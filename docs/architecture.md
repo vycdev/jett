@@ -650,6 +650,10 @@ Track which capabilities flow through the program:
   through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
+- **Scripted provider seams are exact.** Successful host-side Random and Clock
+  conformance runs reject unconsumed samples instead of accepting a script whose
+  expected operations were only partially observed. Runtime failures remain
+  primary and are not replaced by this successful-run cleanup check.
 - **Application logging is a capability operation.** The source-owned
   `log.emit` and level wrappers borrow `view Log`; the runtime injects a
   dedicated provider, filter, capture, and checked sequence state. It remains

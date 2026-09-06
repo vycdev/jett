@@ -950,6 +950,11 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    fn is_orderable_list_element(&self, id: TypeId) -> bool {
+        let base = self.fully_coarsened_type(id);
+        self.is_numeric(base) || matches!(self.interner.resolve(base), Type::String | Type::Bool)
+    }
+
     fn is_integer(&self, id: TypeId) -> bool {
         matches!(
             self.interner.resolve(id),
@@ -3655,17 +3660,12 @@ impl<'a> TypeChecker<'a> {
             }
             "list.__sort" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
-                if inner != TypeInterner::ERROR {
-                    let base = self.fully_coarsened_type(inner);
-                    if !self.is_numeric(base)
-                        && !matches!(base, TypeInterner::STRING | TypeInterner::BOOL)
-                    {
-                        self.sink.emit(errors::type_mismatch(
-                            "numeric, string, or bool",
-                            &self.type_name(inner),
-                            span,
-                        ));
-                    }
+                if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric, string, or bool",
+                        &self.type_name(inner),
+                        span,
+                    ));
                 }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
@@ -3690,12 +3690,26 @@ impl<'a> TypeChecker<'a> {
             }
             "list.__sort_by_index" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric, string, or bool",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
                 let row_ty = self.interner.intern(Type::List(inner));
                 let rows_ty = self.interner.intern(Type::List(row_ty));
                 Some((vec![rows_ty, TypeInterner::INT64], rows_ty))
             }
             "list.__is_sorted" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric, string, or bool",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::BOOL))
             }
