@@ -2985,13 +2985,14 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::BOOL],
                 TypeInterner::STRING,
             ),
-            "float64.from_int64" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::INT64],
-                TypeInterner::FLOAT64,
-            ),
+            "float64.from_int64" => {
+                self.expect_no_type_args(&name, type_args, span);
+                Some((
+                    vec![TypeInterner::INT64],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
+                ))
+            }
             "string.__char_count" => self.no_type_args_signature(
                 &name,
                 type_args,
@@ -15914,8 +15915,10 @@ function main() returns nothing:
 type Percentage = float64 where value >= 0.0 && value <= 100.0
 
 function calculate_grade(score: int64, total: int64) returns Percentage:
-    float64 score_f = float64.from_int64(score)
-    float64 total_f = float64.from_int64(total)
+    float64 score_f = float64.from_int64(score) handle error:
+        default 0.0
+    float64 total_f = float64.from_int64(total) handle error:
+        default 1.0
     return score_f / total_f * 100.0
 ",
         );
