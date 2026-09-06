@@ -423,6 +423,20 @@ impl Validator<'_> {
         }
     }
 
+    fn check_evaluation_order(&mut self, order: &[usize], argument_count: usize, span: Span) {
+        let mut seen = vec![false; argument_count];
+        let valid = order.len() == argument_count
+            && order
+                .iter()
+                .all(|&index| index < argument_count && !std::mem::replace(&mut seen[index], true));
+        if !valid {
+            self.error(
+                span,
+                "argument evaluation order must be a permutation of the argument indexes",
+            );
+        }
+    }
+
     fn block(&mut self, block: &Block) {
         for statement in &block.statements {
             self.statement(statement);
@@ -542,27 +556,51 @@ impl Validator<'_> {
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value) => self.expression(value),
-            ExpressionKind::Call { function, args, .. } => {
+            ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+            } => {
                 if function.index() as usize >= self.program.functions.len() {
                     self.error(expression.span, "call references an unknown HIR function");
                 }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::Intrinsic { args, .. } => {
+            ExpressionKind::Intrinsic {
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::IndirectCall { callee, args, .. } => {
+            ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+            } => {
                 self.expression(callee);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::StructConstruct { fields, .. }
-            | ExpressionKind::BitfieldConstruct { fields, .. } => {
+            ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                ..
+            }
+            | ExpressionKind::BitfieldConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, fields.len(), expression.span);
                 for field in fields {
                     self.expression(field);
                 }
@@ -624,13 +662,24 @@ impl Validator<'_> {
                 }
                 self.block(body);
             }
-            ExpressionKind::ActorSpawn { args, .. } => {
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::ActorMessage { actor, args, .. } => {
+            ExpressionKind::ActorMessage {
+                actor,
+                args,
+                evaluation_order,
+                ..
+            } => {
                 self.expression(actor);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
@@ -2395,6 +2444,35 @@ function main() returns int64:
     }
 
     #[test]
+    fn validator_rejects_invalid_argument_evaluation_orders() {
+        let mut program = lower_source(
+            r#"namespace app
+function difference(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    return difference(right: 2, left: 7)
+"#,
+        );
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call {
+                evaluation_order, ..
+            },
+            ..
+        })) = &mut program.functions[1].body.statements[0].kind
+        else {
+            panic!("expected call");
+        };
+        *evaluation_order = vec![0, 0];
+
+        let errors = validate(&program).expect_err("invalid evaluation order must fail validation");
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("argument evaluation order must be a permutation")
+        }));
+    }
+
+    #[test]
     fn lowers_mutable_locals_assignments_and_loops() {
         let source = r#"namespace app
 function count_to(limit: int64) returns int64:
@@ -3042,6 +3120,40 @@ function main() returns nothing:
         assert!(matches!(args[0].kind, ExpressionKind::Int(3)));
         assert!(matches!(args[1].kind, ExpressionKind::Int(4)));
         assert_eq!(evaluation_order, &[1, 0]);
+    }
+
+    #[test]
+    fn validator_rejects_invalid_actor_message_evaluation_orders() {
+        let mut program = lower_source(
+            r#"namespace app
+actor Counter:
+    receive update(first: int64, second: int64):
+        return nothing
+function main() returns nothing:
+    Counter counter = spawn Counter()
+    send counter.update(second: 4, first: 3)
+    return nothing
+"#,
+        );
+        for invalid_order in [vec![0, 0], vec![2, 0], vec![0], vec![]] {
+            let StatementKind::Expression(Expression {
+                kind:
+                    ExpressionKind::ActorMessage {
+                        evaluation_order, ..
+                    },
+                ..
+            }) = &mut program.functions[0].body.statements[1].kind
+            else {
+                panic!("expected actor message");
+            };
+            *evaluation_order = invalid_order;
+            let errors = validate(&program).expect_err("invalid actor evaluation order");
+            assert!(errors.iter().any(|error| {
+                error
+                    .message
+                    .contains("argument evaluation order must be a permutation")
+            }));
+        }
     }
 
     #[test]
