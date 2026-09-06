@@ -395,9 +395,37 @@ fn semantic_tokens_for_source(source: &str) -> Vec<SemanticToken> {
     let mut previous_line = 0u32;
     let mut previous_start = 0u32;
     let mut tokens = Vec::with_capacity(spans.len());
+    // Lexical spans are ordered and non-overlapping. Walk source characters
+    // once instead of rescanning every prefix twice per token.
+    let mut characters = source.char_indices().peekable();
+    let mut position = Position::new(0, 0);
+    let mut previous_was_cr = false;
+    let mut position_at = |offset: u32| {
+        while characters
+            .peek()
+            .is_some_and(|(index, _)| *index < offset as usize)
+        {
+            let (_, character) = characters.next().expect("peeked character");
+            match character {
+                '\r' => {
+                    position.line += 1;
+                    position.character = 0;
+                }
+                '\n' => {
+                    if !previous_was_cr {
+                        position.line += 1;
+                    }
+                    position.character = 0;
+                }
+                _ => position.character += character.len_utf16() as u32,
+            }
+            previous_was_cr = character == '\r';
+        }
+        position
+    };
     for (start, end, token_type) in spans {
-        let start = lsp_position(source, start);
-        let end = lsp_position(source, end);
+        let start = position_at(start);
+        let end = position_at(end);
         if start.line != end.line || start.character >= end.character {
             continue;
         }
@@ -986,6 +1014,47 @@ mod tests {
         assert_eq!(tokens.data.len(), 2);
         assert_eq!(tokens.data[0].token_type, SEMANTIC_KEYWORD);
         assert_eq!(tokens.data[1].token_type, SEMANTIC_NUMBER);
+    }
+
+    #[test]
+    fn semantic_token_positions_match_utf16_across_mixed_line_endings() {
+        let source = "return \"😀\"\r\n# explanation\rreturn 2\nreturn \"{1 + 2}\"\n";
+        let lexed = jett_lexer::tokenize(source, jett_common::FileId::new(0));
+        let mut expected: Vec<_> = lexed
+            .tokens
+            .iter()
+            .filter_map(|token| {
+                let kind = semantic_token_type(token.kind)?;
+                let start = lsp_position(source, token.span.start);
+                let end = lsp_position(source, token.span.end);
+                (start.line == end.line && start.character < end.character).then_some((
+                    start,
+                    end.character - start.character,
+                    kind,
+                ))
+            })
+            .collect();
+        expected.extend(lexed.comments.iter().map(|comment| {
+            let start = lsp_position(source, comment.span.start);
+            let end = lsp_position(source, comment.span.end);
+            (start, end.character - start.character, SEMANTIC_COMMENT)
+        }));
+        expected.sort_by_key(|entry| entry.0);
+        let mut line = 0;
+        let mut column = 0;
+        let actual: Vec<_> = semantic_tokens_for_source(source)
+            .into_iter()
+            .map(|token| {
+                line += token.delta_line;
+                column = if token.delta_line == 0 {
+                    column + token.delta_start
+                } else {
+                    token.delta_start
+                };
+                (Position::new(line, column), token.length, token.token_type)
+            })
+            .collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
