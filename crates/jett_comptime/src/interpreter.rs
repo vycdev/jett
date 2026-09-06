@@ -45,6 +45,9 @@ fn nonnegative_usize(value: i64) -> usize {
 
 fn repeat_string_checked(value: &str, count: i64) -> Result<String, String> {
     let count = nonnegative_usize(count);
+    if value.is_empty() || count == 0 {
+        return Ok(String::new());
+    }
     let output_len = value
         .len()
         .checked_mul(count)
@@ -8131,15 +8134,20 @@ impl Interpreter {
         };
         let (seconds, nanoseconds) = match provider {
             ClockProvider::Production => production_wall_clock_sample(),
-            ClockProvider::Scripted(samples) => match samples.pop_front() {
+            ClockProvider::Scripted(samples) => match samples.front().copied() {
                 None => return Err("Clock.now: test clock exhausted".to_string()),
                 Some(ClockTestSample::Unavailable) => {
+                    samples.pop_front();
                     return Err("Clock.now: wall clock unavailable".to_string());
                 }
                 Some(ClockTestSample::Wall {
                     unix_seconds,
                     subsecond_nanoseconds,
-                }) => (unix_seconds, subsecond_nanoseconds),
+                }) => {
+                    checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)?;
+                    samples.pop_front();
+                    (unix_seconds, subsecond_nanoseconds)
+                }
             },
         };
         checked_clock_milliseconds(seconds, nanoseconds)
@@ -8276,7 +8284,8 @@ impl Interpreter {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
-                        Some(Ok(Value::String(s.replace(from.as_str(), to.as_str()))))
+                        let replaced = string_split_grapheme_matches(s, from).join(to);
+                        Some(Ok(Value::String(replaced)))
                     }
                     _ => Some(Err(format!("{name} expects three string arguments"))),
                 }
@@ -8427,7 +8436,17 @@ impl Interpreter {
             "float64.from_int64" => {
                 require_args!(name, 1, args);
                 match &args[0] {
-                    Value::Int64(n) => Some(Ok(Value::Float64(*n as f64))),
+                    Value::Int64(n) => {
+                        let converted = *n as f64;
+                        if converted as i128 == i128::from(*n) {
+                            Some(Ok(Value::ResultOk(Box::new(Value::Float64(converted)))))
+                        } else {
+                            Some(Ok(Value::ResultFail(Box::new(Value::String(
+                                "float64.from_int64: value is not exactly representable as float64"
+                                    .to_string(),
+                            )))))
+                        }
+                    }
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
@@ -8675,6 +8694,11 @@ impl Interpreter {
                             match (va, vb) {
                                 (Some(Value::String(sa)), Some(Value::String(sb))) => sa.cmp(&sb),
                                 (Some(Value::Int64(ia)), Some(Value::Int64(ib))) => ia.cmp(&ib),
+                                (Some(Value::Uint64(ia)), Some(Value::Uint64(ib))) => ia.cmp(&ib),
+                                (Some(Value::Float64(ia)), Some(Value::Float64(ib))) => {
+                                    ia.partial_cmp(&ib).unwrap_or(std::cmp::Ordering::Equal)
+                                }
+                                (Some(Value::Bool(ia)), Some(Value::Bool(ib))) => ia.cmp(&ib),
                                 _ => std::cmp::Ordering::Equal,
                             }
                         });
@@ -8692,8 +8716,10 @@ impl Interpreter {
                     Value::List(items) => {
                         let sorted = items.windows(2).all(|w| match (&w[0], &w[1]) {
                             (Value::Int64(a), Value::Int64(b)) => a <= b,
+                            (Value::Uint64(a), Value::Uint64(b)) => a <= b,
                             (Value::Float64(a), Value::Float64(b)) => a <= b,
                             (Value::String(a), Value::String(b)) => a <= b,
+                            (Value::Bool(a), Value::Bool(b)) => a <= b,
                             _ => true,
                         });
                         Some(Ok(Value::Bool(sorted)))
@@ -8846,13 +8872,18 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
-                        let sum = items.iter().try_fold(0.0, |sum, value| match value {
-                            Value::Int64(n) => Ok(sum + *n as f64),
-                            Value::Uint64(n) => Ok(sum + *n as f64),
-                            Value::Float64(n) => Ok(sum + *n),
-                            _ => Err("math.average expects a list of numeric values".to_string()),
-                        });
-                        Some(sum.map(|sum| Value::Float64(sum / items.len() as f64)))
+                        let numbers: Result<Vec<f64>, String> = items
+                            .iter()
+                            .map(|value| match value {
+                                Value::Int64(n) => Ok(*n as f64),
+                                Value::Uint64(n) => Ok(*n as f64),
+                                Value::Float64(n) => Ok(*n),
+                                _ => {
+                                    Err("math.average expects a list of numeric values".to_string())
+                                }
+                            })
+                            .collect();
+                        Some(numbers.map(|numbers| Value::Float64(float_average(&numbers))))
                     }
                     Value::List(_) => Some(Err("math.average: list is empty".to_string())),
                     _ => Some(Err(format!("{name} expects a list of numbers"))),
@@ -9102,8 +9133,25 @@ impl Interpreter {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
-                        let lines: Vec<Value> =
-                            s.lines().map(|l| Value::String(l.to_string())).collect();
+                        let mut lines = Vec::new();
+                        let bytes = s.as_bytes();
+                        let mut start = 0;
+                        let mut index = 0;
+                        while index < bytes.len() {
+                            if matches!(bytes[index], b'\r' | b'\n') {
+                                lines.push(Value::String(s[start..index].to_string()));
+                                if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                                    index += 1;
+                                }
+                                index += 1;
+                                start = index;
+                            } else {
+                                index += 1;
+                            }
+                        }
+                        if start < bytes.len() {
+                            lines.push(Value::String(s[start..].to_string()));
+                        }
                         Some(Ok(Value::List(lines)))
                     }
                     _ => Some(Err(format!("{name} expects a string argument"))),
@@ -10475,6 +10523,22 @@ fn float_midpoint(left: f64, right: f64) -> f64 {
     } else {
         left / 2.0 + right / 2.0
     }
+}
+
+fn float_average(values: &[f64]) -> f64 {
+    let sum = values.iter().sum::<f64>();
+    // Rescaling can underflow small residuals after large values cancel.
+    // Keep ordinary summation whenever it did not overflow.
+    if sum.is_finite() {
+        return sum / values.len() as f64;
+    }
+    let scale = values.iter().map(|value| value.abs()).fold(0.0, f64::max);
+    if scale == 0.0 || !scale.is_finite() {
+        return sum / values.len() as f64;
+    }
+
+    let scaled_sum = values.iter().map(|value| value / scale).sum::<f64>();
+    scaled_sum / values.len() as f64 * scale
 }
 
 fn uint64_arithmetic_operand(value: i64) -> Result<u64, String> {
@@ -17336,6 +17400,37 @@ mod builtin_tests {
     }
 
     #[test]
+    fn invalid_scripted_clock_sample_does_not_advance() {
+        let mut interp = Interpreter::new();
+        interp.current_function_trusted_stdlib = true;
+        interp.set_clock_test_samples(vec![
+            ClockTestSample::Wall {
+                unix_seconds: 0,
+                subsecond_nanoseconds: 1_000_000_000,
+            },
+            ClockTestSample::Wall {
+                unix_seconds: 1,
+                subsecond_nanoseconds: 0,
+            },
+        ]);
+
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: invalid test sample".to_string())
+        );
+        assert_eq!(interp.clock_test_samples_remaining(), Some(2));
+        assert_eq!(
+            interp
+                .call_builtin("Clock.__now", &[Value::Nothing])
+                .unwrap(),
+            Err("Clock.now: invalid test sample".to_string())
+        );
+        assert_eq!(interp.clock_test_samples_remaining(), Some(2));
+    }
+
+    #[test]
     fn clock_state_is_isolated_and_private_kernel_requires_trust() {
         let mut first = Interpreter::new();
         let mut second = Interpreter::new();
@@ -17840,8 +17935,19 @@ mod builtin_tests {
     #[test]
     fn builtin_float64_from_int64() {
         let mut interp = Interpreter::new();
-        let expr = dotted_call("float64", "from_int64", vec![int(42)]);
-        assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Float64(42.0));
+        let exact = dotted_call("float64", "from_int64", vec![int(42)]);
+        assert_eq!(
+            interp.eval_expr(&exact).unwrap(),
+            Value::ResultOk(Box::new(Value::Float64(42.0)))
+        );
+
+        let imprecise = dotted_call("float64", "from_int64", vec![int(9_007_199_254_740_993)]);
+        assert_eq!(
+            interp.eval_expr(&imprecise).unwrap(),
+            Value::ResultFail(Box::new(Value::String(
+                "float64.from_int64: value is not exactly representable as float64".to_string()
+            )))
+        );
     }
 
     #[test]
