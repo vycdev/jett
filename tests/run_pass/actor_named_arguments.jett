@@ -1,0 +1,24 @@
+namespace test
+
+actor Counter(seed: int8, wide: int64):
+    mutable int64 count = wide
+
+    receive subtract(first: int64, second: int64) responds int64:
+        respond first - second
+
+    receive set(first: int64, second: int64):
+        count = first - second
+
+    receive get responds int64:
+        respond count
+
+function actor_results() returns string:
+    Counter counter = spawn Counter(wide: 1000, seed: 10)
+    int64 initial = ask counter.get
+    int64 difference = ask counter.subtract(second: 2, first: 7)
+    send counter.set(second: 3, first: 11)
+    int64 updated = ask counter.get
+    return "{initial}:{difference}:{updated}"
+
+verify actor_named_arguments:
+    assert actor_results() == "1000:5:8"

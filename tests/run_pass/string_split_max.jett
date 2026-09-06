@@ -1,0 +1,24 @@
+namespace app
+function limited_split_preserves_remainder() returns string:
+    list[string] parts = string.split_max("a.b.c.d", ".", 2)
+    return string.join(parts, "|")
+verify limited_split_preserves_remainder:
+    assert limited_split_preserves_remainder() == "a|b.c.d"
+function one_part_keeps_original_value() returns string:
+    list[string] parts = string.split_max("a.b.c", ".", 1)
+    return string.join(parts, "|")
+verify one_part_keeps_original_value:
+    assert one_part_keeps_original_value() == "a.b.c"
+function limited_split_ignores_partial_grapheme_delimiter() returns string:
+    bytes text_bytes = bytes.from_hex("65cc8178") handle error:
+        default bytes.new()
+    bytes delimiter_bytes = bytes.from_hex("cc81") handle error:
+        default bytes.new()
+    string text = bytes.to_string(text_bytes) handle error:
+        default ""
+    string delimiter = bytes.to_string(delimiter_bytes) handle error:
+        default ""
+    list[string] parts = string.split_max(text, delimiter, 2)
+    return string.join(parts, "|")
+verify limited_split_ignores_partial_grapheme_delimiter:
+    assert bytes.to_hex(bytes.from_string(limited_split_ignores_partial_grapheme_delimiter())) == "65cc8178"
