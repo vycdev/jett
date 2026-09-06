@@ -266,7 +266,7 @@ impl Default for MemoryConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocationOperation {
     Allocate { size: u64 },
     Resize { new_size: u64 },
@@ -377,8 +377,9 @@ impl MemoryProfile {
         let mut known_ids = BTreeSet::new();
         let mut live_allocations: BTreeMap<u64, LiveAllocation> = BTreeMap::new();
         let mut sites: BTreeMap<FrameIdentity, MemorySiteCounts> = BTreeMap::new();
+        let mut peak_event = None;
 
-        for event in events {
+        for (index, event) in events.iter().enumerate() {
             let active_site = event.stack.last().cloned();
             match event.operation {
                 AllocationOperation::Allocate { size } => {
@@ -444,16 +445,7 @@ impl MemoryProfile {
 
             if totals.live_bytes > totals.peak_live_bytes {
                 totals.peak_live_bytes = totals.live_bytes;
-                for counts in sites.values_mut() {
-                    counts.live_at_peak_bytes = 0;
-                }
-                for allocation in live_allocations.values() {
-                    if let Some(site) = &allocation.creation_site {
-                        let counts = sites.entry(site.clone()).or_default();
-                        counts.live_at_peak_bytes =
-                            checked_add(counts.live_at_peak_bytes, allocation.size)?;
-                    }
-                }
+                peak_event = Some(index);
             }
         }
 
@@ -463,6 +455,12 @@ impl MemoryProfile {
                 let counts = sites.entry(site.clone()).or_default();
                 counts.retained_bytes = checked_add(counts.retained_bytes, allocation.size)?;
             }
+        }
+        drop(live_allocations);
+        // Reconstruct the single global-peak snapshot once. Rescanning every
+        // live allocation at each increasing peak makes allocation-only traces quadratic.
+        if let Some(index) = peak_event {
+            populate_peak_snapshot(&events[..=index], &mut sites)?;
         }
 
         let attributed_allocated_bytes = sites.values().try_fold(0_u64, |total, counts| {
@@ -519,6 +517,41 @@ impl MemoryProfile {
             bottlenecks,
         })
     }
+}
+
+fn populate_peak_snapshot(
+    events: &[AllocationEvent],
+    sites: &mut BTreeMap<FrameIdentity, MemorySiteCounts>,
+) -> Result<(), MemoryProfileError> {
+    let mut live: BTreeMap<u64, LiveAllocation> = BTreeMap::new();
+    for event in events {
+        match event.operation {
+            AllocationOperation::Allocate { size } => {
+                live.insert(
+                    event.allocation_id,
+                    LiveAllocation {
+                        size,
+                        creation_site: event.stack.last().cloned(),
+                    },
+                );
+            }
+            AllocationOperation::Resize { new_size } => {
+                live.get_mut(&event.allocation_id)
+                    .expect("validated allocation")
+                    .size = new_size;
+            }
+            AllocationOperation::Free => {
+                live.remove(&event.allocation_id);
+            }
+        }
+    }
+    for allocation in live.values() {
+        if let Some(site) = &allocation.creation_site {
+            let counts = sites.get_mut(site).expect("validated creation site");
+            counts.live_at_peak_bytes = checked_add(counts.live_at_peak_bytes, allocation.size)?;
+        }
+    }
+    Ok(())
 }
 
 fn checked_add(left: u64, right: u64) -> Result<u64, MemoryProfileError> {
@@ -739,5 +772,18 @@ mod tests {
             MemoryProfile::aggregate(MemoryConfig::default(), unknown_free),
             Err(MemoryProfileError::UnknownAllocation(9))
         );
+    }
+
+    #[test]
+    fn memory_peak_snapshot_scales_with_long_allocation_traces() {
+        let creator = frame("app", "create");
+        let mut events = (0..20_000)
+            .map(|id| AllocationEvent::allocate(id, 1, vec![creator.clone()]))
+            .collect::<Vec<_>>();
+        events.extend((0..10_000).map(|id| AllocationEvent::free(id, Vec::new())));
+        let profile = MemoryProfile::aggregate(MemoryConfig::default(), events).unwrap();
+        assert_eq!(profile.totals.peak_live_bytes, 20_000);
+        assert_eq!(profile.bottlenecks[0].live_at_peak_bytes, 20_000);
+        assert_eq!(profile.bottlenecks[0].retained_bytes, 10_000);
     }
 }
