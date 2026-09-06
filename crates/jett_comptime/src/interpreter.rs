@@ -45,6 +45,9 @@ fn nonnegative_usize(value: i64) -> usize {
 
 fn repeat_string_checked(value: &str, count: i64) -> Result<String, String> {
     let count = nonnegative_usize(count);
+    if value.is_empty() || count == 0 {
+        return Ok(String::new());
+    }
     let output_len = value
         .len()
         .checked_mul(count)
