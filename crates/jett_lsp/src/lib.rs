@@ -290,14 +290,24 @@ fn document_highlights(source: &str, position: Position) -> Option<Vec<DocumentH
             .into_iter()
             .map(|span| DocumentHighlight {
                 range: Range::new(lsp_position(source, span.0), lsp_position(source, span.1)),
-                kind: Some(if Some(span) == definition {
-                    DocumentHighlightKind::WRITE
-                } else {
-                    DocumentHighlightKind::READ
-                }),
+                kind: Some(
+                    if Some(span) == definition || is_assignment_target(source, span.1) {
+                        DocumentHighlightKind::WRITE
+                    } else {
+                        DocumentHighlightKind::READ
+                    },
+                ),
             })
             .collect()
     })
+}
+
+fn is_assignment_target(source: &str, end: u32) -> bool {
+    source
+        .get(end as usize..)
+        .map(|tail| tail.trim_start_matches([' ', '\t']))
+        .and_then(|tail| tail.strip_prefix('='))
+        .is_some_and(|tail| !tail.starts_with('='))
 }
 
 fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
@@ -859,6 +869,26 @@ mod tests {
                     range: Range::new(Position::new(6, 11), Position::new(6, 17)),
                     kind: Some(DocumentHighlightKind::READ),
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn document_highlights_distinguish_assignments_from_reads_and_equality() {
+        let source = "function main() returns int64:\n    mutable int64 total = 1\n    total = total + 1\n    if total == 2:\n        return total\n    return 0\n";
+        let highlights = document_highlights(source, Position::new(2, 5)).unwrap();
+        let kinds: Vec<_> = highlights
+            .iter()
+            .map(|highlight| highlight.kind.unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DocumentHighlightKind::WRITE,
+                DocumentHighlightKind::WRITE,
+                DocumentHighlightKind::READ,
+                DocumentHighlightKind::READ,
+                DocumentHighlightKind::READ
             ]
         );
     }
