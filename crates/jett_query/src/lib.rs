@@ -142,14 +142,22 @@ pub fn normalize_logical_path(path: &str) -> Result<String, FileRegistryError> {
     for component in path.split('/') {
         match component {
             "" | "." => {}
-            ".." => return Err(FileRegistryError::EscapesOrigin(path)),
+            ".." => {
+                if components.pop().is_none() {
+                    return Err(FileRegistryError::EscapesOrigin(path));
+                }
+            }
             component => components.push(component),
         }
     }
     if components.is_empty() {
         return Err(FileRegistryError::EmptyPath);
     }
-    Ok(components.join("/"))
+    let normalized = components.join("/");
+    if normalized.as_bytes().get(1) == Some(&b':') {
+        return Err(FileRegistryError::AbsolutePath(path));
+    }
+    Ok(normalized)
 }
 
 #[salsa::db]
@@ -270,6 +278,22 @@ mod tests {
         assert!(normalize_logical_path("../main.jett").is_err());
         assert!(normalize_logical_path("/tmp/main.jett").is_err());
         assert!(normalize_logical_path("C:\\tmp\\main.jett").is_err());
+    }
+
+    #[test]
+    fn resolves_parent_components_that_stay_within_the_origin() {
+        assert_eq!(
+            normalize_logical_path("src/generated/../main.jett").unwrap(),
+            "src/main.jett"
+        );
+        assert_eq!(
+            normalize_logical_path("src/../main.jett").unwrap(),
+            "main.jett"
+        );
+        assert!(normalize_logical_path("src/../../main.jett").is_err());
+        assert!(normalize_logical_path("src/../C:/outside.jett").is_err());
+        assert!(normalize_logical_path("src/../C:outside.jett").is_err());
+        assert!(normalize_logical_path("./C:outside.jett").is_err());
     }
 
     #[test]
