@@ -371,7 +371,35 @@ fn signature_callee_before(source: &str, tokens: &[jett_lexer::Token]) -> Option
         }
     }
     let last = tokens.get(end.checked_sub(1)?)?;
-    if !matches!(last.kind, TokenKind::Ident | TokenKind::Value) {
+    // Match parser contextual identifiers too: public calls such as list.map
+    // and json.serialize end in tokens that also have keyword/type meanings.
+    if !matches!(
+        last.kind,
+        TokenKind::Ident
+            | TokenKind::Self_
+            | TokenKind::Other
+            | TokenKind::Error
+            | TokenKind::Value
+            | TokenKind::Serialize
+            | TokenKind::Network
+            | TokenKind::Default
+            | TokenKind::Ok
+            | TokenKind::Fail
+            | TokenKind::Clone
+            | TokenKind::Send
+            | TokenKind::Run
+            | TokenKind::Join
+            | TokenKind::Cancel
+            | TokenKind::Trace
+            | TokenKind::Transition
+            | TokenKind::Type
+            | TokenKind::Bit
+            | TokenKind::Bits
+            | TokenKind::States
+            | TokenKind::Map_
+            | TokenKind::List_
+            | TokenKind::Set_
+    ) {
         return None;
     }
     let mut start = end - 1;
@@ -1005,6 +1033,8 @@ mod tests {
             ("f(1, (2 + ", ("f", 1)),
             ("f(\"{g(1, 2)}\")", ("g", 1)),
             ("f(1, list.of[int64](2, ", ("list.of", 1)),
+            ("list.map[int64, string](values, ", ("list.map", 1)),
+            ("json.serialize(", ("json.serialize", 0)),
         ] {
             let offset = if source.contains("{g") {
                 source.find("2)").unwrap()
