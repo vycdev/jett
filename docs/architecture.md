@@ -589,6 +589,9 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
 - **No rebinding while viewed:** The owner of a variable cannot rebind it while a `view` to it exists. This prevents `items = new_list` inside a `for item in view items:` loop body, and prevents rebinding a variable that was passed as `view` to a `run` task until the task is `join`ed or `cancel`led.
+- **Task-control operands:** cancellation requires a pending task variable on
+  every live control-flow path. Joins retain the ensure-resolved contract for
+  ordinary expressions, with move-only values subject to normal ownership.
 - **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is
   not killed immediately — its next capability checkpoint terminates the pending
   task with `CancelledError` before the capability operation takes effect. The
@@ -650,6 +653,10 @@ Track which capabilities flow through the program:
   through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
+- **Scripted provider seams are exact.** Successful host-side Random and Clock
+  conformance runs reject unconsumed samples instead of accepting a script whose
+  expected operations were only partially observed. Runtime failures remain
+  primary and are not replaced by this successful-run cleanup check.
 - **Application logging is a capability operation.** The source-owned
   `log.emit` and level wrappers borrow `view Log`; the runtime injects a
   dedicated provider, filter, capture, and checked sequence state. It remains
@@ -797,12 +804,15 @@ materialization remains actor-runtime work. Remaining source constructs are stag
 [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
-structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
-`break`, `continue`, and `return` into deterministic dense basic blocks with
-explicit branch, switch, goto, and return terminators. Its CFG analysis exposes
-deduplicated successors, canonical predecessors, and reachable reverse
-postorder for deterministic backend dataflow passes. Handle-internal control
-flow and definitive ownership/drop elaboration remain subsequent MIR work.
+HIR structural validator. It lowers top-level `if`, `while`, exhaustive
+`match`, `break`, `continue`, and `return` into deterministic dense basic
+blocks with explicit branch, switch, goto, and return terminators. Its public
+MIR validator rejects noncanonical block IDs, out-of-range function entries,
+and invalid goto, branch, switch, or for-loop edges before later backends
+consume a graph. Its CFG analysis exposes deduplicated successors, canonical
+predecessors, and reachable reverse postorder for deterministic backend
+dataflow passes. Handle-internal control flow and definitive ownership/drop
+elaboration remain subsequent MIR work.
 
 ### Purpose
 
