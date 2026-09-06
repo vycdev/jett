@@ -106,6 +106,7 @@ pub fn parse_project(db: &dyn Db, manifest: ProjectManifest) -> Vec<Arc<ParsedFi
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParallelParseError {
     InvalidWorkerCount,
+    WorkerSpawnFailed,
     WorkerPanicked,
 }
 
@@ -116,6 +117,7 @@ impl fmt::Display for ParallelParseError {
                 write!(formatter, "parse worker count must be at least one")
             }
             Self::WorkerPanicked => write!(formatter, "parallel parse worker failed"),
+            Self::WorkerSpawnFailed => write!(formatter, "parallel parse worker could not start"),
         }
     }
 }
@@ -149,11 +151,12 @@ pub fn parse_project_with_jobs(
     let (sender, receiver) = mpsc::channel();
     let worker_result = thread::scope(|scope| {
         let mut workers = Vec::with_capacity(worker_count);
+        let mut spawn_failed = false;
         for _ in 0..worker_count {
             let worker_db = db.clone();
             let queue = Arc::clone(&queue);
             let sender = sender.clone();
-            workers.push(scope.spawn(move || {
+            let worker = thread::Builder::new().spawn_scoped(scope, move || {
                 loop {
                     let work = queue
                         .lock()
@@ -167,7 +170,14 @@ pub fn parse_project_with_jobs(
                         break;
                     }
                 }
-            }));
+            });
+            match worker {
+                Ok(worker) => workers.push(worker),
+                Err(_) => {
+                    spawn_failed = true;
+                    break;
+                }
+            }
         }
         drop(sender);
 
@@ -175,7 +185,9 @@ pub fn parse_project_with_jobs(
         for worker in workers {
             panicked |= worker.join().is_err();
         }
-        if panicked {
+        if spawn_failed {
+            Err(ParallelParseError::WorkerSpawnFailed)
+        } else if panicked {
             Err(ParallelParseError::WorkerPanicked)
         } else {
             Ok(())
