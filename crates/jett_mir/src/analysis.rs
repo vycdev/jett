@@ -1,4 +1,4 @@
-use crate::{BlockId, Function, Terminator};
+use crate::{BlockId, Function, TerminatorKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisError {
@@ -44,7 +44,7 @@ impl ControlFlowGraph {
                 });
                 continue;
             }
-            let targets = terminator_successors(&block.terminator);
+            let targets = terminator_successors(&block.terminator.kind);
             for target in targets {
                 if target.index() as usize >= block_count {
                     errors.push(AnalysisError {
@@ -96,16 +96,16 @@ impl ControlFlowGraph {
     }
 }
 
-fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
+fn terminator_successors(terminator: &TerminatorKind) -> Vec<BlockId> {
     match terminator {
-        Terminator::Return(_) | Terminator::Unreachable => Vec::new(),
-        Terminator::Goto(target) => vec![*target],
-        Terminator::Branch {
+        TerminatorKind::Return(_) | TerminatorKind::Unreachable => Vec::new(),
+        TerminatorKind::Goto(target) => vec![*target],
+        TerminatorKind::Branch {
             then_block,
             else_block,
             ..
         } => vec![*then_block, *else_block],
-        Terminator::Switch {
+        TerminatorKind::Switch {
             variants,
             otherwise,
             ..
@@ -114,7 +114,7 @@ fn terminator_successors(terminator: &Terminator) -> Vec<BlockId> {
             .map(|(_, block, _)| *block)
             .chain(*otherwise)
             .collect(),
-        Terminator::ForEach { body, exit, .. } => vec![*body, *exit],
+        TerminatorKind::ForEach { body, exit, .. } => vec![*body, *exit],
     }
 }
 

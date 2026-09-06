@@ -901,6 +901,12 @@ MirStatement {
 }
 ```
 
+Every MIR statement and terminator retains a source `Span`. Direct nodes use
+the originating HIR statement or condition span, while synthetic CFG edges use
+the controlling statement or body span. This provenance lets later ownership,
+optimization, diagnostic, and debug passes report the source construct that
+produced an edge without recovering locations from embedded expressions.
+
 ### Definitive Ownership Verification
 
 The MIR phase performs a final, CFG-based ownership check to catch issues that the AST-level analysis might miss at complex control flow joins. This is the last line of defense before codegen.
