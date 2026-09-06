@@ -153,7 +153,11 @@ pub fn normalize_logical_path(path: &str) -> Result<String, FileRegistryError> {
     if components.is_empty() {
         return Err(FileRegistryError::EmptyPath);
     }
-    Ok(components.join("/"))
+    let normalized = components.join("/");
+    if normalized.as_bytes().get(1) == Some(&b':') {
+        return Err(FileRegistryError::AbsolutePath(path));
+    }
+    Ok(normalized)
 }
 
 #[salsa::db]
@@ -287,6 +291,9 @@ mod tests {
             "main.jett"
         );
         assert!(normalize_logical_path("src/../../main.jett").is_err());
+        assert!(normalize_logical_path("src/../C:/outside.jett").is_err());
+        assert!(normalize_logical_path("src/../C:outside.jett").is_err());
+        assert!(normalize_logical_path("./C:outside.jett").is_err());
     }
 
     #[test]
