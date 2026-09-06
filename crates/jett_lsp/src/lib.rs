@@ -504,9 +504,11 @@ impl LanguageServer for JettBackend {
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
     let result = jett_driver::build_source(source, file_path);
-    let uri = Url::parse(file_path)
+    // Windows drive paths also parse as URLs with a one-letter scheme.
+    // Prefer a filesystem URL for native absolute paths from validate().
+    let uri = Url::from_file_path(file_path)
         .ok()
-        .or_else(|| Url::from_file_path(file_path).ok());
+        .or_else(|| Url::parse(file_path).ok());
 
     result
         .diagnostics
@@ -719,6 +721,21 @@ mod tests {
         assert_eq!(
             related[0].location.range,
             Range::new(Position::new(3, 10), Position::new(3, 15))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn diagnostic_labels_use_file_urls_for_windows_paths() {
+        let source = "function main() returns nothing:\n    int64 value = 1\n    int64 value = 2\n    return nothing\n";
+        let diagnostics = diagnostics_for_source(source, r"C:\workspace\main.jett");
+        let related = diagnostics
+            .iter()
+            .find_map(|diagnostic| diagnostic.related_information.as_ref())
+            .unwrap();
+        assert_eq!(
+            related[0].location.uri.as_str(),
+            "file:///C:/workspace/main.jett"
         );
     }
 
