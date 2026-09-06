@@ -74,6 +74,7 @@ pub struct DeclarationId {
 pub enum DeclarationKind {
     Function,
     Method,
+    ActorHandler,
 }
 
 /// One concrete in-memory function identity. Type arguments are empty for an
@@ -722,6 +723,14 @@ struct FunctionSource<'a> {
     method: Option<CheckedMethodDefinition>,
 }
 
+struct ActorHandlerSource<'a> {
+    id: FunctionId,
+    actor_definition: DefId,
+    actor: &'a ast::ActorDef,
+    handler: &'a ast::ReceiveHandler,
+    message_index: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FunctionKey {
     Definition {
@@ -739,6 +748,7 @@ struct Lowerer<'a> {
     check: &'a CheckResult,
     origins: &'a HashMap<FileId, SourceOrigin>,
     functions: Vec<FunctionSource<'a>>,
+    actor_handlers: Vec<ActorHandlerSource<'a>>,
     function_ids: HashMap<FunctionKey, FunctionId>,
     errors: Vec<LowerError>,
 }
@@ -756,6 +766,7 @@ impl<'a> Lowerer<'a> {
             check,
             origins,
             functions: Vec::new(),
+            actor_handlers: Vec::new(),
             function_ids: HashMap::new(),
             errors: Vec::new(),
         }
@@ -767,6 +778,12 @@ impl<'a> Lowerer<'a> {
         let mut functions = Vec::with_capacity(sources.len());
         for source in sources {
             if let Some(function) = self.lower_function(source) {
+                functions.push(function);
+            }
+        }
+        let actor_handlers = std::mem::take(&mut self.actor_handlers);
+        for source in actor_handlers {
+            if let Some(function) = self.lower_actor_handler(source) {
                 functions.push(function);
             }
         }
@@ -870,6 +887,26 @@ impl<'a> Lowerer<'a> {
                 instantiation: None,
                 method: Some(method),
             });
+        }
+
+        for item in &self.module.items {
+            let Item::Actor(actor) = item else {
+                continue;
+            };
+            let Some(actor_definition) = self.definition_at(actor.name.span, DefKind::Actor) else {
+                self.error(actor.name.span, "actor has no resolved definition");
+                continue;
+            };
+            for (message_index, handler) in actor.handlers.iter().enumerate() {
+                let id = FunctionId((self.functions.len() + self.actor_handlers.len()) as u32);
+                self.actor_handlers.push(ActorHandlerSource {
+                    id,
+                    actor_definition,
+                    actor,
+                    handler,
+                    message_index,
+                });
+            }
         }
     }
 
@@ -1072,6 +1109,174 @@ impl<'a> Lowerer<'a> {
             locals,
             body,
             span: source.function.span,
+        })
+    }
+
+    fn lower_actor_handler(&mut self, source: ActorHandlerSource<'a>) -> Option<Function> {
+        let origin = match self.origins.get(&source.actor.span.file) {
+            Some(origin) => origin.clone(),
+            None => {
+                self.error(
+                    source.actor.span,
+                    "source origin is missing for actor handler",
+                );
+                return None;
+            }
+        };
+        let actor_type = match self.check.definition_types.get(&source.actor_definition) {
+            Some(ty) => *ty,
+            None => {
+                self.error(source.actor.name.span, "actor has no checked type");
+                return None;
+            }
+        };
+        let actor_definition = match self.check.interner.resolve(actor_type) {
+            Type::Actor(id) => self.check.interner.resolve_actor(*id).clone(),
+            _ => {
+                self.error(
+                    source.actor.name.span,
+                    "checked actor definition is not an actor",
+                );
+                return None;
+            }
+        };
+        let message = match actor_definition.messages.get(source.message_index) {
+            Some(message) => message.clone(),
+            None => {
+                self.error(
+                    source.handler.span,
+                    "actor handler has no checked message definition",
+                );
+                return None;
+            }
+        };
+        if source.actor.capability_params.len() != actor_definition.capability_params.len()
+            || source.actor.state_fields.len() != actor_definition.state_fields.len()
+            || source.handler.params.len() != message.params.len()
+        {
+            self.error(
+                source.handler.span,
+                "checked actor shape changed during HIR lowering",
+            );
+            return None;
+        }
+
+        let function_ids = self.function_ids.clone();
+        let expression_types = self.check.type_map.clone();
+        let generic_calls = self.check.generic_calls.clone();
+        let call_argument_orders = self.check.call_argument_orders.clone();
+        let method_calls = self.check.method_calls.clone();
+        let struct_constructions = self.check.struct_constructions.clone();
+        let pipeline_step_call_types = self.check.pipeline_step_call_types.clone();
+        let mut body_lowerer = BodyLowerer::new(
+            self,
+            &function_ids,
+            &expression_types,
+            &generic_calls,
+            &call_argument_orders,
+            &method_calls,
+            &struct_constructions,
+            &pipeline_step_call_types,
+        );
+
+        for (param, (_, ty)) in source
+            .actor
+            .capability_params
+            .iter()
+            .zip(actor_definition.capability_params.iter())
+        {
+            let Some(definition) = body_lowerer
+                .parent
+                .definition_at(param.name.span, DefKind::Param)
+            else {
+                body_lowerer
+                    .parent
+                    .error(param.name.span, "actor capability parameter is unresolved");
+                return None;
+            };
+            body_lowerer.allocate_local(
+                definition,
+                &param.name.name,
+                *ty,
+                param.mutable,
+                param.span,
+            );
+        }
+        for (field, (_, ty)) in source
+            .actor
+            .state_fields
+            .iter()
+            .zip(actor_definition.state_fields.iter())
+        {
+            let Some(definition) = body_lowerer
+                .parent
+                .definition_at(field.name.span, DefKind::Variable)
+            else {
+                body_lowerer
+                    .parent
+                    .error(field.name.span, "actor state field is unresolved");
+                return None;
+            };
+            body_lowerer.allocate_local(
+                definition,
+                &field.name.name,
+                *ty,
+                field.mutable,
+                field.span,
+            );
+        }
+        let mut params = Vec::with_capacity(source.handler.params.len());
+        for (param, (_, ty)) in source.handler.params.iter().zip(message.params.iter()) {
+            let Some(definition) = body_lowerer
+                .parent
+                .definition_at(param.name.span, DefKind::Param)
+            else {
+                body_lowerer
+                    .parent
+                    .error(param.name.span, "actor message parameter is unresolved");
+                return None;
+            };
+            let local = body_lowerer.allocate_local(
+                definition,
+                &param.name.name,
+                *ty,
+                param.mutable,
+                param.span,
+            );
+            params.push(Param {
+                local,
+                name: param.name.name.clone(),
+                ty: *ty,
+                mode: if param.view {
+                    ParamMode::View
+                } else {
+                    ParamMode::Owned
+                },
+                mutable: param.mutable,
+                span: param.span,
+            });
+        }
+        let body = body_lowerer.lower_block(&source.handler.body);
+        let locals = body_lowerer.locals;
+        let actor_def = self.resolve.scope_table.def(source.actor_definition);
+
+        Some(Function {
+            id: source.id,
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin,
+                    namespace: actor_def.namespace.clone().unwrap_or_default(),
+                    name: format!("{}.{}", source.actor.name.name, source.handler.name.name),
+                    kind: DeclarationKind::ActorHandler,
+                },
+                type_arguments: Vec::new(),
+            },
+            source_definition: None,
+            params,
+            return_type: message.responds,
+            locals,
+            body,
+            span: source.handler.span,
         })
     }
 
@@ -2533,6 +2738,40 @@ function render(view values: list[int64]) returns string:
             panic!("expected interpolation assignment");
         };
         assert!(matches!(value.kind, ExpressionKind::StringInterpolation(_)));
+    }
+
+    #[test]
+    fn lowers_actor_receive_handlers_as_backend_functions() {
+        let program = lower_source(
+            r#"namespace app
+actor Counter:
+    mutable int64 count = 0
+    receive add(amount: int64) responds int64:
+        count = count + amount
+        respond count
+"#,
+        );
+
+        assert_eq!(program.functions.len(), 1);
+        let handler = &program.functions[0];
+        assert_eq!(handler.identity.declaration.namespace, "app");
+        assert_eq!(handler.identity.declaration.name, "Counter.add");
+        assert_eq!(handler.params.len(), 1);
+        assert_eq!(handler.params[0].name, "amount");
+        assert!(handler.locals.iter().any(|local| local.name == "count"));
+        assert!(matches!(
+            handler.body.statements.as_slice(),
+            [
+                Statement {
+                    kind: StatementKind::Assign { .. },
+                    ..
+                },
+                Statement {
+                    kind: StatementKind::Respond(_),
+                    ..
+                }
+            ]
+        ));
     }
 
     #[test]

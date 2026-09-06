@@ -62,7 +62,6 @@ pub enum StatementKind {
     },
     Trace(LocalId),
     Breakpoint(Option<Expression>),
-    Respond(Expression),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +73,7 @@ pub struct Terminator {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TerminatorKind {
     Return(Option<Expression>),
+    Respond(Expression),
     Goto(BlockId),
     Branch {
         condition: Expression,
@@ -166,7 +166,9 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
                     check_target(*body, "for body");
                     check_target(*exit, "for exit");
                 }
-                TerminatorKind::Return(_) | TerminatorKind::Unreachable => {}
+                TerminatorKind::Return(_)
+                | TerminatorKind::Respond(_)
+                | TerminatorKind::Unreachable => {}
             }
         }
     }
@@ -336,7 +338,7 @@ impl Builder {
                 self.push(StatementKind::Breakpoint(condition.clone()), statement.span)
             }
             hir::StatementKind::Respond(value) => {
-                self.push(StatementKind::Respond(value.clone()), statement.span)
+                self.terminate(TerminatorKind::Respond(value.clone()), statement.span)
             }
             hir::StatementKind::Scope(block) => self.lower_block(block),
         }
@@ -548,7 +550,9 @@ mod tests {
                     pending.push(*body);
                     pending.push(*exit);
                 }
-                TerminatorKind::Return(_) | TerminatorKind::Unreachable => {}
+                TerminatorKind::Return(_)
+                | TerminatorKind::Respond(_)
+                | TerminatorKind::Unreachable => {}
             }
         }
         reachable
@@ -832,5 +836,28 @@ function choose(value: int64) returns int64:
             .map(|span| &source[span.start as usize..span.end as usize])
             .collect::<Vec<_>>();
         assert_eq!(return_spans, ["return next", "return value"]);
+    }
+
+    #[test]
+    fn responding_handler_branches_do_not_fall_through() {
+        let program = lower_source(
+            r#"namespace app
+actor Counter:
+    receive choose(flag: bool) responds int64:
+        if flag:
+            respond 1
+        else:
+            respond 2
+"#,
+        );
+        let handler = &program.functions[0];
+        assert_eq!(handler.blocks.len(), 3, "responding branches need no join");
+        let cfg = ControlFlowGraph::analyze(handler).expect("valid handler CFG");
+        for target in cfg.successors(handler.entry) {
+            assert!(
+                cfg.successors(*target).is_empty(),
+                "respond ends the handler"
+            );
+        }
     }
 }

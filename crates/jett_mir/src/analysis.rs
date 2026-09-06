@@ -98,7 +98,9 @@ impl ControlFlowGraph {
 
 fn terminator_successors(terminator: &TerminatorKind) -> Vec<BlockId> {
     match terminator {
-        TerminatorKind::Return(_) | TerminatorKind::Unreachable => Vec::new(),
+        TerminatorKind::Return(_) | TerminatorKind::Respond(_) | TerminatorKind::Unreachable => {
+            Vec::new()
+        }
         TerminatorKind::Goto(target) => vec![*target],
         TerminatorKind::Branch {
             then_block,
