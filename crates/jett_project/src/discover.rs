@@ -141,6 +141,11 @@ fn parse_project_file(content: &str) -> Result<(String, String, String), Discove
         if let Some((key, value)) = line.split_once(':') {
             let key = key.trim();
             let value = value.trim();
+            if matches!(key, "name" | "version" | "entry") && value.is_empty() {
+                return Err(DiscoverError::InvalidProjectFile(format!(
+                    "empty '{key}' field"
+                )));
+            }
             match key {
                 "name" => {
                     if name.is_some() {
@@ -315,6 +320,21 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 format!("invalid jett.proj: duplicate '{field}' field")
+            );
+        }
+    }
+
+    #[test]
+    fn parse_project_file_rejects_empty_fields() {
+        for (field, content) in [
+            ("name", "name:   \n"),
+            ("version", "name: test\nversion:   \n"),
+            ("entry", "name: test\nentry:   \n"),
+        ] {
+            let error = parse_project_file(content).expect_err("empty fields must fail");
+            assert_eq!(
+                error.to_string(),
+                format!("invalid jett.proj: empty '{field}' field")
             );
         }
     }
