@@ -355,9 +355,11 @@ impl Builder {
         iterable: &Expression,
         body: &hir::Block,
     ) {
-        let header = self.current;
+        let header = self.new_block();
         let body_block = self.new_block();
         let exit = self.new_block();
+        self.terminate(Terminator::Goto(header));
+        self.current = header;
         self.terminate(Terminator::ForEach {
             key,
             value,
@@ -607,6 +609,40 @@ function first(items: list[int64]) returns int64:
         assert_eq!(
             errors[0].message,
             "for exit target 4294967295 is out of range"
+        );
+    }
+
+    #[test]
+    fn for_loop_back_edge_skips_preheader_statements() {
+        let program = lower_source(
+            r#"namespace app
+function total(items: list[int64]) returns int64:
+    mutable int64 sum = 0
+    for item in view items:
+        sum = sum + item
+    return sum
+"#,
+        );
+        let function = &program.functions[0];
+        let entry = &function.blocks[function.entry.index() as usize];
+        assert_eq!(
+            entry.statements.len(),
+            1,
+            "preheader should initialize sum once"
+        );
+        let Terminator::Goto(loop_header) = entry.terminator else {
+            panic!("preheader should jump to a dedicated for-loop header");
+        };
+
+        let header = &function.blocks[loop_header.index() as usize];
+        assert!(header.statements.is_empty());
+        let Terminator::ForEach { body, .. } = header.terminator else {
+            panic!("dedicated loop header should own the for terminator");
+        };
+        assert_eq!(
+            function.blocks[body.index() as usize].terminator,
+            Terminator::Goto(loop_header),
+            "for-loop back edge should not repeat preheader statements"
         );
     }
 }
