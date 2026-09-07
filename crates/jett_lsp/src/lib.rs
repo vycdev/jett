@@ -73,10 +73,36 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            ..SignatureHelpOptions::default()
+        }),
         document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        semantic_tokens_provider: Some(
+            SemanticTokensOptions {
+                work_done_progress_options: WorkDoneProgressOptions::default(),
+                legend: SemanticTokensLegend {
+                    token_types: vec![
+                        SemanticTokenType::KEYWORD,
+                        SemanticTokenType::TYPE,
+                        SemanticTokenType::NUMBER,
+                        SemanticTokenType::STRING,
+                        SemanticTokenType::OPERATOR,
+                        SemanticTokenType::COMMENT,
+                    ],
+                    token_modifiers: Vec::new(),
+                },
+                range: Some(false),
+                full: Some(SemanticTokensFullOptions::Bool(true)),
+            }
+            .into(),
+        ),
         position_encoding: Some(PositionEncodingKind::UTF16),
         ..ServerCapabilities::default()
     }
@@ -245,6 +271,49 @@ fn document_symbols_for_source(source: &str) -> Option<Vec<DocumentSymbol>> {
     Some(symbols)
 }
 
+#[allow(deprecated)]
+fn workspace_symbols_for_documents(
+    documents: &HashMap<Url, DocumentState>,
+    query: &str,
+) -> Vec<SymbolInformation> {
+    let query = query.to_lowercase();
+    let mut symbols = Vec::new();
+
+    for (uri, document) in documents {
+        let Ok(outline) = jett_driver::query_source_file_symbols(&document.text, "<lsp-document>")
+        else {
+            continue;
+        };
+
+        symbols.extend(outline.symbols.into_iter().filter_map(|symbol| {
+            if !symbol.name.to_lowercase().contains(&query) {
+                return None;
+            }
+            let start = lsp_position_from_driver(&document.text, symbol.line, symbol.column)?;
+            let end = lsp_position_from_driver(&document.text, symbol.end_line, symbol.end_column)?;
+            Some(SymbolInformation {
+                name: symbol.name,
+                kind: document_symbol_kind(&symbol.kind),
+                tags: None,
+                deprecated: None,
+                location: Location {
+                    uri: uri.clone(),
+                    range: Range::new(start, end),
+                },
+                container_name: symbol.namespace,
+            })
+        }));
+    }
+
+    symbols.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.location.uri.as_str().cmp(right.location.uri.as_str()))
+            .then_with(|| left.location.range.start.cmp(&right.location.range.start))
+    });
+    symbols
+}
+
 fn reference_locations(
     source: &str,
     uri: &Url,
@@ -269,6 +338,108 @@ fn reference_locations(
                 range: Range::new(lsp_position(source, start), lsp_position(source, end)),
             })
             .collect()
+    })
+}
+
+fn document_highlights(source: &str, position: Position) -> Option<Vec<DocumentHighlight>> {
+    let (line, column) = driver_position(source, position)?;
+    let definition = jett_driver::goto_definition(source, line, column);
+    let mut spans = jett_driver::references_at(source, line, column);
+
+    if let Some(definition) = definition
+        && !spans.contains(&definition)
+    {
+        spans.push(definition);
+    }
+    spans.sort_unstable();
+    spans.dedup();
+
+    (!spans.is_empty()).then(|| {
+        spans
+            .into_iter()
+            .map(|span| DocumentHighlight {
+                range: Range::new(lsp_position(source, span.0), lsp_position(source, span.1)),
+                kind: Some(
+                    if Some(span) == definition || is_assignment_target(source, span.1) {
+                        DocumentHighlightKind::WRITE
+                    } else {
+                        DocumentHighlightKind::READ
+                    },
+                ),
+            })
+            .collect()
+    })
+}
+
+fn is_assignment_target(source: &str, end: u32) -> bool {
+    source
+        .get(end as usize..)
+        .map(|tail| tail.trim_start_matches([' ', '\t']))
+        .and_then(|tail| tail.strip_prefix('='))
+        .is_some_and(|tail| !tail.starts_with('='))
+}
+
+fn rename_edit(
+    source: &str,
+    uri: &Url,
+    position: Position,
+    new_name: &str,
+) -> Option<WorkspaceEdit> {
+    // Contextual keywords (for example `value`) can be valid binding names;
+    // validate their actual declaration context with the compiler below.
+    if !new_name
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        || !new_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return None;
+    }
+    let (line, column) = driver_position(source, position)?;
+    // External declarations cannot be renamed by editing only their local uses.
+    let definition = jett_driver::goto_definition(source, line, column)?;
+    let old_name = source.get(definition.0 as usize..definition.1 as usize)?;
+    let mut spans = jett_driver::references_at(source, line, column);
+    spans.push(definition);
+    for span in &mut spans {
+        let text = source.get(span.0 as usize..span.1 as usize)?;
+        if text != old_name {
+            // Resolved qualified calls cover their entire namespace path.
+            if !text.strip_suffix(old_name)?.ends_with('.') {
+                return None;
+            }
+            span.0 = span.1.checked_sub(u32::try_from(old_name.len()).ok()?)?;
+        }
+    }
+    spans.sort_unstable();
+    spans.dedup();
+    let mut renamed = source.to_string();
+    for &(start, end) in spans.iter().rev() {
+        renamed.replace_range(start as usize..end as usize, new_name);
+    }
+    // Enforce declaration naming rules, duplicate bindings and no-shadowing
+    // through the compiler rather than emitting a refactor that breaks them.
+    if jett_driver::build_source(&renamed, "<lsp-rename>")
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return None;
+    }
+    let edits = spans
+        .into_iter()
+        .map(|(start, end)| TextEdit {
+            range: Range::new(lsp_position(source, start), lsp_position(source, end)),
+            new_text: new_name.to_string(),
+        })
+        .collect();
+
+    Some(WorkspaceEdit {
+        changes: Some(HashMap::from([(uri.clone(), edits)])),
+        document_changes: None,
+        change_annotations: None,
     })
 }
 
@@ -331,6 +502,355 @@ fn tab_indentation_code_actions(
             }))
         })
         .collect()
+}
+
+const SEMANTIC_KEYWORD: u32 = 0;
+const SEMANTIC_TYPE: u32 = 1;
+const SEMANTIC_NUMBER: u32 = 2;
+const SEMANTIC_STRING: u32 = 3;
+const SEMANTIC_OPERATOR: u32 = 4;
+const SEMANTIC_COMMENT: u32 = 5;
+
+fn semantic_token_type(kind: jett_lexer::TokenKind) -> Option<u32> {
+    use jett_lexer::TokenKind;
+
+    match kind {
+        TokenKind::Int8
+        | TokenKind::Int16
+        | TokenKind::Int32
+        | TokenKind::Int64
+        | TokenKind::Uint8
+        | TokenKind::Uint16
+        | TokenKind::Uint32
+        | TokenKind::Uint64
+        | TokenKind::Float32
+        | TokenKind::Float64
+        | TokenKind::String_
+        | TokenKind::Bool_
+        | TokenKind::Bytes_
+        | TokenKind::List_
+        | TokenKind::Map_
+        | TokenKind::Set_ => Some(SEMANTIC_TYPE),
+        TokenKind::IntLiteral | TokenKind::FloatLiteral => Some(SEMANTIC_NUMBER),
+        TokenKind::StringStart
+        | TokenKind::StringMid
+        | TokenKind::StringEnd
+        | TokenKind::StringLiteral => Some(SEMANTIC_STRING),
+        TokenKind::Eq
+        | TokenKind::EqEq
+        | TokenKind::NotEq
+        | TokenKind::Lt
+        | TokenKind::Gt
+        | TokenKind::LtEq
+        | TokenKind::GtEq
+        | TokenKind::Plus
+        | TokenKind::Minus
+        | TokenKind::Star
+        | TokenKind::Slash
+        | TokenKind::AmpAmp
+        | TokenKind::PipePipe
+        | TokenKind::Bang
+        | TokenKind::Modulo
+        | TokenKind::And
+        | TokenKind::Or
+        | TokenKind::Not
+        | TokenKind::Is
+        | TokenKind::Within => Some(SEMANTIC_OPERATOR),
+        TokenKind::Ident
+        | TokenKind::Value
+        | TokenKind::Dot
+        | TokenKind::Comma
+        | TokenKind::Colon
+        | TokenKind::LParen
+        | TokenKind::RParen
+        | TokenKind::LBracket
+        | TokenKind::RBracket
+        | TokenKind::Hash
+        | TokenKind::Newline
+        | TokenKind::Indent
+        | TokenKind::Dedent
+        | TokenKind::Eof
+        | TokenKind::InvalidToken => None,
+        _ => Some(SEMANTIC_KEYWORD),
+    }
+}
+
+fn semantic_tokens_for_source(source: &str) -> Vec<SemanticToken> {
+    let lexed = jett_lexer::tokenize(source, jett_common::FileId::new(0));
+    let mut spans = lexed
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            semantic_token_type(token.kind)
+                .map(|token_type| (token.span.start, token.span.end, token_type))
+        })
+        .collect::<Vec<_>>();
+    spans.extend(
+        lexed
+            .comments
+            .iter()
+            .map(|comment| (comment.span.start, comment.span.end, SEMANTIC_COMMENT)),
+    );
+    spans.sort_unstable_by_key(|(start, end, token_type)| (*start, *end, *token_type));
+
+    let mut previous_line = 0u32;
+    let mut previous_start = 0u32;
+    let mut tokens = Vec::with_capacity(spans.len());
+    // Lexical spans are ordered and non-overlapping. Walk source characters
+    // once instead of rescanning every prefix twice per token.
+    let mut characters = source.char_indices().peekable();
+    let mut position = Position::new(0, 0);
+    let mut previous_was_cr = false;
+    let mut position_at = |offset: u32| {
+        while characters
+            .peek()
+            .is_some_and(|(index, _)| *index < offset as usize)
+        {
+            let (_, character) = characters.next().expect("peeked character");
+            match character {
+                '\r' => {
+                    position.line += 1;
+                    position.character = 0;
+                }
+                '\n' => {
+                    if !previous_was_cr {
+                        position.line += 1;
+                    }
+                    position.character = 0;
+                }
+                _ => position.character += character.len_utf16() as u32,
+            }
+            previous_was_cr = character == '\r';
+        }
+        position
+    };
+    for (start, end, token_type) in spans {
+        let start = position_at(start);
+        let end = position_at(end);
+        if start.line != end.line || start.character >= end.character {
+            continue;
+        }
+        let delta_line = start.line - previous_line;
+        let delta_start = if delta_line == 0 {
+            start.character - previous_start
+        } else {
+            start.character
+        };
+        tokens.push(SemanticToken {
+            delta_line,
+            delta_start,
+            length: end.character - start.character,
+            token_type,
+            token_modifiers_bitset: 0,
+        });
+        previous_line = start.line;
+        previous_start = start.character;
+    }
+    tokens
+}
+
+fn semantic_tokens_response(source: &str) -> SemanticTokensResult {
+    SemanticTokensResult::Tokens(SemanticTokens {
+        result_id: None,
+        data: semantic_tokens_for_source(source),
+    })
+}
+
+fn signature_help_source_offset(source: &str, position: Position) -> Option<usize> {
+    let line_source = source_line(source, usize::try_from(position.line).ok()?)?;
+    let line_start = line_source.as_ptr() as usize - source.as_ptr() as usize;
+    let mut utf16_column = 0u32;
+    for (offset, ch) in line_source.char_indices() {
+        if utf16_column == position.character {
+            return Some(line_start + offset);
+        }
+        utf16_column = utf16_column.checked_add(ch.len_utf16() as u32)?;
+        if position.character < utf16_column {
+            return None;
+        }
+    }
+    (utf16_column == position.character).then_some(line_start + line_source.len())
+}
+
+fn call_context_at(source: &str, position: Position) -> Option<(String, u32)> {
+    use jett_lexer::TokenKind;
+
+    struct Delimiter {
+        kind: TokenKind,
+        callee: Option<String>,
+        commas: u32,
+    }
+
+    let cursor = signature_help_source_offset(source, position)?;
+    let lexed = jett_lexer::tokenize(source, jett_common::FileId::new(0));
+    let mut delimiters = Vec::new();
+    for (index, token) in lexed.tokens.iter().enumerate() {
+        if token.span.start as usize >= cursor {
+            break;
+        }
+        match token.kind {
+            TokenKind::LParen | TokenKind::LBracket => delimiters.push(Delimiter {
+                kind: token.kind,
+                callee: (token.kind == TokenKind::LParen)
+                    .then(|| signature_callee_before(source, &lexed.tokens[..index]))
+                    .flatten(),
+                commas: 0,
+            }),
+            TokenKind::RParen | TokenKind::RBracket => {
+                let opening = if token.kind == TokenKind::RParen {
+                    TokenKind::LParen
+                } else {
+                    TokenKind::LBracket
+                };
+                if let Some(position) = delimiters.iter().rposition(|entry| entry.kind == opening) {
+                    delimiters.truncate(position);
+                }
+            }
+            TokenKind::Comma => {
+                if let Some(delimiter) = delimiters.last_mut() {
+                    delimiter.commas = delimiter.commas.saturating_add(1);
+                }
+            }
+            _ => {}
+        }
+    }
+    delimiters
+        .into_iter()
+        .rev()
+        .find_map(|call| call.callee.map(|name| (name, call.commas)))
+}
+
+fn signature_callee_before(source: &str, tokens: &[jett_lexer::Token]) -> Option<String> {
+    use jett_lexer::TokenKind;
+    let mut end = tokens.len();
+    if tokens.last()?.kind == TokenKind::RBracket {
+        let mut depth = 1usize;
+        end -= 1;
+        while end > 0 && depth > 0 {
+            end -= 1;
+            match tokens[end].kind {
+                TokenKind::RBracket => depth += 1,
+                TokenKind::LBracket => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            return None;
+        }
+    }
+    let last = tokens.get(end.checked_sub(1)?)?;
+    // Match parser contextual identifiers too: public calls such as list.map
+    // and json.serialize end in tokens that also have keyword/type meanings.
+    if !matches!(
+        last.kind,
+        TokenKind::Ident
+            | TokenKind::Self_
+            | TokenKind::Other
+            | TokenKind::Error
+            | TokenKind::Value
+            | TokenKind::Serialize
+            | TokenKind::Network
+            | TokenKind::Default
+            | TokenKind::Ok
+            | TokenKind::Fail
+            | TokenKind::Clone
+            | TokenKind::Send
+            | TokenKind::Run
+            | TokenKind::Join
+            | TokenKind::Cancel
+            | TokenKind::Trace
+            | TokenKind::Transition
+            | TokenKind::Type
+            | TokenKind::Bit
+            | TokenKind::Bits
+            | TokenKind::States
+            | TokenKind::Map_
+            | TokenKind::List_
+            | TokenKind::Set_
+    ) {
+        return None;
+    }
+    let mut start = end - 1;
+    while start >= 2 && tokens[start - 1].kind == TokenKind::Dot {
+        let component =
+            &source[tokens[start - 2].span.start as usize..tokens[start - 2].span.end as usize];
+        if !component
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            break;
+        }
+        start -= 2;
+    }
+    Some(
+        tokens[start..end]
+            .iter()
+            .map(|token| &source[token.span.start as usize..token.span.end as usize])
+            .collect(),
+    )
+}
+
+fn signature_parameter_label(parameter: &jett_driver::SignatureParam) -> String {
+    let mut label = String::new();
+    if parameter.view {
+        label.push_str("view ");
+    }
+    if parameter.mutable {
+        label.push_str("mutable ");
+    }
+    label.push_str(&parameter.name);
+    label.push_str(": ");
+    label.push_str(&parameter.type_name);
+    label
+}
+
+fn signature_help_for_source(source: &str, position: Position) -> Option<SignatureHelp> {
+    let (callee, active_parameter) = call_context_at(source, position)?;
+    let offset = u32::try_from(signature_help_source_offset(source, position)?).ok()?;
+    let signature = jett_driver::query_source_signature_at(source, &callee, offset)
+        .ok()
+        .flatten()?;
+    let type_params = if signature.type_params.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", signature.type_params.join(", "))
+    };
+    let parameter_labels: Vec<String> = signature
+        .params
+        .iter()
+        .map(signature_parameter_label)
+        .collect();
+    let label = format!(
+        "{}{}({}) returns {}",
+        signature.name,
+        type_params,
+        parameter_labels.join(", "),
+        signature.return_type
+    );
+    let parameters = parameter_labels
+        .into_iter()
+        .map(|label| ParameterInformation {
+            label: ParameterLabel::Simple(label),
+            documentation: None,
+        })
+        .collect();
+    let active_parameter = signature
+        .params
+        .len()
+        .checked_sub(1)
+        .and_then(|last| u32::try_from(last).ok())
+        .map(|last| active_parameter.min(last));
+
+    Some(SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label,
+            documentation: None,
+            parameters: Some(parameters),
+            active_parameter: None,
+        }],
+        active_signature: Some(0),
+        active_parameter,
+    })
 }
 
 #[tower_lsp::async_trait]
@@ -478,6 +998,31 @@ impl LanguageServer for JettBackend {
         ))
     }
 
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+        Ok(document_highlights(&document.text, position))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(rename_edit(&document.text, uri, position, &params.new_name))
+    }
+
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let documents = self.documents.read().await;
         let Some(document) = documents.get(&params.text_document.uri) else {
@@ -504,8 +1049,18 @@ impl LanguageServer for JettBackend {
             &params.text_document.uri,
             &params.context.diagnostics,
         );
-
         Ok((!actions.is_empty()).then_some(actions))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(semantic_tokens_response(&document.text)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -555,6 +1110,19 @@ impl LanguageServer for JettBackend {
         Ok(Some(CompletionResponse::Array(items)))
     }
 
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(signature_help_for_source(
+            &document.text,
+            params.text_document_position_params.position,
+        ))
+    }
+
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
@@ -570,10 +1138,26 @@ impl LanguageServer for JettBackend {
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let documents = self.documents.read().await;
+        Ok(Some(workspace_symbols_for_documents(
+            &documents,
+            &params.query,
+        )))
+    }
 }
 
 fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
     let result = jett_driver::build_source(source, file_path);
+    // Windows drive paths also parse as URLs with a one-letter scheme.
+    // Prefer a filesystem URL for native absolute paths from validate().
+    let uri = Url::from_file_path(file_path)
+        .ok()
+        .or_else(|| Url::parse(file_path).ok());
 
     result
         .diagnostics
@@ -589,6 +1173,24 @@ fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
                 lsp_position(&result.source, d.span.start),
                 lsp_position(&result.source, d.span.end),
             );
+            let related_information = uri.as_ref().and_then(|uri| {
+                let labels = d
+                    .labels
+                    .iter()
+                    .filter(|label| label.span.file == d.span.file)
+                    .map(|label| DiagnosticRelatedInformation {
+                        location: Location {
+                            uri: uri.clone(),
+                            range: Range::new(
+                                lsp_position(&result.source, label.span.start),
+                                lsp_position(&result.source, label.span.end),
+                            ),
+                        },
+                        message: label.message.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                (!labels.is_empty()).then_some(labels)
+            });
 
             Diagnostic {
                 range,
@@ -596,6 +1198,7 @@ fn diagnostics_for_source(source: &str, file_path: &str) -> Vec<Diagnostic> {
                 code: Some(NumberOrString::String(d.code.to_string())),
                 source: Some("jett".to_string()),
                 message: d.message.clone(),
+                related_information,
                 ..Diagnostic::default()
             }
         })
@@ -742,6 +1345,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn diagnostics_for_source_preserves_compiler_labels_as_related_information() {
+        let source = "namespace app\n\nfunction main() returns nothing:\n    int64 value = 1\n    int64 value = 2\n    return nothing\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let diagnostics = diagnostics_for_source(source, uri.as_str());
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                matches!(
+                    diagnostic.code,
+                    Some(NumberOrString::String(ref code)) if code == "E0204"
+                )
+            })
+            .expect("duplicate binding should diagnose");
+        let related = diagnostic
+            .related_information
+            .as_ref()
+            .expect("the original binding label should be preserved");
+
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].location.uri, uri);
+        assert_eq!(related[0].message, "previously defined here");
+        assert_eq!(
+            related[0].location.range,
+            Range::new(Position::new(3, 10), Position::new(3, 15))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn diagnostic_labels_use_file_urls_for_windows_paths() {
+        let source = "function main() returns nothing:\n    int64 value = 1\n    int64 value = 2\n    return nothing\n";
+        let diagnostics = diagnostics_for_source(source, r"C:\workspace\main.jett");
+        let related = diagnostics
+            .iter()
+            .find_map(|diagnostic| diagnostic.related_information.as_ref())
+            .unwrap();
+        assert_eq!(
+            related[0].location.uri.as_str(),
+            "file:///C:/workspace/main.jett"
+        );
+    }
+
     /// Verify that hover_type returns a type for a known expression.
     #[test]
     fn hover_type_returns_type_for_identifier() {
@@ -753,7 +1399,7 @@ mod tests {
     }
 
     #[test]
-    fn server_capabilities_advertise_sync_and_document_symbols() {
+    fn server_capabilities_advertise_sync_document_symbols_and_signature_help() {
         let capabilities = server_capabilities();
         let Some(TextDocumentSyncCapability::Options(options)) = capabilities.text_document_sync
         else {
@@ -768,6 +1414,14 @@ mod tests {
         assert_eq!(
             capabilities.document_symbol_provider,
             Some(OneOf::Left(true))
+        );
+        assert_eq!(
+            capabilities.signature_help_provider,
+            Some(SignatureHelpOptions {
+                trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                retrigger_characters: None,
+                work_done_progress_options: WorkDoneProgressOptions::default(),
+            })
         );
     }
 
@@ -810,6 +1464,104 @@ mod tests {
     }
 
     #[test]
+    fn signature_help_tracks_the_active_parameter_of_nested_calls() {
+        let source = "namespace app\n\nexport function add(left: int64, right: int64) returns int64:\n    return left + right\n\nfunction main() returns int64:\n    return app.add(1, app.add(2, 3))\n";
+        let cursor_offset = source.find("2, 3").expect("inner arguments") + "2, ".len();
+
+        let help = signature_help_for_source(
+            source,
+            lsp_position(source, u32::try_from(cursor_offset).unwrap()),
+        )
+        .expect("nested call should provide signature help");
+
+        assert_eq!(help.active_signature, Some(0));
+        assert_eq!(help.active_parameter, Some(1));
+        assert_eq!(help.signatures.len(), 1);
+        assert_eq!(
+            help.signatures[0].label,
+            "app.add(left: int64, right: int64) returns int64"
+        );
+        assert_eq!(
+            help.signatures[0].parameters.as_ref().unwrap()[1].label,
+            ParameterLabel::Simple("right: int64".to_string())
+        );
+    }
+
+    #[test]
+    fn signature_help_resolves_private_unqualified_document_calls() {
+        let source = "namespace app\n\nfunction helper(value: string) returns string:\n    return value\n\nfunction main() returns string:\n    return helper(\"value\")\n";
+        let cursor_offset = source.find("\"value\"").expect("call argument");
+
+        let help = signature_help_for_source(
+            source,
+            lsp_position(source, u32::try_from(cursor_offset).unwrap()),
+        )
+        .expect("private call should provide signature help");
+
+        assert_eq!(
+            help.signatures[0].label,
+            "app.helper(value: string) returns string"
+        );
+        assert_eq!(help.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn signature_help_survives_an_incomplete_call() {
+        let source = "namespace app\n\nexport function add(left: int64, right: int64) returns int64:\n    return left + right\n\nfunction main() returns int64:\n    return app.add(";
+        let cursor = lsp_position(source, u32::try_from(source.len()).unwrap());
+
+        let help = signature_help_for_source(source, cursor)
+            .expect("an unfinished call should still provide signature help");
+
+        assert_eq!(
+            help.signatures[0].label,
+            "app.add(left: int64, right: int64) returns int64"
+        );
+        assert_eq!(help.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn signature_help_supports_zero_parameters() {
+        let source = "namespace app\nfunction f() returns int64:\n    return 1\nfunction main() returns int64:\n    return f(";
+        let help =
+            signature_help_for_source(source, lsp_position(source, source.len() as u32)).unwrap();
+        assert_eq!(help.active_parameter, None);
+        assert_eq!(help.signatures[0].parameters.as_ref().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn signature_context_handles_grouping_and_interpolation() {
+        for (source, expected) in [
+            ("f(1, (2 + ", ("f", 1)),
+            ("f(\"{g(1, 2)}\")", ("g", 1)),
+            ("f(1, list.of[int64](2, ", ("list.of", 1)),
+            ("list.map[int64, string](values, ", ("list.map", 1)),
+            ("json.serialize(", ("json.serialize", 0)),
+        ] {
+            let offset = if source.contains("{g") {
+                source.find("2)").unwrap()
+            } else {
+                source.len()
+            };
+            assert_eq!(
+                call_context_at(source, lsp_position(source, offset as u32)),
+                Some((expected.0.to_string(), expected.1))
+            );
+        }
+    }
+
+    #[test]
+    fn signature_help_uses_the_calling_namespace() {
+        let source = "namespace first\nfunction helper(value: int64) returns int64:\n    return value\nnamespace second\nfunction helper(value: string) returns string:\n    return value\nfunction main() returns string:\n    return helper(";
+        let help =
+            signature_help_for_source(source, lsp_position(source, source.len() as u32)).unwrap();
+        assert_eq!(
+            help.signatures[0].label,
+            "second.helper(value: string) returns string"
+        );
+    }
+
+    #[test]
     fn document_symbol_kind_maps_resources() {
         assert_eq!(document_symbol_kind("resource"), SymbolKind::CLASS);
     }
@@ -819,6 +1571,192 @@ mod tests {
         let capabilities = server_capabilities();
 
         assert_eq!(capabilities.references_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
+    fn server_capabilities_advertise_document_highlights() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.document_highlight_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn server_capabilities_advertise_full_semantic_tokens() {
+        let capabilities = server_capabilities();
+        let Some(SemanticTokensServerCapabilities::SemanticTokensOptions(options)) =
+            capabilities.semantic_tokens_provider
+        else {
+            panic!("expected semantic token options");
+        };
+
+        assert_eq!(options.range, Some(false));
+        assert_eq!(options.full, Some(SemanticTokensFullOptions::Bool(true)));
+        assert_eq!(
+            options.legend.token_types,
+            vec![
+                SemanticTokenType::KEYWORD,
+                SemanticTokenType::TYPE,
+                SemanticTokenType::NUMBER,
+                SemanticTokenType::STRING,
+                SemanticTokenType::OPERATOR,
+                SemanticTokenType::COMMENT,
+            ]
+        );
+    }
+
+    #[test]
+    fn semantic_tokens_cover_jett_syntax_with_utf16_lengths() {
+        let source = concat!(
+            "namespace demo\n",
+            "# note\n",
+            "function f(value: int64) returns bool:\n",
+            "    return value >= 42 and \"🙂\" != \"\"\n",
+        );
+
+        let tokens = semantic_tokens_for_source(source);
+        let mut line = 0u32;
+        let mut start = 0u32;
+        let absolute = tokens
+            .into_iter()
+            .map(|token| {
+                line += token.delta_line;
+                start = if token.delta_line == 0 {
+                    start + token.delta_start
+                } else {
+                    token.delta_start
+                };
+                (line, start, token.length, token.token_type)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            absolute,
+            vec![
+                (0, 0, 9, 0),
+                (1, 0, 6, 5),
+                (2, 0, 8, 0),
+                (2, 18, 5, 1),
+                (2, 25, 7, 0),
+                (2, 33, 4, 1),
+                (3, 4, 6, 0),
+                (3, 17, 2, 4),
+                (3, 20, 2, 2),
+                (3, 23, 3, 4),
+                (3, 27, 4, 3),
+                (3, 32, 2, 4),
+                (3, 35, 2, 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn server_capabilities_advertise_workspace_symbol_search() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.workspace_symbol_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn semantic_tokens_response_wraps_full_document_tokens() {
+        let response = semantic_tokens_response("return 1\n");
+        let SemanticTokensResult::Tokens(tokens) = response else {
+            panic!("expected a full semantic token response");
+        };
+
+        assert_eq!(tokens.result_id, None);
+        assert_eq!(tokens.data.len(), 2);
+        assert_eq!(tokens.data[0].token_type, SEMANTIC_KEYWORD);
+        assert_eq!(tokens.data[1].token_type, SEMANTIC_NUMBER);
+    }
+
+    #[test]
+    fn semantic_token_positions_match_utf16_across_mixed_line_endings() {
+        let source = "return \"😀\"\r\n# explanation\rreturn 2\nreturn \"{1 + 2}\"\n";
+        let lexed = jett_lexer::tokenize(source, jett_common::FileId::new(0));
+        let mut expected: Vec<_> = lexed
+            .tokens
+            .iter()
+            .filter_map(|token| {
+                let kind = semantic_token_type(token.kind)?;
+                let start = lsp_position(source, token.span.start);
+                let end = lsp_position(source, token.span.end);
+                (start.line == end.line && start.character < end.character).then_some((
+                    start,
+                    end.character - start.character,
+                    kind,
+                ))
+            })
+            .collect();
+        expected.extend(lexed.comments.iter().map(|comment| {
+            let start = lsp_position(source, comment.span.start);
+            let end = lsp_position(source, comment.span.end);
+            (start, end.character - start.character, SEMANTIC_COMMENT)
+        }));
+        expected.sort_by_key(|entry| entry.0);
+        let mut line = 0;
+        let mut column = 0;
+        let actual: Vec<_> = semantic_tokens_for_source(source)
+            .into_iter()
+            .map(|token| {
+                line += token.delta_line;
+                column = if token.delta_line == 0 {
+                    column + token.delta_start
+                } else {
+                    token.delta_start
+                };
+                (Position::new(line, column), token.length, token.token_type)
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn workspace_symbols_search_all_open_documents_case_insensitively() {
+        let first_uri = Url::parse("file:///workspace/auth.jett").unwrap();
+        let second_uri = Url::parse("file:///workspace/admin.jett").unwrap();
+        let mut documents = HashMap::new();
+        documents.insert(
+            first_uri.clone(),
+            DocumentState {
+                text:
+                    "namespace auth\n\nexport function LoginUser() returns int64:\n    return 1\n"
+                        .to_string(),
+                version: 1,
+            },
+        );
+        documents.insert(
+            second_uri,
+            DocumentState {
+                text: "namespace admin\n\nexport function logout() returns int64:\n    return 2\n"
+                    .to_string(),
+                version: 1,
+            },
+        );
+
+        let symbols = workspace_symbols_for_documents(&documents, "login");
+
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "auth.LoginUser");
+        assert_eq!(symbols[0].kind, SymbolKind::FUNCTION);
+        assert_eq!(symbols[0].location.uri, first_uri);
+        assert_eq!(
+            symbols[0].location.range,
+            Range::new(Position::new(2, 16), Position::new(2, 25))
+        );
+        assert_eq!(symbols[0].container_name.as_deref(), Some("auth"));
+    }
+
+    #[test]
+    fn server_capabilities_advertise_symbol_rename() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(capabilities.rename_provider, Some(OneOf::Left(true)));
     }
 
     #[test]
@@ -933,6 +1871,48 @@ mod tests {
     }
 
     #[test]
+    fn document_highlights_mark_the_declaration_as_write_and_uses_as_read() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let highlights = document_highlights(source, Position::new(6, 11))
+            .expect("call should resolve to document highlights");
+
+        assert_eq!(
+            highlights,
+            vec![
+                DocumentHighlight {
+                    range: Range::new(Position::new(2, 9), Position::new(2, 15)),
+                    kind: Some(DocumentHighlightKind::WRITE),
+                },
+                DocumentHighlight {
+                    range: Range::new(Position::new(6, 11), Position::new(6, 17)),
+                    kind: Some(DocumentHighlightKind::READ),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn document_highlights_distinguish_assignments_from_reads_and_equality() {
+        let source = "function main() returns int64:\n    mutable int64 total = 1\n    total = total + 1\n    if total == 2:\n        return total\n    return 0\n";
+        let highlights = document_highlights(source, Position::new(2, 5)).unwrap();
+        let kinds: Vec<_> = highlights
+            .iter()
+            .map(|highlight| highlight.kind.unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DocumentHighlightKind::WRITE,
+                DocumentHighlightKind::WRITE,
+                DocumentHighlightKind::READ,
+                DocumentHighlightKind::READ,
+                DocumentHighlightKind::READ
+            ]
+        );
+    }
+
+    #[test]
     fn reference_locations_support_requests_on_the_declaration() {
         let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
         let uri = Url::parse("file:///workspace/main.jett").unwrap();
@@ -941,6 +1921,67 @@ mod tests {
             .expect("declaration should resolve");
 
         assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn rename_edits_replace_a_declaration_and_all_its_references() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let edit = rename_edit(source, &uri, Position::new(3, 11), "number")
+            .expect("parameter reference should resolve");
+        let changes = edit.changes.expect("document changes");
+        let edits = changes.get(&uri).expect("current document edits");
+
+        assert_eq!(edits.len(), 3);
+        assert!(edits.iter().all(|edit| edit.new_text == "number"));
+        assert_eq!(edits[0].range.start, Position::new(2, 16));
+        assert_eq!(edits[1].range.start, Position::new(3, 11));
+        assert_eq!(edits[2].range.start, Position::new(3, 19));
+    }
+
+    #[test]
+    fn rename_rejects_invalid_names_collisions_and_external_declarations() {
+        let source = "namespace app\nfunction f(value: int64, other: int64) returns int64:\n    return value + other\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        for name in [
+            "",
+            "return",
+            "two words",
+            "foo.bar",
+            "1value",
+            " other",
+            "other",
+        ] {
+            assert!(
+                rename_edit(source, &uri, Position::new(2, 11), name).is_none(),
+                "{name:?}"
+            );
+        }
+        let external =
+            "namespace app\nfunction main() returns int64:\n    return int64.max(1, 2)\n";
+        assert!(rename_edit(external, &uri, Position::new(2, 18), "bigger").is_none());
+    }
+
+    #[test]
+    fn rename_keeps_namespace_qualifiers() {
+        let source = "namespace app\nfunction double(value: int64) returns int64:\n    return value + value\nfunction main() returns int64:\n    return app.double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let edit = rename_edit(source, &uri, Position::new(4, 18), "twice").unwrap();
+        let changes = edit.changes.unwrap();
+        let edits = &changes[&uri];
+        assert_eq!(edits.len(), 2);
+        assert_eq!(
+            edits[1].range,
+            Range::new(Position::new(4, 15), Position::new(4, 21))
+        );
+    }
+
+    #[test]
+    fn rename_accepts_contextual_binding_names() {
+        let source = "function double(number: int64) returns int64:\n    return number + number\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        assert!(rename_edit(source, &uri, Position::new(1, 12), "value").is_some());
     }
 
     #[test]
