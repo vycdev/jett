@@ -1315,7 +1315,12 @@ impl<'a> TypeChecker<'a> {
                 | "json.serialize_public"
                 | "json.serialize_raw"
                 | "Filesystem.write_file"
-                | "log"
+                | "log.emit"
+                | "log.debug"
+                | "log.info"
+                | "log.warn"
+                | "log.error"
+                | "log.__emit"
                 | "http.respond"
         )
     }
@@ -2872,6 +2877,7 @@ impl<'a> TypeChecker<'a> {
                 | "crypto.__sha256"
                 | "crypto.__sha512"
                 | "crypto.__md5"
+                | "crypto.__hmac_sha256"
                 | "csv.__parse"
                 | "csv.__stringify"
                 | "csv.__parse_with_header"
@@ -2884,6 +2890,7 @@ impl<'a> TypeChecker<'a> {
                 | "test.mock.__random"
                 | "test.mock.__clock"
                 | "test.mock.__environment"
+                | "log.__emit"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -4039,6 +4046,11 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::BYTES],
                 TypeInterner::BYTES,
             ),
+            "crypto.__hmac_sha256" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let secret_bytes = self.interner.intern(Type::Secret(TypeInterner::BYTES));
+                Some((vec![secret_bytes, TypeInterner::BYTES], secret_bytes))
+            }
             "Clock.__now" => self.no_type_args_signature(
                 &name,
                 type_args,
@@ -4077,6 +4089,15 @@ impl<'a> TypeChecker<'a> {
                 let entry = *self.named_types.get("test.mock.EnvironmentEntry")?;
                 let entries = self.interner.intern(Type::List(entry));
                 Some((vec![arguments, entries], TypeInterner::ERROR))
+            }
+            "log.__emit" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let event = *self.named_types.get("log.Event")?;
+                let error = *self.named_types.get("log.Error")?;
+                let result = self
+                    .interner
+                    .intern(Type::Result(TypeInterner::NOTHING, error));
+                Some((vec![TypeInterner::ERROR, event], result))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
             "csv.__parse" => {
@@ -9267,20 +9288,21 @@ impl<'a> TypeChecker<'a> {
         args: &[ast::CallArg],
         span: Span,
     ) {
-        if args.len() != params.len() {
-            self.sink.emit(errors::argument_count_mismatch(
-                label,
-                params.len(),
-                args.len(),
-                span,
-            ));
+        let parameter_names = params
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let Some(argument_order) = self.bind_call_arguments(label, &parameter_names, args, span)
+        else {
             for arg in args {
                 self.check_expr(&arg.value);
             }
             return;
-        }
+        };
+        self.record_call_argument_order(span, argument_order.clone());
 
-        for (arg, (param_name, param_ty)) in args.iter().zip(params.iter()) {
+        for (&source_index, (param_name, param_ty)) in argument_order.iter().zip(params.iter()) {
+            let arg = &args[source_index];
             let arg_ty = self.check_expr_for_expected(&arg.value, *param_ty, false);
             if arg_ty != TypeInterner::ERROR
                 && *param_ty != TypeInterner::ERROR

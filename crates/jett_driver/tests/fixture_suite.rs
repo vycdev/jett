@@ -287,6 +287,14 @@ macro_rules! run_pass_fixture {
 }
 
 compile_pass_fixture!(compile_pass_basic, "basic.jett");
+compile_fail_fixture!(
+    compile_fail_structured_logging_secrets,
+    "structured_logging_secrets.jett"
+);
+compile_pass_fixture!(
+    compile_pass_structured_logging_source,
+    "structured_logging_source.jett"
+);
 compile_pass_fixture!(
     compile_pass_test_mock_source_boundary,
     "test_mock_source_boundary.jett"
@@ -797,6 +805,7 @@ run_pass_fixture!(
     "type_construction_machine.jett"
 );
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
+run_pass_fixture!(run_pass_actor_named_arguments, "actor_named_arguments.jett");
 run_pass_fixture!(
     run_pass_numeric_literal_contexts,
     "numeric_literal_contexts.jett"
@@ -1892,7 +1901,7 @@ fn compile_fail_crypto_type_counts() {
 
 #[test]
 fn compile_fail_crypto_secret_exposure_counts() {
-    assert_compile_fail_error_count("crypto_secret_exposure.jett", 600, 3);
+    assert_compile_fail_error_count("crypto_secret_exposure.jett", 600, 4);
     assert_compile_fail_error_count("crypto_secret_exposure.jett", 603, 1);
 }
 
