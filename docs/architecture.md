@@ -1876,6 +1876,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Rename a resolved symbol across its declaration and references in the current
   document using UTF-16 workspace edits.
 - Code completion.
+- Signature help for source-defined and standard-library calls, including the
+  active argument in nested calls and unsaved private document functions.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
 - Whole-document formatting is provided through `jett_fmt`.
