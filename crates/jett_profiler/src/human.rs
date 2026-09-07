@@ -29,6 +29,13 @@ pub fn render_cpu_profile(profile: &CpuProfile) -> String {
     .expect("writing to a String cannot fail");
     writeln!(
         output,
+        "Stack truncation: {} {}",
+        totals.truncated_stacks,
+        sample_label(totals.truncated_stacks)
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(
+        output,
         "Bottlenecks: {} emitted / {} eligible / {} truncated",
         profile.bottlenecks.len(),
         profile.eligible_bottlenecks,

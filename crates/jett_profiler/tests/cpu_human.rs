@@ -36,6 +36,7 @@ fn cpu_human_summary_preserves_totals_ranking_and_fixed_precision() {
             "Samples: 3 attributed / 5 recorded / 8 requested\n",
             "Other samples: 1 runtime, 1 waiting, 0 unavailable\n",
             "Sampling loss: 2 coalesced, 1 collector-dropped\n",
+            "Stack truncation: 0 samples\n",
             "Bottlenecks: 2 emitted / 2 eligible / 0 truncated\n",
             "1. pipeline.transform.main at src/transform.jett:3:5\n",
             "   100.00% inclusive (3 samples), 1 self sample\n",
@@ -47,4 +48,16 @@ fn cpu_human_summary_preserves_totals_ranking_and_fixed_precision() {
             "pipeline.transform.process_image.\n",
         )
     );
+}
+
+#[test]
+fn cpu_human_reports_truncated_stack_samples() {
+    let profile = CpuProfile::aggregate(
+        CpuConfig::default(),
+        1,
+        0,
+        0,
+        vec![CpuSample::jett(vec![frame("recursive", 3); 129])],
+    );
+    assert!(render_cpu_profile(&profile).contains("Stack truncation: 1 sample\n"));
 }
