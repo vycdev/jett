@@ -658,9 +658,11 @@ Track which capabilities flow through the program:
   expected operations were only partially observed. Runtime failures remain
   primary and are not replaced by this successful-run cleanup check.
 - **Application logging is a capability operation.** The source-owned
-  `log.emit` and level wrappers borrow `view Log`; the runtime injects a
-  dedicated provider, filter, capture, and checked sequence state. It remains
-  separate from stdout, stderr, compiler diagnostics, and debug output. See the
+  `log.emit` and level wrappers borrow `view Log`. Their public types, wrappers,
+  private trusted-kernel boundary, capability propagation, and secret-output
+  classification are implemented. Runtime provider injection, filtering,
+  capture, and checked sequence state remain pending. Logging stays separate
+  from stdout, stderr, compiler diagnostics, and debug output. See the
   [structured logging contract](completed/structured_logging_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
