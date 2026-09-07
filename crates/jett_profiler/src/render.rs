@@ -132,9 +132,20 @@ fn suggestion_rule_name(rule: &CpuSuggestionRule) -> &'static str {
 }
 
 fn escape_toon_scalar(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\r', "\\r")
-        .replace('\n', "\\n")
-        .replace(',', "\\,")
+    let mut output = String::new();
+    for character in value.chars() {
+        match character {
+            '\\' => output.push_str("\\\\"),
+            ',' => output.push_str("\\,"),
+            '\r' => output.push_str("\\r"),
+            '\n' => output.push_str("\\n"),
+            '\t' => output.push_str("\\t"),
+            control if control.is_control() => {
+                write!(output, "\\u{{{:x}}}", control as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            other => output.push(other),
+        }
+    }
+    output
 }
