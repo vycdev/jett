@@ -88,7 +88,10 @@ fn terminal_safe_width(text: &str) -> usize {
 
 fn underline_padding(source_line: &str, column: usize) -> String {
     let prefix: String = source_line.chars().take(column.saturating_sub(1)).collect();
-    " ".repeat(terminal_safe_width(&prefix))
+    terminal_safe_text(&prefix, true)
+        .chars()
+        .map(|ch| if ch == '\t' { '\t' } else { ' ' })
+        .collect()
 }
 
 fn span_underline_len(
@@ -397,6 +400,27 @@ mod tests {
             underline.find('^'),
             "the underline should track the escaped source width"
         );
+    }
+
+    #[test]
+    fn render_diagnostic_preserves_tabs_before_underlines() {
+        let source = "let\tvalue\n";
+        let file_id = FileId::new(0);
+        let diag = Diagnostic::error(300, "tabs are not allowed", Span::new(file_id, 4, 9))
+            .with_label(Span::new(file_id, 4, 9), "invalid token");
+
+        let rendered = render_diagnostic(&diag, source, "test.jett");
+        let underline = rendered
+            .lines()
+            .find(|line| line.ends_with("invalid token"))
+            .expect("primary underline should be rendered");
+        let padding = underline
+            .strip_prefix("   | ")
+            .expect("underline should include its gutter")
+            .strip_suffix("^^^^^ invalid token")
+            .expect("underline should include its carets and label");
+
+        assert_eq!(padding, "   \t");
     }
 
     #[test]
