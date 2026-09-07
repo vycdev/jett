@@ -218,6 +218,14 @@ pub type DefinitionAtQueryError = QueryError;
 /// Error returned by a detailed references-at query.
 pub type ReferencesAtQueryError = QueryError;
 
+/// Error returned by a detailed namespace query.
+pub type NamespaceQueryError = QueryError;
+
+/// Error returned by a detailed signature query.
+pub type SignatureQueryError = QueryError;
+/// Error returned by a detailed completion query.
+pub type CompletionsQueryError = QueryError;
+
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAtQueryResult {
@@ -943,32 +951,61 @@ pub fn query_completions_at(
     line: u32,
     column: u32,
 ) -> Result<CompletionsQueryResult, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_completions_at_detailed(path, line, column).map_err(|error| error.to_string())
+}
+
+/// Return completion candidates while retaining compiler diagnostics on failure.
+pub fn query_completions_at_detailed(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, CompletionsQueryError> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        CompletionsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
+    })?;
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
-        return Err(format!(
+        return Err(CompletionsQueryError::operational(format!(
             "position {line}:{column} is outside {}",
             path.display()
-        ));
+        )));
     };
     let prefix = completion_prefix_at(&source, offset);
 
     let parsed = parse(&source, file_id);
-    let parse_errors = error_messages_from_diagnostics(&parsed.errors);
-    if !parse_errors.is_empty() {
-        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    if has_error_diagnostics(&parsed.errors) {
+        return Err(CompletionsQueryError::compilation(
+            "parse errors:",
+            parsed.errors,
+            source,
+            file_path,
+        ));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_project_modules_with_diagnostics(path));
     let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
     if !support_errors.is_empty() {
-        return Err(format!(
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &support_modules.diagnostics,
+        );
+        if diagnostics_have_source_context(&support_modules.diagnostics, &diagnostic_sources) {
+            return Err(CompletionsQueryError::compilation_with_sources(
+                "support parse errors:",
+                support_modules.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(CompletionsQueryError::operational(format!(
             "support parse errors:\n{}",
             support_errors.join("\n")
-        ));
+        )));
     }
 
     let mut file_paths = support_modules.files.clone();
@@ -1029,15 +1066,19 @@ pub fn query_signature(
     start_dir: &Path,
     function_name: &str,
 ) -> Result<Option<SignatureQueryResult>, String> {
+    query_signature_detailed(start_dir, function_name).map_err(|error| error.to_string())
+}
+
+/// Return a public function signature while retaining project parse diagnostics.
+pub fn query_signature_detailed(
+    start_dir: &Path,
+    function_name: &str,
+) -> Result<Option<SignatureQueryResult>, SignatureQueryError> {
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
 
-    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
-    if !support_errors.is_empty() {
-        return Err(format!(
-            "query support parse errors:\n{}",
-            support_errors.join("\n")
-        ));
+    if has_error_diagnostics(&support_modules.diagnostics) {
+        return Err(query_support_error(support_modules));
     }
 
     for module in &support_modules.modules {
@@ -1355,6 +1396,7 @@ fn signature_builtin_type_name(name: &str) -> bool {
             | "Random"
             | "Process"
             | "Environment"
+            | "Log"
     )
 }
 
@@ -1463,15 +1505,18 @@ fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
 /// compiler-shipped stdlib modules. Without a `jett.proj`, the query still
 /// returns stdlib and language built-ins so agents can discover the base surface.
 pub fn query_namespaces(start_dir: &Path) -> Result<NamespaceQueryResult, String> {
+    query_namespaces_detailed(start_dir).map_err(|error| error.to_string())
+}
+
+/// Return the public namespace registry while retaining project parse diagnostics.
+pub fn query_namespaces_detailed(
+    start_dir: &Path,
+) -> Result<NamespaceQueryResult, NamespaceQueryError> {
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
 
-    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
-    if !support_errors.is_empty() {
-        return Err(format!(
-            "query support parse errors:\n{}",
-            support_errors.join("\n")
-        ));
+    if has_error_diagnostics(&support_modules.diagnostics) {
+        return Err(query_support_error(support_modules));
     }
 
     let mut definitions = query_builtin_definitions();
@@ -2507,6 +2552,47 @@ fn diagnostics_have_source_context(
         })
 }
 
+fn query_support_error(support_modules: DiscoveredModules) -> QueryError {
+    let Some(primary_file) = support_modules
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+        .map(|diagnostic| diagnostic.span.file)
+    else {
+        return QueryError::operational("query support parse errors");
+    };
+    let Some(primary_source) = support_modules.sources.get(&primary_file) else {
+        return query_support_operational_error(&support_modules.diagnostics);
+    };
+    let Some(primary_path) = support_modules.files.get(&primary_file) else {
+        return query_support_operational_error(&support_modules.diagnostics);
+    };
+    let primary_path = display_query_path(primary_path);
+    let sources = query_diagnostic_sources(
+        primary_file,
+        primary_source,
+        &primary_path,
+        &support_modules,
+        &support_modules.diagnostics,
+    );
+    if !diagnostics_have_source_context(&support_modules.diagnostics, &sources) {
+        return query_support_operational_error(&support_modules.diagnostics);
+    }
+    QueryError::compilation_with_sources(
+        "query support parse errors:",
+        support_modules.diagnostics,
+        primary_file,
+        sources,
+    )
+}
+
+fn query_support_operational_error(diagnostics: &[Diagnostic]) -> QueryError {
+    QueryError::operational(format!(
+        "query support parse errors:\n{}",
+        error_messages_from_diagnostics(diagnostics).join("\n")
+    ))
+}
+
 fn query_diagnostic_sources(
     primary_file: FileId,
     primary_source: &str,
@@ -3014,14 +3100,32 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
     // Register items from the entry file (may override sibling definitions).
     register_module_items(&mut interp, &module);
 
-    // Call main()
+    // Call main(). Scripted providers are exact expectations: a successful
+    // deterministic run must consume every supplied operation sample.
     match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
-        Ok(_) => Ok(RunOutput {
-            stdout: interp.take_stdout_output(),
-            debug_output: interp.take_debug_output(),
-        }),
+        Ok(_) => {
+            reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())?;
+            reject_unconsumed_test_samples("Clock", interp.clock_test_samples_remaining())?;
+            Ok(RunOutput {
+                stdout: interp.take_stdout_output(),
+                debug_output: interp.take_debug_output(),
+            })
+        }
         Err(e) => Err(format!("runtime error: {}", e)),
     }
+}
+
+fn reject_unconsumed_test_samples(
+    capability: &str,
+    remaining: Option<usize>,
+) -> Result<(), String> {
+    let Some(remaining) = remaining.filter(|remaining| *remaining != 0) else {
+        return Ok(());
+    };
+    let suffix = if remaining == 1 { "sample" } else { "samples" };
+    Err(format!(
+        "runtime error: {capability}: test provider has {remaining} unconsumed {suffix}"
+    ))
 }
 
 fn default_runtime_args_for_main(main: &FunctionDef) -> Result<Vec<Value>, String> {
@@ -3059,6 +3163,7 @@ fn type_expr_is_capability(ty: &TypeExpr) -> bool {
                 | "Random"
                 | "Process"
                 | "Environment"
+                | "Log"
         ),
         TypeExpr::View(inner, _) => type_expr_is_capability(inner),
         TypeExpr::StateQualified(inner, _, _) => type_expr_is_capability(inner),
@@ -3635,6 +3740,34 @@ fn bundle_file_is_in_cycle(start: usize, dependencies: &[HashSet<usize>]) -> boo
     false
 }
 
+fn logical_source_line_count(source: &str) -> u32 {
+    let bytes = source.as_bytes();
+    let mut count = 0_u32;
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                count += 1;
+                index += if bytes.get(index + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+            }
+            b'\n' => {
+                count += 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+
+    if count == 0 || !matches!(bytes.last(), Some(b'\r' | b'\n')) {
+        count += 1;
+    }
+    count
+}
+
 /// Bundle a project while retaining candidate-validation diagnostics on error.
 pub fn bundle_project_detailed(
     start_dir: &Path,
@@ -3703,7 +3836,7 @@ pub fn bundle_project_detailed(
     let mut bundled = String::new();
     let mut current_line = 1_u32;
     bundled.push_str("# Generated by jett bundle.\n");
-    bundled.push_str(&format!("# Project root: {}\n\n", project_dir.display()));
+    bundled.push_str("# Source paths are relative to the project root.\n\n");
     current_line += 3;
 
     let mut bundled_files = Vec::new();
@@ -3714,7 +3847,7 @@ pub fn bundle_project_detailed(
         current_line += 1;
 
         let start_line = current_line;
-        let source_line_count = file.source.lines().count().max(1) as u32;
+        let source_line_count = logical_source_line_count(&file.source);
         bundled.push_str(&file.source);
         if !file.source.ends_with('\n') {
             bundled.push('\n');
@@ -4748,14 +4881,24 @@ mod tests {
             assert_eq!(result.return_type, "string");
         }
 
-        for reserved in ["crypto.hmac_sha256", "crypto.hmac_sha512"] {
-            assert!(
-                query_signature(Path::new("."), reserved)
-                    .expect("reserved crypto query should succeed")
-                    .is_none(),
-                "{reserved} must remain undiscoverable until implemented"
-            );
-        }
+        let hmac = query_signature(Path::new("."), "crypto.hmac_sha256")
+            .expect("HMAC signature query should succeed")
+            .expect("HMAC-SHA-256 signature should be found");
+        assert_eq!(hmac.params.len(), 2);
+        assert_eq!(hmac.params[0].name, "key");
+        assert_eq!(hmac.params[0].type_name, "secret[bytes]");
+        assert!(hmac.params[0].view);
+        assert_eq!(hmac.params[1].name, "message");
+        assert_eq!(hmac.params[1].type_name, "bytes");
+        assert!(hmac.params[1].view);
+        assert_eq!(hmac.return_type, "secret[bytes]");
+
+        assert!(
+            query_signature(Path::new("."), "crypto.hmac_sha512")
+                .expect("reserved crypto query should succeed")
+                .is_none(),
+            "crypto.hmac_sha512 must remain undiscoverable until implemented"
+        );
     }
 
     #[test]
@@ -4981,6 +5124,55 @@ mod tests {
                 .replace('\\', "/")
                 .ends_with("dist/lib.jett")
         );
+    }
+
+    #[test]
+    fn bundle_project_manifest_counts_lone_carriage_return_lines() {
+        let root = temp_test_dir("jett_driver_bundle_lone_cr_manifest");
+        fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("src/core.jett"),
+            "namespace core\r\rexport function answer() returns int64:\r    return 42\r",
+        )
+        .expect("bundle source should be written");
+        let output = root.join("dist/lib.jett");
+
+        let result = bundle_project(&root, &output).expect("bundle should accept lone-CR source");
+
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+        assert_eq!(
+            (result.files[0].start_line, result.files[0].end_line),
+            (5, 8)
+        );
+    }
+
+    #[test]
+    fn bundle_project_output_is_stable_after_checkout_relocation() {
+        let parent = temp_test_dir("jett_driver_bundle_relocation");
+        let first = parent.join("first_checkout");
+        let second = parent.join("second_checkout");
+
+        for root in [&first, &second] {
+            fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");
+            fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+                .expect("project marker should be written");
+            fs::write(
+                root.join("src/core.jett"),
+                "namespace core\n\nexport function answer() returns int64:\n    return 42\n",
+            )
+            .expect("bundle source should be written");
+            bundle_project(root, Path::new("dist/lib.jett")).expect("bundle should succeed");
+        }
+
+        let first_bundle = fs::read_to_string(first.join("dist/lib.jett"))
+            .expect("first bundle output should be readable");
+        let second_bundle = fs::read_to_string(second.join("dist/lib.jett"))
+            .expect("second bundle output should be readable");
+        fs::remove_dir_all(&parent).expect("temp bundle dirs should be removed");
+
+        assert_eq!(first_bundle, second_bundle);
     }
 
     #[test]
@@ -5385,6 +5577,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn project_file_collection_rejects_external_source_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("jett_driver_symlink_file_project");
+        let external = temp_test_dir("jett_driver_symlink_file_external");
+        fs::create_dir_all(root.join("src")).expect("temp project src dir should be created");
+        fs::create_dir_all(&external).expect("external source dir should be created");
+        fs::write(root.join("src/main.jett"), "namespace app\n")
+            .expect("project source should be written");
+        fs::write(external.join("outside.jett"), "namespace outside\n")
+            .expect("external source should be written");
+        symlink(external.join("outside.jett"), root.join("linked.jett"))
+            .expect("source file symlink should be created");
+
+        let mut files = Vec::new();
+        let result = collect_jett_files(&root, &mut files);
+
+        fs::remove_dir_all(&root).expect("temp project dir should be removed");
+        fs::remove_dir_all(&external).expect("external source dir should be removed");
+        let error = result.expect_err("an external source symlink must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("resolves outside source root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn project_file_collection_ignores_symlinked_directories() {
         use std::os::unix::fs::symlink;
 
@@ -5456,21 +5674,41 @@ fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
 }
 
 /// Recursively collect all `.jett` files in a directory, skipping hidden dirs,
-/// `target/`, and symlinked directories.
+/// `target/`, and symlinked directories. Source-file symlinks are accepted only
+/// when their canonical targets remain inside the source root.
 fn collect_jett_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    let canonical_root = dir.canonicalize()?;
+    collect_jett_files_within(dir, &canonical_root, out)
+}
+
+fn collect_jett_files_within(
+    dir: &Path,
+    canonical_root: &Path,
+    out: &mut Vec<std::path::PathBuf>,
+) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
-            // Preserve source-file symlinks without traversing linked trees.
             if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jett") {
+                let canonical_path = path.canonicalize()?;
+                if !canonical_path.starts_with(canonical_root) {
+                    let logical_path = path.strip_prefix(dir).unwrap_or(&path);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "source file '{}' resolves outside source root",
+                            logical_path.display()
+                        ),
+                    ));
+                }
                 out.push(path);
             }
         } else if file_type.is_dir() {
             let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !dir_name.starts_with('.') && dir_name != "target" {
-                collect_jett_files(&path, out)?;
+                collect_jett_files_within(&path, canonical_root, out)?;
             }
         } else if path.extension().and_then(|e| e.to_str()) == Some("jett") {
             out.push(path);
