@@ -1315,7 +1315,12 @@ impl<'a> TypeChecker<'a> {
                 | "json.serialize_public"
                 | "json.serialize_raw"
                 | "Filesystem.write_file"
-                | "log"
+                | "log.emit"
+                | "log.debug"
+                | "log.info"
+                | "log.warn"
+                | "log.error"
+                | "log.__emit"
                 | "http.respond"
         )
     }
@@ -2882,6 +2887,7 @@ impl<'a> TypeChecker<'a> {
                 | "Clock.__now"
                 | "Environment.__get"
                 | "Environment.__args"
+                | "log.__emit"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -4061,6 +4067,15 @@ impl<'a> TypeChecker<'a> {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::ERROR], list_string))
+            }
+            "log.__emit" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let event = *self.named_types.get("log.Event")?;
+                let error = *self.named_types.get("log.Error")?;
+                let result = self
+                    .interner
+                    .intern(Type::Result(TypeInterner::NOTHING, error));
+                Some((vec![TypeInterner::ERROR, event], result))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
             "csv.__parse" => {
@@ -9216,20 +9231,21 @@ impl<'a> TypeChecker<'a> {
         args: &[ast::CallArg],
         span: Span,
     ) {
-        if args.len() != params.len() {
-            self.sink.emit(errors::argument_count_mismatch(
-                label,
-                params.len(),
-                args.len(),
-                span,
-            ));
+        let parameter_names = params
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let Some(argument_order) = self.bind_call_arguments(label, &parameter_names, args, span)
+        else {
             for arg in args {
                 self.check_expr(&arg.value);
             }
             return;
-        }
+        };
+        self.record_call_argument_order(span, argument_order.clone());
 
-        for (arg, (param_name, param_ty)) in args.iter().zip(params.iter()) {
+        for (&source_index, (param_name, param_ty)) in argument_order.iter().zip(params.iter()) {
+            let arg = &args[source_index];
             let arg_ty = self.check_expr_for_expected(&arg.value, *param_ty, false);
             if arg_ty != TypeInterner::ERROR
                 && *param_ty != TypeInterner::ERROR

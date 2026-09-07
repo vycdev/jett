@@ -658,9 +658,11 @@ Track which capabilities flow through the program:
   expected operations were only partially observed. Runtime failures remain
   primary and are not replaced by this successful-run cleanup check.
 - **Application logging is a capability operation.** The source-owned
-  `log.emit` and level wrappers borrow `view Log`; the runtime injects a
-  dedicated provider, filter, capture, and checked sequence state. It remains
-  separate from stdout, stderr, compiler diagnostics, and debug output. See the
+  `log.emit` and level wrappers borrow `view Log`. Their public types, wrappers,
+  private trusted-kernel boundary, capability propagation, and secret-output
+  classification are implemented. Runtime provider injection, filtering,
+  capture, and checked sequence state remain pending. Logging stays separate
+  from stdout, stderr, compiler diagnostics, and debug output. See the
   [structured logging contract](completed/structured_logging_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
@@ -790,7 +792,8 @@ failure blocks distinguish local `default` fallback from function `return`,
 and step-local handles wrap only their intermediate pipeline call. Enum
 construction carries a dense checked variant ID and payloads; exhaustive
 matches carry variant arms, payload locals, and an optional catch-all. Typed
-parameters and locals, direct user calls, core expressions, returns, branches,
+parameters and locals, direct user calls, actor spawn/messages with normalized
+arguments and explicit lexical evaluation order, core expressions, returns, branches,
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
@@ -799,14 +802,16 @@ compiler-owned calls carry canonical intrinsic identity, typed arguments, and
 lexical evaluation order after type checking has authorized them. Inline
 functions and indirect calls retain explicit parameter/local identity;
 comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor declaration/handler
-materialization remains actor-runtime work. Remaining source constructs are staged by the
-[initial HIR lowering plan](active/hir_lowering_plan.md).
+carry typed operands and message identity. Actor receive handlers are
+deterministic HIR functions whose locals preserve checked capability, state,
+and message bindings; actor construction, persistent state layout, scheduling,
+and dispatch remain actor-runtime work. Remaining source constructs are staged
+by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
 HIR structural validator. It lowers top-level `if`, `while`, exhaustive
-`match`, `break`, `continue`, and `return` into deterministic dense basic
-blocks with explicit branch, switch, goto, and return terminators. Its public
+`match`, `break`, `continue`, `return`, and actor `respond` into deterministic dense basic
+blocks with explicit branch, switch, goto, return, and respond terminators. Its public
 MIR validator rejects noncanonical block IDs, out-of-range function entries,
 and invalid goto, branch, switch, or for-loop edges before later backends
 consume a graph. Its CFG analysis exposes deduplicated successors, canonical

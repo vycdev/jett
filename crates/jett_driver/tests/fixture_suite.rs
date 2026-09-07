@@ -287,6 +287,14 @@ macro_rules! run_pass_fixture {
 }
 
 compile_pass_fixture!(compile_pass_basic, "basic.jett");
+compile_fail_fixture!(
+    compile_fail_structured_logging_secrets,
+    "structured_logging_secrets.jett"
+);
+compile_pass_fixture!(
+    compile_pass_structured_logging_source,
+    "structured_logging_source.jett"
+);
 compile_pass_fixture!(
     compile_pass_implicit_pure_call_remains_runtime,
     "implicit_pure_call_remains_runtime.jett"
@@ -793,6 +801,7 @@ run_pass_fixture!(
     "type_construction_machine.jett"
 );
 run_pass_fixture!(run_pass_actor_counter, "actor_counter.jett");
+run_pass_fixture!(run_pass_actor_named_arguments, "actor_named_arguments.jett");
 run_pass_fixture!(
     run_pass_numeric_literal_contexts,
     "numeric_literal_contexts.jett"
