@@ -73,6 +73,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
         signature_help_provider: Some(SignatureHelpOptions {
@@ -337,6 +338,44 @@ fn reference_locations(
             })
             .collect()
     })
+}
+
+fn document_highlights(source: &str, position: Position) -> Option<Vec<DocumentHighlight>> {
+    let (line, column) = driver_position(source, position)?;
+    let definition = jett_driver::goto_definition(source, line, column);
+    let mut spans = jett_driver::references_at(source, line, column);
+
+    if let Some(definition) = definition
+        && !spans.contains(&definition)
+    {
+        spans.push(definition);
+    }
+    spans.sort_unstable();
+    spans.dedup();
+
+    (!spans.is_empty()).then(|| {
+        spans
+            .into_iter()
+            .map(|span| DocumentHighlight {
+                range: Range::new(lsp_position(source, span.0), lsp_position(source, span.1)),
+                kind: Some(
+                    if Some(span) == definition || is_assignment_target(source, span.1) {
+                        DocumentHighlightKind::WRITE
+                    } else {
+                        DocumentHighlightKind::READ
+                    },
+                ),
+            })
+            .collect()
+    })
+}
+
+fn is_assignment_target(source: &str, end: u32) -> bool {
+    source
+        .get(end as usize..)
+        .map(|tail| tail.trim_start_matches([' ', '\t']))
+        .and_then(|tail| tail.strip_prefix('='))
+        .is_some_and(|tail| !tail.starts_with('='))
 }
 
 fn rename_edit(
@@ -910,6 +949,19 @@ impl LanguageServer for JettBackend {
         ))
     }
 
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+        Ok(document_highlights(&document.text, position))
+    }
+
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
@@ -1454,6 +1506,16 @@ mod tests {
     }
 
     #[test]
+    fn server_capabilities_advertise_document_highlights() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.document_highlight_provider,
+            Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
     fn server_capabilities_advertise_full_semantic_tokens() {
         let capabilities = server_capabilities();
         let Some(SemanticTokensServerCapabilities::SemanticTokensOptions(options)) =
@@ -1664,6 +1726,48 @@ mod tests {
             .expect("call should resolve");
 
         assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn document_highlights_mark_the_declaration_as_write_and_uses_as_read() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
+
+        let highlights = document_highlights(source, Position::new(6, 11))
+            .expect("call should resolve to document highlights");
+
+        assert_eq!(
+            highlights,
+            vec![
+                DocumentHighlight {
+                    range: Range::new(Position::new(2, 9), Position::new(2, 15)),
+                    kind: Some(DocumentHighlightKind::WRITE),
+                },
+                DocumentHighlight {
+                    range: Range::new(Position::new(6, 11), Position::new(6, 17)),
+                    kind: Some(DocumentHighlightKind::READ),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn document_highlights_distinguish_assignments_from_reads_and_equality() {
+        let source = "function main() returns int64:\n    mutable int64 total = 1\n    total = total + 1\n    if total == 2:\n        return total\n    return 0\n";
+        let highlights = document_highlights(source, Position::new(2, 5)).unwrap();
+        let kinds: Vec<_> = highlights
+            .iter()
+            .map(|highlight| highlight.kind.unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                DocumentHighlightKind::WRITE,
+                DocumentHighlightKind::WRITE,
+                DocumentHighlightKind::READ,
+                DocumentHighlightKind::READ,
+                DocumentHighlightKind::READ
+            ]
+        );
     }
 
     #[test]

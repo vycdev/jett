@@ -136,6 +136,7 @@
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP find references | Done (current document, with optional declaration inclusion) |
+| LSP document highlights | Done (current-document declaration and use occurrences with UTF-16 ranges) |
 | LSP rename | Done (semantic declaration and reference edits in the current document) |
 | LSP completions | Done |
 | LSP signature help | Done (source-defined and standard-library calls from the latest in-memory document, with nested-call active-parameter tracking) |
