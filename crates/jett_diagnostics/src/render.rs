@@ -88,6 +88,14 @@ fn span_underline_len(
     span_len.min(line_remaining).max(1)
 }
 
+fn underline_padding(source_line: &str, column: usize) -> String {
+    source_line
+        .chars()
+        .take(column.saturating_sub(1))
+        .map(|ch| if ch == '\t' { '\t' } else { ' ' })
+        .collect()
+}
+
 /// Render a single diagnostic with source context into a human-readable string.
 ///
 /// Output format:
@@ -150,7 +158,7 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
         span_underline_len(source, source_line, col, diag.span.start, diag.span.end);
 
     // Build the underline: spaces up to col, then carets
-    let padding = " ".repeat(col - 1);
+    let padding = underline_padding(source_line, col);
     let carets = "^".repeat(underline_len);
 
     // Primary label message: use the first label if present, otherwise empty
@@ -192,7 +200,7 @@ pub fn render_diagnostic(diag: &Diagnostic, source: &str, file_path: &str) -> St
         out.push_str(&format!(
             "{} | {}{} {}\n",
             " ".repeat(gutter_width + 1),
-            " ".repeat(lbl_col - 1),
+            underline_padding(lbl_source_line, lbl_col),
             "^".repeat(lbl_underline_len),
             label.message
         ));
@@ -323,6 +331,27 @@ mod tests {
 
         assert_eq!(primary.matches('^').count(), 1);
         assert_eq!(secondary.matches('^').count(), 1);
+    }
+
+    #[test]
+    fn render_diagnostic_preserves_tabs_before_underlines() {
+        let source = "let\tvalue\n";
+        let file_id = FileId::new(0);
+        let diag = Diagnostic::error(300, "tabs are not allowed", Span::new(file_id, 4, 9))
+            .with_label(Span::new(file_id, 4, 9), "invalid token");
+
+        let rendered = render_diagnostic(&diag, source, "test.jett");
+        let underline = rendered
+            .lines()
+            .find(|line| line.ends_with("invalid token"))
+            .expect("primary underline should be rendered");
+        let padding = underline
+            .strip_prefix("   | ")
+            .expect("underline should include its gutter")
+            .strip_suffix("^^^^^ invalid token")
+            .expect("underline should include its carets and label");
+
+        assert_eq!(padding, "   \t");
     }
 
     #[test]
