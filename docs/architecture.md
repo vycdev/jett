@@ -1880,6 +1880,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
   active argument in nested calls and unsaved private document functions.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
+- Case-insensitive workspace symbol search across all open Jett documents,
+  using their latest unsaved text and deterministic name/location ordering.
 - Whole-document formatting is provided through `jett_fmt`.
 
 The LSP server currently stores full document text, invokes driver operations,
