@@ -5,3 +5,11 @@ function sort_rows() returns list[Row]:
     list[Row] rows = list(Row(value: 2), Row(value: 1))
     return list.sort[Row](rows)
 # ERROR: E0300
+function sort_nested_rows() returns list[list[Row]]:
+    list[list[Row]] rows = list(list(Row(value: 2)), list(Row(value: 1)))
+    return list.sort_by_index[Row](rows, 0)
+# ERROR: E0300
+function rows_are_sorted() returns bool:
+    list[Row] rows = list(Row(value: 2), Row(value: 1))
+    return list.is_sorted[Row](view rows)
+# ERROR: E0300
