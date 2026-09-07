@@ -589,6 +589,9 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
 - **No rebinding while viewed:** The owner of a variable cannot rebind it while a `view` to it exists. This prevents `items = new_list` inside a `for item in view items:` loop body, and prevents rebinding a variable that was passed as `view` to a `run` task until the task is `join`ed or `cancel`led.
+- **Task-control operands:** cancellation requires a pending task variable on
+  every live control-flow path. Joins retain the ensure-resolved contract for
+  ordinary expressions, with move-only values subject to normal ownership.
 - **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is
   not killed immediately — its next capability checkpoint terminates the pending
   task with `CancelledError` before the capability operation takes effect. The
@@ -650,10 +653,16 @@ Track which capabilities flow through the program:
   through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
+- **Scripted provider seams are exact.** Successful host-side Random and Clock
+  conformance runs reject unconsumed samples instead of accepting a script whose
+  expected operations were only partially observed. Runtime failures remain
+  primary and are not replaced by this successful-run cleanup check.
 - **Application logging is a capability operation.** The source-owned
-  `log.emit` and level wrappers borrow `view Log`; the runtime injects a
-  dedicated provider, filter, capture, and checked sequence state. It remains
-  separate from stdout, stderr, compiler diagnostics, and debug output. See the
+  `log.emit` and level wrappers borrow `view Log`. Their public types, wrappers,
+  private trusted-kernel boundary, capability propagation, and secret-output
+  classification are implemented. Runtime provider injection, filtering,
+  capture, and checked sequence state remain pending. Logging stays separate
+  from stdout, stderr, compiler diagnostics, and debug output. See the
   [structured logging contract](completed/structured_logging_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
@@ -783,7 +792,8 @@ failure blocks distinguish local `default` fallback from function `return`,
 and step-local handles wrap only their intermediate pipeline call. Enum
 construction carries a dense checked variant ID and payloads; exhaustive
 matches carry variant arms, payload locals, and an optional catch-all. Typed
-parameters and locals, direct user calls, core expressions, returns, branches,
+parameters and locals, direct user calls, actor spawn/messages with normalized
+arguments and explicit lexical evaluation order, core expressions, returns, branches,
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
@@ -792,15 +802,22 @@ compiler-owned calls carry canonical intrinsic identity, typed arguments, and
 lexical evaluation order after type checking has authorized them. Inline
 functions and indirect calls retain explicit parameter/local identity;
 comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor declaration/handler
-materialization remains actor-runtime work. Remaining source constructs are staged by the
-[initial HIR lowering plan](active/hir_lowering_plan.md).
+carry typed operands and message identity. Actor receive handlers are
+deterministic HIR functions whose locals preserve checked capability, state,
+and message bindings; actor construction, persistent state layout, scheduling,
+and dispatch remain actor-runtime work. Remaining source constructs are staged
+by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
-structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
-`break`, `continue`, and `return` into deterministic dense basic blocks with
-explicit branch, switch, goto, and return terminators. Handle-internal control
-flow and definitive ownership/drop elaboration remain subsequent MIR work.
+HIR structural validator. It lowers top-level `if`, `while`, exhaustive
+`match`, `break`, `continue`, `return`, and actor `respond` into deterministic dense basic
+blocks with explicit branch, switch, goto, return, and respond terminators. Its public
+MIR validator rejects noncanonical block IDs, out-of-range function entries,
+and invalid goto, branch, switch, or for-loop edges before later backends
+consume a graph. Its CFG analysis exposes deduplicated successors, canonical
+predecessors, and reachable reverse postorder for deterministic backend
+dataflow passes. Handle-internal control flow and definitive ownership/drop
+elaboration remain subsequent MIR work.
 
 ### Purpose
 
@@ -888,6 +905,12 @@ MirStatement {
     Nop,
 }
 ```
+
+Every MIR statement and terminator retains a source `Span`. Direct nodes use
+the originating HIR statement or condition span, while synthetic CFG edges use
+the controlling statement or body span. This provenance lets later ownership,
+optimization, diagnostic, and debug passes report the source construct that
+produced an edge without recovering locations from embedded expressions.
 
 ### Definitive Ownership Verification
 
@@ -1640,11 +1663,13 @@ compiler-shipped source file, while only private implementation kernels cross
 the runtime boundary.
 
 Crypto has reached that boundary for its implemented initial surface. Public
-`crypto.sha256` and legacy-only `crypto.md5` declarations live in
+`crypto.sha256`, `crypto.sha512`, legacy-only `crypto.md5`, and key-first binary
+`crypto.hmac_sha256` declarations live in
 `stdlib/crypto.jett`; source wrappers convert exact UTF-8 through `bytes` and
 format raw fixed-size digests as lowercase hex. Only private trusted compression
-kernels remain in the interpreter, and project code cannot call them. SHA-512
-and HMAC remain reserved and undiscoverable until implemented. Exact taint,
+kernels remain in the interpreter, and project code cannot call them. HMAC
+borrows a secret byte key and byte message and returns a secret 32-byte tag;
+HMAC-SHA-512 remains reserved and undiscoverable. Exact taint,
 security, and backend obligations are defined by the
 [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md).
 
@@ -2126,7 +2151,10 @@ only by the exact manifest `DeclarationId` with `SourceOrigin::Stdlib`, never by
 qualified-name or path spelling. Constructor calls are source-legal only as
 direct property-body expressions, excluding nested declarations, closures,
 actors, and spawned tasks. Normal functions, `main`, verify,
-comptime, and application runtime code cannot construct them.
+comptime, and application runtime code cannot construct them. The source checker
+enforces this boundary for calls and pipeline steps and rejects constructor
+function values; per-attempt runtime hooks and construction identities remain
+staged implementation work.
 
 Build, query, and LSP pipelines run the same parse, resolution, type, ownership,
 capability, and context checks over property source without executing it. Only a

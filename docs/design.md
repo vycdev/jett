@@ -386,7 +386,6 @@ Jett has **no implicit type conversions**. An `int64` is never silently promoted
 **Infallible conversions** (lossless — always succeed, return `T` directly):
 
 ```
-float64 x = float64.from_int64(42)          # → 42.0
 string s = string.from_int64(42)         # → "42"
 string s = string.from_float64(3.14)     # → "3.14"
 string s = string.from_bool(true)      # → "true"
@@ -400,6 +399,9 @@ int64 n = int64.from_string("42") handle error:
 
 float64 f = float64.from_string("3.14") handle error:
     return fail("not a float64")
+
+float64 x = float64.from_int64(42) handle error:
+    return fail("integer loses precision")
 
 int64 n = int64.from_float64(3.14) handle error:
     return fail("not a whole number")
@@ -419,7 +421,7 @@ int64 n = int64.from_float64(3.14) handle error:
 ```
 float64 x = 42
 # COMPILE ERROR: expected float64, got int64
-# hint: use float64.from_int64(42)
+# hint: use float64.from_int64(42) and handle the possible error
 
 int64 y = 3.14
 # COMPILE ERROR: expected int64, got float64
@@ -663,13 +665,15 @@ function fetch_data(view net: Network, url: string) returns result[map[string, s
         return fail(parse_error)
     return ok(data)
 
-function compute_stats(values: list[int64]) returns float64:
+function compute_stats(values: list[int64]) returns result[float64, string]:
     use math
     int64 count = list.length[int64](view values)
     int64 total = math.sum(values)
-    float64 total_f = float64.from_int64(total)
-    float64 count_f = float64.from_int64(count)
-    return total_f / count_f
+    float64 total_f = float64.from_int64(total) handle error:
+        return fail(error)
+    float64 count_f = float64.from_int64(count) handle error:
+        return fail(error)
+    return ok(total_f / count_f)
 ```
 
 **What this achieves:**
@@ -1256,7 +1260,10 @@ source-owned `log` module emits explicit events through a dedicated `Log`
 capability, preserves ordered string fields, rejects secret-bearing values, and
 keeps deterministic captures separate from stdout, diagnostics, and debugging
 channels. Filtering is a runtime observation after ordinary eager argument
-evaluation; release builds do not erase semantic log calls.
+evaluation; release builds do not erase semantic log calls. The public event,
+field, level, error, and wrapper declarations plus the capability/checker
+boundary are implemented; provider dispatch and capture remain staged runtime
+work.
 
 #### 1. Macro-Primitives — High-Level Operations as Built-Ins
 
@@ -1544,14 +1551,16 @@ string hex = encoding.hex_encode(view raw)
 
 `crypto.sha256` hashes exact UTF-8 text and returns 64 lowercase hexadecimal
 characters. `crypto.md5` keeps the same representation only for explicit legacy
-compatibility and is not a secure digest. SHA-512 and key-first binary HMAC are
-planned additions, not currently supported declarations. None of these
-operations is a password-hashing API.
+compatibility and is not a secure digest. `crypto.sha512` returns 128 lowercase
+hexadecimal characters. Key-first `crypto.hmac_sha256` borrows `secret[bytes]`
+and message `bytes`, returning a 32-byte `secret[bytes]` tag. HMAC-SHA-512 remains
+reserved. None of these operations is a password-hashing API.
 
-Both supported public declarations live in `stdlib/crypto.jett`. Source code
-converts exact UTF-8 input through the move-only byte API and formats the raw
-private-kernel digest with lowercase byte hex. Project code cannot call the
-private SHA-256 or MD5 kernels.
+All four supported public declarations live in `stdlib/crypto.jett`. Text-digest
+wrappers convert exact UTF-8 input through the move-only byte API and format
+the raw private-kernel digest with lowercase byte hex. HMAC preserves arbitrary
+binary keys and messages without text conversion. Project code cannot call the
+private digest or HMAC kernels.
 
 The encoding API uses strict padded RFC 4648 Base64 and lowercase
 hex over arbitrary `bytes`. Their decoders return `result[bytes, string]`.
@@ -2232,7 +2241,7 @@ function fetch_all_data(view net: Network) returns result[DashboardData, HttpErr
 
 **Cancellation through capabilities:**
 
-`cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:
+`cancel` requires a still-pending task variable; a value that has already been joined on any live branch cannot be cancelled. Unlike cancellation, `join` also accepts resolved values. `cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:
 
 ```
 Data work = run expensive_operation(view net, data)
@@ -2802,8 +2811,10 @@ Each function is immediately followed by its contract. When the LLM generates `c
 type Percentage = float64 where value >= 0.0 && value <= 100.0
 
 function calculate_grade(score: int64, total: int64) returns Percentage:
-    float64 score_f = float64.from_int64(score)
-    float64 total_f = float64.from_int64(total)
+    float64 score_f = float64.from_int64(score) handle error:
+        default 0.0
+    float64 total_f = float64.from_int64(total) handle error:
+        default 1.0
     return score_f / total_f * 100.0
 
 verify calculate_grade:
@@ -5822,7 +5833,10 @@ query, and LSP modes parse, resolve, type-check, and diagnose those calls but do
 not execute them; `jett build` may accept a valid property while omitting it from
 the application artifact. Only `jett test` installs the private hooks and runs
 constructors. Ordinary functions, `main`, verify, comptime, global initializers,
-and application runtime code reject construction.
+and application runtime code reject construction. Calls and pipeline steps share
+the property-only source check; constructors cannot escape as function values.
+The source facade and these checks are implemented, while per-attempt runtime
+providers and replay remain staged work.
 
 Only a resolved manifest `DeclarationId` with `SourceOrigin::Stdlib` is
 authorized; matching project/dependency names cannot mint authority. Every
