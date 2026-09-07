@@ -73,6 +73,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
         document_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
@@ -271,6 +272,70 @@ fn reference_locations(
     })
 }
 
+fn rename_edit(
+    source: &str,
+    uri: &Url,
+    position: Position,
+    new_name: &str,
+) -> Option<WorkspaceEdit> {
+    // Contextual keywords (for example `value`) can be valid binding names;
+    // validate their actual declaration context with the compiler below.
+    if !new_name
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        || !new_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return None;
+    }
+    let (line, column) = driver_position(source, position)?;
+    // External declarations cannot be renamed by editing only their local uses.
+    let definition = jett_driver::goto_definition(source, line, column)?;
+    let old_name = source.get(definition.0 as usize..definition.1 as usize)?;
+    let mut spans = jett_driver::references_at(source, line, column);
+    spans.push(definition);
+    for span in &mut spans {
+        let text = source.get(span.0 as usize..span.1 as usize)?;
+        if text != old_name {
+            // Resolved qualified calls cover their entire namespace path.
+            if !text.strip_suffix(old_name)?.ends_with('.') {
+                return None;
+            }
+            span.0 = span.1.checked_sub(u32::try_from(old_name.len()).ok()?)?;
+        }
+    }
+    spans.sort_unstable();
+    spans.dedup();
+    let mut renamed = source.to_string();
+    for &(start, end) in spans.iter().rev() {
+        renamed.replace_range(start as usize..end as usize, new_name);
+    }
+    // Enforce declaration naming rules, duplicate bindings and no-shadowing
+    // through the compiler rather than emitting a refactor that breaks them.
+    if jett_driver::build_source(&renamed, "<lsp-rename>")
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return None;
+    }
+    let edits = spans
+        .into_iter()
+        .map(|(start, end)| TextEdit {
+            range: Range::new(lsp_position(source, start), lsp_position(source, end)),
+            new_text: new_name.to_string(),
+        })
+        .collect();
+
+    Some(WorkspaceEdit {
+        changes: Some(HashMap::from([(uri.clone(), edits)])),
+        document_changes: None,
+        change_annotations: None,
+    })
+}
+
 fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
     let result = jett_fmt::format_source(source, jett_common::FileId::new(0));
     if !result.errors.is_empty() || result.output == source {
@@ -427,6 +492,18 @@ impl LanguageServer for JettBackend {
             position,
             params.context.include_declaration,
         ))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(uri) else {
+            return Ok(None);
+        };
+
+        Ok(rename_edit(&document.text, uri, position, &params.new_name))
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -752,6 +829,13 @@ mod tests {
     }
 
     #[test]
+    fn server_capabilities_advertise_symbol_rename() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(capabilities.rename_provider, Some(OneOf::Left(true)));
+    }
+
+    #[test]
     fn reference_locations_map_driver_spans_to_lsp_ranges() {
         let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
         let uri = Url::parse("file:///workspace/main.jett").unwrap();
@@ -797,6 +881,67 @@ mod tests {
             .expect("declaration should resolve");
 
         assert_eq!(locations.len(), 2);
+    }
+
+    #[test]
+    fn rename_edits_replace_a_declaration_and_all_its_references() {
+        let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+
+        let edit = rename_edit(source, &uri, Position::new(3, 11), "number")
+            .expect("parameter reference should resolve");
+        let changes = edit.changes.expect("document changes");
+        let edits = changes.get(&uri).expect("current document edits");
+
+        assert_eq!(edits.len(), 3);
+        assert!(edits.iter().all(|edit| edit.new_text == "number"));
+        assert_eq!(edits[0].range.start, Position::new(2, 16));
+        assert_eq!(edits[1].range.start, Position::new(3, 11));
+        assert_eq!(edits[2].range.start, Position::new(3, 19));
+    }
+
+    #[test]
+    fn rename_rejects_invalid_names_collisions_and_external_declarations() {
+        let source = "namespace app\nfunction f(value: int64, other: int64) returns int64:\n    return value + other\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        for name in [
+            "",
+            "return",
+            "two words",
+            "foo.bar",
+            "1value",
+            " other",
+            "other",
+        ] {
+            assert!(
+                rename_edit(source, &uri, Position::new(2, 11), name).is_none(),
+                "{name:?}"
+            );
+        }
+        let external =
+            "namespace app\nfunction main() returns int64:\n    return int64.max(1, 2)\n";
+        assert!(rename_edit(external, &uri, Position::new(2, 18), "bigger").is_none());
+    }
+
+    #[test]
+    fn rename_keeps_namespace_qualifiers() {
+        let source = "namespace app\nfunction double(value: int64) returns int64:\n    return value + value\nfunction main() returns int64:\n    return app.double(21)\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let edit = rename_edit(source, &uri, Position::new(4, 18), "twice").unwrap();
+        let changes = edit.changes.unwrap();
+        let edits = &changes[&uri];
+        assert_eq!(edits.len(), 2);
+        assert_eq!(
+            edits[1].range,
+            Range::new(Position::new(4, 15), Position::new(4, 21))
+        );
+    }
+
+    #[test]
+    fn rename_accepts_contextual_binding_names() {
+        let source = "function double(number: int64) returns int64:\n    return number + number\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        assert!(rename_edit(source, &uri, Position::new(1, 12), "value").is_some());
     }
 
     #[test]

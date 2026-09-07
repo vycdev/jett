@@ -136,6 +136,7 @@
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP find references | Done (current document, with optional declaration inclusion) |
+| LSP rename | Done (semantic declaration and reference edits in the current document) |
 | LSP completions | Done |
 | LSP document symbols | Done (top-level file outline from the latest in-memory document, with declaration kinds, signatures, and UTF-16 ranges) |
 | MCP server | Not started; initial transport, tool/resource, and ASP handoff boundary tracked by [#37](https://github.com/vycdev/jett/issues/37) |
