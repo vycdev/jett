@@ -1,0 +1,26 @@
+namespace benchmark
+enum InventoryEvent:
+    stock(sku: string, quantity: int64)
+    sale(sku: string, quantity: int64)
+enum InventoryResult:
+    accepted(balances: map[string, int64])
+    rejected(index: int64, sku: string)
+function apply_inventory(events: list[InventoryEvent]) returns InventoryResult:
+    mutable map[string, int64] balances = map.new[string, int64]()
+    mutable int64 index = 0
+    for event in events:
+        match event:
+            stock(sku, quantity):
+                if quantity <= 0:
+                    return InventoryResult.rejected(index, sku)
+                int64 current = map.get_or[string, int64](clone balances, sku, 0)
+                balances = map.set[string, int64](balances, sku, current + quantity)
+            sale(sku, quantity):
+                if quantity <= 0:
+                    return InventoryResult.rejected(index, sku)
+                int64 current = map.get_or[string, int64](clone balances, sku, 0)
+                if quantity > current:
+                    return InventoryResult.rejected(index, sku)
+                balances = map.set[string, int64](balances, sku, current - quantity)
+        index = index + 1
+    return InventoryResult.accepted(balances)

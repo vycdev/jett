@@ -1,0 +1,72 @@
+{
+  "id": "merge_sorted_intervals",
+  "version": "1.0.0",
+  "title": "Merge sorted closed intervals",
+  "statement": "Merge overlapping closed intervals. Inputs are sorted by ascending start, and every interval has start <= end. The next interval overlaps the current interval when next.start <= current.end. Preserve ascending order and return a new list containing newly constructed intervals.",
+  "constraints": [
+    "use the exact declared Interval type and function signature",
+    "return an empty list for empty input",
+    "inputs contain at most 10000 intervals and all endpoints fit int64",
+    "do not throw, panic, perform input/output, add tests, or suppress static diagnostics"
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nstruct Interval:\n    start: int64\n    end: int64\n\nfunction merge_sorted_intervals(intervals: list[Interval]) returns list[Interval]",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden"}]
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Interval:\n    start: int\n    end: int\n\ndef merge_sorted_intervals(intervals: list[Interval]) -> list[Interval]",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": ["pyrightconfig.json"],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
+        {"pattern": "\\braise\\b", "message": "raising exceptions is forbidden"}
+      ]
+    },
+    "typescript": {
+      "signature": "export type Interval = { readonly start: bigint; readonly end: bigint };\nexport function mergeSortedIntervals(intervals: readonly Interval[]): readonly Interval[]",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
+        {"pattern": "\\bthrow\\b", "message": "throwing exceptions is forbidden"}
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype Interval struct { Start int64; End int64 }\nfunc MergeSortedIntervals(intervals []Interval) []Interval",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
+        {"pattern": "\\bpanic\\s*\\(", "message": "panic is forbidden"}
+      ]
+    },
+    "rust": {
+      "signature": "#[derive(Debug, PartialEq, Eq)]\npub struct Interval { pub start: i64, pub end: i64 }\npub fn merge_sorted_intervals(intervals: Vec<Interval>) -> Vec<Interval>",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
+        {"pattern": "\\bpanic\\s*!", "message": "panic is forbidden"}
+      ]
+    }
+  }
+}

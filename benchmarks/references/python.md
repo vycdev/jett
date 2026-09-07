@@ -1,4 +1,4 @@
-# Python pilot reference v0.4
+# Python pilot reference v0.5
 
 ## Type-driven development in Python
 
@@ -23,3 +23,9 @@ the hidden tests.
 Recursive domains use postponed annotations and the exact requested union.
 When starter source is supplied, return one complete replacement module and
 let strict checking reveal every branch affected by the type change.
+
+Use frozen dataclasses for requested record shapes, `set[T]` for membership,
+and precisely typed `dict[K, V]` values for maps. Express an optional as
+`T | None`. When parsing bounded integers, validate the int64 range and any
+canonical-text requirement explicitly; Python integers themselves are not
+limited to int64.

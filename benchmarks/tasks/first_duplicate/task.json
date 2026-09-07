@@ -1,0 +1,72 @@
+{
+  "id": "first_duplicate",
+  "version": "1.0.0",
+  "title": "Find the first repeated value",
+  "statement": "Return the first value encountered while scanning left to right that has already appeared earlier. Return the language's empty optional value when no value repeats. The returned value is determined by the second occurrence, not by which duplicated value appeared earliest initially.",
+  "constraints": [
+    "use the exact declared optional result type",
+    "preserve input order when deciding which duplicate is first",
+    "inputs contain at most 10000 int64 values",
+    "do not throw, panic, perform input/output, add tests, or suppress static diagnostics"
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nfunction first_duplicate(values: list[int64]) returns optional[int64]",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden"}]
+    },
+    "python": {
+      "signature": "def first_duplicate(values: list[int]) -> int | None",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": ["pyrightconfig.json"],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
+        {"pattern": "\\braise\\b", "message": "raising exceptions is forbidden; return None"}
+      ]
+    },
+    "typescript": {
+      "signature": "export function firstDuplicate(values: readonly bigint[]): bigint | null",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
+        {"pattern": "\\bthrow\\b", "message": "throwing exceptions is forbidden; return null"}
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype MaybeInt struct { Found bool; Value int64 }\nfunc FirstDuplicate(values []int64) MaybeInt",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
+        {"pattern": "\\bpanic\\s*\\(", "message": "panic is forbidden; return MaybeInt{Found: false}"}
+      ]
+    },
+    "rust": {
+      "signature": "pub fn first_duplicate(values: &[i64]) -> Option<i64>",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
+        {"pattern": "\\bpanic\\s*!", "message": "panic is forbidden; return None"}
+      ]
+    }
+  }
+}

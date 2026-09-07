@@ -1,0 +1,17 @@
+function inventory_label(outcome: InventoryResult) returns string:
+    match outcome:
+        accepted(balances):
+            int64 size = map.length[string, int64](view balances)
+            bool has_apple = map.has[string, int64](view balances, "apple")
+            int64 apple = map.get_or[string, int64](clone balances, "apple", 0)
+            int64 banana = map.get_or[string, int64](balances, "banana", 0)
+            return "accepted:{size}:{has_apple}:{apple}:{banana}"
+        rejected(index, sku):
+            return "rejected:{index}:{sku}"
+verify inventory_batch_hidden:
+    assert inventory_label(apply_inventory(list())) == "accepted:0:false:0:0"
+    assert inventory_label(apply_inventory(list(InventoryEvent.stock("apple", 5), InventoryEvent.sale("apple", 2), InventoryEvent.stock("banana", 4)))) == "accepted:2:true:3:4"
+    assert inventory_label(apply_inventory(list(InventoryEvent.stock("apple", 2), InventoryEvent.sale("apple", 2)))) == "accepted:1:true:0:0"
+    assert inventory_label(apply_inventory(list(InventoryEvent.sale("apple", 1)))) == "rejected:0:apple"
+    assert inventory_label(apply_inventory(list(InventoryEvent.stock("apple", 2), InventoryEvent.sale("apple", 3), InventoryEvent.stock("banana", 9)))) == "rejected:1:apple"
+    assert inventory_label(apply_inventory(list(InventoryEvent.stock("bad", 0)))) == "rejected:0:bad"

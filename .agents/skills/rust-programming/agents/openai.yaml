@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rust Programming"
+  short_description: "Type-driven Rust programming and repair"
+  default_prompt: "Use $rust-programming to implement and verify this Rust program."
