@@ -950,6 +950,11 @@ impl<'a> TypeChecker<'a> {
         )
     }
 
+    fn is_orderable_list_element(&self, id: TypeId) -> bool {
+        let base = self.fully_coarsened_type(id);
+        self.is_numeric(base) || matches!(self.interner.resolve(base), Type::String | Type::Bool)
+    }
+
     fn is_integer(&self, id: TypeId) -> bool {
         matches!(
             self.interner.resolve(id),
@@ -1310,7 +1315,12 @@ impl<'a> TypeChecker<'a> {
                 | "json.serialize_public"
                 | "json.serialize_raw"
                 | "Filesystem.write_file"
-                | "log"
+                | "log.emit"
+                | "log.debug"
+                | "log.info"
+                | "log.warn"
+                | "log.error"
+                | "log.__emit"
                 | "http.respond"
         )
     }
@@ -2867,6 +2877,7 @@ impl<'a> TypeChecker<'a> {
                 | "crypto.__sha256"
                 | "crypto.__sha512"
                 | "crypto.__md5"
+                | "crypto.__hmac_sha256"
                 | "csv.__parse"
                 | "csv.__stringify"
                 | "csv.__parse_with_header"
@@ -2876,6 +2887,10 @@ impl<'a> TypeChecker<'a> {
                 | "Clock.__now"
                 | "Environment.__get"
                 | "Environment.__args"
+                | "test.mock.__random"
+                | "test.mock.__clock"
+                | "test.mock.__environment"
+                | "log.__emit"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -2980,13 +2995,14 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::BOOL],
                 TypeInterner::STRING,
             ),
-            "float64.from_int64" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::INT64],
-                TypeInterner::FLOAT64,
-            ),
+            "float64.from_int64" => {
+                self.expect_no_type_args(&name, type_args, span);
+                Some((
+                    vec![TypeInterner::INT64],
+                    self.interner
+                        .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
+                ))
+            }
             "string.__char_count" => self.no_type_args_signature(
                 &name,
                 type_args,
@@ -3655,17 +3671,12 @@ impl<'a> TypeChecker<'a> {
             }
             "list.__sort" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
-                if inner != TypeInterner::ERROR {
-                    let base = self.fully_coarsened_type(inner);
-                    if !self.is_numeric(base)
-                        && !matches!(base, TypeInterner::STRING | TypeInterner::BOOL)
-                    {
-                        self.sink.emit(errors::type_mismatch(
-                            "numeric, string, or bool",
-                            &self.type_name(inner),
-                            span,
-                        ));
-                    }
+                if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric, string, or bool",
+                        &self.type_name(inner),
+                        span,
+                    ));
                 }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
@@ -3690,12 +3701,26 @@ impl<'a> TypeChecker<'a> {
             }
             "list.__sort_by_index" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric, string, or bool",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
                 let row_ty = self.interner.intern(Type::List(inner));
                 let rows_ty = self.interner.intern(Type::List(row_ty));
                 Some((vec![rows_ty, TypeInterner::INT64], rows_ty))
             }
             "list.__is_sorted" => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
+                    self.sink.emit(errors::type_mismatch(
+                        "numeric, string, or bool",
+                        &self.type_name(inner),
+                        span,
+                    ));
+                }
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::BOOL))
             }
@@ -4021,6 +4046,11 @@ impl<'a> TypeChecker<'a> {
                 vec![TypeInterner::BYTES],
                 TypeInterner::BYTES,
             ),
+            "crypto.__hmac_sha256" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let secret_bytes = self.interner.intern(Type::Secret(TypeInterner::BYTES));
+                Some((vec![secret_bytes, TypeInterner::BYTES], secret_bytes))
+            }
             "Clock.__now" => self.no_type_args_signature(
                 &name,
                 type_args,
@@ -4040,6 +4070,34 @@ impl<'a> TypeChecker<'a> {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::ERROR], list_string))
+            }
+            "test.mock.__random" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let step = *self.named_types.get("test.mock.RandomStep")?;
+                let steps = self.interner.intern(Type::List(step));
+                Some((vec![steps], TypeInterner::ERROR))
+            }
+            "test.mock.__clock" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let step = *self.named_types.get("test.mock.ClockStep")?;
+                let steps = self.interner.intern(Type::List(step));
+                Some((vec![steps], TypeInterner::ERROR))
+            }
+            "test.mock.__environment" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let arguments = self.interner.intern(Type::List(TypeInterner::STRING));
+                let entry = *self.named_types.get("test.mock.EnvironmentEntry")?;
+                let entries = self.interner.intern(Type::List(entry));
+                Some((vec![arguments, entries], TypeInterner::ERROR))
+            }
+            "log.__emit" => {
+                self.expect_no_type_args(&name, type_args, span);
+                let event = *self.named_types.get("log.Event")?;
+                let error = *self.named_types.get("log.Error")?;
+                let result = self
+                    .interner
+                    .intern(Type::Result(TypeInterner::NOTHING, error));
+                Some((vec![TypeInterner::ERROR, event], result))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
             "csv.__parse" => {
@@ -8227,7 +8285,34 @@ impl<'a> TypeChecker<'a> {
     // Expressions
     // ------------------------------------------------------------------
 
+    fn is_test_mock_constructor(name: &str) -> bool {
+        matches!(
+            name,
+            "test.mock.random" | "test.mock.clock" | "test.mock.environment"
+        )
+    }
+
+    fn check_test_mock_constructor_call(&mut self, name: Option<&str>, span: Span) {
+        if let Some(name) = name
+            && Self::is_test_mock_constructor(name)
+            && (!self.in_property_block || self.comptime_expr_depth > 0)
+        {
+            self.sink
+                .emit(errors::test_mock_outside_property(name, span));
+        }
+    }
+
     fn check_expr(&mut self, expr: &Expr) -> TypeId {
+        // Provider constructors are direct property operations, not ordinary
+        // function values that can escape through aliases or callbacks.
+        if matches!(expr, Expr::Ident(_) | Expr::FieldAccess(_, _, _))
+            && let Some(name) = self.resolved_expr_name(expr)
+            && Self::is_test_mock_constructor(&name)
+        {
+            self.sink
+                .emit(errors::test_mock_outside_property(&name, expr.span()));
+            return TypeInterner::ERROR;
+        }
         let ty = match expr {
             Expr::IntLiteral(value, span) => {
                 if self.int_literal_fits_type(*value, TypeInterner::INT64) {
@@ -8364,7 +8449,11 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Run(inner, _) => {
                 // `run call` returns the same type as the call (pending tracked internally).
-                self.check_expr(inner)
+                let saved_in_property_block = self.in_property_block;
+                self.in_property_block = false;
+                let ty = self.check_expr(inner);
+                self.in_property_block = saved_in_property_block;
+                ty
             }
             Expr::Join(inner, _) => {
                 // `join task` returns result[T, string] so `handle error:` works.
@@ -8391,6 +8480,7 @@ impl<'a> TypeChecker<'a> {
                 let saved_return_type = self.current_return_type;
                 let saved_fn_name = self.current_function_name.take();
                 let saved_pure = self.current_function_pure;
+                let saved_in_property_block = self.in_property_block;
 
                 let ret = return_type
                     .as_ref()
@@ -8398,6 +8488,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::NOTHING);
                 self.current_return_type = Some(ret);
                 self.current_function_pure = false;
+                self.in_property_block = false;
                 self.closure_capture_scopes
                     .push(ClosureCaptureScope::default());
 
@@ -8420,6 +8511,7 @@ impl<'a> TypeChecker<'a> {
                 self.current_return_type = saved_return_type;
                 self.current_function_name = saved_fn_name;
                 self.current_function_pure = saved_pure;
+                self.in_property_block = saved_in_property_block;
 
                 self.interner.intern(Type::Function {
                     params: param_types,
@@ -8477,6 +8569,7 @@ impl<'a> TypeChecker<'a> {
     fn check_pipeline_step_call(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
         let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
         let callee_name = self.resolved_expr_name(function);
+        self.check_test_mock_constructor_call(callee_name.as_deref(), step.span);
         let callee_is_pure = callee_name
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
@@ -9195,20 +9288,21 @@ impl<'a> TypeChecker<'a> {
         args: &[ast::CallArg],
         span: Span,
     ) {
-        if args.len() != params.len() {
-            self.sink.emit(errors::argument_count_mismatch(
-                label,
-                params.len(),
-                args.len(),
-                span,
-            ));
+        let parameter_names = params
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let Some(argument_order) = self.bind_call_arguments(label, &parameter_names, args, span)
+        else {
             for arg in args {
                 self.check_expr(&arg.value);
             }
             return;
-        }
+        };
+        self.record_call_argument_order(span, argument_order.clone());
 
-        for (arg, (param_name, param_ty)) in args.iter().zip(params.iter()) {
+        for (&source_index, (param_name, param_ty)) in argument_order.iter().zip(params.iter()) {
+            let arg = &args[source_index];
             let arg_ty = self.check_expr_for_expected(&arg.value, *param_ty, false);
             if arg_ty != TypeInterner::ERROR
                 && *param_ty != TypeInterner::ERROR
@@ -9967,6 +10061,8 @@ impl<'a> TypeChecker<'a> {
             }
             return TypeInterner::ERROR;
         }
+
+        self.check_test_mock_constructor_call(callee_name.as_deref(), span);
 
         if let Some(name) = callee_name.as_deref()
             && capability::is_capability_type(name)
@@ -15900,8 +15996,10 @@ function main() returns nothing:
 type Percentage = float64 where value >= 0.0 && value <= 100.0
 
 function calculate_grade(score: int64, total: int64) returns Percentage:
-    float64 score_f = float64.from_int64(score)
-    float64 total_f = float64.from_int64(total)
+    float64 score_f = float64.from_int64(score) handle error:
+        default 0.0
+    float64 total_f = float64.from_int64(total) handle error:
+        default 1.0
     return score_f / total_f * 100.0
 ",
         );
