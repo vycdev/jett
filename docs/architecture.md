@@ -1869,7 +1869,8 @@ separate future contracts.
 
 Standard LSP implementation using the `tower-lsp` crate. Provides:
 
-- Real-time diagnostics (errors/warnings as you type).
+- Real-time diagnostics (errors/warnings as you type), including same-source
+  compiler labels as LSP related information with UTF-16 ranges.
 - Hover information (type at cursor).
 - Go-to-definition.
 - Find all references in the current document, optionally including the declaration.
@@ -1888,6 +1889,7 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
   in-memory source.
 
 The LSP server currently stores full document text, invokes driver operations,
+maps same-source compiler labels into the current document URI,
 and suppresses diagnostics from stale document versions. After `jett_query`
 lands, one database per workspace session will reuse unchanged parse results;
 version checks remain the final publish guard.
