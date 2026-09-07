@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+
+use jett_lexer::{Lexer, TokenKind};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -83,6 +85,7 @@ fn server_capabilities() -> ServerCapabilities {
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         semantic_tokens_provider: Some(
             SemanticTokensOptions {
@@ -454,6 +457,51 @@ fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
         range: Range::new(Position::new(0, 0), lsp_position(source, end_offset)),
         new_text: result.output,
     }])
+}
+
+fn folding_ranges_for_source(source: &str) -> Vec<FoldingRange> {
+    let lexed = Lexer::new(source, jett_common::FileId::new(0)).tokenize();
+    let mut starts = Vec::new();
+    let mut ranges = Vec::new();
+    let mut previous_code_offset = 0;
+
+    for token in lexed.tokens {
+        match token.kind {
+            TokenKind::Indent => {
+                // Blank and comment-only lines do not produce indentation
+                // tokens. Keep the actual header visible when folding.
+                starts.push(lsp_position(source, previous_code_offset).line);
+            }
+            TokenKind::Dedent => {
+                let Some(start_line) = starts.pop() else {
+                    continue;
+                };
+                let dedent_line = lsp_position(source, token.span.start).line;
+                let at_unterminated_eof =
+                    token.span.start as usize == source.len() && !source.ends_with(['\n', '\r']);
+                let end_line = if at_unterminated_eof {
+                    dedent_line
+                } else {
+                    dedent_line.saturating_sub(1)
+                };
+                if end_line > start_line {
+                    ranges.push(FoldingRange {
+                        start_line,
+                        start_character: None,
+                        end_line,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    });
+                }
+            }
+            TokenKind::Newline | TokenKind::Eof => {}
+            _ => previous_code_offset = token.span.start,
+        }
+    }
+
+    ranges.sort_by_key(|range| (range.start_line, std::cmp::Reverse(range.end_line)));
+    ranges
 }
 
 fn tab_indentation_code_actions(
@@ -1030,6 +1078,14 @@ impl LanguageServer for JettBackend {
         };
 
         Ok(formatting_edits(&document.text))
+    }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(folding_ranges_for_source(&document.text)))
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
@@ -2016,5 +2072,56 @@ mod tests {
             edits[0].new_text,
             "namespace app\nfunction f() returns int64:\n    return 1\n"
         );
+    }
+
+    #[test]
+    fn folding_ranges_follow_nested_jett_blocks() {
+        let source = "namespace app\nfunction main() returns int64:\n    mutable int64 total = 2\n    if total > 0:\n        while total > 1:\n            total = total - 1\n    return total\n";
+
+        let ranges = folding_ranges_for_source(source);
+        let lines = ranges
+            .iter()
+            .map(|range| (range.start_line, range.end_line))
+            .collect::<Vec<_>>();
+
+        assert_eq!(lines, vec![(1, 6), (3, 5), (4, 5)]);
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.kind == Some(FoldingRangeKind::Region))
+        );
+    }
+
+    #[test]
+    fn folding_ranges_keep_headers_before_comments_and_blank_lines() {
+        for newline in ["\n", "\r", "\r\n"] {
+            let source = [
+                "function main() returns int64:",
+                "",
+                "    # explanation",
+                "    if true:",
+                "        # nested explanation",
+                "",
+                "        return 1",
+                "    return 0",
+            ]
+            .join(newline);
+            let ranges = folding_ranges_for_source(&source);
+            let lines: Vec<_> = ranges
+                .iter()
+                .map(|range| (range.start_line, range.end_line))
+                .collect();
+            assert_eq!(lines, vec![(0, 7), (3, 6)], "{newline:?}");
+        }
+    }
+
+    #[test]
+    fn server_capabilities_advertise_folding_ranges() {
+        let capabilities = server_capabilities();
+
+        assert!(matches!(
+            capabilities.folding_range_provider,
+            Some(FoldingRangeProviderCapability::Simple(true))
+        ));
     }
 }
