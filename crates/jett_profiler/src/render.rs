@@ -72,6 +72,12 @@ pub fn render_cpu_profile_toon(profile: &CpuProfile) -> String {
     .expect("writing to a String cannot fail");
     writeln!(
         output,
+        "    truncated_stacks: {}",
+        profile.totals.truncated_stacks
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(
+        output,
         "  eligible_bottlenecks: {}",
         profile.eligible_bottlenecks
     )
