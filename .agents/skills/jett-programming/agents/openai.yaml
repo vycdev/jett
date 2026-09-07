@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jett Programming"
+  short_description: "Type-driven Jett programming and repair"
+  default_prompt: "Use $jett-programming to implement and verify this Jett program."

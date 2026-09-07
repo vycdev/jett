@@ -1,0 +1,91 @@
+{
+  "benchmark_version": "0.5.0-pilot",
+  "run_kind": "codex-subscription-skill-calibration",
+  "generated_at_utc": {
+    "first": "2026-08-30T15:37:46.530209+00:00",
+    "last": "2026-08-30T16:07:44.788719+00:00"
+  },
+  "backend": "codex_subscription",
+  "authentication": "ChatGPT subscription",
+  "api_key_present": false,
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "model_alias_is_rolling": true,
+  "codex_cli_version": "codex-cli 0.145.0",
+  "reasoning_effort": "medium",
+  "repetitions_per_cell": 1,
+  "repair_attempts": 0,
+  "output_token_limit_enforced": false,
+  "tasks": [
+    "account_state_evolution",
+    "bounded_weighted_sum",
+    "first_duplicate",
+    "inventory_batch",
+    "merge_sorted_intervals",
+    "order_lifecycle",
+    "recursive_expression",
+    "score_lines",
+    "signed_gcd",
+    "triangle_kind"
+  ],
+  "languages": ["jett", "python", "typescript", "go", "rust"],
+  "tracks": ["zero_shot", "onboarding", "skill_assisted"],
+  "row_count": 150,
+  "unique_response_ids": 150,
+  "deterministic_order": "sha256('codex-calibration-order:' + run_id)",
+  "prompt_git_revision": "552276b305a22ca4c1db3ab8ed63259777fcec4c",
+  "skill_bundles": {
+    "go": {"bytes": 3155, "prompt_reference_bytes": 3431, "sha256": "98c9778fdb473385c8317de22cca8925b14524ff2779e0ad82250715b6c69675"},
+    "jett": {"bytes": 5781, "prompt_reference_bytes": 6057, "sha256": "ba6d12de129c4cdecb4b1daf289b20894941a53113113bf86076821ac78b013d"},
+    "python": {"bytes": 3249, "prompt_reference_bytes": 3525, "sha256": "0e186705cd04be588e779053b4e73ee5e370e1870eeeb0854dec3c7a06745bcd"},
+    "rust": {"bytes": 3592, "prompt_reference_bytes": 3868, "sha256": "ee7e5d45a2262ccd56fc6d8202a209e0910ce534ba5ddd5f08829fe4ad22698f"},
+    "typescript": {"bytes": 3301, "prompt_reference_bytes": 3577, "sha256": "eee6a8a9c06c6533b0c8bc0e8938e43dc342be4e3f24a02e0fc88c02939de21c"}
+  },
+  "generation_isolation": {
+    "ephemeral_sessions": true,
+    "empty_temporary_working_directory": true,
+    "user_config_ignored": true,
+    "project_rules_ignored": true,
+    "sandbox": "read-only",
+    "tools_forbidden_by_prompt": true,
+    "observed_tool_calls": 0
+  },
+  "grading_isolation": {
+    "container_image": "jett-bench:0.5",
+    "container_image_sha256": "b3befa9baec71ab3f76929f971c6c798ae96925135b381434876649d57e29ccb",
+    "network": "none",
+    "memory_limit": "2g",
+    "cpu_limit": 2,
+    "pid_limit": 256,
+    "capabilities": "all dropped",
+    "no_new_privileges": true
+  },
+  "usage": {
+    "input_tokens": 1978019,
+    "cached_input_tokens": 1688064,
+    "output_tokens": 73913,
+    "reasoning_tokens": 36413,
+    "extracted_code_bytes": 158728,
+    "extracted_code_lines": 4964,
+    "model_latency_ms": 1804726.2121994863,
+    "estimated_api_cost_usd": null,
+    "subscription_allowance_consumed": true
+  },
+  "grading": {
+    "passed": 116,
+    "compile_errors": 32,
+    "policy_errors": 1,
+    "test_failures": 1,
+    "grader_runtime_ms": 427566.28182384884
+  },
+  "artifacts": {
+    "results": {
+      "path": "results.jsonl",
+      "sha256": "30b8241279ec5518b85c54efe323c33e1890c38eda5ed74a065e891777366285"
+    },
+    "summary": {
+      "path": "summary.json",
+      "sha256": "d62b7495acc3f7e44259c2fb857d8cbdfb0b60ea5ff8b0da3b59a8587e3c231a"
+    }
+  }
+}

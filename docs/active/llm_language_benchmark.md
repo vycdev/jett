@@ -25,13 +25,16 @@ pilot results receives a new version.
 ## Experiment shape
 
 - Languages: Jett, Python, TypeScript, Go, Rust.
-- Tracks: zero-shot and controlled onboarding.
+- Tracks: zero-shot, controlled onboarding, and parity-matched programming
+  skills.
 - Model: a pinned GPT-5.6 Luna snapshot when available; otherwise record the
   rolling alias, backend, client version, order, and exact run time.
 - Reasoning: low, medium, high.
 - Context: every initial attempt is an independent Responses API request.
-- Repair: optional bounded repairs receive the prior answer and normalized
-  diagnostics in a new request; they do not reuse hidden expected values.
+- Repair: an optional paired `compile_repair` mode gives each failed one-shot
+  exactly one second prompt with its prior answer and safe compiler feedback.
+  Candidate diagnostics are preserved when private grader code can be excluded;
+  otherwise only a normalized category is provided.
 - Budgets: identical output-token and repair limits within a task cell.
 - Repetitions: three for harness validation, at least ten for a frozen study.
 
@@ -153,3 +156,104 @@ grading passed 80/100: Go 20, Rust 19, TypeScript 18, Python 16, and Jett 7.
 Onboarding improved Jett from 0/10 to 7/10. Three Python failures passed hidden
 behavior tests but were rejected by Pyright's strict unnecessary-`isinstance`
 diagnostic; the official score remains static-check based.
+
+The next treatment is now implemented as a paired compile-and-repair pass over
+failed zero-shot and onboarding rows. It does not replace the 100 one-shot
+scores: passing rows stop after prompt one, while failures receive one repair
+prompt and are reported through repair success and pass-after-repair rates.
+
+That repair pass is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.4_compile_repair/`. It
+repaired 10/20 failures and raised the paired result from 80/100 to 90/100.
+Python, TypeScript, and Rust repaired every failed row; Jett repaired 3/13,
+ending at 10/20. The remaining Jett failures were all compile-time failures,
+showing that a single diagnostic usually does not replace onboarding for the
+current language surface.
+
+## Programming-skill expansion v0.5
+
+The next context treatment gives all five languages a proper programming skill,
+not only Jett. Each repo-scoped skill contains the same type-driven workflow,
+compiler-repair loop, evaluation boundary, and language reference shape. Jett's
+reference is larger because its syntax and ownership rules are not present in
+model pretraining; every row records the exact skill hash and byte count.
+
+The skills contain no benchmark task names, source fixtures, hidden graders,
+observed solutions, or task-specific repair advice. For deterministic
+evaluation, the harness serializes the complete language skill into the prompt
+instead of relying on automatic activation. This produces a 1,350-row study
+matrix and a 150-row balanced medium calibration slice.
+
+That slice is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5_calibration/`. Initial
+grading passed 116/150: zero-shot 33/50, onboarding 45/50, and skill-assisted
+38/50. Excluding Jett, onboarding and skill-assisted tied at 37/40. Jett scored
+0/10 zero-shot, 8/10 onboarding, and 1/10 skill-assisted.
+
+The Jett skill result exposes a specific documentation gap. Seven of its nine
+failed responses used invalid `mutable name: Type` declarations. The reference
+describes type-before-name order but, unlike the onboarding sheet, shows no
+mutable-local example. The skill must gain compiler-accepted binding and
+collection examples and receive a new version before another calibration.
+
+Benchmark v0.5.1 makes that correction. The Jett skill now contrasts
+parameter/field syntax with local syntax and includes compiler-checked generic
+examples for mutable bindings, enums, optionals/results, collections, views,
+cloning, consuming updates, and typed helper extraction. Tasks and language
+semantics are unchanged; only future skill-assisted rows use the new version
+and hash.
+
+The paired repair stage is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5_compile_repair/`. It
+repaired 15/34 failures and raised the final result to 131/150. Jett repaired
+5/21 and ended at 14/30; the established languages repaired 10/13 and ended at
+117/120. These runs use one observation per cell and the rolling Luna alias, so
+they remain calibration evidence rather than a language ranking.
+
+## Jett skill smoke calibration v0.5.1
+
+A targeted ten-task Jett `skill_assisted` smoke run is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke/`.
+Initial grading passed 8/10, compared with 1/10 for the prior skill treatment.
+The former mutable-local syntax pattern disappeared. The two failures wrapped
+ordinary function or constructor arguments across newlines, which Jett does
+not accept.
+
+The paired repair pass is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke_compile_repair/`.
+Neither failure repaired successfully. One retained multiline call arguments;
+the other corrected that form but guessed `int64.to_string` instead of the
+implemented `string.from_int64` spelling.
+
+Benchmark v0.5.2 adds those two general syntax anchors to the skill. No task,
+grader, adapter, or language rule changed. A future smoke run must use the new
+version and skill hash rather than appending to the v0.5.1 evidence.
+
+## Jett skill smoke calibration v0.5.2
+
+The targeted v0.5.2 Jett `skill_assisted` smoke passed 6/10 initial tasks.
+Both tasks that failed under v0.5.1 now passed, confirming that multiline-call
+and integer-rendering guidance reached the model. The four new failures were
+compile errors: one guessed nonexistent `map.contains`, while three exceeded
+the complexity limit through boolean chains or nested exhaustive matches.
+
+All four submissions passed after one compiler-feedback repair prompt, making
+the paired final result 10/10. Benchmark v0.5.3 therefore adds the exact
+`map.has` membership spelling and explains that nested matches and every
+`and`/`or` condition add complexity decision points. It remains general
+language guidance and contains no task-specific solution material.
+
+## Jett skill 2x2 calibration v0.5.3
+
+The controlled v0.5.3 run measured four cells over the same ten tasks:
+zero-shot one-shot, zero-shot with one compile-repair prompt, skill-assisted
+one-shot, and skill-assisted with one compile-repair prompt. Zero-shot passed
+0/10 initially and repaired 1/10. Skill-assisted passed 9/10 initially; its
+single repair failed, leaving 9/10 final.
+
+This isolates the skill as the dominant treatment in this sample. A compiler
+diagnostic alone did little to recover programs written without Jett syntax
+knowledge. The skill-assisted failure initially exceeded the complexity limit;
+its repair split helpers successfully but used reserved built-in type word
+`result` as a parameter. Benchmark v0.5.4 adds that general lexical constraint
+without including task-specific source or advice.
