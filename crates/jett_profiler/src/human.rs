@@ -45,13 +45,17 @@ pub fn render_cpu_profile(profile: &CpuProfile) -> String {
 
     for (index, bottleneck) in profile.bottlenecks.iter().enumerate() {
         let frame = &bottleneck.frame;
-        let qualified_name = format!("{}.{}", frame.namespace, frame.function);
+        let qualified_name = format!(
+            "{}.{}",
+            escape_metadata(&frame.namespace),
+            escape_metadata(&frame.function)
+        );
         writeln!(
             output,
             "{}. {} at {}:{}:{}",
             index + 1,
             qualified_name,
-            frame.path,
+            escape_metadata(&frame.path),
             frame.line,
             frame.column
         )
@@ -79,6 +83,23 @@ pub fn render_cpu_profile(profile: &CpuProfile) -> String {
         .expect("writing to a String cannot fail");
     }
 
+    output
+}
+
+fn escape_metadata(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        match character {
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            control if control.is_control() => {
+                write!(output, "\\u{{{:x}}}", control as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            other => output.push(other),
+        }
+    }
     output
 }
 

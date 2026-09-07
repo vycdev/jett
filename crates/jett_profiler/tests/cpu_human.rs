@@ -61,3 +61,24 @@ fn cpu_human_reports_truncated_stack_samples() {
     );
     assert!(render_cpu_profile(&profile).contains("Stack truncation: 1 sample\n"));
 }
+
+#[test]
+fn cpu_human_escapes_controls_in_every_metadata_field() {
+    let frame = FrameIdentity::new("app\u{1b}[2J", "work\nforged", "src/\r\t\u{7f}é.jett", 1, 2);
+    let profile = CpuProfile::aggregate(
+        CpuConfig::default(),
+        1,
+        0,
+        0,
+        vec![CpuSample::jett(vec![frame])],
+    );
+    let rendered = render_cpu_profile(&profile);
+    assert!(rendered.contains("app\\u{1b}[2J.work\\nforged at src/\\r\\t\\u{7f}é.jett:1:2"));
+    assert!(rendered.contains("Inspect the hot lines for app\\u{1b}[2J.work\\nforged."));
+    assert!(
+        !rendered
+            .chars()
+            .any(|character| character.is_control() && character != '\n')
+    );
+    assert!(!rendered.contains("\nforged"));
+}
