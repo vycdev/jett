@@ -83,6 +83,7 @@ fn server_capabilities() -> ServerCapabilities {
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         semantic_tokens_provider: Some(
             SemanticTokensOptions {
                 work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -453,6 +454,54 @@ fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
         range: Range::new(Position::new(0, 0), lsp_position(source, end_offset)),
         new_text: result.output,
     }])
+}
+
+fn tab_indentation_code_actions(
+    source: &str,
+    uri: &Url,
+    diagnostics: &[Diagnostic],
+) -> CodeActionResponse {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            if diagnostic.source.as_deref() != Some("jett")
+                || !diagnostic.message.starts_with("tabs are not allowed")
+            {
+                return None;
+            }
+
+            let line_index = usize::try_from(diagnostic.range.start.line).ok()?;
+            let indentation: String = source_line(source, line_index)?
+                .chars()
+                .take_while(|ch| matches!(ch, ' ' | '\t'))
+                .collect();
+            if !indentation.contains('\t') {
+                return None;
+            }
+
+            let end_character = u32::try_from(indentation.encode_utf16().count()).ok()?;
+            let edit = TextEdit {
+                range: Range::new(
+                    Position::new(diagnostic.range.start.line, 0),
+                    Position::new(diagnostic.range.start.line, end_character),
+                ),
+                new_text: indentation.replace('\t', "    "),
+            };
+            let changes = HashMap::from([(uri.clone(), vec![edit])]);
+
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title: "Replace tab indentation with spaces".to_string(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..WorkspaceEdit::default()
+                }),
+                is_preferred: Some(true),
+                ..CodeAction::default()
+            }))
+        })
+        .collect()
 }
 
 const SEMANTIC_KEYWORD: u32 = 0;
@@ -983,6 +1032,26 @@ impl LanguageServer for JettBackend {
         Ok(formatting_edits(&document.text))
     }
 
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        if params.context.only.as_ref().is_some_and(|kinds| {
+            !kinds
+                .iter()
+                .any(|kind| kind.as_str().is_empty() || *kind == CodeActionKind::QUICKFIX)
+        }) {
+            return Ok(None);
+        }
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let actions = tab_indentation_code_actions(
+            &document.text,
+            &params.text_document.uri,
+            &params.context.diagnostics,
+        );
+        Ok((!actions.is_empty()).then_some(actions))
+    }
+
     async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
@@ -991,7 +1060,6 @@ impl LanguageServer for JettBackend {
         let Some(document) = documents.get(&params.text_document.uri) else {
             return Ok(None);
         };
-
         Ok(Some(semantic_tokens_response(&document.text)))
     }
 
@@ -1715,6 +1783,80 @@ mod tests {
             capabilities.document_formatting_provider,
             Some(OneOf::Left(true))
         );
+    }
+
+    #[test]
+    fn server_capabilities_advertise_code_actions() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.code_action_provider,
+            Some(CodeActionProviderCapability::Simple(true))
+        );
+    }
+
+    #[test]
+    fn tab_indentation_diagnostic_offers_a_four_space_quick_fix() {
+        let source = "namespace app\nfunction main() returns int64:\n\treturn 1\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let diagnostics = diagnostics_for_source(source, "main.jett");
+
+        let actions = tab_indentation_code_actions(source, &uri, &diagnostics);
+
+        assert_eq!(actions.len(), 1);
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected a code action");
+        };
+        assert_eq!(action.title, "Replace tab indentation with spaces");
+        assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+        assert_eq!(action.diagnostics.as_deref(), Some(&diagnostics[..1]));
+        let changes = action
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.changes.as_ref())
+            .expect("workspace edit changes");
+        assert_eq!(
+            changes.get(&uri),
+            Some(&vec![TextEdit {
+                range: Range::new(Position::new(2, 0), Position::new(2, 1)),
+                new_text: "    ".to_string(),
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn tab_quick_fixes_respect_requested_code_action_kinds() {
+        let source = "function main() returns int64:\n\treturn 1\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let (service, _socket) = tower_lsp::LspService::new(JettBackend::new);
+        let backend = service.inner();
+        backend.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                text: source.to_string(),
+                version: 1,
+            },
+        );
+        for (kind, expected) in [
+            (CodeActionKind::SOURCE_ORGANIZE_IMPORTS, false),
+            (CodeActionKind::QUICKFIX, true),
+        ] {
+            let result = backend
+                .code_action(CodeActionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    range: Range::new(Position::new(1, 0), Position::new(1, 1)),
+                    context: CodeActionContext {
+                        diagnostics: diagnostics_for_source(source, "main.jett"),
+                        only: Some(vec![kind]),
+                        trigger_kind: None,
+                    },
+                    work_done_progress_params: WorkDoneProgressParams::default(),
+                    partial_result_params: PartialResultParams::default(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.is_some(), expected);
+        }
     }
 
     #[test]

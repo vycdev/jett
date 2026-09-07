@@ -1884,6 +1884,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Case-insensitive workspace symbol search across all open Jett documents,
   using their latest unsaved text and deterministic name/location ordering.
 - Whole-document formatting is provided through `jett_fmt`.
+- Quick fixes replace tab-indented line prefixes with the required four-space
+  indentation while preserving the rest of the line.
 - Full-document semantic tokens classify keywords, primitive types, numbers,
   strings, operators, and comments with UTF-16 positions from the latest
   in-memory source.
