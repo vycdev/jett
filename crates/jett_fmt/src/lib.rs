@@ -49,10 +49,13 @@ fn reprint_tokens(tokens: &[Token], comments: &[CommentTrivia], source: &str) ->
     let mut index = 0usize;
     while index < tokens.len() {
         let token = &tokens[index];
+        let next_indent_level = indent_after_structural_tokens(tokens, index, indent_level);
         emit_comments_before(
             comments,
             &mut comment_index,
             token.span.start as usize,
+            indent_level,
+            next_indent_level,
             source,
             &mut output,
             &mut at_line_start,
@@ -135,6 +138,8 @@ fn reprint_tokens(tokens: &[Token], comments: &[CommentTrivia], source: &str) ->
         comments,
         &mut comment_index,
         source.len(),
+        indent_level,
+        indent_level,
         source,
         &mut output,
         &mut at_line_start,
@@ -161,6 +166,8 @@ fn emit_comments_before(
     comments: &[CommentTrivia],
     comment_index: &mut usize,
     limit: usize,
+    current_indent_level: u32,
+    next_indent_level: u32,
     source: &str,
     output: &mut String,
     at_line_start: &mut bool,
@@ -187,7 +194,13 @@ fn emit_comments_before(
             if !output.is_empty() && !output.ends_with('\n') {
                 output.push('\n');
             }
-            output.push_str(comment_line_prefix(source, start));
+            let source_indent_level = comment_indent_level(source, start);
+            let active_levels = current_indent_level.min(next_indent_level)
+                ..=current_indent_level.max(next_indent_level);
+            let indent_level = source_indent_level
+                .filter(|level| active_levels.contains(level))
+                .unwrap_or(next_indent_level);
+            output.push_str(&"    ".repeat(indent_level as usize));
             output.push_str(text);
             output.push('\n');
         }
@@ -207,16 +220,28 @@ fn has_newline_between(source: &str, start: usize, end: usize) -> bool {
         .any(|byte| byte == b'\n' || byte == b'\r')
 }
 
-fn comment_line_prefix(source: &str, comment_start: usize) -> &str {
+fn indent_after_structural_tokens(tokens: &[Token], index: usize, current: u32) -> u32 {
+    let mut indent = current;
+    for token in &tokens[index..] {
+        match token.kind {
+            TokenKind::Indent => indent += 1,
+            TokenKind::Dedent => indent = indent.saturating_sub(1),
+            _ => break,
+        }
+    }
+    indent
+}
+
+fn comment_indent_level(source: &str, comment_start: usize) -> Option<u32> {
     let line_start = source[..comment_start]
-        .rfind(|ch| ch == '\n' || ch == '\r')
+        .rfind(['\n', '\r'])
         .map(|index| index + 1)
         .unwrap_or(0);
     let prefix = &source[line_start..comment_start];
-    if prefix.bytes().all(|byte| byte == b' ' || byte == b'\t') {
-        prefix
+    if prefix.bytes().all(|byte| byte == b' ') && prefix.len().is_multiple_of(4) {
+        Some((prefix.len() / 4) as u32)
     } else {
-        ""
+        None
     }
 }
 
@@ -374,6 +399,29 @@ fn minus_is_unary(prev: Option<TokenKind>) -> bool {
         prev,
         None | Some(
             TokenKind::Return
+                | TokenKind::If
+                | TokenKind::While
+                | TokenKind::Match
+                | TokenKind::Assert
+                | TokenKind::Breakpoint
+                | TokenKind::Respond
+                | TokenKind::Where
+                | TokenKind::In
+                | TokenKind::View
+                | TokenKind::Comptime
+                | TokenKind::Declassify
+                | TokenKind::Coarsen
+                | TokenKind::Spawn
+                | TokenKind::Clone
+                | TokenKind::Send
+                | TokenKind::Ask
+                | TokenKind::Run
+                | TokenKind::Join
+                | TokenKind::Cancel
+                | TokenKind::Not
+                | TokenKind::Bang
+                | TokenKind::And
+                | TokenKind::Or
                 | TokenKind::Default
                 | TokenKind::Eq
                 | TokenKind::Colon
@@ -480,6 +528,59 @@ mod tests {
     }
 
     #[test]
+    fn format_keeps_unary_minus_attached_after_expression_introducers() {
+        let cases = [
+            "function f() returns nothing:\n    assert -1 < 0\n",
+            "function f() returns nothing:\n    if -1 < 0:\n        return nothing\n",
+            "function f() returns nothing:\n    while -1 < 0:\n        break\n",
+            "function f() returns nothing:\n    match -1:\n        other:\n            return nothing\n",
+            "function f() returns nothing:\n    breakpoint -1 < 0\n",
+            "actor Worker():\n    receive value() responds int64:\n        respond -1\n",
+            "function f() returns bool:\n    return not -1 < 0\n",
+            "function f() returns int64:\n    return comptime -1\n",
+            "type Negative = int64 where -1 < 0\n",
+        ];
+
+        for source in cases {
+            let formatted = fmt(source);
+            assert!(formatted.contains("-1"), "formatted output: {formatted}");
+            assert!(
+                !formatted.contains("- 1"),
+                "unary minus was detached in: {formatted}"
+            );
+        }
+    }
+
+    #[test]
+    fn format_keeps_unary_minus_attached_after_prefix_and_infix_operators() {
+        let cases = [
+            "function f() returns int64:\n    return view -1\n",
+            "function f() returns int64:\n    return declassify -1\n",
+            "function f() returns int64:\n    return coarsen -1\n",
+            "function f() returns int64:\n    return clone -1\n",
+            "function f() returns int64:\n    return spawn -1\n",
+            "function f() returns int64:\n    return send -1\n",
+            "function f() returns int64:\n    return ask -1\n",
+            "function f() returns int64:\n    return run -1\n",
+            "function f() returns int64:\n    return join -1\n",
+            "function f() returns int64:\n    return cancel -1\n",
+            "function f() returns bool:\n    return !-1 < 0\n",
+            "function f() returns nothing:\n    assert true and -1 < 0\n",
+            "function f() returns nothing:\n    assert false or -1 < 0\n",
+            "function f() returns nothing:\n    for value in -1:\n        break\n",
+        ];
+
+        for source in cases {
+            let formatted = fmt(source);
+            assert!(formatted.contains("-1"), "formatted output: {formatted}");
+            assert!(
+                !formatted.contains("- 1"),
+                "unary minus was detached in: {formatted}"
+            );
+        }
+    }
+
+    #[test]
     fn format_keeps_unary_bang_attached() {
         let source = "function f(value: bool) returns bool:\n    return !value\n";
         let formatted = fmt(source);
@@ -500,6 +601,29 @@ mod tests {
         let formatted = fmt(source);
         assert!(formatted.contains("    # keep me\n"));
         assert!(formatted.contains("    return nothing"));
+    }
+
+    #[test]
+    fn format_canonicalizes_standalone_comment_indentation() {
+        let source = "function f() returns nothing:\n        # keep me\n    return nothing\n";
+        let formatted = fmt(source);
+        assert_eq!(
+            formatted,
+            "function f() returns nothing:\n    # keep me\n    return nothing\n"
+        );
+    }
+
+    #[test]
+    fn format_preserves_comment_scope_across_a_dedent() {
+        let source = "function f() returns nothing:\n    if true:\n        return nothing\n    # parent scope\n    return nothing\n";
+        let formatted = fmt(source);
+        assert_eq!(formatted, source);
+    }
+
+    #[test]
+    fn format_preserves_intermediate_comment_scope_across_multiple_dedents() {
+        let source = "function f() returns nothing:\n    if true:\n        if true:\n            return nothing\n        # middle scope\n    # outer scope\nfunction g() returns nothing:\n    return nothing\n";
+        assert_eq!(fmt(source), source);
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use jett_query::cache::{PARSE_FILE_ARTIFACT_KIND, ParseCacheKey, ParseCacheKeyRecord};
+use jett_query::cache::{
+    CacheEnvelope, PARSE_FILE_ARTIFACT_KIND, ParseCacheKey, ParseCacheKeyRecord,
+};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -57,4 +59,51 @@ fn parse_key_decoder_rejects_noncanonical_fixed_fields() {
             "decoder accepted noncanonical {name}"
         );
     }
+}
+
+#[test]
+fn cache_envelope_round_trips_an_authenticated_parse_payload() {
+    let key = ParseCacheKey::new(b"namespace app\n", [0xa5; 32], 7);
+    let authentication_key = [0x5a; 32];
+    let payload = b"canonical parsed-file payload";
+
+    let encoded = CacheEnvelope::encode(&key, payload, &authentication_key)
+        .expect("bounded payload should encode");
+    assert_eq!(encoded.len(), 364);
+    assert_eq!(
+        hex(&encoded[encoded.len() - 32..]),
+        "d598468a57d2ae7e012d84e7b42efe5a0fbf6d0d48d948f82b61198c2b6263ec"
+    );
+    let decoded = CacheEnvelope::decode(&encoded, &key, &authentication_key)
+        .expect("canonical envelope should decode");
+
+    assert_eq!(decoded.payload(), payload);
+    assert_eq!(decoded.key_record(), key.record());
+}
+
+#[test]
+fn cache_envelope_rejects_tampering_and_the_wrong_key() {
+    let key = ParseCacheKey::new(b"namespace app\n", [0xa5; 32], 7);
+    let authentication_key = [0x5a; 32];
+    let mut encoded = CacheEnvelope::encode(&key, b"payload", &authentication_key).unwrap();
+    let payload_byte = encoded.len() - 33;
+    encoded[payload_byte] ^= 1;
+
+    assert!(CacheEnvelope::decode(&encoded, &key, &authentication_key).is_err());
+
+    let encoded = CacheEnvelope::encode(&key, b"payload", &authentication_key).unwrap();
+    let different_key = ParseCacheKey::new(b"namespace other\n", [0xa5; 32], 7);
+    assert!(CacheEnvelope::decode(&encoded, &different_key, &authentication_key).is_err());
+    assert!(CacheEnvelope::decode(&encoded, &key, &[0x33; 32]).is_err());
+}
+
+#[test]
+fn cache_envelope_rejects_oversized_input_before_authentication() {
+    let key = ParseCacheKey::new(b"namespace app\n", [0xa5; 32], 7);
+    let oversized = vec![0; 64 * 1024 * 1024 + 4097];
+
+    let error = CacheEnvelope::decode(&oversized, &key, &[0x5a; 32])
+        .expect_err("oversized input must be rejected");
+
+    assert_eq!(error.to_string(), "cache envelope exceeds size limit");
 }
