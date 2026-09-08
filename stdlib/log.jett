@@ -1,0 +1,30 @@
+namespace log
+export enum Level:
+    debug
+    info
+    warn
+    error
+export enum Error:
+    sink_unavailable
+    write_failed
+export struct Field:
+    name: string
+    value: string
+export struct Event:
+    level: Level
+    message: string
+    fields: list[Field]
+export function emit(view output: Log, event: Event) returns result[nothing, Error]:
+    return log.__emit(view output, event)
+export function debug(view output: Log, message: string, fields: list[Field]) returns result[nothing, Error]:
+    Event event = Event(level: Level.debug, message: message, fields: fields)
+    return emit(view output, event)
+export function info(view output: Log, message: string, fields: list[Field]) returns result[nothing, Error]:
+    Event event = Event(level: Level.info, message: message, fields: fields)
+    return emit(view output, event)
+export function warn(view output: Log, message: string, fields: list[Field]) returns result[nothing, Error]:
+    Event event = Event(level: Level.warn, message: message, fields: fields)
+    return emit(view output, event)
+export function error(view output: Log, message: string, fields: list[Field]) returns result[nothing, Error]:
+    Event event = Event(level: Level.error, message: message, fields: fields)
+    return emit(view output, event)

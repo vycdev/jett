@@ -85,6 +85,22 @@ function parse_float_test() returns float64:
     return val
 verify parse_float_test:
     assert parse_float_test() == 2.5
+# --- float64 from int64 (result type) ---
+function int_to_float_exact_test() returns float64:
+    return float64.from_int64(9007199254740992) handle error:
+        default 0.0
+function int_to_float_precision_error_test() returns string:
+    float64 value = float64.from_int64(9007199254740993) handle error:
+        return error
+    return string.from_float64(value)
+function int_to_float_max_error_test() returns string:
+    float64 value = float64.from_int64(9223372036854775807) handle error:
+        return error
+    return string.from_float64(value)
+verify int_to_float_test:
+    assert int_to_float_exact_test() == 9007199254740992.0
+    assert int_to_float_precision_error_test() == "float64.from_int64: value is not exactly representable as float64"
+    assert int_to_float_max_error_test() == "float64.from_int64: value is not exactly representable as float64"
 # --- int64 from float64 (result type) ---
 function float_to_int_exact_test() returns int64:
     return int64.from_float64(42.0) handle error:

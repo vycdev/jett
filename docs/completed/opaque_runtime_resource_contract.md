@@ -1,8 +1,10 @@
 # Opaque Runtime Resource Type Contract
 
 Status: accepted for the first compiler-shipped runtime resource implementation.
-Frontend, interpreter, socket, HIR, MIR, and native-runtime support remain
-pending. This document closes the design scope tracked by
+The frontend/type boundary and the generation-checked `jett_runtime` registry
+substrate are implemented. Trusted-hook dispatch, interpreter control-flow
+cleanup integration, sockets, HIR/MIR drop elaboration, and native-runtime
+support remain pending. This document closes the design scope tracked by
 [#175](https://github.com/vycdev/jett/issues/175).
 
 ## Purpose And Scope
