@@ -8,6 +8,8 @@ pub use source::{SanitizedSourceExcerpt, SourceExcerptMetadata, sanitize_source_
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod human;
+
 mod sampling;
 
 pub use sampling::{CpuSampleRequestCounts, CpuSampleRequestGate, CpuTickOutcome};
