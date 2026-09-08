@@ -74,6 +74,7 @@ pub struct DeclarationId {
 pub enum DeclarationKind {
     Function,
     Method,
+    ActorHandler,
 }
 
 /// One concrete in-memory function identity. Type arguments are empty for an
@@ -295,6 +296,8 @@ pub enum ExpressionKind {
         actor: Box<Expression>,
         message: String,
         args: Vec<Expression>,
+        /// Parameter indexes in lexical source evaluation order.
+        evaluation_order: Vec<usize>,
         kind: ActorMessageKind,
     },
     Field {
@@ -421,6 +424,20 @@ impl Validator<'_> {
         }
     }
 
+    fn check_evaluation_order(&mut self, order: &[usize], argument_count: usize, span: Span) {
+        let mut seen = vec![false; argument_count];
+        let valid = order.len() == argument_count
+            && order
+                .iter()
+                .all(|&index| index < argument_count && !std::mem::replace(&mut seen[index], true));
+        if !valid {
+            self.error(
+                span,
+                "argument evaluation order must be a permutation of the argument indexes",
+            );
+        }
+    }
+
     fn block(&mut self, block: &Block) {
         for statement in &block.statements {
             self.statement(statement);
@@ -540,27 +557,51 @@ impl Validator<'_> {
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value) => self.expression(value),
-            ExpressionKind::Call { function, args, .. } => {
+            ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+            } => {
                 if function.index() as usize >= self.program.functions.len() {
                     self.error(expression.span, "call references an unknown HIR function");
                 }
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::Intrinsic { args, .. } => {
+            ExpressionKind::Intrinsic {
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::IndirectCall { callee, args, .. } => {
+            ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+            } => {
                 self.expression(callee);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::StructConstruct { fields, .. }
-            | ExpressionKind::BitfieldConstruct { fields, .. } => {
+            ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                ..
+            }
+            | ExpressionKind::BitfieldConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, fields.len(), expression.span);
                 for field in fields {
                     self.expression(field);
                 }
@@ -622,13 +663,24 @@ impl Validator<'_> {
                 }
                 self.block(body);
             }
-            ExpressionKind::ActorSpawn { args, .. } => {
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
             }
-            ExpressionKind::ActorMessage { actor, args, .. } => {
+            ExpressionKind::ActorMessage {
+                actor,
+                args,
+                evaluation_order,
+                ..
+            } => {
                 self.expression(actor);
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
                 }
@@ -671,6 +723,14 @@ struct FunctionSource<'a> {
     method: Option<CheckedMethodDefinition>,
 }
 
+struct ActorHandlerSource<'a> {
+    id: FunctionId,
+    actor_definition: DefId,
+    actor: &'a ast::ActorDef,
+    handler: &'a ast::ReceiveHandler,
+    message_index: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FunctionKey {
     Definition {
@@ -688,6 +748,7 @@ struct Lowerer<'a> {
     check: &'a CheckResult,
     origins: &'a HashMap<FileId, SourceOrigin>,
     functions: Vec<FunctionSource<'a>>,
+    actor_handlers: Vec<ActorHandlerSource<'a>>,
     function_ids: HashMap<FunctionKey, FunctionId>,
     errors: Vec<LowerError>,
 }
@@ -705,6 +766,7 @@ impl<'a> Lowerer<'a> {
             check,
             origins,
             functions: Vec::new(),
+            actor_handlers: Vec::new(),
             function_ids: HashMap::new(),
             errors: Vec::new(),
         }
@@ -716,6 +778,12 @@ impl<'a> Lowerer<'a> {
         let mut functions = Vec::with_capacity(sources.len());
         for source in sources {
             if let Some(function) = self.lower_function(source) {
+                functions.push(function);
+            }
+        }
+        let actor_handlers = std::mem::take(&mut self.actor_handlers);
+        for source in actor_handlers {
+            if let Some(function) = self.lower_actor_handler(source) {
                 functions.push(function);
             }
         }
@@ -819,6 +887,26 @@ impl<'a> Lowerer<'a> {
                 instantiation: None,
                 method: Some(method),
             });
+        }
+
+        for item in &self.module.items {
+            let Item::Actor(actor) = item else {
+                continue;
+            };
+            let Some(actor_definition) = self.definition_at(actor.name.span, DefKind::Actor) else {
+                self.error(actor.name.span, "actor has no resolved definition");
+                continue;
+            };
+            for (message_index, handler) in actor.handlers.iter().enumerate() {
+                let id = FunctionId((self.functions.len() + self.actor_handlers.len()) as u32);
+                self.actor_handlers.push(ActorHandlerSource {
+                    id,
+                    actor_definition,
+                    actor,
+                    handler,
+                    message_index,
+                });
+            }
         }
     }
 
@@ -1021,6 +1109,174 @@ impl<'a> Lowerer<'a> {
             locals,
             body,
             span: source.function.span,
+        })
+    }
+
+    fn lower_actor_handler(&mut self, source: ActorHandlerSource<'a>) -> Option<Function> {
+        let origin = match self.origins.get(&source.actor.span.file) {
+            Some(origin) => origin.clone(),
+            None => {
+                self.error(
+                    source.actor.span,
+                    "source origin is missing for actor handler",
+                );
+                return None;
+            }
+        };
+        let actor_type = match self.check.definition_types.get(&source.actor_definition) {
+            Some(ty) => *ty,
+            None => {
+                self.error(source.actor.name.span, "actor has no checked type");
+                return None;
+            }
+        };
+        let actor_definition = match self.check.interner.resolve(actor_type) {
+            Type::Actor(id) => self.check.interner.resolve_actor(*id).clone(),
+            _ => {
+                self.error(
+                    source.actor.name.span,
+                    "checked actor definition is not an actor",
+                );
+                return None;
+            }
+        };
+        let message = match actor_definition.messages.get(source.message_index) {
+            Some(message) => message.clone(),
+            None => {
+                self.error(
+                    source.handler.span,
+                    "actor handler has no checked message definition",
+                );
+                return None;
+            }
+        };
+        if source.actor.capability_params.len() != actor_definition.capability_params.len()
+            || source.actor.state_fields.len() != actor_definition.state_fields.len()
+            || source.handler.params.len() != message.params.len()
+        {
+            self.error(
+                source.handler.span,
+                "checked actor shape changed during HIR lowering",
+            );
+            return None;
+        }
+
+        let function_ids = self.function_ids.clone();
+        let expression_types = self.check.type_map.clone();
+        let generic_calls = self.check.generic_calls.clone();
+        let call_argument_orders = self.check.call_argument_orders.clone();
+        let method_calls = self.check.method_calls.clone();
+        let struct_constructions = self.check.struct_constructions.clone();
+        let pipeline_step_call_types = self.check.pipeline_step_call_types.clone();
+        let mut body_lowerer = BodyLowerer::new(
+            self,
+            &function_ids,
+            &expression_types,
+            &generic_calls,
+            &call_argument_orders,
+            &method_calls,
+            &struct_constructions,
+            &pipeline_step_call_types,
+        );
+
+        for (param, (_, ty)) in source
+            .actor
+            .capability_params
+            .iter()
+            .zip(actor_definition.capability_params.iter())
+        {
+            let Some(definition) = body_lowerer
+                .parent
+                .definition_at(param.name.span, DefKind::Param)
+            else {
+                body_lowerer
+                    .parent
+                    .error(param.name.span, "actor capability parameter is unresolved");
+                return None;
+            };
+            body_lowerer.allocate_local(
+                definition,
+                &param.name.name,
+                *ty,
+                param.mutable,
+                param.span,
+            );
+        }
+        for (field, (_, ty)) in source
+            .actor
+            .state_fields
+            .iter()
+            .zip(actor_definition.state_fields.iter())
+        {
+            let Some(definition) = body_lowerer
+                .parent
+                .definition_at(field.name.span, DefKind::Variable)
+            else {
+                body_lowerer
+                    .parent
+                    .error(field.name.span, "actor state field is unresolved");
+                return None;
+            };
+            body_lowerer.allocate_local(
+                definition,
+                &field.name.name,
+                *ty,
+                field.mutable,
+                field.span,
+            );
+        }
+        let mut params = Vec::with_capacity(source.handler.params.len());
+        for (param, (_, ty)) in source.handler.params.iter().zip(message.params.iter()) {
+            let Some(definition) = body_lowerer
+                .parent
+                .definition_at(param.name.span, DefKind::Param)
+            else {
+                body_lowerer
+                    .parent
+                    .error(param.name.span, "actor message parameter is unresolved");
+                return None;
+            };
+            let local = body_lowerer.allocate_local(
+                definition,
+                &param.name.name,
+                *ty,
+                param.mutable,
+                param.span,
+            );
+            params.push(Param {
+                local,
+                name: param.name.name.clone(),
+                ty: *ty,
+                mode: if param.view {
+                    ParamMode::View
+                } else {
+                    ParamMode::Owned
+                },
+                mutable: param.mutable,
+                span: param.span,
+            });
+        }
+        let body = body_lowerer.lower_block(&source.handler.body);
+        let locals = body_lowerer.locals;
+        let actor_def = self.resolve.scope_table.def(source.actor_definition);
+
+        Some(Function {
+            id: source.id,
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin,
+                    namespace: actor_def.namespace.clone().unwrap_or_default(),
+                    name: format!("{}.{}", source.actor.name.name, source.handler.name.name),
+                    kind: DeclarationKind::ActorHandler,
+                },
+                type_arguments: Vec::new(),
+            },
+            source_definition: None,
+            params,
+            return_type: message.responds,
+            locals,
+            body,
+            span: source.handler.span,
         })
     }
 
@@ -1490,11 +1746,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return None;
         };
         let actor = Box::new(self.lower_expression(actor)?);
-        let (args, _) = self.lower_arguments_in_parameter_order(args, call_span)?;
+        let (args, evaluation_order) = self.lower_arguments_in_parameter_order(args, call_span)?;
         Some(ExpressionKind::ActorMessage {
             actor,
             message: message.name.clone(),
             args,
+            evaluation_order,
             kind,
         })
     }
@@ -2392,6 +2649,35 @@ function main() returns int64:
     }
 
     #[test]
+    fn validator_rejects_invalid_argument_evaluation_orders() {
+        let mut program = lower_source(
+            r#"namespace app
+function difference(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    return difference(right: 2, left: 7)
+"#,
+        );
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call {
+                evaluation_order, ..
+            },
+            ..
+        })) = &mut program.functions[1].body.statements[0].kind
+        else {
+            panic!("expected call");
+        };
+        *evaluation_order = vec![0, 0];
+
+        let errors = validate(&program).expect_err("invalid evaluation order must fail validation");
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("argument evaluation order must be a permutation")
+        }));
+    }
+
+    #[test]
     fn lowers_mutable_locals_assignments_and_loops() {
         let source = r#"namespace app
 function count_to(limit: int64) returns int64:
@@ -2452,6 +2738,40 @@ function render(view values: list[int64]) returns string:
             panic!("expected interpolation assignment");
         };
         assert!(matches!(value.kind, ExpressionKind::StringInterpolation(_)));
+    }
+
+    #[test]
+    fn lowers_actor_receive_handlers_as_backend_functions() {
+        let program = lower_source(
+            r#"namespace app
+actor Counter:
+    mutable int64 count = 0
+    receive add(amount: int64) responds int64:
+        count = count + amount
+        respond count
+"#,
+        );
+
+        assert_eq!(program.functions.len(), 1);
+        let handler = &program.functions[0];
+        assert_eq!(handler.identity.declaration.namespace, "app");
+        assert_eq!(handler.identity.declaration.name, "Counter.add");
+        assert_eq!(handler.params.len(), 1);
+        assert_eq!(handler.params[0].name, "amount");
+        assert!(handler.locals.iter().any(|local| local.name == "count"));
+        assert!(matches!(
+            handler.body.statements.as_slice(),
+            [
+                Statement {
+                    kind: StatementKind::Assign { .. },
+                    ..
+                },
+                Statement {
+                    kind: StatementKind::Respond(_),
+                    ..
+                }
+            ]
+        ));
     }
 
     #[test]
@@ -2992,6 +3312,87 @@ function main() returns int64:
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn lowers_actor_named_arguments_to_parameter_order() {
+        let source = r#"namespace app
+actor Counter(seed: int64, step: int64):
+    mutable int64 count = seed
+    receive update(first: int64, second: int64):
+        count = first + second
+function main() returns nothing:
+    Counter counter = spawn Counter(step: 2, seed: 1)
+    send counter.update(second: 4, first: 3)
+    return nothing
+"#;
+        let program = lower_source(source);
+        let main = &program.functions[0];
+
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected actor local");
+        };
+        let ExpressionKind::ActorSpawn {
+            args,
+            evaluation_order,
+            ..
+        } = &value.kind
+        else {
+            panic!("expected actor spawn");
+        };
+        assert!(matches!(args[0].kind, ExpressionKind::Int(1)));
+        assert!(matches!(args[1].kind, ExpressionKind::Int(2)));
+        assert_eq!(evaluation_order, &[1, 0]);
+
+        let StatementKind::Expression(Expression {
+            kind:
+                ExpressionKind::ActorMessage {
+                    args,
+                    evaluation_order,
+                    ..
+                },
+            ..
+        }) = &main.body.statements[1].kind
+        else {
+            panic!("expected actor message");
+        };
+        assert!(matches!(args[0].kind, ExpressionKind::Int(3)));
+        assert!(matches!(args[1].kind, ExpressionKind::Int(4)));
+        assert_eq!(evaluation_order, &[1, 0]);
+    }
+
+    #[test]
+    fn validator_rejects_invalid_actor_message_evaluation_orders() {
+        let mut program = lower_source(
+            r#"namespace app
+actor Counter:
+    receive update(first: int64, second: int64):
+        return nothing
+function main() returns nothing:
+    Counter counter = spawn Counter()
+    send counter.update(second: 4, first: 3)
+    return nothing
+"#,
+        );
+        for invalid_order in [vec![0, 0], vec![2, 0], vec![0], vec![]] {
+            let StatementKind::Expression(Expression {
+                kind:
+                    ExpressionKind::ActorMessage {
+                        evaluation_order, ..
+                    },
+                ..
+            }) = &mut program.functions[0].body.statements[1].kind
+            else {
+                panic!("expected actor message");
+            };
+            *evaluation_order = invalid_order;
+            let errors = validate(&program).expect_err("invalid actor evaluation order");
+            assert!(errors.iter().any(|error| {
+                error
+                    .message
+                    .contains("argument evaluation order must be a permutation")
+            }));
+        }
     }
 
     #[test]
