@@ -48,3 +48,27 @@ fn cpu_profile_aggregates_ranked_hot_lines_and_call_chains() {
     assert_eq!(target.call_chains[2].samples, 2);
     assert_eq!(target.call_chains[2].frames[1].function, "gamma");
 }
+
+#[test]
+fn truncated_stacks_do_not_assign_omitted_leaf_locations_to_the_runtime_marker() {
+    let stack = (0..130)
+        .map(|index| frame(&format!("frame_{index}")))
+        .collect();
+    let profile = CpuProfile::aggregate(
+        CpuConfig::new(0, 100).unwrap(),
+        1,
+        0,
+        0,
+        vec![CpuSample::jett_at(
+            stack,
+            SourceLocation::new("secret-tail.jett", 999, 1),
+        )],
+    );
+    let marker = profile
+        .bottlenecks
+        .iter()
+        .find(|entry| entry.frame.function == "<truncated-stack>")
+        .unwrap();
+    assert!(marker.hot_lines.is_empty());
+    assert_eq!(profile.totals.truncated_stacks, 1);
+}
