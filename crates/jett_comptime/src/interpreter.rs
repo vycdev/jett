@@ -10514,22 +10514,57 @@ fn string_split_grapheme_matches<'a>(haystack: &'a str, delimiter: &str) -> Vec<
         return parts;
     }
 
+    if delimiter.len() > haystack.len() {
+        return vec![haystack];
+    }
     let boundaries = string_grapheme_boundaries(haystack);
+    let needle = delimiter.as_bytes();
+    let mut prefix = vec![0; needle.len()];
+    for index in 1..needle.len() {
+        let mut matched = prefix[index - 1];
+        while matched > 0 && needle[index] != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if needle[index] == needle[matched] {
+            matched += 1;
+        }
+        prefix[index] = matched;
+    }
+
     let mut parts = Vec::new();
     let mut part_start = 0;
-    let mut boundary_index = 0;
-    while boundary_index + 1 < boundaries.len() {
-        let start = boundaries[boundary_index];
-        if haystack[start..].starts_with(delimiter) {
-            let end = start + delimiter.len();
-            if let Ok(end_boundary_index) = boundaries.binary_search(&end) {
-                parts.push(&haystack[part_start..start]);
-                part_start = end;
-                boundary_index = end_boundary_index;
-                continue;
-            }
+    let mut matched = 0;
+    let mut start_boundary = 0;
+    let mut end_boundary = 0;
+    // KMP avoids comparing a long near-match again at every grapheme boundary.
+    // Both boundary cursors move only forward, so the entire scan is linear.
+    for (index, &byte) in haystack.as_bytes().iter().enumerate() {
+        while matched > 0 && byte != needle[matched] {
+            matched = prefix[matched - 1];
         }
-        boundary_index += 1;
+        if byte == needle[matched] {
+            matched += 1;
+        }
+        if matched != needle.len() {
+            continue;
+        }
+
+        let end = index + 1;
+        let start = end - needle.len();
+        while boundaries[start_boundary] < start {
+            start_boundary += 1;
+        }
+        while boundaries[end_boundary] < end {
+            end_boundary += 1;
+        }
+        if boundaries[start_boundary] == start && boundaries[end_boundary] == end {
+            parts.push(&haystack[part_start..start]);
+            part_start = end;
+            matched = 0;
+        } else {
+            // A rejected byte match can overlap a later valid grapheme match.
+            matched = prefix[matched - 1];
+        }
     }
     parts.push(&haystack[part_start..]);
     parts
@@ -11067,12 +11102,133 @@ fn runtime_type_name(value: &Value) -> Option<String> {
 // Tests
 // ---------------------------------------------------------------------------
 
+// The reference intentionally retains the pre-optimization boundary scan.
+#[cfg(test)]
+mod grapheme_split_differential {
+    use super::{string_grapheme_boundaries, string_graphemes, string_split_grapheme_matches};
+    use std::collections::BTreeSet;
+
+    fn old_split<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
+        if delimiter.is_empty() {
+            let mut parts = vec![""];
+            parts.extend(string_graphemes(haystack));
+            parts.push("");
+            return parts;
+        }
+        let boundaries = string_grapheme_boundaries(haystack);
+        let mut parts = Vec::new();
+        let mut part_start = 0;
+        let mut boundary_index = 0;
+        while boundary_index + 1 < boundaries.len() {
+            let start = boundaries[boundary_index];
+            if haystack[start..].starts_with(delimiter) {
+                let end = start + delimiter.len();
+                if let Ok(end_boundary_index) = boundaries.binary_search(&end) {
+                    parts.push(&haystack[part_start..start]);
+                    part_start = end;
+                    boundary_index = end_boundary_index;
+                    continue;
+                }
+            }
+            boundary_index += 1;
+        }
+        parts.push(&haystack[part_start..]);
+        parts
+    }
+
+    #[test]
+    fn grapheme_split_exhaustive_short_unicode_matches_reference() {
+        let tokens = ["a", "\r", "\n", "\u{0301}", "\u{200D}", "🇦", "👩"];
+        let mut level = vec![String::new()];
+        let mut haystack_count = 0;
+        let mut comparison_count = 0;
+        for depth in 0..=4 {
+            for haystack in &level {
+                haystack_count += 1;
+                let offsets = haystack
+                    .char_indices()
+                    .map(|(index, _)| index)
+                    .chain(std::iter::once(haystack.len()))
+                    .collect::<Vec<_>>();
+                let mut delimiters =
+                    BTreeSet::from([String::new(), "x".into(), format!("{haystack}x")]);
+                for (i, &start) in offsets.iter().enumerate() {
+                    for &end in &offsets[i..] {
+                        delimiters.insert(haystack[start..end].to_owned());
+                    }
+                }
+                for delimiter in delimiters {
+                    assert_eq!(
+                        string_split_grapheme_matches(haystack, &delimiter),
+                        old_split(haystack, &delimiter),
+                        "haystack={haystack:?}, delimiter={delimiter:?}"
+                    );
+                    comparison_count += 1;
+                }
+            }
+            if depth < 4 {
+                level = level
+                    .iter()
+                    .flat_map(|prefix| tokens.iter().map(move |token| format!("{prefix}{token}")))
+                    .collect();
+            }
+        }
+        assert_eq!(haystack_count, 2801);
+        eprintln!(
+            "differential corpus: {haystack_count} haystacks, {comparison_count} comparisons"
+        );
+    }
+
+    #[test]
+    fn grapheme_split_overlap_and_cluster_expected_vectors() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("🇦🇦🇦🇦🇦", "🇦🇦🇦", &["🇦🇦", ""]),
+            ("\r\n\r\n", "\r", &["\r\n\r\n"]),
+            ("\r\n\r\n", "\n", &["\r\n\r\n"]),
+            ("\r\n\r\n", "\r\n", &["", "", ""]),
+            ("e\u{0301}e\u{0301}", "e", &["e\u{0301}e\u{0301}"]),
+            ("e\u{0301}e\u{0301}", "\u{0301}", &["e\u{0301}e\u{0301}"]),
+            ("e\u{0301}e\u{0301}", "e\u{0301}", &["", "", ""]),
+            ("👩\u{200D}💻", "👩", &["👩\u{200D}💻"]),
+            ("👩\u{200D}💻", "💻", &["👩\u{200D}💻"]),
+            ("👩\u{200D}💻", "👩\u{200D}💻", &["", ""]),
+            ("👍🏽👍", "👍", &["👍🏽", ""]),
+            ("👍🏽👍", "🏽", &["👍🏽👍"]),
+            ("aaaaa", "aaa", &["", "aa"]),
+            ("", "", &["", ""]),
+            ("a\r\ne\u{0301}", "", &["", "a", "\r\n", "e\u{0301}", ""]),
+        ];
+        for &(haystack, delimiter, expected) in cases {
+            assert_eq!(
+                old_split(haystack, delimiter),
+                expected,
+                "reference: {haystack:?}/{delimiter:?}"
+            );
+            assert_eq!(
+                string_split_grapheme_matches(haystack, delimiter),
+                expected,
+                "new: {haystack:?}/{delimiter:?}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
     use jett_parser::ast::*;
 
     use super::*;
+
+    #[test]
+    fn grapheme_split_handles_large_near_matches() {
+        let haystack = "a".repeat(1024 * 1024);
+        let delimiter = format!("{}b", "a".repeat(512 * 1024));
+        assert_eq!(
+            string_split_grapheme_matches(&haystack, &delimiter),
+            vec![haystack.as_str()]
+        );
+    }
 
     const JSON_RAW_FACADE_NAMES: &[&str] = &[
         "json.parse_raw",
