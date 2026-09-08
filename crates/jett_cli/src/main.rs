@@ -1587,6 +1587,10 @@ mod tests {
                 column: 17,
                 end_line: 3,
                 end_column: 22,
+                range_line: 3,
+                range_column: 1,
+                range_end_line: 4,
+                range_end_column: 13,
             }],
         };
 
