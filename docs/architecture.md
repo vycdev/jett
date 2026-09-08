@@ -1379,6 +1379,19 @@ dispatch. Finalization detaches pending work, runs one infallible trusted
 cleanup, retires the slot, and advances its generation so stale callbacks or
 copied backend bits cannot target a replacement resource.
 
+The initial `jett_runtime` registry implements this backend-neutral carrier
+boundary. It type-erases provider payloads behind private keys, validates
+context/type/generation and authority provenance before access, gives pending
+operations separate generations so late completions cannot finish replacement
+work, and finalizes live entries in reverse creation order on explicit or
+implicit context shutdown. Provider cleanup panics do not skip remaining
+finalizers, and rejected insertions release their consumed provider payloads.
+Suppressed panic payloads are dropped under unwind protection; if their
+destructors panic too, only that secondary payload is deliberately forgotten
+to bound cleanup while retaining the first failure for propagation.
+Interpreter trusted-hook dispatch and source-level
+scope/drop integration remain later stages of the resource contract.
+
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime
 teardown finalize each remaining owner in deterministic reverse-acquisition
