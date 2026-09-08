@@ -485,9 +485,22 @@ pub fn constant_time_token_eq(expected: &[u8], provided: &[u8]) -> bool {
 }
 
 fn escape_toon_scalar(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('\r', "\\r")
-        .replace('\n', "\\n")
-        .replace(',', "\\,")
+    use std::fmt::Write;
+
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '\r' => escaped.push_str("\\r"),
+            '\n' => escaped.push_str("\\n"),
+            '\t' => escaped.push_str("\\t"),
+            ',' => escaped.push_str("\\,"),
+            ch if ch.is_control() => {
+                write!(escaped, "\\u{{{:x}}}", u32::from(ch))
+                    .expect("writing to a string cannot fail");
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
 }

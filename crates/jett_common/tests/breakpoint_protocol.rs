@@ -343,3 +343,14 @@ fn failure_renderer_is_deterministic_and_escapes_multiline_messages() {
         "protocol: jett.breakpoint.v1\nsession_id: session-a\npause_id: 3\nrequest_id: 9\nstatus: error\nfailure:\n  code: BP1004\n  kind: unavailable_binding\n  message: binding `order` was consumed\\,\\nretry after pause\n"
     );
 }
+
+#[test]
+fn failure_renderer_escapes_controls_in_session_and_message() {
+    let metadata = "session\u{1b}[31m\t\0\u{85}é\\,\r\n";
+    let escaped = "session\\u{1b}[31m\\t\\u{0}\\u{85}é\\\\\\,\\r\\n";
+    let failure = ProtocolFailure::new(FailureKind::InvalidExpression, metadata);
+    let rendered = failure.render_toon(metadata, None, 1);
+    assert!(rendered.contains(&format!("session_id: {escaped}\n")));
+    assert!(rendered.contains(&format!("  message: {escaped}\n")));
+    assert!(!rendered.chars().any(|ch| ch.is_control() && ch != '\n'));
+}
