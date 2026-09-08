@@ -19,6 +19,7 @@ members = [
     "crates/jett_lsp",
     "crates/jett_profiler",
     "crates/jett_runtime",
+    "crates/jett_regex",
     "crates/jett_cli",
 ]
 
@@ -47,6 +48,7 @@ jett_driver = { path = "crates/jett_driver" }
 jett_lsp = { path = "crates/jett_lsp" }
 jett_profiler = { path = "crates/jett_profiler" }
 jett_runtime = { path = "crates/jett_runtime" }
+jett_regex = { path = "crates/jett_regex" }
 
 # External crates
 clap = { version = "4", features = ["derive"] }
@@ -58,3 +60,4 @@ salsa = "=0.28.2"
 subtle = "2"
 unicode-segmentation = "1"
 sha2 = "0.10"
+hmac = "0.12"
