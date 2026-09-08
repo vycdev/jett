@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub mod cache;
+pub mod compatibility;
 
 /// Stable source identity within a query database.
 ///
