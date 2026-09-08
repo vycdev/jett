@@ -97,8 +97,10 @@ the truncation marker. CPU samples have bounded hot-line and root-to-function ca
 detail. It accounts for injected allocation, resize, and free
 events with deterministic pressure, peak, and retention records. It sanitizes
 only manifest-authorized excerpts with checked secret metadata, replacing
-literals and secret-bearing spans with a bounded 160-byte buffer. Rendering,
-CLI integration, and runtime adapters remain staged.
+literals and secret-bearing spans with a bounded 160-byte buffer. The TOON
+summary renderer escapes metadata controls and reports truncation totals. The
+CLI validates launch options and source before refusing unsupported collectors;
+human rendering and runtime adapters remain staged.
 
 ### Crate Dependency Graph
 
