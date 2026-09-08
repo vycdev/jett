@@ -8,7 +8,29 @@ function may_fail(x: int64) returns result[int64, string]:
         return fail("negative input")
     return ok(x + 1)
 
+function join_resolved_values() returns bool:
+    int64 resolved = 7
+    int64 joined = join resolved handle error:
+        return false
+    int64 expression = join compute(3) handle error:
+        return false
+    int64 joined_again = join joined handle error:
+        return false
+    return joined_again == 7 && expression == 9
+
+verify join_resolved_values:
+    assert join_resolved_values()
+
+function reassign_task() returns nothing:
+    mutable int64 task = 0
+    task = run compute(1)
+    cancel task
+    int64 parenthesized = (run compute(2))
+    cancel (parenthesized)
+    return nothing
+
 function main() returns nothing:
+    reassign_task()
     int64 task1 = run compute(5)
     int64 task2 = run compute(7)
 

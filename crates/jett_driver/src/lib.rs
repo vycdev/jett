@@ -222,6 +222,14 @@ pub type DefinitionAtQueryError = QueryError;
 /// Error returned by a detailed references-at query.
 pub type ReferencesAtQueryError = QueryError;
 
+/// Error returned by a detailed namespace query.
+pub type NamespaceQueryError = QueryError;
+
+/// Error returned by a detailed signature query.
+pub type SignatureQueryError = QueryError;
+/// Error returned by a detailed completion query.
+pub type CompletionsQueryError = QueryError;
+
 /// Result of `jett query --agent --type-at file:line:column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAtQueryResult {
@@ -463,6 +471,10 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     }
 }
 
+fn span_contains_offset(span: Span, file_id: FileId, offset: u32) -> bool {
+    span.file == file_id && span.start <= offset && offset < span.end
+}
+
 /// Return the inferred type name at the given (1-based) line and column in `source`.
 /// Returns `None` if the position is outside any typed expression or if the file
 /// does not compile cleanly past the parse phase.
@@ -497,7 +509,7 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     // Find the smallest span in type_map that contains `offset`.
     let mut best: Option<(u32, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
                 best = Some((len, *ty_id));
@@ -623,7 +635,7 @@ pub fn query_type_at_detailed(
 
     let mut best: Option<(u32, Span, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
                 best = Some((len, *span, *ty_id));
@@ -743,7 +755,7 @@ pub fn query_definition_at_detailed(
 
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
     for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, *def_id));
@@ -947,32 +959,72 @@ pub fn query_completions_at(
     line: u32,
     column: u32,
 ) -> Result<CompletionsQueryResult, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    query_completions_at_detailed(path, line, column).map_err(|error| error.to_string())
+}
+
+/// Return completion candidates while retaining compiler diagnostics on failure.
+pub fn query_completions_at_detailed(
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, CompletionsQueryError> {
+    let source = fs::read_to_string(path).map_err(|error| {
+        CompletionsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
+    })?;
+    query_source_completions_at(&source, path, line, column)
+}
+
+/// Query completion metadata using the authoritative in-memory document while
+/// preserving structured compiler diagnostics.
+pub fn query_source_completions_at(
+    source: &str,
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, CompletionsQueryError> {
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
-        return Err(format!(
+        return Err(CompletionsQueryError::operational(format!(
             "position {line}:{column} is outside {}",
             path.display()
-        ));
+        )));
     };
     let prefix = completion_prefix_at(&source, offset);
 
     let parsed = parse(&source, file_id);
-    let parse_errors = error_messages_from_diagnostics(&parsed.errors);
-    if !parse_errors.is_empty() {
-        return Err(format!("parse errors:\n{}", parse_errors.join("\n")));
+    if has_error_diagnostics(&parsed.errors) {
+        return Err(CompletionsQueryError::compilation(
+            "parse errors:",
+            parsed.errors,
+            source.to_string(),
+            file_path,
+        ));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_project_modules_with_diagnostics(path));
     let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
     if !support_errors.is_empty() {
-        return Err(format!(
+        let diagnostic_sources = query_diagnostic_sources(
+            file_id,
+            &source,
+            &file_path,
+            &support_modules,
+            &support_modules.diagnostics,
+        );
+        if diagnostics_have_source_context(&support_modules.diagnostics, &diagnostic_sources) {
+            return Err(CompletionsQueryError::compilation_with_sources(
+                "support parse errors:",
+                support_modules.diagnostics,
+                file_id,
+                diagnostic_sources,
+            ));
+        }
+        return Err(CompletionsQueryError::operational(format!(
             "support parse errors:\n{}",
             support_errors.join("\n")
-        ));
+        )));
     }
 
     let mut file_paths = support_modules.files.clone();
@@ -1033,9 +1085,77 @@ pub fn query_signature(
     start_dir: &Path,
     function_name: &str,
 ) -> Result<Option<SignatureQueryResult>, String> {
+    query_signature_detailed(start_dir, function_name).map_err(|error| error.to_string())
+}
+
+/// Return a public function signature while retaining project parse diagnostics.
+pub fn query_signature_detailed(
+    start_dir: &Path,
+    function_name: &str,
+) -> Result<Option<SignatureQueryResult>, SignatureQueryError> {
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
 
+    if has_error_diagnostics(&support_modules.diagnostics) {
+        return Err(query_support_error(support_modules));
+    }
+
+    for module in &support_modules.modules {
+        if let Some(signature) =
+            module_signature_query_result(module, &support_modules.files, function_name)
+        {
+            return Ok(Some(signature));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Return a source-level function signature from the current in-memory document
+/// or the compiler standard library.
+pub fn query_source_signature(
+    source: &str,
+    function_name: &str,
+) -> Result<Option<SignatureQueryResult>, String> {
+    query_source_signature_inner(source, function_name, None)
+}
+
+/// Resolve an unqualified call relative to the namespace at its source offset.
+pub fn query_source_signature_at(
+    source: &str,
+    function_name: &str,
+    offset: u32,
+) -> Result<Option<SignatureQueryResult>, String> {
+    query_source_signature_inner(source, function_name, Some(offset))
+}
+
+fn query_source_signature_inner(
+    source: &str,
+    function_name: &str,
+    offset: Option<u32>,
+) -> Result<Option<SignatureQueryResult>, String> {
+    let parsed = parse_source_with_query(source, "<lsp-document>");
+    let scoped_name = offset
+        .filter(|_| !function_name.contains('.'))
+        .and_then(|offset| namespace_at_offset(&parsed.module, FileId::new(0), offset))
+        .map(|namespace| format!("{namespace}.{function_name}"));
+    let function_name = scoped_name.as_deref().unwrap_or(function_name);
+
+    // Signature help is requested while calls are often syntactically
+    // incomplete. Use parser-recovered declarations from the current document
+    // instead of suppressing all help because another expression is unfinished.
+    let mut file_paths = HashMap::new();
+    file_paths.insert(FileId::new(0), PathBuf::from("<lsp-document>"));
+    if let Some(signature) = module_signature_query_result_with_visibility(
+        &parsed.module,
+        &file_paths,
+        function_name,
+        true,
+    ) {
+        return Ok(Some(signature));
+    }
+
+    let support_modules = discover_stdlib_modules_with_diagnostics();
     let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
     if !support_errors.is_empty() {
         return Err(format!(
@@ -1043,7 +1163,6 @@ pub fn query_signature(
             support_errors.join("\n")
         ));
     }
-
     for module in &support_modules.modules {
         if let Some(signature) =
             module_signature_query_result(module, &support_modules.files, function_name)
@@ -1060,14 +1179,29 @@ fn module_signature_query_result(
     file_paths: &HashMap<FileId, PathBuf>,
     function_name: &str,
 ) -> Option<SignatureQueryResult> {
+    module_signature_query_result_with_visibility(module, file_paths, function_name, false)
+}
+
+fn module_signature_query_result_with_visibility(
+    module: &Module,
+    file_paths: &HashMap<FileId, PathBuf>,
+    function_name: &str,
+    include_private: bool,
+) -> Option<SignatureQueryResult> {
     let mut current_namespace: Option<String> = None;
     for item in &module.items {
         match item {
             Item::Namespace(ns) => current_namespace = Some(ns.name.name.clone()),
             Item::Function(func) => {
-                if let Some(signature) =
-                    function_signature_query_result(func, current_namespace.as_deref(), file_paths)
-                    && signature.name == function_name
+                if let Some(signature) = function_signature_query_result(
+                    func,
+                    current_namespace.as_deref(),
+                    file_paths,
+                    include_private,
+                ) && (signature.name == function_name
+                    || (include_private
+                        && !function_name.contains('.')
+                        && signature.name.rsplit('.').next() == Some(function_name)))
                 {
                     return Some(signature);
                 }
@@ -1078,7 +1212,11 @@ fn module_signature_query_result(
                         decl,
                         current_namespace.as_deref(),
                         file_paths,
-                    ) && signature.name == function_name
+                        include_private,
+                    ) && (signature.name == function_name
+                        || (include_private
+                            && !function_name.contains('.')
+                            && signature.name.rsplit('.').next() == Some(function_name)))
                     {
                         return Some(signature);
                     }
@@ -1111,9 +1249,12 @@ fn append_module_signature_displays(
         match item {
             Item::Namespace(ns) => current_namespace = Some(ns.name.name.clone()),
             Item::Function(func) => {
-                if let Some(signature) =
-                    function_signature_query_result(func, current_namespace.as_deref(), file_paths)
-                {
+                if let Some(signature) = function_signature_query_result(
+                    func,
+                    current_namespace.as_deref(),
+                    file_paths,
+                    false,
+                ) {
                     signatures
                         .entry(signature.name.clone())
                         .or_insert_with(|| signature_display(&signature));
@@ -1125,6 +1266,7 @@ fn append_module_signature_displays(
                         decl,
                         current_namespace.as_deref(),
                         file_paths,
+                        false,
                     ) {
                         signatures
                             .entry(signature.name.clone())
@@ -1152,8 +1294,9 @@ fn function_signature_query_result(
     func: &FunctionDef,
     namespace: Option<&str>,
     file_paths: &HashMap<FileId, PathBuf>,
+    include_private: bool,
 ) -> Option<SignatureQueryResult> {
-    if namespace.is_some() && !func.exported {
+    if !include_private && namespace.is_some() && !func.exported {
         return None;
     }
 
@@ -1172,8 +1315,9 @@ fn function_decl_signature_query_result(
     decl: &FunctionDecl,
     namespace: Option<&str>,
     file_paths: &HashMap<FileId, PathBuf>,
+    include_private: bool,
 ) -> Option<SignatureQueryResult> {
-    if namespace.is_some() && !decl.exported {
+    if !include_private && namespace.is_some() && !decl.exported {
         return None;
     }
 
@@ -1359,6 +1503,7 @@ fn signature_builtin_type_name(name: &str) -> bool {
             | "Random"
             | "Process"
             | "Environment"
+            | "Log"
     )
 }
 
@@ -1452,6 +1597,11 @@ fn completion_match_kind(name: &str, prefix: &str) -> Option<CompletionMatchKind
         .then_some(CompletionMatchKind::LeafPrefix)
 }
 
+/// Return the stable completion rank for a candidate matching `prefix`.
+pub fn completion_match_rank(name: &str, prefix: &str) -> Option<u32> {
+    completion_match_kind(name, prefix).map(completion_rank)
+}
+
 fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
     match match_kind {
         CompletionMatchKind::Exact => 0,
@@ -1467,15 +1617,18 @@ fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
 /// compiler-shipped stdlib modules. Without a `jett.proj`, the query still
 /// returns stdlib and language built-ins so agents can discover the base surface.
 pub fn query_namespaces(start_dir: &Path) -> Result<NamespaceQueryResult, String> {
+    query_namespaces_detailed(start_dir).map_err(|error| error.to_string())
+}
+
+/// Return the public namespace registry while retaining project parse diagnostics.
+pub fn query_namespaces_detailed(
+    start_dir: &Path,
+) -> Result<NamespaceQueryResult, NamespaceQueryError> {
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_query_project_modules_with_diagnostics(start_dir));
 
-    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
-    if !support_errors.is_empty() {
-        return Err(format!(
-            "query support parse errors:\n{}",
-            support_errors.join("\n")
-        ));
+    if has_error_diagnostics(&support_modules.diagnostics) {
+        return Err(query_support_error(support_modules));
     }
 
     let mut definitions = query_builtin_definitions();
@@ -2086,7 +2239,7 @@ fn best_resolved_definition_at(
 ) -> Option<(u32, jett_resolve::scope::DefId)> {
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
     for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, *def_id));
@@ -2095,7 +2248,7 @@ fn best_resolved_definition_at(
     }
     for definition in &resolve_result.scope_table.definitions {
         let span = definition.span;
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, definition.id));
@@ -2534,6 +2687,47 @@ fn diagnostics_have_source_context(
                 .iter()
                 .any(|source| source.file_id == diagnostic.span.file)
         })
+}
+
+fn query_support_error(support_modules: DiscoveredModules) -> QueryError {
+    let Some(primary_file) = support_modules
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+        .map(|diagnostic| diagnostic.span.file)
+    else {
+        return QueryError::operational("query support parse errors");
+    };
+    let Some(primary_source) = support_modules.sources.get(&primary_file) else {
+        return query_support_operational_error(&support_modules.diagnostics);
+    };
+    let Some(primary_path) = support_modules.files.get(&primary_file) else {
+        return query_support_operational_error(&support_modules.diagnostics);
+    };
+    let primary_path = display_query_path(primary_path);
+    let sources = query_diagnostic_sources(
+        primary_file,
+        primary_source,
+        &primary_path,
+        &support_modules,
+        &support_modules.diagnostics,
+    );
+    if !diagnostics_have_source_context(&support_modules.diagnostics, &sources) {
+        return query_support_operational_error(&support_modules.diagnostics);
+    }
+    QueryError::compilation_with_sources(
+        "query support parse errors:",
+        support_modules.diagnostics,
+        primary_file,
+        sources,
+    )
+}
+
+fn query_support_operational_error(diagnostics: &[Diagnostic]) -> QueryError {
+    QueryError::operational(format!(
+        "query support parse errors:\n{}",
+        error_messages_from_diagnostics(diagnostics).join("\n")
+    ))
 }
 
 fn query_diagnostic_sources(
@@ -3043,14 +3237,32 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
     // Register items from the entry file (may override sibling definitions).
     register_module_items(&mut interp, &module);
 
-    // Call main()
+    // Call main(). Scripted providers are exact expectations: a successful
+    // deterministic run must consume every supplied operation sample.
     match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
-        Ok(_) => Ok(RunOutput {
-            stdout: interp.take_stdout_output(),
-            debug_output: interp.take_debug_output(),
-        }),
+        Ok(_) => {
+            reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())?;
+            reject_unconsumed_test_samples("Clock", interp.clock_test_samples_remaining())?;
+            Ok(RunOutput {
+                stdout: interp.take_stdout_output(),
+                debug_output: interp.take_debug_output(),
+            })
+        }
         Err(e) => Err(format!("runtime error: {}", e)),
     }
+}
+
+fn reject_unconsumed_test_samples(
+    capability: &str,
+    remaining: Option<usize>,
+) -> Result<(), String> {
+    let Some(remaining) = remaining.filter(|remaining| *remaining != 0) else {
+        return Ok(());
+    };
+    let suffix = if remaining == 1 { "sample" } else { "samples" };
+    Err(format!(
+        "runtime error: {capability}: test provider has {remaining} unconsumed {suffix}"
+    ))
 }
 
 fn default_runtime_args_for_main(main: &FunctionDef) -> Result<Vec<Value>, String> {
@@ -3088,6 +3300,7 @@ fn type_expr_is_capability(ty: &TypeExpr) -> bool {
                 | "Random"
                 | "Process"
                 | "Environment"
+                | "Log"
         ),
         TypeExpr::View(inner, _) => type_expr_is_capability(inner),
         TypeExpr::StateQualified(inner, _, _) => type_expr_is_capability(inner),
@@ -3664,6 +3877,34 @@ fn bundle_file_is_in_cycle(start: usize, dependencies: &[HashSet<usize>]) -> boo
     false
 }
 
+fn logical_source_line_count(source: &str) -> u32 {
+    let bytes = source.as_bytes();
+    let mut count = 0_u32;
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                count += 1;
+                index += if bytes.get(index + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+            }
+            b'\n' => {
+                count += 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+
+    if count == 0 || !matches!(bytes.last(), Some(b'\r' | b'\n')) {
+        count += 1;
+    }
+    count
+}
+
 /// Bundle a project while retaining candidate-validation diagnostics on error.
 pub fn bundle_project_detailed(
     start_dir: &Path,
@@ -3732,7 +3973,7 @@ pub fn bundle_project_detailed(
     let mut bundled = String::new();
     let mut current_line = 1_u32;
     bundled.push_str("# Generated by jett bundle.\n");
-    bundled.push_str(&format!("# Project root: {}\n\n", project_dir.display()));
+    bundled.push_str("# Source paths are relative to the project root.\n\n");
     current_line += 3;
 
     let mut bundled_files = Vec::new();
@@ -3743,7 +3984,7 @@ pub fn bundle_project_detailed(
         current_line += 1;
 
         let start_line = current_line;
-        let source_line_count = file.source.lines().count().max(1) as u32;
+        let source_line_count = logical_source_line_count(&file.source);
         bundled.push_str(&file.source);
         if !file.source.ends_with('\n') {
             bundled.push('\n');
@@ -4146,6 +4387,13 @@ mod tests {
     }
 
     #[test]
+    fn hover_does_not_select_an_expression_at_its_end_offset() {
+        let source = "namespace test\n\nfunction main() returns nothing:\n    int64 value = 42\n    return nothing\n";
+
+        assert_eq!(hover_type(source, 4, 21), None);
+    }
+
+    #[test]
     fn line_col_to_offset_rejects_columns_past_line_end() {
         let source = "alpha\nβeta\n";
 
@@ -4408,6 +4656,35 @@ mod tests {
         );
         assert_eq!(helper.match_kind, CompletionMatchKind::LeafPrefix);
         assert_eq!(helper.rank, 20);
+    }
+
+    #[test]
+    fn query_source_signature_reports_unsaved_function_signature() {
+        let source = "namespace app\n\nexport function add(left: int64, right: int64) returns int64:\n    return left + right\n";
+
+        let result = query_source_signature(source, "app.add")
+            .expect("source signature query should succeed")
+            .expect("app.add signature should be found");
+
+        assert_eq!(result.name, "app.add");
+        assert_eq!(result.params.len(), 2);
+        assert_eq!(result.params[0].name, "left");
+        assert_eq!(result.params[1].type_name, "int64");
+        assert_eq!(result.return_type, "int64");
+    }
+
+    #[test]
+    fn query_source_signature_reports_private_document_function() {
+        let source =
+            "namespace app\n\nfunction helper(value: string) returns string:\n    return value\n";
+
+        let result = query_source_signature(source, "app.helper")
+            .expect("source signature query should succeed")
+            .expect("private in-document function should be found");
+
+        assert_eq!(result.name, "app.helper");
+        assert_eq!(result.params[0].name, "value");
+        assert_eq!(result.return_type, "string");
     }
 
     #[test]
@@ -4777,14 +5054,24 @@ mod tests {
             assert_eq!(result.return_type, "string");
         }
 
-        for reserved in ["crypto.hmac_sha256", "crypto.hmac_sha512"] {
-            assert!(
-                query_signature(Path::new("."), reserved)
-                    .expect("reserved crypto query should succeed")
-                    .is_none(),
-                "{reserved} must remain undiscoverable until implemented"
-            );
-        }
+        let hmac = query_signature(Path::new("."), "crypto.hmac_sha256")
+            .expect("HMAC signature query should succeed")
+            .expect("HMAC-SHA-256 signature should be found");
+        assert_eq!(hmac.params.len(), 2);
+        assert_eq!(hmac.params[0].name, "key");
+        assert_eq!(hmac.params[0].type_name, "secret[bytes]");
+        assert!(hmac.params[0].view);
+        assert_eq!(hmac.params[1].name, "message");
+        assert_eq!(hmac.params[1].type_name, "bytes");
+        assert!(hmac.params[1].view);
+        assert_eq!(hmac.return_type, "secret[bytes]");
+
+        assert!(
+            query_signature(Path::new("."), "crypto.hmac_sha512")
+                .expect("reserved crypto query should succeed")
+                .is_none(),
+            "crypto.hmac_sha512 must remain undiscoverable until implemented"
+        );
     }
 
     #[test]
@@ -5010,6 +5297,55 @@ mod tests {
                 .replace('\\', "/")
                 .ends_with("dist/lib.jett")
         );
+    }
+
+    #[test]
+    fn bundle_project_manifest_counts_lone_carriage_return_lines() {
+        let root = temp_test_dir("jett_driver_bundle_lone_cr_manifest");
+        fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");
+        fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+            .expect("project marker should be written");
+        fs::write(
+            root.join("src/core.jett"),
+            "namespace core\r\rexport function answer() returns int64:\r    return 42\r",
+        )
+        .expect("bundle source should be written");
+        let output = root.join("dist/lib.jett");
+
+        let result = bundle_project(&root, &output).expect("bundle should accept lone-CR source");
+
+        fs::remove_dir_all(&root).expect("temp bundle dir should be removed");
+        assert_eq!(
+            (result.files[0].start_line, result.files[0].end_line),
+            (5, 8)
+        );
+    }
+
+    #[test]
+    fn bundle_project_output_is_stable_after_checkout_relocation() {
+        let parent = temp_test_dir("jett_driver_bundle_relocation");
+        let first = parent.join("first_checkout");
+        let second = parent.join("second_checkout");
+
+        for root in [&first, &second] {
+            fs::create_dir_all(root.join("src")).expect("temp bundle dir should be created");
+            fs::write(root.join("jett.proj"), "name: bundle_fixture\n")
+                .expect("project marker should be written");
+            fs::write(
+                root.join("src/core.jett"),
+                "namespace core\n\nexport function answer() returns int64:\n    return 42\n",
+            )
+            .expect("bundle source should be written");
+            bundle_project(root, Path::new("dist/lib.jett")).expect("bundle should succeed");
+        }
+
+        let first_bundle = fs::read_to_string(first.join("dist/lib.jett"))
+            .expect("first bundle output should be readable");
+        let second_bundle = fs::read_to_string(second.join("dist/lib.jett"))
+            .expect("second bundle output should be readable");
+        fs::remove_dir_all(&parent).expect("temp bundle dirs should be removed");
+
+        assert_eq!(first_bundle, second_bundle);
     }
 
     #[test]
@@ -5414,6 +5750,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn project_file_collection_rejects_external_source_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("jett_driver_symlink_file_project");
+        let external = temp_test_dir("jett_driver_symlink_file_external");
+        fs::create_dir_all(root.join("src")).expect("temp project src dir should be created");
+        fs::create_dir_all(&external).expect("external source dir should be created");
+        fs::write(root.join("src/main.jett"), "namespace app\n")
+            .expect("project source should be written");
+        fs::write(external.join("outside.jett"), "namespace outside\n")
+            .expect("external source should be written");
+        symlink(external.join("outside.jett"), root.join("linked.jett"))
+            .expect("source file symlink should be created");
+
+        let mut files = Vec::new();
+        let result = collect_jett_files(&root, &mut files);
+
+        fs::remove_dir_all(&root).expect("temp project dir should be removed");
+        fs::remove_dir_all(&external).expect("external source dir should be removed");
+        let error = result.expect_err("an external source symlink must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("resolves outside source root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn project_file_collection_ignores_symlinked_directories() {
         use std::os::unix::fs::symlink;
 
@@ -5485,21 +5847,41 @@ fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
 }
 
 /// Recursively collect all `.jett` files in a directory, skipping hidden dirs,
-/// `target/`, and symlinked directories.
+/// `target/`, and symlinked directories. Source-file symlinks are accepted only
+/// when their canonical targets remain inside the source root.
 fn collect_jett_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    let canonical_root = dir.canonicalize()?;
+    collect_jett_files_within(dir, &canonical_root, out)
+}
+
+fn collect_jett_files_within(
+    dir: &Path,
+    canonical_root: &Path,
+    out: &mut Vec<std::path::PathBuf>,
+) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
-            // Preserve source-file symlinks without traversing linked trees.
             if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jett") {
+                let canonical_path = path.canonicalize()?;
+                if !canonical_path.starts_with(canonical_root) {
+                    let logical_path = path.strip_prefix(dir).unwrap_or(&path);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "source file '{}' resolves outside source root",
+                            logical_path.display()
+                        ),
+                    ));
+                }
                 out.push(path);
             }
         } else if file_type.is_dir() {
             let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if !dir_name.starts_with('.') && dir_name != "target" {
-                collect_jett_files(&path, out)?;
+                collect_jett_files_within(&path, canonical_root, out)?;
             }
         } else if path.extension().and_then(|e| e.to_str()) == Some("jett") {
             out.push(path);
