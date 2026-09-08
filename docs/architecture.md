@@ -1882,7 +1882,8 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
 - Signature help for source-defined and standard-library calls, including the
   active argument in nested calls and unsaved private document functions.
 - Document symbols from the latest in-memory source, including declaration
-  kinds, signatures, and UTF-16 ranges for editor outlines.
+  kinds, signatures, full declaration ranges, and narrower name-selection
+  ranges in UTF-16 coordinates for editor outlines.
 - Selection ranges that expand from lexer tokens to trimmed lines and the full
   open document while preserving UTF-16 positions.
 - Case-insensitive workspace symbol search across all open Jett documents,

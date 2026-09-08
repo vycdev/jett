@@ -140,7 +140,7 @@
 | LSP document highlights | Done (current-document declaration and use occurrences with UTF-16 ranges) |
 | LSP rename | Done (semantic declaration and reference edits in the current document) |
 | LSP signature help | Done (source-defined and standard-library calls from the latest in-memory document, with nested-call active-parameter tracking) |
-| LSP document symbols | Done (top-level file outline from the latest in-memory document, with declaration kinds, signatures, and UTF-16 ranges) |
+| LSP document symbols | Done (top-level file outline from the latest in-memory document, with declaration kinds, signatures, full declaration ranges, and name-selection ranges in UTF-16 coordinates) |
 | LSP folding ranges | Done (lexer-backed nested block ranges from the latest in-memory document) |
 | MCP server | Not started; initial transport, tool/resource, and ASP handoff boundary tracked by [#37](https://github.com/vycdev/jett/issues/37) |
 | ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges; file-symbol and completion parse failures, type-at parse/resolution/type-check failures, and definition-at/references-at parse/resolution failures with known source context preserve structured diagnostics and cross-file labels; completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
