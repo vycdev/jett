@@ -1,3 +1,7 @@
+mod render;
+
+pub use render::render_cpu_profile_toon;
+
 mod source;
 
 pub use source::{SanitizedSourceExcerpt, SourceExcerptMetadata, sanitize_source_excerpt};
