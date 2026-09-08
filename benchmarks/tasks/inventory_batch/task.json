@@ -1,0 +1,77 @@
+{
+  "id": "inventory_batch",
+  "version": "1.0.0",
+  "title": "Apply a typed inventory event batch",
+  "statement": "Apply inventory events from left to right, starting with no stock. Every quantity must be positive. stock adds quantity for its SKU. sale subtracts quantity, but rejects when the SKU has insufficient stock. Return the first rejection with its zero-based event index and SKU. On success return all balances; a sale that reaches zero keeps that SKU in the map with balance zero.",
+  "constraints": [
+    "use the exact declared event and result types",
+    "return the first invalid event and do not throw or panic",
+    "inputs and resulting balances fit int64 and contain at most 10000 events",
+    "handle every event and result variant explicitly without catch-all or default branches",
+    "do not perform input/output, add tests, or suppress static diagnostics"
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nenum InventoryEvent:\n    stock(sku: string, quantity: int64)\n    sale(sku: string, quantity: int64)\n\nenum InventoryResult:\n    accepted(balances: map[string, int64])\n    rejected(index: int64, sku: string)\n\nfunction apply_inventory(events: list[InventoryEvent]) returns InventoryResult",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden; handle every Jett enum variant explicitly"}]
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Stock:\n    sku: str\n    quantity: int\n@dataclass(frozen=True)\nclass Sale:\n    sku: str\n    quantity: int\ntype InventoryEvent = Stock | Sale\n@dataclass(frozen=True)\nclass Accepted:\n    balances: dict[str, int]\n@dataclass(frozen=True)\nclass Rejected:\n    index: int\n    sku: str\ntype InventoryResult = Accepted | Rejected\ndef apply_inventory(events: list[InventoryEvent]) -> InventoryResult",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": ["pyrightconfig.json"],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
+        {"pattern": "(?m)^\\s*case\\s+_\\s*:", "message": "catch-all match cases are forbidden; handle every Python union member explicitly"},
+        {"pattern": "\\braise\\b", "message": "raising exceptions is forbidden; return Rejected"}
+      ]
+    },
+    "typescript": {
+      "signature": "export type InventoryEvent = { readonly kind: \"stock\"; readonly sku: string; readonly quantity: bigint } | { readonly kind: \"sale\"; readonly sku: string; readonly quantity: bigint };\nexport type InventoryResult = { readonly kind: \"accepted\"; readonly balances: ReadonlyMap<string, bigint> } | { readonly kind: \"rejected\"; readonly index: bigint; readonly sku: string };\nexport function applyInventory(events: readonly InventoryEvent[]): InventoryResult",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--noFallthroughCasesInSwitch", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every TypeScript union member explicitly"},
+        {"pattern": "\\bthrow\\b", "message": "throwing exceptions is forbidden; return rejected"}
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype InventoryEvent interface{ isInventoryEvent() }\ntype Stock struct{ SKU string; Quantity int64 }\ntype Sale struct{ SKU string; Quantity int64 }\nfunc (Stock) isInventoryEvent() {}\nfunc (Sale) isInventoryEvent() {}\ntype InventoryResult interface{ isInventoryResult() }\ntype Accepted struct{ Balances map[string]int64 }\ntype Rejected struct{ Index int64; SKU string }\nfunc (Accepted) isInventoryResult() {}\nfunc (Rejected) isInventoryResult() {}\nfunc ApplyInventory(events []InventoryEvent) InventoryResult",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every Go concrete type explicitly"},
+        {"pattern": "\\bpanic\\s*\\(", "message": "panic is forbidden; return Rejected"}
+      ]
+    },
+    "rust": {
+      "signature": "pub enum InventoryEvent { Stock { sku: String, quantity: i64 }, Sale { sku: String, quantity: i64 } }\n#[derive(Debug, PartialEq, Eq)]\npub enum InventoryResult { Accepted(std::collections::BTreeMap<String, i64>), Rejected { index: i64, sku: String } }\npub fn apply_inventory(events: Vec<InventoryEvent>) -> InventoryResult",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
+        {"pattern": "_\\s*=>", "message": "wildcard match arms are forbidden; handle every Rust enum variant explicitly"},
+        {"pattern": "\\bpanic\\s*!", "message": "panic is forbidden; return Rejected"}
+      ]
+    }
+  }
+}

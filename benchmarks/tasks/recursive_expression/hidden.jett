@@ -1,0 +1,17 @@
+function eval_label(outcome: EvalResult) returns string:
+    match outcome:
+        value(number):
+            return "value:{number}"
+        division_by_zero:
+            return "division_by_zero"
+verify recursive_expression_hidden:
+    assert eval_label(evaluate(Expr.literal(7))) == "value:7"
+    assert eval_label(evaluate(Expr.add(Expr.literal(2), Expr.literal(3)))) == "value:5"
+    assert eval_label(evaluate(Expr.negate(Expr.add(Expr.literal(4), Expr.literal(5))))) == "value:-9"
+    assert eval_label(evaluate(Expr.divide(Expr.literal(8), Expr.literal(2)))) == "value:4"
+    assert eval_label(evaluate(Expr.divide(Expr.literal(8), Expr.literal(0)))) == "division_by_zero"
+    assert eval_label(evaluate(Expr.divide(Expr.literal(10), Expr.divide(Expr.literal(1), Expr.literal(0))))) == "division_by_zero"
+    assert eval_label(evaluate(Expr.add(Expr.divide(Expr.literal(1), Expr.literal(0)), Expr.literal(5)))) == "division_by_zero"
+    assert eval_label(evaluate(Expr.divide(Expr.literal(21), Expr.negate(Expr.literal(3))))) == "value:-7"
+    assert eval_label(evaluate(Expr.divide(Expr.literal(-7), Expr.literal(2)))) == "value:-3"
+    assert eval_label(evaluate(Expr.divide(Expr.literal(7), Expr.literal(-2)))) == "value:-3"

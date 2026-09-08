@@ -1,0 +1,14 @@
+{
+  "id": "triangle_kind",
+  "version": "1.0.0",
+  "title": "Triangle classification",
+  "statement": "Implement triangle_kind for three integer side lengths. Return invalid when any side is non-positive or the three sides cannot form a non-degenerate triangle. Otherwise return equilateral, isosceles, or scalene.",
+  "constraints": ["-10000 <= each side <= 10000", "use exact lowercase output spellings", "do not perform input/output"],
+  "adapters": {
+    "jett": {"signature": "namespace benchmark\n\nfunction triangle_kind(a: int64, b: int64, c: int64) returns string", "baseline": "baseline.jett", "hidden": "hidden.jett", "candidate": "solution.jett", "grade_mode": "append", "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]]},
+    "python": {"signature": "def triangle_kind(a: int, b: int, c: int) -> str", "baseline": "baseline.py", "hidden": "hidden.py", "candidate": "solution.py", "grade_mode": "separate", "commands": [["python", "hidden.py"]]},
+    "typescript": {"signature": "export function triangleKind(a: number, b: number, c: number): string", "baseline": "baseline.ts", "hidden": "hidden.ts", "candidate": "solution.ts", "grade_mode": "separate", "commands": [["npx", "tsc", "--strict", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]]},
+    "go": {"signature": "package benchmark\n\nfunc TriangleKind(a int64, b int64, c int64) string", "baseline": "baseline.go", "hidden": "hidden_test.go", "candidate": "solution.go", "grade_mode": "separate", "commands": [["go", "test", "solution.go", "hidden_test.go"]]},
+    "rust": {"signature": "pub fn triangle_kind(a: i64, b: i64, c: i64) -> &'static str", "baseline": "baseline.rs", "hidden": "hidden.rs", "candidate": "solution.rs", "grade_mode": "separate", "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]]}
+  }
+}

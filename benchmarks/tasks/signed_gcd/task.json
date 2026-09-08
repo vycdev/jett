@@ -1,0 +1,14 @@
+{
+  "id": "signed_gcd",
+  "version": "1.0.0",
+  "title": "Signed greatest common divisor",
+  "statement": "Implement signed_gcd using the Euclidean definition. Return the non-negative greatest common divisor of a and b. The gcd of 0 and 0 is 0.",
+  "constraints": ["inputs exclude the minimum signed 64-bit value", "the result fits in a signed 64-bit integer", "do not perform input/output"],
+  "adapters": {
+    "jett": {"signature": "namespace benchmark\n\nfunction signed_gcd(a: int64, b: int64) returns int64", "baseline": "baseline.jett", "hidden": "hidden.jett", "candidate": "solution.jett", "grade_mode": "append", "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]]},
+    "python": {"signature": "def signed_gcd(a: int, b: int) -> int", "baseline": "baseline.py", "hidden": "hidden.py", "candidate": "solution.py", "grade_mode": "separate", "commands": [["python", "hidden.py"]]},
+    "typescript": {"signature": "export function signedGcd(a: bigint, b: bigint): bigint", "baseline": "baseline.ts", "hidden": "hidden.ts", "candidate": "solution.ts", "grade_mode": "separate", "commands": [["npx", "tsc", "--strict", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]]},
+    "go": {"signature": "package benchmark\n\nfunc SignedGCD(a int64, b int64) int64", "baseline": "baseline.go", "hidden": "hidden_test.go", "candidate": "solution.go", "grade_mode": "separate", "commands": [["go", "test", "solution.go", "hidden_test.go"]]},
+    "rust": {"signature": "pub fn signed_gcd(a: i64, b: i64) -> i64", "baseline": "baseline.rs", "hidden": "hidden.rs", "candidate": "solution.rs", "grade_mode": "separate", "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]]}
+  }
+}

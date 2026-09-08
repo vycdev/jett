@@ -1,0 +1,80 @@
+{
+  "benchmark_version": "0.2.0-pilot",
+  "run_kind": "codex-subscription-calibration",
+  "generated_at_utc": {
+    "first": "2026-08-30T12:36:51.181743+00:00",
+    "last": "2026-08-30T12:42:41.630086+00:00"
+  },
+  "backend": "codex_subscription",
+  "authentication": "ChatGPT subscription",
+  "api_key_present": false,
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "model_alias_is_rolling": true,
+  "codex_cli_version": "codex-cli 0.145.0",
+  "reasoning_effort": "medium",
+  "repetitions_per_cell": 1,
+  "repair_attempts": 0,
+  "output_token_limit_enforced": false,
+  "tasks": ["bounded_weighted_sum", "order_lifecycle", "signed_gcd", "triangle_kind"],
+  "languages": ["jett", "python", "typescript", "go", "rust"],
+  "tracks": ["zero_shot", "onboarding"],
+  "row_count": 40,
+  "unique_response_ids": 40,
+  "deterministic_order": "sha256('codex-calibration-order:' + run_id)",
+  "prompt_git_revision": "b1a6523aa8840e54817a06ff9c4ac2e44998bdcd",
+  "generation_isolation": {
+    "ephemeral_sessions": true,
+    "empty_temporary_working_directory": true,
+    "user_config_ignored": true,
+    "project_rules_ignored": true,
+    "sandbox": "read-only",
+    "tools_forbidden_by_prompt": true,
+    "observed_tool_calls": 0
+  },
+  "grading_isolation": {
+    "container_image": "jett-bench:0.2",
+    "container_image_sha256": "80590ab9b95618ec05cd20e882335f690922a442b081bb64d36342d1ce4756bc",
+    "network": "none",
+    "memory_limit": "2g",
+    "cpu_limit": 2,
+    "pid_limit": 256,
+    "capabilities": "all dropped",
+    "no_new_privileges": true
+  },
+  "usage": {
+    "input_tokens": 512657,
+    "cached_input_tokens": 407552,
+    "output_tokens": 13068,
+    "reasoning_tokens": 4575,
+    "model_latency_ms": 358991.7100003222,
+    "estimated_api_cost_usd": null,
+    "subscription_allowance_consumed": true
+  },
+  "grading": {
+    "passed": 36,
+    "compile_errors": 4,
+    "grader_runtime_ms": 105215.33857291797
+  },
+  "manual_compliance_audit": {
+    "audited_passed": 35,
+    "false_positive_count": 1,
+    "false_positives": [
+      {
+        "run_id": "0.2.0-pilot:order_lifecycle:1.0.0:go:zero_shot:medium:01",
+        "response_id": "01a052b0-aaff-7f30-b8ad-81a1b1ef904b",
+        "reason": "submission calls panic despite the public no-panic constraint"
+      }
+    ]
+  },
+  "artifacts": {
+    "results": {
+      "path": "results.jsonl",
+      "sha256": "94cdfa3aa6710e958b9638e5ed459e8c91d259a06567acd0b9a89cadb0b9a5e6"
+    },
+    "summary": {
+      "path": "summary.json",
+      "sha256": "31bbc80bf286fe21367665381898bfa6c778648bfe9f1182a00d25dbc2716ba7"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+verify account_state_evolution_hidden:
+    assert can_sign_in(AccountState.active)
+    assert can_sign_in(AccountState.suspended("review")) == false
+    assert can_sign_in(AccountState.locked(3)) == false
+    assert can_sign_in(AccountState.closed) == false
+    assert status_label(AccountState.active) == "active"
+    assert status_label(AccountState.suspended("review")) == "suspended:review"
+    assert status_label(AccountState.locked(3)) == "locked:3"
+    assert status_label(AccountState.closed) == "closed"
+    assert status_label(suspend(AccountState.active, "maintenance")) == "suspended:maintenance"
+    assert status_label(suspend(AccountState.suspended("review"), "replacement")) == "suspended:review"
+    assert status_label(suspend(AccountState.locked(7), "ignored")) == "locked:7"
+    assert status_label(suspend(AccountState.closed, "ignored")) == "closed"

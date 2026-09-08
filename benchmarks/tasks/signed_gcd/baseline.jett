@@ -1,0 +1,14 @@
+namespace benchmark
+
+function signed_gcd(a: int64, b: int64) returns int64:
+    int64 left = a
+    int64 right = b
+    if left < 0:
+        left = 0 - left
+    if right < 0:
+        right = 0 - right
+    while right != 0:
+        int64 remainder = left modulo right
+        left = right
+        right = remainder
+    return left

@@ -1,0 +1,83 @@
+{
+  "benchmark_version": "0.5.2-pilot",
+  "run_kind": "codex-subscription-jett-skill-smoke",
+  "generated_at_utc": {
+    "first": "2026-08-30T17:48:03.078100+00:00",
+    "last": "2026-08-30T17:50:23.067716+00:00"
+  },
+  "backend": "codex_subscription",
+  "authentication": "ChatGPT subscription",
+  "api_key_present": false,
+  "model": "gpt-5.6-luna",
+  "model_snapshot": null,
+  "model_alias_is_rolling": true,
+  "codex_cli_version": "codex-cli 0.145.0",
+  "reasoning_effort": "medium",
+  "languages": ["jett"],
+  "tracks": ["skill_assisted"],
+  "tasks": [
+    "account_state_evolution",
+    "bounded_weighted_sum",
+    "first_duplicate",
+    "inventory_batch",
+    "merge_sorted_intervals",
+    "order_lifecycle",
+    "recursive_expression",
+    "score_lines",
+    "signed_gcd",
+    "triangle_kind"
+  ],
+  "row_count": 10,
+  "unique_response_ids": 10,
+  "prompt_git_revision": "69c8a7ec4165ac1f8448fd3647aa43a1e9e7d25e",
+  "selection": {
+    "language": "jett",
+    "track": "skill_assisted",
+    "limit": 10,
+    "selected_before_limit": true
+  },
+  "skill": {
+    "bytes": 8185,
+    "prompt_reference_bytes": 8461,
+    "sha256": "a3cbc6c516b223d8f1306db7c31773677ed747fa3460eac07cf435aeaf6e9ea5"
+  },
+  "generation_isolation": {
+    "ephemeral_sessions": true,
+    "empty_temporary_working_directory": true,
+    "user_config_ignored": true,
+    "project_rules_ignored": true,
+    "sandbox": "read-only",
+    "tools_forbidden_by_prompt": true,
+    "observed_tool_calls": 0
+  },
+  "grading_isolation": {
+    "container_image": "jett-bench:0.5.2",
+    "container_image_sha256": "54c7b40eaba589ae327f074ade611f58344f2a3f4712d27827e4c19709fe062f",
+    "network": "none",
+    "memory_limit": "2g",
+    "cpu_limit": 2,
+    "pid_limit": 256,
+    "capabilities": "all dropped",
+    "no_new_privileges": true
+  },
+  "usage": {
+    "input_tokens": 145968,
+    "cached_input_tokens": 111104,
+    "output_tokens": 6530,
+    "reasoning_tokens": 4155,
+    "extracted_code_bytes": 11656,
+    "extracted_code_lines": 290,
+    "model_latency_ms": 149351.63890005788,
+    "estimated_api_cost_usd": null,
+    "subscription_allowance_consumed": true
+  },
+  "grading": {
+    "passed": 6,
+    "compile_errors": 4,
+    "grader_runtime_ms": 2032.4982139864005
+  },
+  "artifacts": {
+    "results": {"path": "results.jsonl", "sha256": "6883848d425d8e0a691c47d2605bbe994da19e8eb60a231f768598d2eec42cc5"},
+    "summary": {"path": "summary.json", "sha256": "5b5ea2fb672c9e9f01fea086a81407f2ef7266a8b9415222a4cbdbad2d4b5d27"}
+  }
+}

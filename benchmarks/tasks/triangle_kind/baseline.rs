@@ -1,0 +1,15 @@
+pub fn triangle_kind(a: i64, b: i64, c: i64) -> &'static str {
+    if a <= 0 || b <= 0 || c <= 0 {
+        return "invalid";
+    }
+    if a + b <= c || a + c <= b || b + c <= a {
+        return "invalid";
+    }
+    if a == b && b == c {
+        return "equilateral";
+    }
+    if a == b || a == c || b == c {
+        return "isosceles";
+    }
+    "scalene"
+}

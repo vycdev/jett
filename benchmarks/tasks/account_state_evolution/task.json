@@ -1,0 +1,81 @@
+{
+  "id": "account_state_evolution",
+  "version": "1.0.0",
+  "title": "Evolve a closed account-state model",
+  "statement": "Update the existing source to the exact required declarations. Add suspended(reason) to the closed account-state model. can_sign_in is true only for active. status_label returns active, suspended:<reason>, locked:<failed_attempts>, or closed. Add suspend(state, reason): active becomes suspended with the new reason; an already suspended state keeps its existing reason; locked and closed preserve their state and payload.",
+  "constraints": [
+    "return one complete replacement file and preserve all existing behavior",
+    "represent every state and payload with the exact declared closed types",
+    "handle every state variant explicitly without catch-all or default branches",
+    "do not throw, panic, perform input/output, add tests, or suppress static diagnostics"
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nenum AccountState:\n    active\n    suspended(reason: string)\n    locked(failed_attempts: int64)\n    closed\n\nfunction can_sign_in(state: AccountState) returns bool\nfunction status_label(state: AccountState) returns string\nfunction suspend(state: AccountState, reason: string) returns AccountState",
+      "starter": "starter.jett",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden; handle every Jett enum variant explicitly"}]
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Active:\n    pass\n@dataclass(frozen=True)\nclass Suspended:\n    reason: str\n@dataclass(frozen=True)\nclass Locked:\n    failed_attempts: int\n@dataclass(frozen=True)\nclass Closed:\n    pass\ntype AccountState = Active | Suspended | Locked | Closed\ndef can_sign_in(state: AccountState) -> bool\ndef status_label(state: AccountState) -> str\ndef suspend(state: AccountState, reason: str) -> AccountState",
+      "starter": "starter.py",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": ["pyrightconfig.json"],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [["{pyright}", "--project", "pyrightconfig.json"], ["python", "hidden.py"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(", "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"},
+        {"pattern": "(?m)^\\s*case\\s+_\\s*:", "message": "catch-all match cases are forbidden; handle every Python union member explicitly"},
+        {"pattern": "\\braise\\b", "message": "raising exceptions is forbidden; return the declared state"}
+      ]
+    },
+    "typescript": {
+      "signature": "export type AccountState = { readonly kind: \"active\" } | { readonly kind: \"suspended\"; readonly reason: string } | { readonly kind: \"locked\"; readonly failedAttempts: bigint } | { readonly kind: \"closed\" };\nexport function canSignIn(state: AccountState): boolean\nexport function statusLabel(state: AccountState): string\nexport function suspend(state: AccountState, reason: string): AccountState",
+      "starter": "starter.ts",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [["npx", "tsc", "--strict", "--noImplicitReturns", "--noFallthroughCasesInSwitch", "--exactOptionalPropertyTypes", "--target", "ES2022", "--module", "NodeNext", "--moduleResolution", "NodeNext", "solution.ts", "hidden.ts", "--outDir", "out"], ["node", "out/hidden.js"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b", "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every TypeScript union member explicitly"},
+        {"pattern": "\\bthrow\\b", "message": "throwing exceptions is forbidden; return the declared state"}
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype AccountState interface{ isAccountState() }\ntype Active struct{}\ntype Suspended struct{ Reason string }\ntype Locked struct{ FailedAttempts int64 }\ntype Closed struct{}\nfunc (Active) isAccountState() {}\nfunc (Suspended) isAccountState() {}\nfunc (Locked) isAccountState() {}\nfunc (Closed) isAccountState() {}\nfunc CanSignIn(state AccountState) bool\nfunc StatusLabel(state AccountState) string\nfunc Suspend(state AccountState, reason string) AccountState",
+      "starter": "starter.go",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [["go", "test", "-run", "^$", "solution.go", "hidden_test.go"], ["go", "test", "solution.go", "hidden_test.go"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bany\\b|interface\\s*\\{\\s*\\}", "message": "Go type erasure through any or interface{} is forbidden"},
+        {"pattern": "(?m)^\\s*default\\s*:", "message": "default switch branches are forbidden; handle every Go concrete type explicitly"},
+        {"pattern": "\\bpanic\\s*\\(", "message": "panic is forbidden; return the declared state"}
+      ]
+    },
+    "rust": {
+      "signature": "#[derive(Debug, PartialEq, Eq)]\npub enum AccountState { Active, Suspended(String), Locked(i64), Closed }\npub fn can_sign_in(state: AccountState) -> bool\npub fn status_label(state: AccountState) -> String\npub fn suspend(state: AccountState, reason: String) -> AccountState",
+      "starter": "starter.rs",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [["rustc", "--edition=2024", "--test", "hidden.rs", "-o", "{executable}"], ["{executable}"]],
+      "forbidden_patterns": [
+        {"pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b", "message": "unsafe Rust and unchecked type escapes are forbidden"},
+        {"pattern": "_\\s*=>", "message": "wildcard match arms are forbidden; handle every Rust enum variant explicitly"},
+        {"pattern": "\\bpanic\\s*!", "message": "panic is forbidden; return the declared state"}
+      ]
+    }
+  }
+}

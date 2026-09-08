@@ -1,0 +1,70 @@
+namespace benchmark
+enum OrderState:
+    draft
+    submitted
+    paid
+    shipped
+    cancelled
+enum OrderEvent:
+    submit
+    pay
+    ship
+    cancel
+enum TransitionError:
+    event_not_allowed
+    terminal_state
+enum TransitionResult:
+    accepted(state: OrderState)
+    rejected(error: TransitionError)
+function transition_from_draft(event: OrderEvent) returns TransitionResult:
+    match event:
+        submit:
+            return TransitionResult.accepted(OrderState.submitted)
+        pay:
+            return TransitionResult.rejected(TransitionError.event_not_allowed)
+        ship:
+            return TransitionResult.rejected(TransitionError.event_not_allowed)
+        cancel:
+            return TransitionResult.accepted(OrderState.cancelled)
+function transition_from_submitted(event: OrderEvent) returns TransitionResult:
+    match event:
+        submit:
+            return TransitionResult.rejected(TransitionError.event_not_allowed)
+        pay:
+            return TransitionResult.accepted(OrderState.paid)
+        ship:
+            return TransitionResult.rejected(TransitionError.event_not_allowed)
+        cancel:
+            return TransitionResult.accepted(OrderState.cancelled)
+function transition_from_paid(event: OrderEvent) returns TransitionResult:
+    match event:
+        submit:
+            return TransitionResult.rejected(TransitionError.event_not_allowed)
+        pay:
+            return TransitionResult.rejected(TransitionError.event_not_allowed)
+        ship:
+            return TransitionResult.accepted(OrderState.shipped)
+        cancel:
+            return TransitionResult.accepted(OrderState.cancelled)
+function reject_terminal(event: OrderEvent) returns TransitionResult:
+    match event:
+        submit:
+            return TransitionResult.rejected(TransitionError.terminal_state)
+        pay:
+            return TransitionResult.rejected(TransitionError.terminal_state)
+        ship:
+            return TransitionResult.rejected(TransitionError.terminal_state)
+        cancel:
+            return TransitionResult.rejected(TransitionError.terminal_state)
+function transition(state: OrderState, event: OrderEvent) returns TransitionResult:
+    match state:
+        draft:
+            return transition_from_draft(event)
+        submitted:
+            return transition_from_submitted(event)
+        paid:
+            return transition_from_paid(event)
+        shipped:
+            return reject_terminal(event)
+        cancelled:
+            return reject_terminal(event)

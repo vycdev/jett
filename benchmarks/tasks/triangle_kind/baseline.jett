@@ -1,0 +1,15 @@
+namespace benchmark
+
+function invalid_triangle_sides(a: int64, b: int64, c: int64) returns bool:
+    if a <= 0 or b <= 0 or c <= 0:
+        return true
+    return a + b <= c or a + c <= b or b + c <= a
+
+function triangle_kind(a: int64, b: int64, c: int64) returns string:
+    if invalid_triangle_sides(a, b, c):
+        return "invalid"
+    if a == b and b == c:
+        return "equilateral"
+    if a == b or a == c or b == c:
+        return "isosceles"
+    return "scalene"

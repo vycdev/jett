@@ -1,0 +1,29 @@
+function score_error_label(error: ScoreError) returns string:
+    match error:
+        malformed:
+            return "malformed"
+        invalid_score:
+            return "invalid_score"
+        duplicate_name:
+            return "duplicate_name"
+function score_result_label(outcome: ScoreResult) returns string:
+    match outcome:
+        accepted(scores):
+            int64 size = map.length[string, int64](view scores)
+            int64 ada = map.get_or[string, int64](clone scores, "ada", 0)
+            int64 bob = map.get_or[string, int64](scores, "bob", 0)
+            return "accepted:{size}:{ada}:{bob}"
+        rejected(line, error):
+            return "rejected:{line}:{score_error_label(error)}"
+verify score_lines_hidden:
+    assert score_result_label(parse_scores(list())) == "accepted:0:0:0"
+    assert score_result_label(parse_scores(list("ada=10", "bob=-2"))) == "accepted:2:10:-2"
+    assert score_result_label(parse_scores(list("ada=9223372036854775807", "bob=-9223372036854775808"))) == "accepted:2:9223372036854775807:-9223372036854775808"
+    assert score_result_label(parse_scores(list("ada=1", "ada=2"))) == "rejected:1:duplicate_name"
+    assert score_result_label(parse_scores(list("missing"))) == "rejected:0:malformed"
+    assert score_result_label(parse_scores(list("=3"))) == "rejected:0:malformed"
+    assert score_result_label(parse_scores(list("a=1=2"))) == "rejected:0:malformed"
+    assert score_result_label(parse_scores(list("ada=01"))) == "rejected:0:invalid_score"
+    assert score_result_label(parse_scores(list("ada=-0"))) == "rejected:0:invalid_score"
+    assert score_result_label(parse_scores(list("ada=9223372036854775808"))) == "rejected:0:invalid_score"
+    assert score_result_label(parse_scores(list("ada=1", "ada=bad"))) == "rejected:1:invalid_score"
