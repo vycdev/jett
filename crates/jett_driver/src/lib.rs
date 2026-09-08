@@ -963,6 +963,17 @@ pub fn query_completions_at_detailed(
     let source = fs::read_to_string(path).map_err(|error| {
         CompletionsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
     })?;
+    query_source_completions_at(&source, path, line, column)
+}
+
+/// Query completion metadata using the authoritative in-memory document while
+/// preserving structured compiler diagnostics.
+pub fn query_source_completions_at(
+    source: &str,
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, CompletionsQueryError> {
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
@@ -978,7 +989,7 @@ pub fn query_completions_at_detailed(
         return Err(CompletionsQueryError::compilation(
             "parse errors:",
             parsed.errors,
-            source,
+            source.to_string(),
             file_path,
         ));
     }
@@ -1576,6 +1587,11 @@ fn completion_match_kind(name: &str, prefix: &str) -> Option<CompletionMatchKind
 
     leaf.starts_with(prefix)
         .then_some(CompletionMatchKind::LeafPrefix)
+}
+
+/// Return the stable completion rank for a candidate matching `prefix`.
+pub fn completion_match_rank(name: &str, prefix: &str) -> Option<u32> {
+    completion_match_kind(name, prefix).map(completion_rank)
 }
 
 fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
