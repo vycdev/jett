@@ -22,11 +22,48 @@ function sorted_row_value() returns string:
         default list()
     return list.first[string](view first_row) handle:
         default "missing"
+function uint64_rows_are_sorted_by_index() returns bool:
+    list[list[uint64]] rows = list.sort_by_index[uint64](list(list(18446744073709551615, 0), list(2, 1), list(9223372036854775808, 2)), 0)
+    list[uint64] first_row = list.first[list[uint64]](view rows) handle:
+        return false
+    uint64 first_value = list.first[uint64](view first_row) handle:
+        return false
+    return first_value == 2
+function detects_unsorted_uint64_values() returns bool:
+    list[uint64] values = list(18446744073709551615, 2)
+    return not list.is_sorted[uint64](view values)
+function float64_rows_are_sorted_by_index() returns bool:
+    list[list[float64]] rows = list.sort_by_index[float64](list(list(3.5, 0.0), list(-1.0, 1.0)), 0)
+    list[float64] first_row = list.first[list[float64]](view rows) handle:
+        return false
+    float64 first_value = list.first[float64](view first_row) handle:
+        return false
+    return first_value == -1.0
+function bool_rows_are_sorted_by_index() returns bool:
+    list[list[bool]] rows = list.sort_by_index[bool](list(list(true, false), list(false, true)), 0)
+    list[bool] first_row = list.first[list[bool]](view rows) handle:
+        return false
+    bool first_value = list.first[bool](view first_row) handle:
+        return true
+    return not first_value
+function detects_unsorted_bool_values() returns bool:
+    list[bool] values = list(true, false)
+    return not list.is_sorted[bool](view values)
 function grouped_even_count() returns int64:
     map[string, list[int64]] groups = list.group_by[int64](list(1, 2, 3, 4), parity)
     list[int64] evens = map.get[string, list[int64]](groups, "even") handle:
         default list()
     return list.length[int64](view evens)
+verify sort_uint64_rows_by_index:
+    assert uint64_rows_are_sorted_by_index()
+verify detect_unsorted_uint64_values:
+    assert detects_unsorted_uint64_values()
+verify sort_float64_rows_by_index:
+    assert float64_rows_are_sorted_by_index()
+verify sort_bool_rows_by_index:
+    assert bool_rows_are_sorted_by_index()
+verify detect_unsorted_bool_values:
+    assert detects_unsorted_bool_values()
 verify list_source_surface:
     assert zip_summary() == "1:a:2"
     assert enumerate_summary() == "1:b"

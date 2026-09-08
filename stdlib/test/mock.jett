@@ -1,0 +1,18 @@
+namespace test.mock
+export enum RandomStep:
+    bounded(offset: uint64)
+    unit53(bits: uint64)
+    boolean(value: bool)
+    entropy_unavailable
+export enum ClockStep:
+    wall(unix_milliseconds: int64)
+    unavailable
+export struct EnvironmentEntry:
+    name: string
+    value: string
+export function random(steps: list[RandomStep]) returns Random:
+    return test.mock.__random(steps)
+export function clock(steps: list[ClockStep]) returns Clock:
+    return test.mock.__clock(steps)
+export function environment(arguments: list[string], entries: list[EnvironmentEntry]) returns Environment:
+    return test.mock.__environment(arguments, entries)
