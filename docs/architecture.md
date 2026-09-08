@@ -47,7 +47,7 @@ The compiler is organized as a Cargo workspace with one crate per major phase. C
 jett/
 ├── Cargo.toml                  # Workspace root
 ├── crates/
-│   ├── jett_common/            # Shared types: Span, FileId, Symbol, diagnostics
+│   ├── jett_common/            # Shared IDs, spans, origins, and breakpoint protocol model
 │   ├── jett_diagnostics/       # Error/warning types, TOON + human formatting
 │   ├── jett_lexer/             # Tokenizer
 │   ├── jett_parser/            # Current direct source-spanned AST parser
@@ -68,6 +68,7 @@ jett/
 │   ├── jett_asp/               # Agent Server Protocol (TOON output formatting)
 │   ├── jett_mcp/               # MCP server wrapping ASP
 │   ├── jett_profiler/          # Built-in CPU/memory profiler
+│   ├── jett_regex/             # Portable regex parser and canonical NFA preflight
 │   ├── jett_fuzz/              # Property-based test runner and fuzzer
 │   ├── jett_bind/              # C header → .jett binding generator
 │   ├── jett_runtime/           # Runtime library linked into every binary (allocator, actors, strings)
@@ -89,10 +90,18 @@ jett/
 The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.md)
 defines CPU/memory events, attribution, bounded collection, deterministic
 reporting, security, and the interpreter/future-runtime handoff. The initial
-backend-neutral crate validates CPU report controls, aggregates injected samples
-into deterministic bottleneck records, and provides the constant-space pending
-request gate used between a timer and one runtime worker; rendering, CLI
-integration, and runtime adapters remain staged.
+backend-neutral crate validates CPU and memory report controls, aggregates
+injected CPU samples normalized to 128 frames with an explicit truncation
+marker and counter. Omitted leaf locations never become source locations for
+the truncation marker. CPU samples have bounded hot-line and root-to-function call-chain
+detail. It accounts for injected allocation, resize, and free
+events with deterministic pressure, peak, and retention records. It sanitizes
+only manifest-authorized excerpts with checked secret metadata, replacing
+literals and secret-bearing spans with a bounded 160-byte buffer. The TOON
+summary renderer escapes metadata controls and reports truncation totals. The
+CLI validates launch options and source before refusing unsupported collectors;
+a constant-space pending-request/coalescing gate connects timer and worker.
+Human rendering and runtime adapters remain staged.
 
 ### Crate Dependency Graph
 
@@ -590,6 +599,9 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
 - **No rebinding while viewed:** The owner of a variable cannot rebind it while a `view` to it exists. This prevents `items = new_list` inside a `for item in view items:` loop body, and prevents rebinding a variable that was passed as `view` to a `run` task until the task is `join`ed or `cancel`led.
+- **Task-control operands:** cancellation requires a pending task variable on
+  every live control-flow path. Joins retain the ensure-resolved contract for
+  ordinary expressions, with move-only values subject to normal ownership.
 - **Cancellation semantics:** `cancel task` sets a cancellation flag. The task is
   not killed immediately — its next capability checkpoint terminates the pending
   task with `CancelledError` before the capability operation takes effect. The
@@ -651,10 +663,16 @@ Track which capabilities flow through the program:
   through `test.mock.environment`. See the
   [Environment and argument capability contract](open_design/environment_argv_capability_contract.md)
   and implementation issue [#170](https://github.com/vycdev/jett/issues/170).
+- **Scripted provider seams are exact.** Successful host-side Random and Clock
+  conformance runs reject unconsumed samples instead of accepting a script whose
+  expected operations were only partially observed. Runtime failures remain
+  primary and are not replaced by this successful-run cleanup check.
 - **Application logging is a capability operation.** The source-owned
-  `log.emit` and level wrappers borrow `view Log`; the runtime injects a
-  dedicated provider, filter, capture, and checked sequence state. It remains
-  separate from stdout, stderr, compiler diagnostics, and debug output. See the
+  `log.emit` and level wrappers borrow `view Log`. Their public types, wrappers,
+  private trusted-kernel boundary, capability propagation, and secret-output
+  classification are implemented. Runtime provider injection, filtering,
+  capture, and checked sequence state remain pending. Logging stays separate
+  from stdout, stderr, compiler diagnostics, and debug output. See the
   [structured logging contract](completed/structured_logging_contract.md).
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
@@ -784,7 +802,8 @@ failure blocks distinguish local `default` fallback from function `return`,
 and step-local handles wrap only their intermediate pipeline call. Enum
 construction carries a dense checked variant ID and payloads; exhaustive
 matches carry variant arms, payload locals, and an optional catch-all. Typed
-parameters and locals, direct user calls, core expressions, returns, branches,
+parameters and locals, direct user calls, actor spawn/messages with normalized
+arguments and explicit lexical evaluation order, core expressions, returns, branches,
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
@@ -793,15 +812,22 @@ compiler-owned calls carry canonical intrinsic identity, typed arguments, and
 lexical evaluation order after type checking has authorized them. Inline
 functions and indirect calls retain explicit parameter/local identity;
 comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor declaration/handler
-materialization remains actor-runtime work. Remaining source constructs are staged by the
-[initial HIR lowering plan](active/hir_lowering_plan.md).
+carry typed operands and message identity. Actor receive handlers are
+deterministic HIR functions whose locals preserve checked capability, state,
+and message bindings; actor construction, persistent state layout, scheduling,
+and dispatch remain actor-runtime work. Remaining source constructs are staged
+by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
-structural validator. It lowers top-level `if`, `while`, exhaustive `match`,
-`break`, `continue`, and `return` into deterministic dense basic blocks with
-explicit branch, switch, goto, and return terminators. Handle-internal control
-flow and definitive ownership/drop elaboration remain subsequent MIR work.
+HIR structural validator. It lowers top-level `if`, `while`, exhaustive
+`match`, `break`, `continue`, `return`, and actor `respond` into deterministic dense basic
+blocks with explicit branch, switch, goto, return, and respond terminators. Its public
+MIR validator rejects noncanonical block IDs, out-of-range function entries,
+and invalid goto, branch, switch, or for-loop edges before later backends
+consume a graph. Its CFG analysis exposes deduplicated successors, canonical
+predecessors, and reachable reverse postorder for deterministic backend
+dataflow passes. Handle-internal control flow and definitive ownership/drop
+elaboration remain subsequent MIR work.
 
 ### Purpose
 
@@ -889,6 +915,12 @@ MirStatement {
     Nop,
 }
 ```
+
+Every MIR statement and terminator retains a source `Span`. Direct nodes use
+the originating HIR statement or condition span, while synthetic CFG edges use
+the controlling statement or body span. This provenance lets later ownership,
+optimization, diagnostic, and debug passes report the source construct that
+produced an edge without recovering locations from embedded expressions.
 
 ### Definitive Ownership Verification
 
@@ -1355,6 +1387,19 @@ dispatch. Finalization detaches pending work, runs one infallible trusted
 cleanup, retires the slot, and advances its generation so stale callbacks or
 copied backend bits cannot target a replacement resource.
 
+The initial `jett_runtime` registry implements this backend-neutral carrier
+boundary. It type-erases provider payloads behind private keys, validates
+context/type/generation and authority provenance before access, gives pending
+operations separate generations so late completions cannot finish replacement
+work, and finalizes live entries in reverse creation order on explicit or
+implicit context shutdown. Provider cleanup panics do not skip remaining
+finalizers, and rejected insertions release their consumed provider payloads.
+Suppressed panic payloads are dropped under unwind protection; if their
+destructors panic too, only that secondary payload is deliberately forgotten
+to bound cleanup while retaining the first failure for propagation.
+Interpreter trusted-hook dispatch and source-level
+scope/drop integration remain later stages of the resource contract.
+
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime
 teardown finalize each remaining owner in deterministic reverse-acquisition
@@ -1402,12 +1447,16 @@ no committed writes. Disconnect resumes by default (or aborts when selected by
 the launcher), invalidates the token, and removes the descriptor so an abandoned
 agent cannot leave the process paused indefinitely.
 
-The current tree-walking interpreter's one-line binding snapshot is the
-compatibility baseline, not the interactive implementation. The staged order is
-typed protocol/renderer tests, interpreter pause and operations, complete
-stack/source context, then HIR/MIR/native safe-point lowering. Native code adapts
-values to the same operation model instead of defining a second debugger wire
-schema. See the
+The shared `jett_common::breakpoint` model now implements the protocol identity,
+session and pause lifecycle, operation-specific request validation, idempotent
+request-ID admission with one outstanding command and one independent wait,
+terminal request invalidation, stable failure envelopes, constant-work token comparison,
+and manifest-relative source authorization. The current tree-walking
+interpreter's one-line binding snapshot remains the compatibility baseline, not
+the interactive implementation. The next stages are interpreter pause and
+operations, complete stack/source context, then HIR/MIR/native safe-point
+lowering. Native code adapts values to the same operation model instead of
+defining a second debugger wire schema. See the
 [breakpoint protocol record](completed/breakpoint_pause_inspection_protocol.md)
 for the lifecycle, authorization, envelopes, examples, and verification slices.
 
@@ -1641,11 +1690,13 @@ compiler-shipped source file, while only private implementation kernels cross
 the runtime boundary.
 
 Crypto has reached that boundary for its implemented initial surface. Public
-`crypto.sha256` and legacy-only `crypto.md5` declarations live in
+`crypto.sha256`, `crypto.sha512`, legacy-only `crypto.md5`, and key-first binary
+`crypto.hmac_sha256` declarations live in
 `stdlib/crypto.jett`; source wrappers convert exact UTF-8 through `bytes` and
 format raw fixed-size digests as lowercase hex. Only private trusted compression
-kernels remain in the interpreter, and project code cannot call them. SHA-512
-and HMAC remain reserved and undiscoverable until implemented. Exact taint,
+kernels remain in the interpreter, and project code cannot call them. HMAC
+borrows a secret byte key and byte message and returns a secret 32-byte tag;
+HMAC-SHA-512 remains reserved and undiscoverable. Exact taint,
 security, and backend obligations are defined by the
 [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md).
 
@@ -1784,27 +1835,31 @@ these public shapes:
 | `references_at(file, line, col)` | Find all references to the selected symbol with use-site ranges | LSP, ASP |
 | `diagnostics(file)` | All errors/warnings for a file | LSP |
 
-File-symbol parse failures, references-at parse/resolution failures, and
-type-at parse, resolution, and type-check failures with known source context
-retain `Diagnostic` values through the driver boundary. Type-at and
-references-at failures retain the source map used by the compiler, so
+File-symbol and completion parse failures, references-at parse/resolution
+failures, and type-at parse, resolution, and type-check failures with known
+source context retain `Diagnostic` values through the driver boundary. Type-at,
+references-at, and completion failures retain the source map used by the compiler, so
 diagnostics and labels in sibling project or stdlib files keep their own paths
 and ranges. Agent mode renders those failures with the build diagnostic
-envelope. Because the current suggested-fix table has no file column, fixes
-are emitted only for the requested file. Operational failures without matching
-compiler source context use a prose `error` scalar. Extending that boundary and
-a file-aware fix schema to the remaining queries and commands is
-tracked by #35.
+envelope. Suggested-fix rows also carry their target file and complete range,
+so fixes in sibling project or stdlib sources are preserved instead of being
+silently omitted. Operational failures without matching compiler source
+context use a prose `error` scalar. Extending structured diagnostics to the
+remaining queries and commands is tracked by #35.
 
 ### Demand-Driven Computation
 
 The initial in-process `jett_query` database is implemented and memoizes
-`parse_file(FileKey) -> ParsedFile`. The current driver creates a fresh database
-at its migrated single-file parse adapter, while project semantic passes and
-interactive operations still invoke resolver and typechecker operations
-directly. Cross-request LSP reuse and item-level semantic queries are not yet
-implemented. The bounded first slice was tracked by
-[#166](https://github.com/vycdev/jett/issues/166).
+`parse_file(FileKey) -> ParsedFile`. Its bounded parallel coordinator executes
+independent whole-file queries through cloned Salsa database snapshots, joins
+the complete worker set, and publishes results only after restoring manifest
+order. The current driver creates a fresh database at its migrated single-file
+parse adapter, while project semantic passes and interactive operations still
+invoke resolver and typechecker operations directly. Cancellation,
+stale-revision suppression, CLI/LSP worker controls, cross-request LSP reuse,
+and item-level semantic queries are not yet implemented. The bounded first
+query slice was tracked by [#166](https://github.com/vycdev/jett/issues/166),
+and the parallel boundary by [#151](https://github.com/vycdev/jett/issues/151).
 
 The [initial query boundary](open_design/incremental_query_boundary.md) defines
 database ownership, ground-truth inputs, stable file identity, deterministic
@@ -1820,9 +1875,12 @@ adds a separate local, cross-process performance layer after in-process Salsa
 memoization. Its first artifact is a successful whole-file direct AST plus
 non-error parser diagnostics. Exact source bytes, a canonical artifact schema,
 and a deterministic compiler compatibility identity form its SHA-256 key. The
-current `jett_query` cache module implements the exact v1 parse-key record,
-digest, strict decoder, and current-source validation. Artifact serialization,
-authenticated storage, and persistent query read-through remain pending.
+current `jett_query` cache module implements the exact v1 parse-key record and
+authenticated envelope, including SHA-256 digests, HMAC-SHA-256 tags,
+constant-time tag verification, strict bounded decoding, and current-source
+validation. Compiler compatibility identity, authentication-key storage,
+artifact serialization, persistent storage, and query read-through remain
+pending.
 
 The wire format is compiler-owned and independent of Rust layout, Salsa handles,
 process-local `FileId` values, pointers, and checkout paths. A hit reconstructs
@@ -1845,17 +1903,36 @@ separate future contracts.
 
 Standard LSP implementation using the `tower-lsp` crate. Provides:
 
-- Real-time diagnostics (errors/warnings as you type).
+- Real-time diagnostics (errors/warnings as you type), including same-source
+  compiler labels as LSP related information with UTF-16 ranges.
 - Hover information (type at cursor).
 - Go-to-definition.
 - Find all references in the current document, optionally including the declaration.
-- Code completion.
+- Prefix-filtered code completion from the latest in-memory source, with
+  deterministic match ranking, project/stdlib candidates, function signatures,
+  and leaf-name filtering for qualified symbols.
+- Rename a resolved symbol across its declaration and references in the current
+  document using UTF-16 workspace edits.
+- Signature help for source-defined and standard-library calls, including the
+  active argument in nested calls and unsaved private document functions.
 - Document symbols from the latest in-memory source, including declaration
-  kinds, signatures, and UTF-16 ranges for editor outlines.
+  kinds, signatures, full declaration ranges, and narrower name-selection
+  ranges in UTF-16 coordinates for editor outlines.
+- Selection ranges that expand from lexer tokens to trimmed lines and the full
+  open document while preserving UTF-16 positions.
+- Case-insensitive workspace symbol search across all open Jett documents,
+  using their latest unsaved text and deterministic name/location ordering.
 - Whole-document formatting is provided through `jett_fmt`.
-- Planned follow-up: rename symbol.
+- Folding ranges follow the lexer's indentation tokens, including nested blocks
+  and every accepted line-ending form.
+- Quick fixes replace tab-indented line prefixes with the required four-space
+  indentation while preserving the rest of the line.
+- Full-document semantic tokens classify keywords, primitive types, numbers,
+  strings, operators, and comments with UTF-16 positions from the latest
+  in-memory source.
 
 The LSP server currently stores full document text, invokes driver operations,
+maps same-source compiler labels into the current document URI,
 and suppresses diagnostics from stale document versions. After `jett_query`
 lands, one database per workspace session will reuse unchanged parse results;
 version checks remain the final publish guard.
@@ -1884,7 +1961,7 @@ The Agent Server Protocol is not a persistent server — it's the `--agent` flag
 | `jett run --agent --profile` | Profiling bottleneck summary |
 | `jett bundle --output lib.jett` | Validated single-file bundle with source manifest |
 
-The ASP module formats `Diagnostic` structs and query results into TOON. It shares all data with the human-mode output — only the rendering differs.
+The ASP module formats `Diagnostic` structs and query results into TOON. It shares all data with the human-mode output — only the rendering differs. Global namespace and signature discovery retain project parse diagnostics and source ranges in the same structured failure envelope as file-position queries.
 
 ---
 
@@ -1949,6 +2026,19 @@ human/TOON rendering. The driver owns capability negotiation, run-manifest
 metadata, lifecycle finalization, and composition with `RunOutput`; the CLI owns
 argument validation, output channels, and exit behavior. Runtimes only produce
 safe events and exclude collector metadata.
+
+The source sanitizer accepts excerpts only when the driver proves manifest
+authorization and supplies checked secret metadata. It withholds unavailable or
+unsafe-to-tokenize source, replaces string and byte literals plus secret-typed
+spans with fixed markers, omits comments, escapes controls, and truncates at a
+UTF-8 boundary to 160 bytes. This helper does not authorize filesystem reads;
+the driver must supply source from the loaded run manifest.
+
+The CLI parses decimal thresholds into exact integer basis points, enforces
+mode-specific rates and bounded limits, and materializes one backend-neutral
+`ProfileRequest`. Until a runtime advertises the required collector capability,
+that request validates the source and then fails setup before the program
+executes. Agent launches report setup failures through the run-error envelope.
 
 ### CPU Profiling
 
@@ -2129,7 +2219,10 @@ only by the exact manifest `DeclarationId` with `SourceOrigin::Stdlib`, never by
 qualified-name or path spelling. Constructor calls are source-legal only as
 direct property-body expressions, excluding nested declarations, closures,
 actors, and spawned tasks. Normal functions, `main`, verify,
-comptime, and application runtime code cannot construct them.
+comptime, and application runtime code cannot construct them. The source checker
+enforces this boundary for calls and pipeline steps and rejects constructor
+function values; per-attempt runtime hooks and construction identities remain
+staged implementation work.
 
 Build, query, and LSP pipelines run the same parse, resolution, type, ownership,
 capability, and context checks over property source without executing it. Only a

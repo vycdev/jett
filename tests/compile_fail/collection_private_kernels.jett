@@ -1,4 +1,4 @@
-# ERROR: E0313 x13
+# ERROR: E0313 x14
 namespace app
 function map_kernel_is_private() returns map[string, int64]:
     return map.__new[string, int64]()
@@ -16,6 +16,8 @@ function encoding_kernel_is_private() returns string:
     return encoding.__base64_encode(bytes.new())
 function crypto_kernel_is_private() returns bytes:
     return crypto.__sha256(bytes.new())
+function crypto_hmac_kernel_is_private(view key: secret[bytes], view message: bytes) returns secret[bytes]:
+    return crypto.__hmac_sha256(view key, view message)
 function csv_parse_kernel_is_private() returns result[list[list[string]], string]:
     return csv.__parse("a,b")
 function csv_stringify_kernel_is_private() returns string:
