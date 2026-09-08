@@ -8,6 +8,10 @@ pub use source::{SanitizedSourceExcerpt, SourceExcerptMetadata, sanitize_source_
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod sampling;
+
+pub use sampling::{CpuSampleRequestCounts, CpuSampleRequestGate, CpuTickOutcome};
+
 const MAX_STACK_DEPTH: usize = 128;
 
 fn truncated_stack_frame() -> FrameIdentity {

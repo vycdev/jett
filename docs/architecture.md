@@ -100,7 +100,8 @@ only manifest-authorized excerpts with checked secret metadata, replacing
 literals and secret-bearing spans with a bounded 160-byte buffer. The TOON
 summary renderer escapes metadata controls and reports truncation totals. The
 CLI validates launch options and source before refusing unsupported collectors;
-human rendering and runtime adapters remain staged.
+a constant-space pending-request/coalescing gate connects timer and worker.
+Human rendering and runtime adapters remain staged.
 
 ### Crate Dependency Graph
 
@@ -2043,8 +2044,10 @@ executes. Agent launches report setup failures through the run-error envelope.
 
 `jett run --profile` requests monotonic elapsed-time samples at 1000 Hz by
 default. The timer keeps at most one pending request per runtime worker. The
-current tree-walking interpreter acknowledges requests at statement/call safe
-points on its dedicated runtime thread; future native runtimes may use safe
+backend-neutral request gate counts every tick, coalesces requests while its
+single pending bit is set, and lets the runtime consume that bit at a safe point
+without allocating or growing a queue. Wiring those safe points into the current
+tree-walking interpreter remains staged; future native runtimes may use safe
 platform sampling. Backends report coalesced, unavailable, runtime, and waiting
 observations instead of charging them to the last user frame. Statement counts
 are not an allowed timing substitute.
