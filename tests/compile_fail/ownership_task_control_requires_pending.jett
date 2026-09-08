@@ -1,0 +1,22 @@
+# ERROR: E0403 x3
+function compute() returns int64:
+    return 1
+function cancel_joined() returns nothing:
+    int64 task = run compute()
+    int64 resolved = join (task) handle error:
+        return nothing
+    cancel task
+    return nothing
+function cancel_maybe_joined(condition: bool) returns nothing:
+    int64 task = run compute()
+    if condition:
+        int64 resolved = join task handle error:
+            return nothing
+    cancel task
+    return nothing
+function main() returns nothing:
+    int64 value = 7
+    int64 joined = join value handle error:
+        return nothing
+    cancel value
+    return nothing

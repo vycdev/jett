@@ -920,6 +920,15 @@ pub fn missing_call_argument(function_name: &str, parameter_name: &str, span: Sp
     )
 }
 
+/// E0371: Test capability providers may only be constructed directly in properties.
+pub fn test_mock_outside_property(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        371,
+        format!("`{name}` may only construct a capability directly inside a property block"),
+        span,
+    )
+}
+
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
 /// E0800: Function body exceeds the statement count limit.
