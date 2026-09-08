@@ -2029,6 +2029,12 @@ spans with fixed markers, omits comments, escapes controls, and truncates at a
 UTF-8 boundary to 160 bytes. This helper does not authorize filesystem reads;
 the driver must supply source from the loaded run manifest.
 
+The CLI parses decimal thresholds into exact integer basis points, enforces
+mode-specific rates and bounded limits, and materializes one backend-neutral
+`ProfileRequest`. Until a runtime advertises the required collector capability,
+that request validates the source and then fails setup before the program
+executes. Agent launches report setup failures through the run-error envelope.
+
 ### CPU Profiling
 
 `jett run --profile` requests monotonic elapsed-time samples at 1000 Hz by
