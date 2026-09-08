@@ -1881,9 +1881,15 @@ Standard LSP implementation using the `tower-lsp` crate. Provides:
   active argument in nested calls and unsaved private document functions.
 - Document symbols from the latest in-memory source, including declaration
   kinds, signatures, and UTF-16 ranges for editor outlines.
+- Selection ranges that expand from lexer tokens to trimmed lines and the full
+  open document while preserving UTF-16 positions.
 - Case-insensitive workspace symbol search across all open Jett documents,
   using their latest unsaved text and deterministic name/location ordering.
 - Whole-document formatting is provided through `jett_fmt`.
+- Folding ranges follow the lexer's indentation tokens, including nested blocks
+  and every accepted line-ending form.
+- Quick fixes replace tab-indented line prefixes with the required four-space
+  indentation while preserving the rest of the line.
 - Full-document semantic tokens classify keywords, primitive types, numbers,
   strings, operators, and comments with UTF-16 positions from the latest
   in-memory source.

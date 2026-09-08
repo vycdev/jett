@@ -132,7 +132,7 @@
 | Component | Status |
 |---|---|
 | TOON output (`--agent` flag) | Partial (build diagnostics include file, ok/error status, severity counts, ranged diagnostics/labels, and file-aware ranged suggested fixes; format status, run stdout/typed debug output, ranged verify/property test summaries, namespace/symbol/type-at/definition-at/references-at/completion/signature query results, file-symbol/completion parse failures, global namespace/signature project-parse failures, type-at compiler failures, and definition-at/references-at parse/resolution failures with known source context and cross-file labels/fixes are structured) |
-| LSP server (save diagnostics with related compiler labels, whole-document formatting, semantic tokens, and open-buffer workspace symbol search) | Done |
+| LSP server (save diagnostics with related compiler labels, whole-document formatting, semantic tokens, token-aware selection ranges, and open-buffer workspace symbol search) | Done |
 | LSP hover (type at cursor) | Done |
 | LSP go-to-definition | Done |
 | LSP find references | Done (current document, with optional declaration inclusion) |
@@ -141,6 +141,7 @@
 | LSP completions | Done |
 | LSP signature help | Done (source-defined and standard-library calls from the latest in-memory document, with nested-call active-parameter tracking) |
 | LSP document symbols | Done (top-level file outline from the latest in-memory document, with declaration kinds, signatures, and UTF-16 ranges) |
+| LSP folding ranges | Done (lexer-backed nested block ranges from the latest in-memory document) |
 | MCP server | Not started; initial transport, tool/resource, and ASP handoff boundary tracked by [#37](https://github.com/vycdev/jett/issues/37) |
 | ASP query system | Partial (`jett query --agent --namespaces`, `--symbols`, `--type-at`, `--definition-at`, `--references-at`, prefix-filtered `--complete-at`, and `--signature` are implemented; namespace, type, symbol, definition, reference, and completion rows include source ranges; file-symbol and completion parse failures, type-at parse/resolution/type-check failures, and definition-at/references-at parse/resolution failures with known source context preserve structured diagnostics and cross-file labels; completion rows also include deterministic rank, match kind, namespace, visibility, and source-level signatures where available) |
 
@@ -201,7 +202,7 @@
 |---|---|
 | Syntax highlighting (TextMate grammar) | Done |
 | Language configuration (brackets, indentation) | Done |
-| LSP integration (diagnostics, formatting, and semantic highlighting) | Done (via `jett lsp`) |
+| LSP integration (diagnostics, formatting, semantic highlighting, and quick fixes) | Done (via `jett lsp`; tab-indentation diagnostics offer an apply-ready four-space fix) |
 
 ## CLI Commands
 

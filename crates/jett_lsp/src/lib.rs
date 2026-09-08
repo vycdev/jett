@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+
+use jett_lexer::{Lexer, TokenKind};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -83,6 +85,9 @@ fn server_capabilities() -> ServerCapabilities {
         document_symbol_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         semantic_tokens_provider: Some(
             SemanticTokensOptions {
                 work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -112,37 +117,8 @@ fn server_capabilities() -> ServerCapabilities {
 /// Jett accepts LF, CRLF, and lone CR, so LSP conversions must recognize all
 /// three forms consistently with the compiler and query layer.
 fn source_line(source: &str, target_line: usize) -> Option<&str> {
-    let bytes = source.as_bytes();
-    let mut line = 0usize;
-    let mut start = 0usize;
-    let mut index = 0usize;
-
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\r' => {
-                if line == target_line {
-                    return Some(&source[start..index]);
-                }
-                index += 1;
-                if bytes.get(index) == Some(&b'\n') {
-                    index += 1;
-                }
-                line += 1;
-                start = index;
-            }
-            b'\n' => {
-                if line == target_line {
-                    return Some(&source[start..index]);
-                }
-                index += 1;
-                line += 1;
-                start = index;
-            }
-            _ => index += 1,
-        }
-    }
-
-    (line == target_line).then_some(&source[start..])
+    let (start, end) = source_line_bounds(source, target_line)?;
+    Some(&source[start..end])
 }
 
 /// Convert a zero-based LSP UTF-16 position into the driver's one-based
@@ -228,6 +204,129 @@ fn lsp_position_from_driver(source: &str, line: u32, column: u32) -> Option<Posi
         u32::try_from(line_index).ok()?,
         u32::try_from(utf16_column).ok()?,
     ))
+}
+
+fn source_line_bounds(source: &str, target_line: usize) -> Option<(usize, usize)> {
+    let bytes = source.as_bytes();
+    let mut line = 0usize;
+    let mut start = 0usize;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' | b'\n' => {
+                if line == target_line {
+                    return Some((start, index));
+                }
+                if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                    index += 1;
+                }
+                index += 1;
+                line += 1;
+                start = index;
+            }
+            _ => index += 1,
+        }
+    }
+
+    (line == target_line).then_some((start, source.len()))
+}
+
+fn byte_offset_for_position(source: &str, position: Position) -> Option<u32> {
+    let line = usize::try_from(position.line).ok()?;
+    let (line_start, line_end) = source_line_bounds(source, line)?;
+    let mut utf16_column = 0u32;
+
+    for (relative_offset, ch) in source[line_start..line_end].char_indices() {
+        if utf16_column == position.character {
+            return u32::try_from(line_start + relative_offset).ok();
+        }
+        let next_column = utf16_column.checked_add(ch.len_utf16() as u32)?;
+        if position.character < next_column {
+            return None;
+        }
+        utf16_column = next_column;
+    }
+
+    (utf16_column == position.character)
+        .then(|| u32::try_from(line_end).ok())
+        .flatten()
+}
+
+fn selection_range_for_position(source: &str, position: Position) -> Option<SelectionRange> {
+    let byte_offset = byte_offset_for_position(source, position)?;
+    let line = usize::try_from(position.line).ok()?;
+    let (line_start, line_end) = source_line_bounds(source, line)?;
+    let line_source = &source[line_start..line_end];
+    let (trimmed_start, trimmed_end) = if line_source.trim().is_empty() {
+        (line_start, line_end)
+    } else {
+        (
+            line_start + (line_source.len() - line_source.trim_start().len()),
+            line_start + line_source.trim_end().len(),
+        )
+    };
+    // A selection must contain the requested cursor even in indentation or
+    // trailing whitespace on a nonblank line.
+    let (selection_start, selection_end) =
+        if (trimmed_start..=trimmed_end).contains(&(byte_offset as usize)) {
+            (trimmed_start, trimmed_end)
+        } else {
+            (line_start, line_end)
+        };
+    let line_range = Range::new(
+        lsp_position(source, u32::try_from(selection_start).ok()?),
+        lsp_position(source, u32::try_from(selection_end).ok()?),
+    );
+    let document_range = Range::new(
+        Position::new(0, 0),
+        lsp_position(source, u32::try_from(source.len()).unwrap_or(u32::MAX)),
+    );
+
+    let mut selection = SelectionRange {
+        range: document_range,
+        parent: None,
+    };
+    if line_range != selection.range {
+        selection = SelectionRange {
+            range: line_range,
+            parent: Some(Box::new(selection)),
+        };
+    }
+
+    let token_range = jett_lexer::tokenize(source, jett_common::FileId::new(0))
+        .tokens
+        .into_iter()
+        .find(|token| {
+            token.span.start <= byte_offset
+                && byte_offset < token.span.end
+                && !matches!(
+                    token.kind,
+                    jett_lexer::TokenKind::Newline
+                        | jett_lexer::TokenKind::Indent
+                        | jett_lexer::TokenKind::Dedent
+                        | jett_lexer::TokenKind::Eof
+                        | jett_lexer::TokenKind::InvalidToken
+                )
+        })
+        .map(|token| {
+            Range::new(
+                lsp_position(source, token.span.start),
+                lsp_position(source, token.span.end),
+            )
+        });
+    if let Some(token_range) = token_range
+        && token_range != selection.range
+        && selection.range.start <= token_range.start
+        && token_range.end <= selection.range.end
+    {
+        selection = SelectionRange {
+            range: token_range,
+            parent: Some(Box::new(selection)),
+        };
+    }
+
+    Some(selection)
 }
 
 fn document_symbol_kind(kind: &str) -> SymbolKind {
@@ -453,6 +552,99 @@ fn formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
         range: Range::new(Position::new(0, 0), lsp_position(source, end_offset)),
         new_text: result.output,
     }])
+}
+
+fn folding_ranges_for_source(source: &str) -> Vec<FoldingRange> {
+    let lexed = Lexer::new(source, jett_common::FileId::new(0)).tokenize();
+    let mut starts = Vec::new();
+    let mut ranges = Vec::new();
+    let mut previous_code_offset = 0;
+
+    for token in lexed.tokens {
+        match token.kind {
+            TokenKind::Indent => {
+                // Blank and comment-only lines do not produce indentation
+                // tokens. Keep the actual header visible when folding.
+                starts.push(lsp_position(source, previous_code_offset).line);
+            }
+            TokenKind::Dedent => {
+                let Some(start_line) = starts.pop() else {
+                    continue;
+                };
+                let dedent_line = lsp_position(source, token.span.start).line;
+                let at_unterminated_eof =
+                    token.span.start as usize == source.len() && !source.ends_with(['\n', '\r']);
+                let end_line = if at_unterminated_eof {
+                    dedent_line
+                } else {
+                    dedent_line.saturating_sub(1)
+                };
+                if end_line > start_line {
+                    ranges.push(FoldingRange {
+                        start_line,
+                        start_character: None,
+                        end_line,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    });
+                }
+            }
+            TokenKind::Newline | TokenKind::Eof => {}
+            _ => previous_code_offset = token.span.start,
+        }
+    }
+
+    ranges.sort_by_key(|range| (range.start_line, std::cmp::Reverse(range.end_line)));
+    ranges
+}
+
+fn tab_indentation_code_actions(
+    source: &str,
+    uri: &Url,
+    diagnostics: &[Diagnostic],
+) -> CodeActionResponse {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            if diagnostic.source.as_deref() != Some("jett")
+                || !diagnostic.message.starts_with("tabs are not allowed")
+            {
+                return None;
+            }
+
+            let line_index = usize::try_from(diagnostic.range.start.line).ok()?;
+            let indentation: String = source_line(source, line_index)?
+                .chars()
+                .take_while(|ch| matches!(ch, ' ' | '\t'))
+                .collect();
+            if !indentation.contains('\t') {
+                return None;
+            }
+
+            let end_character = u32::try_from(indentation.encode_utf16().count()).ok()?;
+            let edit = TextEdit {
+                range: Range::new(
+                    Position::new(diagnostic.range.start.line, 0),
+                    Position::new(diagnostic.range.start.line, end_character),
+                ),
+                new_text: indentation.replace('\t', "    "),
+            };
+            let changes = HashMap::from([(uri.clone(), vec![edit])]);
+
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title: "Replace tab indentation with spaces".to_string(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diagnostic.clone()]),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..WorkspaceEdit::default()
+                }),
+                is_preferred: Some(true),
+                ..CodeAction::default()
+            }))
+        })
+        .collect()
 }
 
 const SEMANTIC_KEYWORD: u32 = 0;
@@ -983,6 +1175,34 @@ impl LanguageServer for JettBackend {
         Ok(formatting_edits(&document.text))
     }
 
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(folding_ranges_for_source(&document.text)))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        if params.context.only.as_ref().is_some_and(|kinds| {
+            !kinds
+                .iter()
+                .any(|kind| kind.as_str().is_empty() || *kind == CodeActionKind::QUICKFIX)
+        }) {
+            return Ok(None);
+        }
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let actions = tab_indentation_code_actions(
+            &document.text,
+            &params.text_document.uri,
+            &params.context.diagnostics,
+        );
+        Ok((!actions.is_empty()).then_some(actions))
+    }
+
     async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
@@ -991,7 +1211,6 @@ impl LanguageServer for JettBackend {
         let Some(document) = documents.get(&params.text_document.uri) else {
             return Ok(None);
         };
-
         Ok(Some(semantic_tokens_response(&document.text)))
     }
 
@@ -1069,6 +1288,26 @@ impl LanguageServer for JettBackend {
         };
 
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>> {
+        let documents = self.documents.read().await;
+        let Some(document) = documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let Some(ranges) = params
+            .positions
+            .into_iter()
+            .map(|position| selection_range_for_position(&document.text, position))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(ranges))
     }
 
     async fn symbol(
@@ -1506,12 +1745,60 @@ mod tests {
     }
 
     #[test]
+    fn server_capabilities_advertise_selection_ranges() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.selection_range_provider,
+            Some(SelectionRangeProviderCapability::Simple(true))
+        );
+    }
+
+    #[test]
     fn server_capabilities_advertise_document_highlights() {
         let capabilities = server_capabilities();
 
         assert_eq!(
             capabilities.document_highlight_provider,
             Some(OneOf::Left(true))
+        );
+    }
+
+    #[test]
+    fn selection_ranges_expand_from_token_to_line_and_document() {
+        let source = "function greet(name: string) returns string:\n    return \"🙂 \" + name\n";
+
+        let selection = selection_range_for_position(source, Position::new(1, 19))
+            .expect("name token should be selectable");
+        assert_eq!(
+            selection.range,
+            Range::new(Position::new(1, 19), Position::new(1, 23))
+        );
+
+        let line = selection.parent.expect("trimmed line parent");
+        assert_eq!(
+            line.range,
+            Range::new(Position::new(1, 4), Position::new(1, 23))
+        );
+
+        let document = line.parent.expect("document parent");
+        assert_eq!(
+            document.range,
+            Range::new(Position::new(0, 0), Position::new(2, 0))
+        );
+        assert!(document.parent.is_none());
+    }
+
+    #[test]
+    fn selection_ranges_keep_whitespace_positions_contained() {
+        let source = "function main() returns nothing:\n    \n";
+
+        let selection = selection_range_for_position(source, Position::new(1, 2))
+            .expect("whitespace position should be selectable");
+
+        assert_eq!(
+            selection.range,
+            Range::new(Position::new(1, 0), Position::new(1, 4))
         );
     }
 
@@ -1537,6 +1824,24 @@ mod tests {
                 SemanticTokenType::COMMENT,
             ]
         );
+    }
+
+    #[test]
+    fn selection_ranges_contain_nonblank_indentation_and_trailing_whitespace() {
+        for newline in ["\n", "\r", "\r\n"] {
+            let source =
+                format!("function main() returns nothing:{newline}    return nothing   {newline}");
+            for column in [0, 2, 20, 21] {
+                let position = Position::new(1, column);
+                let mut selection = selection_range_for_position(&source, position).unwrap();
+                assert!(selection.range.start <= position && position <= selection.range.end);
+                while let Some(parent) = selection.parent {
+                    assert!(parent.range.start <= selection.range.start);
+                    assert!(selection.range.end <= parent.range.end);
+                    selection = *parent;
+                }
+            }
+        }
     }
 
     #[test]
@@ -1718,6 +2023,80 @@ mod tests {
     }
 
     #[test]
+    fn server_capabilities_advertise_code_actions() {
+        let capabilities = server_capabilities();
+
+        assert_eq!(
+            capabilities.code_action_provider,
+            Some(CodeActionProviderCapability::Simple(true))
+        );
+    }
+
+    #[test]
+    fn tab_indentation_diagnostic_offers_a_four_space_quick_fix() {
+        let source = "namespace app\nfunction main() returns int64:\n\treturn 1\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let diagnostics = diagnostics_for_source(source, "main.jett");
+
+        let actions = tab_indentation_code_actions(source, &uri, &diagnostics);
+
+        assert_eq!(actions.len(), 1);
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected a code action");
+        };
+        assert_eq!(action.title, "Replace tab indentation with spaces");
+        assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+        assert_eq!(action.diagnostics.as_deref(), Some(&diagnostics[..1]));
+        let changes = action
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.changes.as_ref())
+            .expect("workspace edit changes");
+        assert_eq!(
+            changes.get(&uri),
+            Some(&vec![TextEdit {
+                range: Range::new(Position::new(2, 0), Position::new(2, 1)),
+                new_text: "    ".to_string(),
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn tab_quick_fixes_respect_requested_code_action_kinds() {
+        let source = "function main() returns int64:\n\treturn 1\n";
+        let uri = Url::parse("file:///workspace/main.jett").unwrap();
+        let (service, _socket) = tower_lsp::LspService::new(JettBackend::new);
+        let backend = service.inner();
+        backend.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                text: source.to_string(),
+                version: 1,
+            },
+        );
+        for (kind, expected) in [
+            (CodeActionKind::SOURCE_ORGANIZE_IMPORTS, false),
+            (CodeActionKind::QUICKFIX, true),
+        ] {
+            let result = backend
+                .code_action(CodeActionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    range: Range::new(Position::new(1, 0), Position::new(1, 1)),
+                    context: CodeActionContext {
+                        diagnostics: diagnostics_for_source(source, "main.jett"),
+                        only: Some(vec![kind]),
+                        trigger_kind: None,
+                    },
+                    work_done_progress_params: WorkDoneProgressParams::default(),
+                    partial_result_params: PartialResultParams::default(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.is_some(), expected);
+        }
+    }
+
+    #[test]
     fn reference_locations_include_the_declaration_when_requested() {
         let source = "namespace app\n\nfunction double(value: int64) returns int64:\n    return value + value\n\nfunction main() returns int64:\n    return double(21)\n";
         let uri = Url::parse("file:///workspace/main.jett").unwrap();
@@ -1874,5 +2253,56 @@ mod tests {
             edits[0].new_text,
             "namespace app\nfunction f() returns int64:\n    return 1\n"
         );
+    }
+
+    #[test]
+    fn folding_ranges_follow_nested_jett_blocks() {
+        let source = "namespace app\nfunction main() returns int64:\n    mutable int64 total = 2\n    if total > 0:\n        while total > 1:\n            total = total - 1\n    return total\n";
+
+        let ranges = folding_ranges_for_source(source);
+        let lines = ranges
+            .iter()
+            .map(|range| (range.start_line, range.end_line))
+            .collect::<Vec<_>>();
+
+        assert_eq!(lines, vec![(1, 6), (3, 5), (4, 5)]);
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.kind == Some(FoldingRangeKind::Region))
+        );
+    }
+
+    #[test]
+    fn folding_ranges_keep_headers_before_comments_and_blank_lines() {
+        for newline in ["\n", "\r", "\r\n"] {
+            let source = [
+                "function main() returns int64:",
+                "",
+                "    # explanation",
+                "    if true:",
+                "        # nested explanation",
+                "",
+                "        return 1",
+                "    return 0",
+            ]
+            .join(newline);
+            let ranges = folding_ranges_for_source(&source);
+            let lines: Vec<_> = ranges
+                .iter()
+                .map(|range| (range.start_line, range.end_line))
+                .collect();
+            assert_eq!(lines, vec![(0, 7), (3, 6)], "{newline:?}");
+        }
+    }
+
+    #[test]
+    fn server_capabilities_advertise_folding_ranges() {
+        let capabilities = server_capabilities();
+
+        assert!(matches!(
+            capabilities.folding_range_provider,
+            Some(FoldingRangeProviderCapability::Simple(true))
+        ));
     }
 }
