@@ -104,6 +104,10 @@ pub struct FileSymbolQueryEntry {
     pub column: u32,
     pub end_line: u32,
     pub end_column: u32,
+    pub range_line: u32,
+    pub range_column: u32,
+    pub range_end_line: u32,
+    pub range_end_column: u32,
 }
 
 /// Result of `jett query --agent --symbols file.jett`.
@@ -467,6 +471,10 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
     }
 }
 
+fn span_contains_offset(span: Span, file_id: FileId, offset: u32) -> bool {
+    span.file == file_id && span.start <= offset && offset < span.end
+}
+
 /// Return the inferred type name at the given (1-based) line and column in `source`.
 /// Returns `None` if the position is outside any typed expression or if the file
 /// does not compile cleanly past the parse phase.
@@ -501,7 +509,7 @@ pub fn hover_type(source: &str, line: u32, col: u32) -> Option<String> {
     // Find the smallest span in type_map that contains `offset`.
     let mut best: Option<(u32, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
                 best = Some((len, *ty_id));
@@ -627,7 +635,7 @@ pub fn query_type_at_detailed(
 
     let mut best: Option<(u32, Span, jett_types::TypeId)> = None;
     for (span, ty_id) in &check_result.type_map {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best.is_none() || len < best.unwrap().0 {
                 best = Some((len, *span, *ty_id));
@@ -747,7 +755,7 @@ pub fn query_definition_at_detailed(
 
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
     for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, *def_id));
@@ -963,6 +971,17 @@ pub fn query_completions_at_detailed(
     let source = fs::read_to_string(path).map_err(|error| {
         CompletionsQueryError::operational(format!("failed to read {}: {}", path.display(), error))
     })?;
+    query_source_completions_at(&source, path, line, column)
+}
+
+/// Query completion metadata using the authoritative in-memory document while
+/// preserving structured compiler diagnostics.
+pub fn query_source_completions_at(
+    source: &str,
+    path: &Path,
+    line: u32,
+    column: u32,
+) -> Result<CompletionsQueryResult, CompletionsQueryError> {
     let file_path = path.display().to_string();
     let file_id = FileId::new(0);
     let Some(offset) = line_col_to_offset(&source, line, column) else {
@@ -978,7 +997,7 @@ pub fn query_completions_at_detailed(
         return Err(CompletionsQueryError::compilation(
             "parse errors:",
             parsed.errors,
-            source,
+            source.to_string(),
             file_path,
         ));
     }
@@ -1578,6 +1597,11 @@ fn completion_match_kind(name: &str, prefix: &str) -> Option<CompletionMatchKind
         .then_some(CompletionMatchKind::LeafPrefix)
 }
 
+/// Return the stable completion rank for a candidate matching `prefix`.
+pub fn completion_match_rank(name: &str, prefix: &str) -> Option<u32> {
+    completion_match_kind(name, prefix).map(completion_rank)
+}
+
 fn completion_rank(match_kind: CompletionMatchKind) -> u32 {
     match match_kind {
         CompletionMatchKind::Exact => 0,
@@ -1698,6 +1722,7 @@ fn append_file_symbol_query_entries(
                     jett_resolve::scope::DefVisibility::Public,
                     None,
                     ns.name.span,
+                    ns.span,
                     source,
                 );
             }
@@ -1719,6 +1744,7 @@ fn append_file_symbol_query_entries(
                     file_symbol_visibility(current_namespace.as_deref(), func.exported),
                     Some(signature),
                     func.name.span,
+                    func.span,
                     source,
                 );
             }
@@ -1741,6 +1767,7 @@ fn append_file_symbol_query_entries(
                         file_symbol_visibility(current_namespace.as_deref(), decl.exported),
                         Some(signature),
                         decl.name.span,
+                        decl.span,
                         source,
                     );
                 }
@@ -1753,6 +1780,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), interface.exported),
                 None,
                 interface.name.span,
+                interface.span,
                 source,
             ),
             Item::Implement(block) => push_file_symbol_query_entry(
@@ -1767,6 +1795,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 block.interface_name.span,
+                block.span,
                 source,
             ),
             Item::Struct(strukt) => push_file_symbol_query_entry(
@@ -1777,6 +1806,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), strukt.exported),
                 None,
                 strukt.name.span,
+                strukt.span,
                 source,
             ),
             Item::Bitfield(bitfield) => push_file_symbol_query_entry(
@@ -1787,6 +1817,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), bitfield.exported),
                 None,
                 bitfield.name.span,
+                bitfield.span,
                 source,
             ),
             Item::Enum(enm) => push_file_symbol_query_entry(
@@ -1797,6 +1828,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), enm.exported),
                 None,
                 enm.name.span,
+                enm.span,
                 source,
             ),
             Item::Machine(machine) => push_file_symbol_query_entry(
@@ -1807,6 +1839,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), machine.exported),
                 None,
                 machine.name.span,
+                machine.span,
                 source,
             ),
             Item::Actor(actor) => push_file_symbol_query_entry(
@@ -1817,6 +1850,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), actor.exported),
                 None,
                 actor.name.span,
+                actor.span,
                 source,
             ),
             Item::VarDecl(decl) => push_file_symbol_query_entry(
@@ -1827,6 +1861,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 decl.name.span,
+                decl.span,
                 source,
             ),
             Item::Verify(verify) => push_file_symbol_query_entry(
@@ -1837,6 +1872,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 verify.name.span,
+                verify.span,
                 source,
             ),
             Item::Property(prop) => push_file_symbol_query_entry(
@@ -1847,6 +1883,7 @@ fn append_file_symbol_query_entries(
                 jett_resolve::scope::DefVisibility::Private,
                 None,
                 prop.name.span,
+                prop.span,
                 source,
             ),
             Item::Resource(resource) => push_file_symbol_query_entry(
@@ -1857,6 +1894,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), resource.exported),
                 None,
                 resource.name.span,
+                resource.span,
                 source,
             ),
             Item::TypeAlias(alias) => push_file_symbol_query_entry(
@@ -1867,6 +1905,7 @@ fn append_file_symbol_query_entries(
                 file_symbol_visibility(current_namespace.as_deref(), alias.exported),
                 None,
                 alias.name.span,
+                alias.span,
                 source,
             ),
         }
@@ -1880,11 +1919,17 @@ fn push_file_symbol_query_entry(
     namespace: Option<String>,
     visibility: jett_resolve::scope::DefVisibility,
     signature: Option<String>,
-    span: Span,
+    selection_span: Span,
+    range_span: Span,
     source: &str,
 ) {
-    let (line, column) = jett_diagnostics::render::line_col(source, span.start);
-    let (end_line, end_column) = jett_diagnostics::render::line_col(source, span.end);
+    let (line, column) = jett_diagnostics::render::line_col(source, selection_span.start);
+    let (end_line, end_column) = jett_diagnostics::render::line_col(source, selection_span.end);
+    let (range_line, range_column) = jett_diagnostics::render::line_col(source, range_span.start);
+    let range_end = source[..(range_span.end as usize).min(source.len())]
+        .trim_end_matches(char::is_whitespace)
+        .len() as u32;
+    let (range_end_line, range_end_column) = jett_diagnostics::render::line_col(source, range_end);
     symbols.push(FileSymbolQueryEntry {
         name,
         kind: kind.to_string(),
@@ -1895,6 +1940,10 @@ fn push_file_symbol_query_entry(
         column: column as u32,
         end_line: end_line as u32,
         end_column: end_column as u32,
+        range_line: range_line as u32,
+        range_column: range_column as u32,
+        range_end_line: range_end_line as u32,
+        range_end_column: range_end_column as u32,
     });
 }
 
@@ -2190,7 +2239,7 @@ fn best_resolved_definition_at(
 ) -> Option<(u32, jett_resolve::scope::DefId)> {
     let mut best_def: Option<(u32, jett_resolve::scope::DefId)> = None;
     for (span, def_id) in &resolve_result.resolutions {
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(*span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, *def_id));
@@ -2199,7 +2248,7 @@ fn best_resolved_definition_at(
     }
     for definition in &resolve_result.scope_table.definitions {
         let span = definition.span;
-        if span.file == file_id && span.start <= offset && offset <= span.end {
+        if span_contains_offset(span, file_id, offset) {
             let len = span.end - span.start;
             if best_def.is_none() || len < best_def.unwrap().0 {
                 best_def = Some((len, definition.id));
@@ -4335,6 +4384,13 @@ mod tests {
             .expect("cross-file label source should be retained");
         assert!(label_source.file_path.ends_with("api.jett"));
         assert!(label_source.source.contains("function hidden"));
+    }
+
+    #[test]
+    fn hover_does_not_select_an_expression_at_its_end_offset() {
+        let source = "namespace test\n\nfunction main() returns nothing:\n    int64 value = 42\n    return nothing\n";
+
+        assert_eq!(hover_type(source, 4, 21), None);
     }
 
     #[test]

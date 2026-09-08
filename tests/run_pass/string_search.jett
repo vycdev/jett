@@ -76,6 +76,11 @@ function grapheme_replace_test() returns string:
     return "{bytes.to_hex(bytes.from_string(partial_base))}:{bytes.to_hex(bytes.from_string(partial_mark))}:{whole}:{bytes.to_hex(bytes.from_string(empty))}"
 verify grapheme_replace_test:
     assert grapheme_replace_test() == "65cc81:65cc81:axb:2d65cc812d"
+verify grapheme_replace_rejected_match_overlap:
+    string indicator = utf8_from_hex("f09f87a6")
+    string haystack = string.repeat(indicator, 5)
+    string delimiter = string.repeat(indicator, 3)
+    assert string.replace(haystack, delimiter, "X") == "{indicator}{indicator}X"
 # --- string.to_upper_first / string.to_lower_first ---
 function capitalize_test() returns string:
     return string.to_upper_first("hello world")
