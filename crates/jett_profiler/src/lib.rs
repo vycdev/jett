@@ -1,3 +1,7 @@
+mod source;
+
+pub use source::{SanitizedSourceExcerpt, SourceExcerptMetadata, sanitize_source_excerpt};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

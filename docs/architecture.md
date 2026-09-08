@@ -93,7 +93,9 @@ reporting, security, and the interpreter/future-runtime handoff. The initial
 backend-neutral crate validates CPU and memory report controls, aggregates
 injected CPU samples with bounded hot-line and root-to-function call-chain
 detail, and accounts for injected allocation, resize, and free
-events with deterministic pressure, peak, and retention records. Rendering,
+events with deterministic pressure, peak, and retention records. It sanitizes
+only manifest-authorized excerpts with checked secret metadata, replacing
+literals and secret-bearing spans with a bounded 160-byte buffer. Rendering,
 CLI integration, and runtime adapters remain staged.
 
 ### Crate Dependency Graph
@@ -2019,6 +2021,13 @@ human/TOON rendering. The driver owns capability negotiation, run-manifest
 metadata, lifecycle finalization, and composition with `RunOutput`; the CLI owns
 argument validation, output channels, and exit behavior. Runtimes only produce
 safe events and exclude collector metadata.
+
+The source sanitizer accepts excerpts only when the driver proves manifest
+authorization and supplies checked secret metadata. It withholds unavailable or
+unsafe-to-tokenize source, replaces string and byte literals plus secret-typed
+spans with fixed markers, omits comments, escapes controls, and truncates at a
+UTF-8 boundary to 160 bytes. This helper does not authorize filesystem reads;
+the driver must supply source from the loaded run manifest.
 
 ### CPU Profiling
 
