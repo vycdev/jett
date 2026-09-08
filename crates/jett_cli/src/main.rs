@@ -52,6 +52,26 @@ enum Command {
         /// Emit TOON agent output
         #[arg(long)]
         agent: bool,
+
+        /// Collect an elapsed-time CPU profile
+        #[arg(long, conflicts_with = "profile_memory")]
+        profile: bool,
+
+        /// Collect a Jett-managed heap profile
+        #[arg(long, conflicts_with = "profile")]
+        profile_memory: bool,
+
+        /// Minimum bottleneck impact as a percentage
+        #[arg(long, value_parser = jett_profiler::parse_threshold_basis_points)]
+        profile_threshold: Option<u16>,
+
+        /// Maximum number of reported bottlenecks
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=100))]
+        profile_limit: Option<u16>,
+
+        /// Requested CPU sampling rate in hertz
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=1000))]
+        profile_rate: Option<u16>,
     },
 
     /// Run all verify and property blocks
@@ -265,7 +285,74 @@ fn main() {
                 }
             }
         }
-        Command::Run { file, agent } => {
+        Command::Run {
+            file,
+            agent,
+            profile,
+            profile_memory,
+            profile_threshold,
+            profile_limit,
+            profile_rate,
+        } => {
+            let profile_mode = if profile {
+                Some(jett_profiler::ProfileMode::Cpu)
+            } else if profile_memory {
+                Some(jett_profiler::ProfileMode::Memory)
+            } else {
+                None
+            };
+            let profile_request = match jett_profiler::ProfileRequest::from_cli(
+                profile_mode,
+                profile_threshold,
+                profile_limit,
+                profile_rate,
+            ) {
+                Ok(request) => request,
+                Err(jett_profiler::ProfileRequestError::OptionsRequireMode) => {
+                    eprintln!("error: profile options require --profile or --profile-memory");
+                    process::exit(2);
+                }
+                Err(jett_profiler::ProfileRequestError::CpuRateRequiresCpuMode) => {
+                    eprintln!("error: --profile-rate requires --profile");
+                    process::exit(2);
+                }
+            };
+            if profile_request.is_some() {
+                let result = jett_driver::build_file(Path::new(&file));
+                if result.has_errors {
+                    if agent {
+                        print!(
+                            "{}",
+                            jett_diagnostics::toon::render_toon(
+                                &result.diagnostics,
+                                &result.source,
+                                &result.file_path
+                            )
+                        );
+                    } else {
+                        for diagnostic in &result.diagnostics {
+                            eprint!(
+                                "{}",
+                                jett_diagnostics::render::render_diagnostic(
+                                    diagnostic,
+                                    &result.source,
+                                    &result.file_path
+                                )
+                            );
+                        }
+                    }
+                    process::exit(1);
+                }
+                if agent {
+                    print!(
+                        "{}",
+                        render_run_agent_error(&file, "profiler: backend unsupported")
+                    );
+                } else {
+                    eprintln!("profiler: backend unsupported");
+                }
+                process::exit(1);
+            }
             let path = Path::new(&file);
             if agent {
                 match jett_driver::run_file_capture_output(path) {
@@ -350,7 +437,7 @@ fn main() {
 
             if namespaces {
                 let cwd = std::env::current_dir().unwrap_or_default();
-                match jett_driver::query_namespaces(&cwd) {
+                match jett_driver::query_namespaces_detailed(&cwd) {
                     Ok(result) => {
                         if agent {
                             print!("{}", render_query_namespaces_agent_output(&result));
@@ -360,7 +447,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
@@ -506,7 +593,7 @@ fn main() {
                         process::exit(1);
                     }
                 };
-                match jett_driver::query_completions_at(
+                match jett_driver::query_completions_at_detailed(
                     Path::new(&position.file),
                     position.line,
                     position.column,
@@ -520,7 +607,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
@@ -531,7 +618,7 @@ fn main() {
 
             if let Some(function_name) = signature {
                 let cwd = std::env::current_dir().unwrap_or_default();
-                match jett_driver::query_signature(&cwd, &function_name) {
+                match jett_driver::query_signature_detailed(&cwd, &function_name) {
                     Ok(result) => {
                         if agent {
                             print!(
@@ -547,7 +634,7 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_query_agent_error(&e));
+                            print!("{}", render_query_diagnostic_agent_error(&e));
                         } else {
                             eprintln!("error: {e}");
                         }
@@ -1587,6 +1674,10 @@ mod tests {
                 column: 17,
                 end_line: 3,
                 end_column: 22,
+                range_line: 3,
+                range_column: 1,
+                range_end_line: 4,
+                range_end_column: 13,
             }],
         };
 
