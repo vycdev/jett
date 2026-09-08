@@ -91,7 +91,8 @@ The selected [`jett_profiler` contract](completed/cpu_memory_profiling_contract.
 defines CPU/memory events, attribution, bounded collection, deterministic
 reporting, security, and the interpreter/future-runtime handoff. The initial
 backend-neutral crate validates CPU and memory report controls, aggregates
-injected CPU samples, and accounts for injected allocation, resize, and free
+injected CPU samples with bounded hot-line and root-to-function call-chain
+detail, and accounts for injected allocation, resize, and free
 events with deterministic pressure, peak, and retention records. Rendering,
 CLI integration, and runtime adapters remain staged.
 
