@@ -1,7 +1,17 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::sync::{Arc, Mutex};
 
 use jett_runtime::{AuthorityProvenance, ResourceRegistry, ResourceTypeId};
+
+struct PanicOnDrop;
+
+impl Drop for PanicOnDrop {
+    fn drop(&mut self) {
+        // The secondary payload also panics on drop, checking that disposal
+        // handles provider failure without unbounded recursive unwinding.
+        panic_any(PanicOnDrop);
+    }
+}
 
 #[test]
 fn explicit_close_runs_the_finalizer_exactly_once() {
@@ -248,4 +258,85 @@ fn cleanup_panics_do_not_abort_an_existing_unwind() {
         .is_err()
     );
     assert_eq!(&*events.lock().unwrap(), &["finalized"]);
+}
+
+#[test]
+fn panic_payload_destruction_does_not_skip_older_resources() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ResourceRegistry::new();
+    for name in ["oldest", "middle", "newest"] {
+        let events = Arc::clone(&events);
+        registry
+            .insert(
+                ResourceTypeId::new(1),
+                name,
+                AuthorityProvenance::new(1, 1),
+                move |name| {
+                    events.lock().unwrap().push(name);
+                    match name {
+                        "newest" => panic!("first provider failure"),
+                        "middle" => panic_any(PanicOnDrop),
+                        _ => {}
+                    }
+                },
+            )
+            .unwrap();
+    }
+    let failure = catch_unwind(AssertUnwindSafe(|| registry.shutdown())).unwrap_err();
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"first provider failure")
+    );
+    assert_eq!(registry.live_count(), 0);
+    registry.shutdown();
+    drop(registry);
+    assert_eq!(*events.lock().unwrap(), ["newest", "middle", "oldest"]);
+}
+
+#[test]
+fn suppressed_finalizer_payload_does_not_replace_the_detach_failure() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let finalized = Arc::clone(&events);
+    let mut registry = ResourceRegistry::new();
+    let resource_type = ResourceTypeId::new(1);
+    let authority = AuthorityProvenance::new(1, 1);
+    let key = registry
+        .insert(resource_type, (), authority, move |_| {
+            finalized.lock().unwrap().push("finalized");
+            panic_any(PanicOnDrop);
+        })
+        .unwrap();
+    registry
+        .begin_pending(key, resource_type, &authority, || panic!("detach failure"))
+        .unwrap();
+    let failure =
+        catch_unwind(AssertUnwindSafe(|| registry.close(key, resource_type))).unwrap_err();
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"detach failure"));
+    assert_eq!(registry.live_count(), 0);
+    drop(registry);
+    assert_eq!(*events.lock().unwrap(), ["finalized"]);
+}
+
+#[test]
+fn panic_payload_destruction_does_not_abort_an_existing_unwind() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let finalized = Arc::clone(&events);
+    let failure = catch_unwind(move || {
+        let mut registry = ResourceRegistry::new();
+        registry
+            .insert(
+                ResourceTypeId::new(1),
+                (),
+                AuthorityProvenance::new(1, 1),
+                move |_| {
+                    finalized.lock().unwrap().push("finalized");
+                    panic_any(PanicOnDrop);
+                },
+            )
+            .unwrap();
+        panic!("original failure");
+    })
+    .unwrap_err();
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"original failure"));
+    assert_eq!(*events.lock().unwrap(), ["finalized"]);
 }

@@ -1361,6 +1361,9 @@ operations separate generations so late completions cannot finish replacement
 work, and finalizes live entries in reverse creation order on explicit or
 implicit context shutdown. Provider cleanup panics do not skip remaining
 finalizers, and rejected insertions release their consumed provider payloads.
+Suppressed panic payloads are dropped under unwind protection; if their
+destructors panic too, only that secondary payload is deliberately forgotten
+to bound cleanup while retaining the first failure for propagation.
 Interpreter trusted-hook dispatch and source-level
 scope/drop integration remain later stages of the resource contract.
 

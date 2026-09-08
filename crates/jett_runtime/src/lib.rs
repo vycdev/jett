@@ -8,6 +8,25 @@ static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 type ErasedPayload = Box<dyn Any + Send>;
 type Finalizer = Box<dyn FnOnce(ErasedPayload) + Send>;
+type PanicPayload = Box<dyn Any + Send>;
+
+fn discard_panic_payload(payload: PanicPayload) {
+    if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+        // A panic payload can itself panic when dropped. Do not recursively
+        // drop that secondary payload: provider cleanup must remain bounded.
+        std::mem::forget(secondary);
+    }
+}
+
+fn retain_first_failure(first: &mut Option<PanicPayload>, result: std::thread::Result<()>) {
+    if let Err(failure) = result {
+        if first.is_none() {
+            *first = Some(failure);
+        } else {
+            discard_panic_payload(failure);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ResourceTypeId(u32);
@@ -292,13 +311,13 @@ impl ResourceRegistry {
         let mut failure = None;
         for (_, slot_index) in live_slots {
             let result = catch_unwind(AssertUnwindSafe(|| self.finalize_slot(slot_index)));
-            if failure.is_none() {
-                failure = result.err();
-            }
+            retain_first_failure(&mut failure, result);
         }
         if let Some(failure) = failure {
             // Cleanup must finish even when Drop runs during an existing unwind.
-            if !std::thread::panicking() {
+            if std::thread::panicking() {
+                discard_panic_payload(failure);
+            } else {
                 resume_unwind(failure);
             }
         }
@@ -344,13 +363,15 @@ impl ResourceRegistry {
             .take()
             .expect("live resource entry disappeared before finalization");
         self.retire_slot(slot_index);
-        let detach_failure = entry
-            .pending
-            .take()
-            .and_then(|pending| catch_unwind(AssertUnwindSafe(pending.detach)).err());
-        let finalizer_failure =
-            catch_unwind(AssertUnwindSafe(|| (entry.finalizer)(entry.payload))).err();
-        if let Some(failure) = detach_failure.or(finalizer_failure) {
+        let mut failure = None;
+        if let Some(pending) = entry.pending.take() {
+            retain_first_failure(&mut failure, catch_unwind(AssertUnwindSafe(pending.detach)));
+        }
+        retain_first_failure(
+            &mut failure,
+            catch_unwind(AssertUnwindSafe(|| (entry.finalizer)(entry.payload))),
+        );
+        if let Some(failure) = failure {
             resume_unwind(failure);
         }
     }
