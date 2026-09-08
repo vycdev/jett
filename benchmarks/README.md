@@ -22,6 +22,8 @@ python tools/jett_bench.py plan --output target/jett-bench/plan.jsonl
 python tools/jett_bench.py baselines --allow-unsafe-local
 python tools/jett_bench.py requests --output target/jett-bench/requests.jsonl
 python tools/jett_bench.py codex-calibration --confirm-subscription-usage
+python tools/jett_bench.py codex-calibration --language jett \
+  --track skill_assisted --limit 10 --confirm-subscription-usage
 python tools/jett_bench.py codex-repair graded-initial.jsonl \
   --output target/jett-bench/codex-repair/raw.jsonl \
   --confirm-subscription-usage
@@ -38,12 +40,14 @@ timeouts do not provide a security boundary.
 
 `codex-calibration` uses the ChatGPT login held by the Codex CLI, removes API
 credential variables from the child environment, and refuses to run unless
-`codex login status` reports `Logged in using ChatGPT`. The current v0.5
+`codex login status` reports `Logged in using ChatGPT`. The current v0.5.4
 calibration is a 150-cell medium-reasoning slice run in fresh ephemeral sessions
 from empty temporary directories. The Luna name is currently a rolling alias
 rather than a dated snapshot, so every row records the alias, UTC completion time, Codex version,
 backend, deterministic sequence, and event-log hash. Do not pool these rows with
 Responses API rows: the Codex agent wrapper is part of this treatment.
+Optional `--language` and `--track` filters select a balanced diagnostic slice
+before `--limit` is applied.
 
 Generation does not execute submitted code. Grade the resulting JSONL inside
 the no-network container:
@@ -75,10 +79,10 @@ The isolated runner recipe and required no-network/resource controls are in
 - `references/*.md`: controlled-onboarding sheets;
 - `schemas/*.json`: machine-readable result and task contracts.
 
-The current skill-assisted extension is specified by `protocol_v0.5.1.md` and
-`jett_subset_v0.5.1.md`. It inherits v0.5 and corrects the Jett skill syntax
-anchors identified by the first skill calibration. Its Python adapter adds
-pinned Pyright strict checking; all five typed-task adapters perform a
+The current skill-assisted extension is specified by `protocol_v0.5.4.md` and
+`jett_subset_v0.5.4.md`. It inherits v0.5.3 and records that Jett keywords and
+built-in type spellings cannot be used as identifiers. Its Python
+adapter adds pinned Pyright strict checking; all five typed-task adapters perform a
 static-check phase before hidden runtime tests.
 Task-specific forbidden patterns are a narrow preflight against type erasure
 and catch-all branches, and a rejection is recorded as `policy_error`.

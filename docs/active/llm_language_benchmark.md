@@ -209,3 +209,51 @@ repaired 15/34 failures and raised the final result to 131/150. Jett repaired
 5/21 and ended at 14/30; the established languages repaired 10/13 and ended at
 117/120. These runs use one observation per cell and the rolling Luna alias, so
 they remain calibration evidence rather than a language ranking.
+
+## Jett skill smoke calibration v0.5.1
+
+A targeted ten-task Jett `skill_assisted` smoke run is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke/`.
+Initial grading passed 8/10, compared with 1/10 for the prior skill treatment.
+The former mutable-local syntax pattern disappeared. The two failures wrapped
+ordinary function or constructor arguments across newlines, which Jett does
+not accept.
+
+The paired repair pass is recorded in
+`benchmarks/results/2026-08-30_codex_luna_medium_v0.5.1_jett_skill_smoke_compile_repair/`.
+Neither failure repaired successfully. One retained multiline call arguments;
+the other corrected that form but guessed `int64.to_string` instead of the
+implemented `string.from_int64` spelling.
+
+Benchmark v0.5.2 adds those two general syntax anchors to the skill. No task,
+grader, adapter, or language rule changed. A future smoke run must use the new
+version and skill hash rather than appending to the v0.5.1 evidence.
+
+## Jett skill smoke calibration v0.5.2
+
+The targeted v0.5.2 Jett `skill_assisted` smoke passed 6/10 initial tasks.
+Both tasks that failed under v0.5.1 now passed, confirming that multiline-call
+and integer-rendering guidance reached the model. The four new failures were
+compile errors: one guessed nonexistent `map.contains`, while three exceeded
+the complexity limit through boolean chains or nested exhaustive matches.
+
+All four submissions passed after one compiler-feedback repair prompt, making
+the paired final result 10/10. Benchmark v0.5.3 therefore adds the exact
+`map.has` membership spelling and explains that nested matches and every
+`and`/`or` condition add complexity decision points. It remains general
+language guidance and contains no task-specific solution material.
+
+## Jett skill 2x2 calibration v0.5.3
+
+The controlled v0.5.3 run measured four cells over the same ten tasks:
+zero-shot one-shot, zero-shot with one compile-repair prompt, skill-assisted
+one-shot, and skill-assisted with one compile-repair prompt. Zero-shot passed
+0/10 initially and repaired 1/10. Skill-assisted passed 9/10 initially; its
+single repair failed, leaving 9/10 final.
+
+This isolates the skill as the dominant treatment in this sample. A compiler
+diagnostic alone did little to recover programs written without Jett syntax
+knowledge. The skill-assisted failure initially exceeded the complexity limit;
+its repair split helpers successfully but used reserved built-in type word
+`result` as a parameter. Benchmark v0.5.4 adds that general lexical constraint
+without including task-specific source or advice.
