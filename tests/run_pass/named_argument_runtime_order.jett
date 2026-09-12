@@ -1,0 +1,10 @@
+namespace app
+function record(view stdout: Stdout, label: string, value: int64) returns int64:
+    Stdout.write(view stdout, label)
+    return value
+function digits(hundreds: int64, tens: int64, ones: int64) returns int64:
+    return hundreds * 100 + tens * 10 + ones
+function main(stdout: Stdout) returns nothing:
+    int64 direct = digits(ones: record(view stdout, "a", 3), hundreds: record(view stdout, "b", 1), tens: record(view stdout, "c", 2))
+    int64 piped = record(view stdout, "p", 4) into digits(ones: record(view stdout, "q", 6), tens: record(view stdout, "r", 5))
+    Stdout.write(view stdout, "{direct}:{piped}\n")

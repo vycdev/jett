@@ -43,6 +43,13 @@ fn graphics_frontend_policy_failures() {
         ("graphics_callback_capability_alias.jett", vec![372]),
         ("graphics_private_kernel_values.jett", vec![303, 313, 313]),
         ("graphics_state_callback_authority.jett", vec![372]),
+        ("graphics_pipeline_callback_effect.jett", vec![500]),
+        ("graphics_pipeline_inferred_callback_effect.jett", vec![500]),
+        ("graphics_pipeline_authority.jett", vec![372]),
+        ("graphics_pipeline_state_authority.jett", vec![372]),
+        ("graphics_mutual_method_effect.jett", vec![500]),
+        ("graphics_generic_method_effect.jett", vec![500]),
+        ("graphics_inline_method_effect.jett", vec![500]),
     ] {
         let outcome = build_file(&fixture("compile_fail", name));
         let mut codes = outcome
@@ -60,4 +67,15 @@ fn graphics_frontend_policy_failures() {
 fn graphics_method_authority_compiles_without_opening_a_window() {
     let outcome = build_file(&fixture("compile_pass", "graphics_method_authority.jett"));
     assert!(!outcome.has_errors, "{:?}", outcome.diagnostics);
+}
+
+#[test]
+fn graphics_pipeline_and_mutual_callbacks_compile_without_opening_a_window() {
+    for name in [
+        "graphics_pipeline_mutual_callbacks.jett",
+        "graphics_generic_method_isolation.jett",
+    ] {
+        let outcome = build_file(&fixture("compile_pass", name));
+        assert!(!outcome.has_errors, "{name}: {:?}", outcome.diagnostics);
+    }
 }

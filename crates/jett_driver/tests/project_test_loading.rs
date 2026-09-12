@@ -169,3 +169,44 @@ fn project_tests_preserve_lexical_order_between_siblings() {
         .expect("later sibling cannot satisfy an earlier forward reference");
     assert!(error.contains("E0205"), "{error}");
 }
+
+#[cfg(any(unix, windows))]
+#[test]
+fn project_tests_preserve_logical_source_symlink_order() {
+    let fixture = ProjectFixture::with_dependencies();
+    fs::create_dir(fixture.root.join("target")).expect("create excluded target directory");
+    let linked_source = fixture.root.join("src/00_core.jett");
+    fs::rename(&linked_source, fixture.root.join("target/z_core.jett"))
+        .expect("move core source to an in-root symlink target");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("../target/z_core.jett", &linked_source)
+        .expect("create in-root source symlink");
+    #[cfg(windows)]
+    if let Err(error) = std::os::windows::fs::symlink_file("../target/z_core.jett", &linked_source)
+    {
+        if error.kind() == std::io::ErrorKind::PermissionDenied
+            || error.raw_os_error() == Some(1314)
+        {
+            eprintln!(
+                "skipping source-symlink integration: Windows symlink permission unavailable"
+            );
+            return;
+        }
+        panic!("create in-root source symlink: {error}");
+    }
+
+    let built = build_file(&fixture.root.join("src/main.jett"));
+    assert!(!built.has_errors, "symlink build: {:?}", built.diagnostics);
+    for file in ["00_core.jett", "10_report.jett", "main.jett"] {
+        let outcome = test_file(&fixture.root.join("src").join(file))
+            .expect("selected-file tests preserve logical source order");
+        assert_eq!(outcome.total, 1, "selected {file}");
+        assert_eq!(outcome.passed, 1, "selected {file}");
+    }
+    let outcome =
+        test_project(&fixture.root).expect("test a project with an in-root source symlink");
+    assert_eq!(outcome.total_files, 3);
+    assert_eq!(outcome.total_blocks, 3);
+    assert_eq!(outcome.total_passed, 3);
+    assert_eq!(outcome.total_failed, 0);
+}

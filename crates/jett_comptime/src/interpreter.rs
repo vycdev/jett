@@ -1933,13 +1933,88 @@ impl Interpreter {
         callee: &Expr,
         type_args: &[TypeExpr],
         args: &[CallArg],
+        argument_order: Option<&[usize]>,
     ) -> Option<Vec<TypeExpr>> {
         self.generic_function_for_inference(callee, type_args)?;
         let actual_types = args
             .iter()
             .map(|arg| self.call_argument_type(&arg.value))
             .collect::<Option<Vec<_>>>()?;
+        let actual_types = Self::reorder_function_arguments(actual_types, argument_order).ok()?;
         self.inferred_user_function_type_args_from_types(callee, type_args, &actual_types)
+    }
+
+    /// Parameter-order indices into source-order arguments of a registered call.
+    /// Values are still evaluated lexically before this permutation is applied.
+    fn source_function_argument_order(
+        &self,
+        callee: &Expr,
+        args: &[CallArg],
+        piped: bool,
+    ) -> Result<Option<Vec<usize>>, String> {
+        if args.iter().all(|arg| arg.name.is_none()) {
+            return Ok(None);
+        }
+        let Some(source_name) = Self::dotted_expr_name(callee) else {
+            return Ok(None);
+        };
+        let name = self.runtime_name(&source_name);
+        let Some(function) = self.functions.get(&name) else {
+            return Ok(None);
+        };
+        let offset = usize::from(piped);
+        if function.params.len() != args.len() + offset {
+            return Err(format!(
+                "function '{name}' argument count does not match parameter count"
+            ));
+        }
+        let mut order = vec![None; function.params.len()];
+        if piped {
+            order[0] = Some(0);
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let source_index = index + offset;
+            let parameter_index = match &arg.name {
+                Some(argument_name) => function
+                    .params
+                    .iter()
+                    .position(|param| param.name.name == argument_name.name)
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown argument '{}' for function '{name}'",
+                            argument_name.name
+                        )
+                    })?,
+                None => source_index,
+            };
+            if order[parameter_index].replace(source_index).is_some() {
+                return Err(format!("duplicate argument for function '{name}'"));
+            }
+        }
+        order
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .map(Some)
+            .ok_or_else(|| format!("missing argument for function '{name}'"))
+    }
+
+    fn reorder_function_arguments<T>(
+        values: Vec<T>,
+        order: Option<&[usize]>,
+    ) -> Result<Vec<T>, String> {
+        let Some(order) = order else {
+            return Ok(values);
+        };
+        let mut values = values.into_iter().map(Some).collect::<Vec<_>>();
+        order
+            .iter()
+            .map(|&index| {
+                values
+                    .get_mut(index)
+                    .and_then(Option::take)
+                    .ok_or_else(|| "invalid function argument order".to_string())
+            })
+            .collect()
     }
 
     fn inferred_user_function_type_args_from_types(
@@ -2003,7 +2078,9 @@ impl Interpreter {
 
     fn call_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
         match expression {
-            Expr::Ident(argument) => self.get_variable_type(&argument.name).cloned(),
+            Expr::Ident(argument) if self.get_variable_type(&argument.name).is_some() => {
+                self.get_variable_type(&argument.name).cloned()
+            }
             Expr::InlineFn(params, return_type, _, span) => Some(TypeExpr::Function(
                 params.iter().map(|param| param.ty.clone()).collect(),
                 Box::new(return_type.clone().unwrap_or_else(|| {
@@ -2014,14 +2091,52 @@ impl Interpreter {
                 })),
                 *span,
             )),
-            _ => self
-                .checked_expression_types
-                .as_ref()
-                .and_then(|types| types.get(&expression.span()))
-                .and_then(|type_name| {
-                    Self::simple_type_expr_from_name(type_name, expression.span())
-                }),
+            _ => self.named_function_argument_type(expression).or_else(|| {
+                self.checked_expression_types
+                    .as_ref()
+                    .and_then(|types| types.get(&expression.span()))
+                    .and_then(|type_name| {
+                        Self::simple_type_expr_from_name(type_name, expression.span())
+                    })
+            }),
         }
+    }
+
+    fn named_function_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
+        if let Expr::Ident(ident) = expression
+            && self.get_variable(&ident.name).is_some()
+        {
+            // Captures can omit runtime type metadata and shadow a namespaced
+            // function. Their checked expression type remains authoritative.
+            return None;
+        }
+        let source_name = Self::dotted_expr_name(expression)?;
+        let name = self.registry_name(&self.functions, &source_name)?;
+        let function = self.functions.get(&name)?;
+        if !function.type_params.is_empty() {
+            return None;
+        }
+        let namespace = Self::function_namespace(&name);
+        let params = function
+            .params
+            .iter()
+            .map(|param| self.substitute_type_expr_in_namespace(&param.ty, namespace.as_deref()))
+            .collect();
+        let return_type = function
+            .return_type
+            .as_ref()
+            .map(|ty| self.substitute_type_expr_in_namespace(ty, namespace.as_deref()))
+            .unwrap_or_else(|| {
+                TypeExpr::Named(Ident {
+                    name: "nothing".to_string(),
+                    span: expression.span(),
+                })
+            });
+        Some(TypeExpr::Function(
+            params,
+            Box::new(return_type),
+            expression.span(),
+        ))
     }
 
     fn infer_type_arguments(
@@ -2126,13 +2241,20 @@ impl Interpreter {
             _ => {}
         }
 
-        let inferred_type_args = self.inferred_user_function_type_args(callee, type_args, args);
+        let argument_order = self.source_function_argument_order(callee, args, false)?;
+        let inferred_type_args = self.inferred_user_function_type_args(
+            callee,
+            type_args,
+            args,
+            argument_order.as_deref(),
+        );
         let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
         let mut arg_values = Vec::with_capacity(args.len());
         for arg in args {
             arg_values.push(value_or_signal!(self, &arg.value));
         }
+        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
 
         match callee {
             Expr::Ident(ident) => {
@@ -2335,8 +2457,10 @@ impl Interpreter {
         };
         let (function, type_args, extra_args): (&Expr, &[TypeExpr], &[CallArg]) = match function {
             Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
+            Expr::Call(callee, args, _) => (callee, &[], args),
             _ => (function, &[], &step.extra_args),
         };
+        let argument_order = self.source_function_argument_order(function, extra_args, true)?;
 
         let mut actual_types = Vec::with_capacity(extra_args.len() + 1);
         if let Some(piped_type) = self
@@ -2356,6 +2480,10 @@ impl Interpreter {
                 actual_types.clear();
             }
         }
+        if !actual_types.is_empty() {
+            actual_types =
+                Self::reorder_function_arguments(actual_types, argument_order.as_deref())?;
+        }
         let inferred_type_args =
             self.inferred_user_function_type_args_from_types(function, type_args, &actual_types);
         let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
@@ -2365,6 +2493,7 @@ impl Interpreter {
         for arg in extra_args {
             arg_values.push(value_or_signal!(self, &arg.value));
         }
+        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
 
         // Resolve the function name from the expression.
         match function {
@@ -2840,15 +2969,15 @@ impl Interpreter {
                 Ok(None)
             }
 
-            Stmt::Expr(expr_stmt) => {
-                // Type names appearing as bare ExprStmt (from parser producing ExprStmt
-                // instead of VarDecl for `Type name = expr`) are harmless — ignore errors.
-                match self.eval_expr_flow(&expr_stmt.expr) {
-                    Ok(ExprFlow::Value(_)) => Ok(None),
-                    Ok(ExprFlow::Signal(signal)) => Ok(Some(signal)),
-                    Err(_) => Ok(None),
-                }
+            // Preserve the parser's existing standalone builtin-type markers
+            // before legacy declarations, not arbitrary expression failures.
+            Stmt::Expr(expr_stmt) if matches!(&expr_stmt.expr, Expr::Ident(ident) if Self::is_builtin_type_name(&ident.name)) => {
+                Ok(None)
             }
+            Stmt::Expr(expr_stmt) => match self.eval_expr_flow(&expr_stmt.expr)? {
+                ExprFlow::Value(_) => Ok(None),
+                ExprFlow::Signal(signal) => Ok(Some(signal)),
+            },
 
             Stmt::Assert(assert_stmt) => {
                 let cond = match self.eval_expr_flow(&assert_stmt.condition)? {

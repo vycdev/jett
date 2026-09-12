@@ -1,0 +1,38 @@
+namespace app
+struct State:
+    moves: int64
+function update(state: State, key: graphics.Key) returns State:
+    match key:
+        right:
+            return State(moves: state.moves + 1)
+        left:
+            return State(moves: state.moves - 1)
+        other:
+            return state
+function render(view state: State) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: state.moves, green: 20, blue: 30)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function explicit_session(view display: Graphics) returns result[nothing, string]:
+    use graphics as drawing
+    graphics.Config config = graphics.Config(title: "Explicit pipeline", width: 32, height: 32)
+    State initial = State(moves: 5)
+    return display into view drawing.run[State](render: app.render, initial: initial, config: config, update: app.update)
+function inferred_session(view display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "Inferred pipeline", width: 32, height: 32)
+    State initial = State(moves: 5)
+    return display into view graphics.run(config, initial, update, render)
+function direct_session(view display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "Named direct call", width: 32, height: 32)
+    State initial = State(moves: 5)
+    return graphics.run(render: app.render, initial: initial, display: view display, config: config, update: app.update)
+function main(display: Graphics, stdout: Stdout) returns nothing:
+    nothing explicit_completed = explicit_session(view display) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    nothing inferred_completed = inferred_session(view display) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    nothing direct_completed = direct_session(view display) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    Stdout.write(view stdout, "closed three times\n")

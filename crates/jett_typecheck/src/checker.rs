@@ -291,10 +291,14 @@ struct TypeChecker<'a> {
     function_parameter_names: HashMap<String, Vec<String>>,
     /// Source signatures retained for the initial graphics callback policy.
     graphics_callback_definitions: HashMap<String, FunctionDef>,
-    graphics_audited_functions: HashSet<Span>,
+    /// Audit after all bodies have populated expression and method metadata.
+    graphics_pending_callbacks: Vec<(Expr, Option<usize>)>,
+    graphics_audited_functions: HashSet<(Span, Option<usize>)>,
+    graphics_audit_instantiation: Option<usize>,
     graphics_method_definitions: HashMap<Span, FunctionDef>,
     /// Inline graphics callbacks must be checked as pure functions.
     graphics_inline_callbacks: HashSet<Span>,
+    graphics_rejected_capture_spans: HashSet<Span>,
     /// Includes nested closures inside an inline graphics callback.
     in_graphics_callback: bool,
     /// Graphics authority must be borrowed from a declared capability parameter.
@@ -431,9 +435,12 @@ impl<'a> TypeChecker<'a> {
             function_signatures: HashMap::new(),
             function_parameter_names: HashMap::new(),
             graphics_callback_definitions: HashMap::new(),
+            graphics_pending_callbacks: Vec::new(),
             graphics_audited_functions: HashSet::new(),
+            graphics_audit_instantiation: None,
             graphics_method_definitions: HashMap::new(),
             graphics_inline_callbacks: HashSet::new(),
+            graphics_rejected_capture_spans: HashSet::new(),
             in_graphics_callback: false,
             graphics_authority_params: HashSet::new(),
             trusted_stdlib_function_signatures: HashMap::new(),
@@ -4380,6 +4387,7 @@ impl<'a> TypeChecker<'a> {
                 _ => {}
             }
         }
+        self.audit_graphics_callbacks();
     }
 
     fn collect_type_aliases(&mut self, module: &Module) {
@@ -8395,6 +8403,11 @@ impl<'a> TypeChecker<'a> {
             Expr::BoolLiteral(_, _) => TypeInterner::BOOL,
             Expr::Nothing(_) => TypeInterner::NOTHING,
 
+            Expr::Ident(_) | Expr::FieldAccess(_, _, _)
+                if self.reject_unspecialized_generic_value(expr) =>
+            {
+                TypeInterner::ERROR
+            }
             Expr::Ident(ident) => self.check_ident(ident),
             Expr::Binary(lhs, op, rhs, span) => self.check_binary(lhs, *op, rhs, *span),
             Expr::Unary(op, operand, span) => self.check_unary(*op, operand, *span),
@@ -8552,24 +8565,9 @@ impl<'a> TypeChecker<'a> {
                 self.current_return_type = Some(ret);
                 self.in_graphics_callback =
                     saved_graphics_callback || self.graphics_inline_callbacks.contains(inline_span);
-                if self.in_graphics_callback
-                    && (params
-                        .iter()
-                        .any(|param| self.graphics_type_contains_capability(&param.ty))
-                        || return_type
-                            .as_ref()
-                            .is_some_and(|ty| self.graphics_type_contains_capability(ty)))
-                {
-                    self.sink.emit(errors::graphics_contract(
-                        "callback closures must be pure and cannot accept or return capabilities",
-                        *inline_span,
-                    ));
-                }
-                self.current_function_pure =
-                    self.in_graphics_callback && Self::params_are_pure(params);
-                if self.in_graphics_callback {
-                    self.current_function_name = Some("<graphics callback>".to_string());
-                }
+                // Callback purity is audited once all method targets are known;
+                // checking it here would make mutual declarations order-sensitive.
+                self.current_function_pure = false;
                 self.in_property_block = false;
                 self.closure_capture_scopes
                     .push(ClosureCaptureScope::default());
@@ -8610,11 +8608,12 @@ impl<'a> TypeChecker<'a> {
 
     fn check_pipeline(&mut self, initial: &Expr, steps: &[ast::PipelineStep]) -> TypeId {
         let mut current_ty = self.check_expr(initial);
-        for step in steps {
+        for (index, step) in steps.iter().enumerate() {
             // The interpreter uses the checked input type to infer source-generic
             // arguments for the synthetic first argument of a pipeline call.
             self.record_expression_type(step.span, current_ty);
-            current_ty = self.check_pipeline_step(current_ty, step);
+            current_ty =
+                self.check_pipeline_step(current_ty, step, (index == 0).then_some(initial));
         }
         current_ty
     }
@@ -8635,8 +8634,33 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_pipeline_step(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
-        let step_ty = self.check_pipeline_step_call(current_ty, step);
+    fn check_pipeline_step(
+        &mut self,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+        initial: Option<&Expr>,
+    ) -> TypeId {
+        let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        let step_ty = if self.resolved_expr_name(function).as_deref() == Some("graphics.run") {
+            // Preserve the source authority expression while sharing every gate
+            // with ordinary calls, including named arguments and type inference.
+            // A prior pipeline result cannot be a declared capability parameter.
+            let input = initial.cloned().unwrap_or(Expr::Error(step.span));
+            let authority = if piped_as_view {
+                Expr::View(Box::new(input), step.span)
+            } else {
+                input
+            };
+            let mut args = vec![ast::CallArg {
+                name: None,
+                span: authority.span(),
+                value: authority,
+            }];
+            args.extend_from_slice(extra_args);
+            self.check_call(function, type_args, &args, step.span)
+        } else {
+            self.check_pipeline_step_call(current_ty, step)
+        };
         self.record_pipeline_step_call_type(step.span, step_ty);
         if let Some(handle) = &step.handle {
             return self.check_handle_with_target_type(
@@ -9401,6 +9425,28 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reject_unspecialized_generic_value(&mut self, expr: &Expr) -> bool {
+        let Some(definition) = self.resolve.resolutions.get(&expr.span()) else {
+            return false;
+        };
+        if self.resolve.scope_table.def(*definition).kind != DefKind::Function {
+            return false;
+        }
+        let Some(name) = self.resolved_expr_name(expr) else {
+            return false;
+        };
+        if !self.generic_function_templates.contains_key(&name) {
+            return false;
+        }
+        // Ordinary generic calls instantiate before checking the callee as a
+        // value. A bare template has no checked function type or body yet.
+        self.sink.emit(errors::unspecialized_generic_function_value(
+            &name,
+            expr.span(),
+        ));
+        true
+    }
+
     fn check_ident(&mut self, ident: &ast::Ident) -> TypeId {
         if let Some(&def_id) = self
             .resolve
@@ -9441,6 +9487,9 @@ impl<'a> TypeChecker<'a> {
         }
 
         let scope = self.closure_capture_scopes.last_mut().unwrap();
+        if self.in_graphics_callback {
+            self.graphics_rejected_capture_spans.insert(ident.span);
+        }
         if scope.rejected.insert(def_id) {
             self.sink.emit(crate::ownership::cannot_capture_move_only(
                 &ident.name,
@@ -10114,14 +10163,6 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> TypeId {
         let callee_name = self.resolved_expr_name(callee);
-        if self.in_graphics_callback
-            && let Some(function) = callee_name
-                .as_ref()
-                .and_then(|name| self.graphics_callback_definitions.get(name))
-                .cloned()
-        {
-            self.audit_graphics_function(&function);
-        }
         let callee_is_pure = callee_name
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
@@ -10933,6 +10974,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_graphics_callback(&mut self, callback: &Expr, label: &str, views: &[bool]) {
+        self.graphics_pending_callbacks.push((
+            callback.clone(),
+            self.active_generic_instantiations
+                .last()
+                .map(|active| active.manifest_index),
+        ));
         let signature = if let Expr::InlineFn(params, return_type, _, span) = callback {
             self.graphics_inline_callbacks.insert(*span);
             Some((params.clone(), return_type.clone()))
@@ -10940,9 +10987,6 @@ impl<'a> TypeChecker<'a> {
             let definition = self
                 .resolved_expr_name(callback)
                 .and_then(|name| self.graphics_callback_definitions.get(&name).cloned());
-            if let Some(definition) = &definition {
-                self.audit_graphics_function(definition);
-            }
             definition.map(|function| (function.params, function.return_type))
         } else {
             None

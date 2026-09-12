@@ -31,6 +31,7 @@ enough pressure from real code:
 
 - [Initial C FFI and generated binding contract](open_design/c_ffi_binding_contract.md)
 - [Type construction design](open_design/type_construction_design.md)
+- [Generic function value specialization](open_design/generic_function_values.md)
 - [Namespace-qualified type follow-up](open_design/namespace_qualified_types_followup.md)
 - [State machine type model](open_design/state_machine_type_model.md)
 - [JSON unknown field policy](open_design/json_unknown_field_policy.md)

@@ -28,7 +28,10 @@ variables or higher-order parameters is rejected until ordinary function types
 retain sufficient borrowing and effect information. The update callback owns
 both arguments; render borrows its sole argument. Both must be pure. The display
 argument must explicitly borrow a declared `Graphics` parameter. These checks
-are conservative API gates, not exemptions from normal function checking.
+are conservative API gates, not exemptions from normal function checking. They
+apply to direct and pipeline calls, with explicit or inferred generic arguments.
+Callback call-graph auditing waits until module typechecking has resolved method
+dispatch, so legal `mutual` declaration order cannot conceal an effectful helper.
 
 `State` is concrete data: primitive values, structs, enums, and supported
 collections containing only concrete data. Function values, capabilities,
@@ -60,7 +63,11 @@ The window initially displays `render(view initial)`. Each supported key press
 transfers state to `update`, obtains its replacement, and renders that state.
 Held keys do not repeat. Escape and the OS close action end the session without
 calling update. Unsupported keys do nothing. Concurrent keys have provider order;
-applications must not rely on a particular order for simultaneous presses.
+applications must not rely on a particular order for simultaneous presses. The
+runtime normalizes the inverted macOS focus flag in the exactly pinned minifb
+0.28.0 backend before resetting held keys on focus loss. Changing that dependency
+requires rechecking the adapter; headless tests cover both focus conventions and
+repeat suppression, but do not replace native macOS input testing.
 
 The backend continues pumping window messages while idle and retains the current
 scene. Callbacks run synchronously on the interpreter's thread. A slow callback

@@ -4,6 +4,22 @@
 use super::*;
 
 impl TypeChecker<'_> {
+    pub(super) fn audit_graphics_callbacks(&mut self) {
+        let mut seen = HashSet::new();
+        for (callback, instantiation) in std::mem::take(&mut self.graphics_pending_callbacks) {
+            if !seen.insert((callback.span(), instantiation)) {
+                continue;
+            }
+            self.graphics_audit_instantiation = instantiation;
+            if let Expr::InlineFn(_, _, body, _) = &callback {
+                self.audit_graphics_block(body, true);
+            } else {
+                self.audit_graphics_reference(&callback, Some(callback.span()));
+            }
+        }
+        self.graphics_audit_instantiation = None;
+    }
+
     pub(super) fn graphics_state_contains_authority(&self, initial: TypeId) -> bool {
         let mut pending = vec![initial];
         let mut seen = HashSet::new();
@@ -76,13 +92,28 @@ impl TypeChecker<'_> {
         false
     }
 
-    pub(super) fn audit_graphics_function(&mut self, function: &FunctionDef) {
-        if !self.graphics_audited_functions.insert(function.span)
+    fn audit_graphics_function(&mut self, function: &FunctionDef, instantiation: Option<usize>) {
+        if !self
+            .graphics_audited_functions
+            .insert((function.span, instantiation))
             || !Self::params_are_pure(&function.params)
         {
             return;
         }
+        let previous = std::mem::replace(&mut self.graphics_audit_instantiation, instantiation);
         self.audit_graphics_block(&function.body, false);
+        self.graphics_audit_instantiation = previous;
+    }
+
+    fn graphics_audit_type(&self, span: Span) -> Option<TypeId> {
+        self.graphics_audit_instantiation
+            .and_then(|index| {
+                self.generic_function_instantiations[index]
+                    .type_map
+                    .get(&span)
+            })
+            .or_else(|| self.type_map.get(&span))
+            .copied()
     }
 
     fn audit_graphics_block(&mut self, block: &Block, inline: bool) {
@@ -150,8 +181,11 @@ impl TypeChecker<'_> {
     fn audit_graphics_expr(&mut self, expr: &Expr, inline: bool) {
         match expr {
             Expr::Ident(_) | Expr::FieldAccess(_, _, _) => {
-                self.audit_graphics_reference(expr, false);
-                if inline && self.type_map.get(&expr.span()) == Some(&TypeInterner::ERROR) {
+                self.audit_graphics_reference(expr, None);
+                if inline
+                    && self.graphics_audit_type(expr.span()) == Some(TypeInterner::ERROR)
+                    && !self.graphics_rejected_capture_spans.contains(&expr.span())
+                {
                     self.sink.emit(errors::graphics_contract(
                         "callback closures cannot contain opaque capability values",
                         expr.span(),
@@ -260,8 +294,8 @@ impl TypeChecker<'_> {
                 span,
             ));
         }
-        if let Some(ty) = self.type_map.get(&callee.span())
-            && let Type::Function { params, .. } = self.interner.resolve(*ty)
+        if let Some(ty) = self.graphics_audit_type(callee.span())
+            && let Type::Function { params, .. } = self.interner.resolve(ty)
             && params.iter().any(|ty| *ty == TypeInterner::ERROR)
         {
             self.sink.emit(errors::graphics_contract(
@@ -269,14 +303,21 @@ impl TypeChecker<'_> {
                 span,
             ));
         }
-        self.audit_graphics_reference(callee, true);
-        if let Some(method) = self.method_calls.get(&span)
+        self.audit_graphics_reference(callee, Some(span));
+        if let Some(method) = self
+            .graphics_audit_instantiation
+            .and_then(|index| {
+                self.generic_function_instantiations[index]
+                    .method_calls
+                    .get(&span)
+            })
+            .or_else(|| self.method_calls.get(&span))
             && let Some(function) = self
                 .graphics_method_definitions
                 .get(&method.source_span)
                 .cloned()
         {
-            self.audit_graphics_function(&function);
+            self.audit_graphics_function(&function, None);
         }
         if !matches!(callee, Expr::Ident(_) | Expr::FieldAccess(_, _, _)) {
             self.audit_graphics_expr(callee, inline);
@@ -287,11 +328,11 @@ impl TypeChecker<'_> {
         }
     }
 
-    fn audit_graphics_reference(&mut self, expr: &Expr, called: bool) {
+    fn audit_graphics_reference(&mut self, expr: &Expr, call_span: Option<Span>) {
         let Some(name) = self.resolved_expr_name(expr) else {
             return;
         };
-        if !called && !self.named_call_is_pure(&name) {
+        if call_span.is_none() && !self.named_call_is_pure(&name) {
             self.sink.emit(errors::graphics_contract(
                 "callbacks cannot retain impure function values",
                 expr.span(),
@@ -300,7 +341,33 @@ impl TypeChecker<'_> {
         if self.graphics_callback_is_named(expr)
             && let Some(function) = self.graphics_callback_definitions.get(&name).cloned()
         {
-            self.audit_graphics_function(&function);
+            let call = call_span.and_then(|span| {
+                self.graphics_audit_instantiation
+                    .and_then(|index| {
+                        self.generic_function_instantiations[index]
+                            .generic_calls
+                            .get(&span)
+                    })
+                    .or_else(|| self.generic_calls.get(&span))
+                    .cloned()
+            });
+            if let Some(call) = call {
+                let instantiations = self
+                    .generic_function_instantiations
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, instantiation)| {
+                        (instantiation.definition == call.definition
+                            && instantiation.concrete_args == call.concrete_args)
+                            .then_some(index)
+                    })
+                    .collect::<Vec<_>>();
+                for index in instantiations {
+                    self.audit_graphics_function(&function, Some(index));
+                }
+            } else {
+                self.audit_graphics_function(&function, None);
+            }
         }
     }
 }

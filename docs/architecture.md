@@ -1378,12 +1378,19 @@ The initial interpreter graphics path uses source-owned data declarations and
 `graphics.run[State]` in `stdlib/graphics.jett`, an explicit injected `Graphics`
 capability, and a private `graphics.__run` kernel. The typechecker enforces the
 capability and conservative callback modes/effect policy; callbacks are directly
-named or inline pure functions. Its scoped call-graph audit follows named helpers
-and nested functions; recursively data-only state excludes function values and
-authority-bearing types, including aliases. Qualified named function values
-preserve their resolved declaration, and inline function values preserve their lexical
-namespace, so calls from the stdlib graphics loop resolve application helpers
-in the defining module.
+named or inline pure functions. Direct calls and pipeline steps share that gate,
+including inferred generic calls. Its scoped call-graph audit runs after module
+typechecking so forward-declared callbacks have complete method-dispatch metadata.
+The audit follows named helpers and nested functions; recursively data-only state
+excludes function values and authority-bearing types, including aliases. Qualified
+named function values preserve their resolved declaration, and inline function
+values preserve their lexical namespace, so calls from the stdlib graphics loop
+resolve application helpers in the defining module.
+
+Bare generic templates are rejected as function values before interpretation;
+they have no checked concrete signature or instantiation identity. A concrete
+wrapper uses the existing generic call checker. See the
+[generic function value boundary](open_design/generic_function_values.md).
 
 `jett_comptime::interpreter::graphics` decodes checked scene/configuration values,
 calls the pure update/render functions, and owns the synchronous native or
@@ -1393,7 +1400,10 @@ host-local `Session` owns the window on the creating thread and drops it on ever
 normal or error exit. No native window enters `Value`, and this path does not
 claim interpreter integration of source-owned opaque resources. The scripted
 provider validates through the same rasterizer and records events, scenes, and
-cleanup without opening a display.
+cleanup without opening a display. Native input normalizes the inverted macOS
+focus flag in the exactly pinned minifb 0.28.0 backend before reconciling held keys;
+the adapter must be rechecked when that dependency changes. Focus/repeat unit tests
+exercise both backend conventions without requiring a native window.
 
 The interpreter shares immutable registered function definitions through `Arc`,
 borrows arguments while probing higher-order builtins, and clones only the
@@ -1401,6 +1411,15 @@ selected value when reading a nested struct field. Non-generic calls skip
 generic type inference, and primitive normalization avoids alias-search
 allocations. These reduce per-input interpretation costs without changing Jett
 ownership or the independent-value semantics of explicit `clone`.
+
+Named arguments to registered source functions are evaluated in lexical source
+order, then permuted into declaration order for dispatch. The same permutation
+aligns checked argument types for generic inference; named callback references
+use their declared, namespace-qualified signatures. Direct and pipeline calls
+share this behavior. Runtime errors propagate through expression statements as
+well as bindings and returns, including failures raised inside graphics callbacks.
+Only the parser's existing standalone builtin-type identifier markers are skipped;
+that compatibility case does not suppress errors from evaluated expressions.
 
 The driver injects authority only when runtime `main` requests `Graphics`.
 Comptime, verify/property, untrusted private-kernel calls, and nested sessions
@@ -1793,6 +1812,8 @@ while stripping verify/property blocks from support modules; it does not move
 the selected file after its dependents. Project testing therefore executes
 each check once under the same declaration order. Project-root discovery
 starts from an absolute path, including for relative source-file requests.
+Sibling ordering follows logical source paths, not canonical symlink targets;
+canonical paths are used only to match source and entry identities.
 The conservative contract is recorded in
 [project test loading](active/project_test_loading.md).
 
@@ -2518,7 +2539,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0362 | Type and language policy errors: calls, generic arity, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, and release debug-print policy |
+| E0300–E0373 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |

@@ -3628,17 +3628,31 @@ fn assemble_test_project_module(
     let project = jett_project::discover_project(&project_root, &mut interner)
         .map_err(|error| format!("project discovery error: {error}"))?;
     let entry_id = project.entry_file;
-    let entry_path = project
-        .files
-        .into_iter()
-        .find(|file| file.id == entry_id)
-        .ok_or_else(|| "project discovery did not identify its entry file".to_string())?
-        .path
-        .canonicalize()
-        .map_err(|error| format!("failed to resolve project entry path: {error}"))?;
+    let mut entry_path = None;
+    let mut logical_paths = HashMap::with_capacity(project.files.len() + 1);
+    for file in project.files {
+        let canonical_path = file
+            .path
+            .canonicalize()
+            .map_err(|error| format!("failed to resolve project source path: {error}"))?;
+        if file.id == entry_id {
+            entry_path = Some(canonical_path.clone());
+        }
+        // Discovery preserves lexical source paths, including in-root symlinks.
+        // Canonical paths identify modules; they must not determine their order.
+        logical_paths.entry(canonical_path).or_insert(file.path);
+    }
+    let entry_path = entry_path
+        .ok_or_else(|| "project discovery did not identify its entry file".to_string())?;
+    let selected_logical_path = std::path::absolute(selected_path)
+        .map_err(|error| format!("failed to resolve selected test path: {error}"))?;
     let selected_path = selected_path
         .canonicalize()
         .map_err(|error| format!("failed to resolve selected test path: {error}"))?;
+    // Explicitly selected files can live in directories excluded from discovery.
+    logical_paths
+        .entry(selected_path.clone())
+        .or_insert(selected_logical_path);
     let span = selected_module.span;
     let mut modules = Vec::with_capacity(support.modules.len() + 1);
     for module in support.modules {
@@ -3651,11 +3665,7 @@ fn assemble_test_project_module(
     modules.push((selected_path, selected_module));
     // Match compilation of the manifest entry regardless of which source's
     // checks were selected: siblings in lexical order, then the entry file.
-    modules.sort_by(|left, right| {
-        (left.0 == entry_path)
-            .cmp(&(right.0 == entry_path))
-            .then_with(|| left.0.cmp(&right.0))
-    });
+    sort_test_project_modules(&mut modules, &entry_path, &logical_paths);
     Ok(Module {
         items: modules
             .into_iter()
@@ -3663,6 +3673,20 @@ fn assemble_test_project_module(
             .collect(),
         span,
     })
+}
+
+fn sort_test_project_modules(
+    modules: &mut [(PathBuf, Module)],
+    entry_path: &Path,
+    logical_paths: &HashMap<PathBuf, PathBuf>,
+) {
+    modules.sort_by(|left, right| {
+        let left_logical = logical_paths.get(&left.0).unwrap_or(&left.0);
+        let right_logical = logical_paths.get(&right.0).unwrap_or(&right.0);
+        (left.0 == entry_path)
+            .cmp(&(right.0 == entry_path))
+            .then_with(|| left_logical.cmp(right_logical))
+    });
 }
 
 fn strip_test_items_from_support_modules(modules: &mut [Module]) {
@@ -4132,6 +4156,42 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("{name}_{nanos}"))
+    }
+
+    #[test]
+    fn project_test_order_uses_logical_paths_before_canonical_targets() {
+        // Model src/00_core.jett -> target/z_core.jett without requiring
+        // filesystem symlink privileges. The early entry must still go last.
+        let core = PathBuf::from("project/target/z_core.jett");
+        let report = PathBuf::from("project/src/10_report.jett");
+        let entry = PathBuf::from("project/target/a_entry.jett");
+        let logical_paths = HashMap::from([
+            (core.clone(), PathBuf::from("project/src/00_core.jett")),
+            (report.clone(), report.clone()),
+            (entry.clone(), PathBuf::from("project/src/00_entry.jett")),
+        ]);
+        let mut modules = vec![
+            (
+                entry.clone(),
+                parse("namespace app\n", FileId::new(0)).module,
+            ),
+            (
+                report.clone(),
+                parse("namespace report\n", FileId::new(2)).module,
+            ),
+            (
+                core.clone(),
+                parse("namespace core\n", FileId::new(1)).module,
+            ),
+        ];
+        sort_test_project_modules(&mut modules, &entry, &logical_paths);
+        assert_eq!(
+            modules
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect::<Vec<_>>(),
+            vec![core, report, entry]
+        );
     }
 
     #[test]

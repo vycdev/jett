@@ -7065,6 +7065,12 @@ Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with
 
 Generic type parameters may be inferred when argument types uniquely determine every parameter, including direct and pipeline calls to source-owned stdlib functions such as `list.length(items)`. Calls with no inferable value argument, an ambiguous result-only parameter, or an explicit reflection target write the type arguments. When type arguments are written, their count must exactly match the callable's generic arity.
 
+A bare generic function template is not a concrete function value. To pass one
+as a callback, use a concrete named wrapper or inline function containing an
+ordinary generic call. Contextual specialization of generic function values is
+an [open design choice](open_design/generic_function_values.md); the compiler
+rejects unspecialized references instead of executing an unchecked generic body.
+
 ```
 # Inferred from value arguments
 string result = add("hello", " world")
@@ -7357,7 +7363,9 @@ signatures are rejected while ordinary function types still erase that metadata.
 State must recursively contain concrete data; function values, capabilities,
 resources, actors, and interfaces cannot cross this callback boundary, including
 through aliases or fields. Purity checks follow callback helpers and nested
-functions as well as the callback's own declaration.
+functions as well as the callback's own declaration. These gates apply equally
+to direct calls and pipeline steps, with explicit or inferred generic arguments.
+Legal `mutual` declaration ordering cannot change the callback effect boundary.
 The API is unavailable in comptime/verify/property evaluation. Escape and the
 OS close action end the session; supported key presses drive deterministic state
 updates. Animation ticks, audio, and source-owned windows remain outside this

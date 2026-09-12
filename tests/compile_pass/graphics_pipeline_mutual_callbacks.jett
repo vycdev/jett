@@ -1,0 +1,23 @@
+namespace app
+interface Evaluator:
+    function evaluate(view self: Evaluator) returns int64
+struct Number:
+    value: int64
+implement Evaluator for Number:
+    function evaluate(view self: Number) returns int64:
+        return self.value
+function render(view state: int64) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+mutual:
+    function launch(view display: Graphics) returns result[nothing, string]
+    function update(state: int64, key: graphics.Key) returns int64
+function launch(view display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "Callback review", width: 32, height: 32)
+    return display into view graphics.run[int64](render: render, initial: 0, config: config, update: update)
+function update(state: int64, key: graphics.Key) returns int64:
+    Number number = Number(value: state)
+    return Evaluator.evaluate(view number)
+function main(display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "Callback review", width: 32, height: 32)
+    return display into view graphics.run(config, 0, update, render)
