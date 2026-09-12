@@ -61,12 +61,13 @@ Future independent tasks and repeated samples are needed for broad rankings.
   work, stops new dispatch on infrastructure failure, and produces complete
   four-cell reports only when all expected rows and repair pairings exist.
 - The v0.6.0 four-cell campaign has 1,000 frozen initial prompts. Generation
-  stopped with 365 saved responses and three interrupted calls without saved
-  answers; all 365 saved responses are graded. The first six pipeline-check
+  initially stopped with 365 saved responses and three interrupted calls
+  without saved answers; all 365 saved responses are graded. The first six pipeline-check
   responses (five passes, one test failure) remain in the campaign unchanged.
   The user approved repeating only those three prompts with explicit disclosure;
-  the original interrupted receipts and all saved responses remain unchanged.
-  Remaining generation, paired repair, reporting, and the skill-revision
+  all three replacements are now saved and graded, and initial generation has
+  resumed. The original interrupted receipts and all saved responses remain
+  unchanged. Remaining generation, paired repair, reporting, and the skill-revision
   follow-up remain unfinished; no partial sample is a final language ranking.
 
 ## Run checkpoint (2026-09-12)
@@ -170,8 +171,8 @@ The frozen subprocess runner buffers events until it returns or handles an
 error. Abrupt termination can lose those buffered events. The existing resume
 guard correctly refuses all unjournaled attempts, regardless of status. No
 replacement-sampling policy existed for this case, so a user decision was
-requested before repeating the three exact prompts. No new model calls have
-been made since the interruption. Keep the guard and original receipts intact;
+requested before repeating the three exact prompts. At that checkpoint, no new
+model calls had been made since the interruption. Keep the guard and original receipts intact;
 any authorized recovery must separately link and disclose replacement attempts
 and keep interrupted-call consumption unavailable.
 
@@ -190,6 +191,39 @@ replacement must carry a link to its original attempt and this decision;
 another interrupted replacement would require a new explicit decision, not an
 automatic third draw. Completed-response usage must remain distinguished from
 unknown interrupted-call overhead in the eventual report.
+
+All three approved repetitions have now completed. Their new response rows
+link to the approval and original attempt hashes, with the original calls'
+usage and server completion explicitly unavailable. The first 365 raw-response
+rows match the published checkpoint byte for byte; all three original receipts
+remain unchanged. There are now 368 saved and staging-graded responses at this
+recovery checkpoint, including the three replacements, which all passed.
+
+The remaining 632 initial prompts resumed through the unchanged generator
+at 06:48:49 UTC as detached process 61200. Do not restart it while it is live.
+The host-side supervisor can observe that process and complete the handoff:
+
+```powershell
+powershell.exe -NoProfile -File tools/bench_campaign_continue.ps1 `
+  -Campaign target/jett-bench/v0.6.0-four-cell `
+  -Staging target/jett-bench/v0.6.0-four-cell-staging `
+  -Image jett-bench:0.6.0 -InitialGeneratorId 61200 -ConfirmSubscriptionUsage
+```
+
+Use the same task-local CLI PATH and a hidden detached process with persistent,
+previously unused stdout/stderr logs. The supervisor first finishes the existing
+staging batch, then snapshots and grades completed responses while the observed
+generator is live. It never restarts initial generation. Only after the full
+initial merge and grading checks succeed does it generate one repair for each
+failed initial response, grade those repairs, and write the original report.
+The skill follow-up remains a separate required phase.
+
+Every failed command stops the supervisor, including a snapshot that races with
+a partial JSONL append. Inspect its logs and actual process state before
+restarting the supervisor; never infer that a missing execution handle means a
+generator has stopped. A supervisor restart resumes saved grading. The unchanged
+generation guard still refuses an unjournaled model attempt; do not remove that
+evidence or authorize another repetition implicitly.
 
 ## Skill follow-up execution constraints
 
