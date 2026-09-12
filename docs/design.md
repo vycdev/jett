@@ -7340,6 +7340,30 @@ rendering never changes compiler-query facts. The full input, invalidation,
 diagnostic, client snapshot, and staged migration policy is recorded in the
 [initial incremental query boundary](open_design/incremental_query_boundary.md).
 
+### Synchronous 2D Graphics
+
+The interpreter supports `graphics.run[State]` for a synchronous native window
+session. `main` requests a `Graphics` capability, and the public source-owned
+wrapper borrows it with `view`. Pure update and render functions receive only
+ordinary state and keyboard values; rendering returns a `graphics.Scene` of RGB
+rectangles and bitmap text. The runtime owns the window inside the call and
+closes it on normal return, host failure, or callback failure. No source-visible
+window handle or resource is exposed.
+
+The initial callback boundary accepts directly named functions (including
+qualified namespace references) or inline functions. Update owns its two
+arguments; render views its state. Callback variables and effectful callback
+signatures are rejected while ordinary function types still erase that metadata.
+State must recursively contain concrete data; function values, capabilities,
+resources, actors, and interfaces cannot cross this callback boundary, including
+through aliases or fields. Purity checks follow callback helpers and nested
+functions as well as the callback's own declaration.
+The API is unavailable in comptime/verify/property evaluation. Escape and the
+OS close action end the session; supported key presses drive deterministic state
+updates. Animation ticks, audio, and source-owned windows remain outside this
+slice. See the [graphics contract](active/graphics_game_contract.md) for the exact
+data shapes, bounds, and cleanup guarantees.
+
 ### Project Structure
 
 ```

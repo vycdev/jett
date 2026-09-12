@@ -9,6 +9,7 @@ license.workspace = true
 jett_common.workspace = true
 jett_diagnostics.workspace = true
 jett_parser.workspace = true
+jett_runtime.workspace = true
 jett_types.workspace = true
 rand.workspace = true
 subtle.workspace = true

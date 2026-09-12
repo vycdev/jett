@@ -21,6 +21,8 @@ These notes describe live implementation and architecture staging:
 - [JSON stdlib extraction plan](active/stdlib_json_extraction_plan.md)
 - [Canonical reflection metadata plan](active/canonical_reflection_metadata_plan.md)
 - [Stdlib visibility design](active/stdlib_visibility_design.md)
+- [Synchronous 2D graphics](active/graphics_game_contract.md)
+- [Canonical project test loading](active/project_test_loading.md)
 
 ## Open Design
 

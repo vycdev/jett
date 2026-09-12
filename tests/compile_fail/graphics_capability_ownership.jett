@@ -1,0 +1,7 @@
+# ERROR: E0502
+# ERROR: E0503
+namespace app
+function helper(display: Graphics) returns nothing:
+    return nothing
+function main(view display: Graphics) returns nothing:
+    return nothing

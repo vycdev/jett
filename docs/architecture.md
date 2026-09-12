@@ -1372,6 +1372,42 @@ The runtime sits between Rust (~2K lines, no scheduler) and Pony (~15-20K lines,
 | **Breakpoint control plane** | ~300 lines | Debug-only. A compiler-owned operation layer exposes pause, inspection, evaluation, and resume through an authenticated loopback HTTP adapter. The [decided protocol](completed/breakpoint_pause_inspection_protocol.md) is compiled out in release. |
 | **Entry point** | ~100 lines | `_jett_entry` initializes the runtime (thread pool, event loop), constructs capabilities, calls user's `main()`, and shuts down cleanly. |
 
+### Synchronous Graphics Sessions
+
+The initial interpreter graphics path uses source-owned data declarations and
+`graphics.run[State]` in `stdlib/graphics.jett`, an explicit injected `Graphics`
+capability, and a private `graphics.__run` kernel. The typechecker enforces the
+capability and conservative callback modes/effect policy; callbacks are directly
+named or inline pure functions. Its scoped call-graph audit follows named helpers
+and nested functions; recursively data-only state excludes function values and
+authority-bearing types, including aliases. Qualified named function values
+preserve their resolved declaration, and inline function values preserve their lexical
+namespace, so calls from the stdlib graphics loop resolve application helpers
+in the defining module.
+
+`jett_comptime::interpreter::graphics` decodes checked scene/configuration values,
+calls the pure update/render functions, and owns the synchronous native or
+scripted session. `jett_runtime::graphics` validates bounded scene data, clips
+and rasterizes rectangles and bitmap text, and presents through minifb. Its
+host-local `Session` owns the window on the creating thread and drops it on every
+normal or error exit. No native window enters `Value`, and this path does not
+claim interpreter integration of source-owned opaque resources. The scripted
+provider validates through the same rasterizer and records events, scenes, and
+cleanup without opening a display.
+
+The interpreter shares immutable registered function definitions through `Arc`,
+borrows arguments while probing higher-order builtins, and clones only the
+selected value when reading a nested struct field. Non-generic calls skip
+generic type inference, and primitive normalization avoids alias-search
+allocations. These reduce per-input interpretation costs without changing Jett
+ownership or the independent-value semantics of explicit `clone`.
+
+The driver injects authority only when runtime `main` requests `Graphics`.
+Comptime, verify/property, untrusted private-kernel calls, and nested sessions
+cannot open a window. Native compilation, textures, audio, animation timing, and
+source-visible window ownership remain separate work. See the
+[graphics contract](active/graphics_game_contract.md).
+
 ### Opaque Runtime Resources
 
 Compiler-shipped source declares a runtime-owned nominal type only as

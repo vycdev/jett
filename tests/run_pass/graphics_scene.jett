@@ -1,0 +1,34 @@
+namespace app
+struct State:
+    moves: int64
+function update(state: State, key: graphics.Key) returns State:
+    list[int64] counts = list.append[int64](list.new[int64](), state.moves)
+    list[int64] changed = list.map[int64, int64](counts, function(value: int64) returns int64: return value + 1)
+    int64 moves = list.first[int64](view changed) handle:
+        default 0
+    return State(moves: moves)
+function render(view state: State) returns graphics.Scene:
+    graphics.Color background = graphics.Color(red: 12, green: 18, blue: 30)
+    graphics.Color ink = graphics.Color(red: 255, green: 220, blue: 120)
+    graphics.Rect tile = graphics.Rect(x: 16, y: 24, width: 32, height: 32, color: clone ink)
+    graphics.Text label = graphics.Text(x: 8, y: 8, text: string.from_int64(state.moves), scale: 2, color: ink)
+    list[graphics.Rect] rectangles = list.append[graphics.Rect](list.new[graphics.Rect](), tile)
+    list[graphics.Text] texts = list.append[graphics.Text](list.new[graphics.Text](), label)
+    return graphics.Scene(background: background, rectangles: rectangles, texts: texts)
+function launch(view display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "Graphics type check", width: 320, height: 240)
+    return graphics.run[State](view display, config, State(moves: 0), update, render)
+function launch_inferred(view display: Graphics, config: graphics.Config) returns result[nothing, string]:
+    return graphics.run(view display, config, State(moves: 0), update, render)
+function launch_inline(view display: Graphics, config: graphics.Config) returns result[nothing, string]:
+    return graphics.run[State](view display, config, State(moves: 0), function(state: State, key: graphics.Key) returns State: return update(state, key), function(view state: State) returns graphics.Scene: return render(view state))
+function launch_qualified(view display: Graphics, config: graphics.Config) returns result[nothing, string]:
+    return graphics.run[State](view display, config, State(moves: 0), app.update, app.render)
+verify pure_scene_construction:
+    State initial = State(moves: 4)
+    State moved = update(initial, graphics.Key.right)
+    graphics.Scene scene = render(view moved)
+    assert moved.moves == 5
+    assert scene.background.red == 12
+    assert list.length[graphics.Rect](view scene.rectangles) == 1
+    assert list.length[graphics.Text](view scene.texts) == 1

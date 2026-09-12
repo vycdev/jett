@@ -1,0 +1,17 @@
+namespace app
+function update(state: int64, key: graphics.Key) returns int64:
+    return state
+function render(view state: int64) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+interface Launchable:
+    function launch(view self: Launchable, view display: Graphics) returns result[nothing, string]
+struct Game:
+    value: int64
+implement Launchable for Game:
+    function launch(view self: Game, view display: Graphics) returns result[nothing, string]:
+        graphics.Config config = graphics.Config(title: "Callback review", width: 32, height: 32)
+        return graphics.run[int64](view display, config, self.value, update, render)
+function main(display: Graphics) returns result[nothing, string]:
+    Game game = Game(value: 0)
+    return Launchable.launch(view game, view display)

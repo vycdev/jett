@@ -7,7 +7,7 @@ use jett_comptime::verify::{
 };
 pub use jett_comptime::{
     ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
-    RandomTestSample,
+    GraphicsTestEvent, GraphicsTestKey, RandomTestSample,
 };
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
@@ -348,6 +348,7 @@ struct RunOptions {
     random_test_samples: Option<Vec<RandomTestSample>>,
     clock_test_samples: Option<Vec<ClockTestSample>>,
     environment_test_snapshot: Option<EnvironmentTestSnapshot>,
+    graphics_test_events: Option<Vec<GraphicsTestEvent>>,
 }
 
 fn parse_source_with_query(source: &str, file_path: &str) -> ParseResult {
@@ -1503,6 +1504,7 @@ fn signature_builtin_type_name(name: &str) -> bool {
             | "Random"
             | "Process"
             | "Environment"
+            | "Graphics"
             | "Log"
     )
 }
@@ -2978,6 +2980,7 @@ pub fn run_file(path: &Path) -> Result<(), String> {
             random_test_samples: None,
             clock_test_samples: None,
             environment_test_snapshot: None,
+            graphics_test_events: None,
         },
     )
     .map(|_| ())
@@ -2994,6 +2997,7 @@ pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
             random_test_samples: None,
             clock_test_samples: None,
             environment_test_snapshot: None,
+            graphics_test_events: None,
         },
     )
     .map(|output| output.stdout)
@@ -3009,6 +3013,7 @@ pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
             random_test_samples: None,
             clock_test_samples: None,
             environment_test_snapshot: None,
+            graphics_test_events: None,
         },
     )
 }
@@ -3026,6 +3031,7 @@ pub fn run_file_with_random_test_samples(
             random_test_samples: Some(samples),
             clock_test_samples: None,
             environment_test_snapshot: None,
+            graphics_test_events: None,
         },
     )
     .map(|_| ())
@@ -3044,6 +3050,7 @@ pub fn run_file_capture_stdout_with_random_test_samples(
             random_test_samples: Some(samples),
             clock_test_samples: None,
             environment_test_snapshot: None,
+            graphics_test_events: None,
         },
     )
     .map(|output| output.stdout)
@@ -3062,6 +3069,7 @@ pub fn run_file_with_clock_test_samples(
             random_test_samples: None,
             clock_test_samples: Some(samples),
             environment_test_snapshot: None,
+            graphics_test_events: None,
         },
     )
     .map(|_| ())
@@ -3080,6 +3088,7 @@ pub fn run_file_capture_stdout_with_clock_test_samples(
             random_test_samples: None,
             clock_test_samples: Some(samples),
             environment_test_snapshot: None,
+            graphics_test_events: None,
         },
     )
     .map(|output| output.stdout)
@@ -3098,6 +3107,7 @@ pub fn run_file_capture_stdout_with_environment_test_snapshot(
             random_test_samples: None,
             clock_test_samples: None,
             environment_test_snapshot: Some(snapshot),
+            graphics_test_events: None,
         },
     )
     .map(|output| output.stdout)
@@ -3116,9 +3126,28 @@ pub fn run_file_with_environment_test_snapshot(
             random_test_samples: None,
             clock_test_samples: None,
             environment_test_snapshot: Some(snapshot),
+            graphics_test_events: None,
         },
     )
     .map(|_| ())
+}
+
+/// Run with deterministic graphics input and real scene validation, without a window.
+pub fn run_file_capture_output_with_graphics_test_events(
+    path: &Path,
+    events: Vec<GraphicsTestEvent>,
+) -> Result<RunOutput, String> {
+    run_file_with_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: None,
+            graphics_test_events: Some(events),
+        },
+    )
 }
 
 fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
@@ -3210,6 +3239,17 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
                 .map_err(|error| format!("runtime error: {error}"))?;
         }
     }
+    if main_func
+        .params
+        .iter()
+        .any(|param| type_expr_name(&param.ty) == "Graphics")
+    {
+        if let Some(events) = options.graphics_test_events.clone() {
+            interp.set_graphics_test_events(events);
+        } else {
+            interp.initialize_graphics_provider();
+        }
+    }
     if let Some(metadata) = build.reflection_metadata.clone() {
         interp.set_reflection_metadata(metadata);
     }
@@ -3243,6 +3283,7 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
         Ok(_) => {
             reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())?;
             reject_unconsumed_test_samples("Clock", interp.clock_test_samples_remaining())?;
+            reject_unconsumed_test_samples("Graphics", interp.graphics_test_events_remaining())?;
             Ok(RunOutput {
                 stdout: interp.take_stdout_output(),
                 debug_output: interp.take_debug_output(),
@@ -3273,8 +3314,9 @@ fn default_runtime_args_for_main(main: &FunctionDef) -> Result<Vec<Value>, Strin
 }
 
 fn default_runtime_arg_for_param(param: &Param) -> Result<Value, String> {
-    if type_expr_name(&param.ty) == "Environment" {
-        return Ok(Value::Capability("Environment".to_string()));
+    let type_name = type_expr_name(&param.ty);
+    if matches!(type_name.as_str(), "Environment" | "Graphics") {
+        return Ok(Value::Capability(type_name));
     }
     if type_expr_is_capability(&param.ty) {
         return Ok(Value::Nothing);
@@ -3300,6 +3342,7 @@ fn type_expr_is_capability(ty: &TypeExpr) -> bool {
                 | "Random"
                 | "Process"
                 | "Environment"
+                | "Graphics"
                 | "Log"
         ),
         TypeExpr::View(inner, _) => type_expr_is_capability(inner),

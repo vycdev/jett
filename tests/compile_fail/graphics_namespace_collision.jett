@@ -1,0 +1,5 @@
+# ERROR: E0204
+# ERROR: E0205
+namespace graphics
+function __run() returns nothing:
+    return nothing

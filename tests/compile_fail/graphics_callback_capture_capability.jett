@@ -1,0 +1,8 @@
+# ERROR: E0402
+namespace app
+function render(view state: int64) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function main(display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "No callback authority", width: 320, height: 240)
+    return graphics.run[int64](view display, config, 0, function(state: int64, key: graphics.Key) returns int64: return display, render)
