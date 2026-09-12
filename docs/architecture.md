@@ -1748,6 +1748,18 @@ arithmetic belong in compiler-shipped `.jett` source. The exact value,
 capability, determinism, and compatibility rules are defined in the
 [Time and Clock capability contract](completed/time_clock_capability_contract.md).
 
+### Project Test Loading
+
+The test driver reads the canonical entry from `jett_project` metadata and
+assembles stdlib modules first, lexical project siblings next, and the manifest
+entry last. Selecting a source file retains its source spans and test blocks
+while stripping verify/property blocks from support modules; it does not move
+the selected file after its dependents. Project testing therefore executes
+each check once under the same declaration order. Project-root discovery
+starts from an absolute path, including for relative source-file requests.
+The conservative contract is recorded in
+[project test loading](active/project_test_loading.md).
+
 ### How the Compiler Locates the Stdlib
 
 The stdlib is a set of `.jett` files bundled with the compiler installation. The

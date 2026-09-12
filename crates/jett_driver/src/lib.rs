@@ -3506,8 +3506,11 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
-    support_modules.extend(discover_project_modules_with_diagnostics(path));
-    let support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    let mut project_modules = discover_project_modules_with_diagnostics(path);
+    let mut support_errors = error_messages_from_diagnostics(&support_modules.diagnostics);
+    support_errors.extend(error_messages_from_diagnostics(
+        &project_modules.diagnostics,
+    ));
     if !support_errors.is_empty() {
         return Err(format!(
             "support parse errors:\n{}",
@@ -3515,6 +3518,8 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         ));
     }
     strip_test_items_from_support_modules(&mut support_modules.modules);
+    strip_test_items_from_support_modules(&mut project_modules.modules);
+    parse_result.module = assemble_test_project_module(path, parse_result.module, project_modules)?;
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
     let resolve_result = resolve(&parse_result.module);
@@ -3565,6 +3570,55 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         failed,
         file_path: path.display().to_string(),
         blocks,
+    })
+}
+
+fn assemble_test_project_module(
+    selected_path: &Path,
+    selected_module: Module,
+    mut support: DiscoveredModules,
+) -> Result<Module, String> {
+    let Ok(project_root) = find_project_root(selected_path) else {
+        return Ok(selected_module);
+    };
+    let mut interner = jett_common::SymbolInterner::new();
+    let project = jett_project::discover_project(&project_root, &mut interner)
+        .map_err(|error| format!("project discovery error: {error}"))?;
+    let entry_id = project.entry_file;
+    let entry_path = project
+        .files
+        .into_iter()
+        .find(|file| file.id == entry_id)
+        .ok_or_else(|| "project discovery did not identify its entry file".to_string())?
+        .path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve project entry path: {error}"))?;
+    let selected_path = selected_path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve selected test path: {error}"))?;
+    let span = selected_module.span;
+    let mut modules = Vec::with_capacity(support.modules.len() + 1);
+    for module in support.modules {
+        let path = support
+            .files
+            .remove(&module.span.file)
+            .ok_or_else(|| "project module discovery did not retain its source path".to_string())?;
+        modules.push((path, module));
+    }
+    modules.push((selected_path, selected_module));
+    // Match compilation of the manifest entry regardless of which source's
+    // checks were selected: siblings in lexical order, then the entry file.
+    modules.sort_by(|left, right| {
+        (left.0 == entry_path)
+            .cmp(&(right.0 == entry_path))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    Ok(Module {
+        items: modules
+            .into_iter()
+            .flat_map(|(_, module)| module.items)
+            .collect(),
+        span,
     })
 }
 
@@ -5826,6 +5880,9 @@ mod tests {
 
 /// Walk up from `start_dir` to find a directory containing `jett.proj`.
 fn find_project_root(start_dir: &Path) -> Result<std::path::PathBuf, String> {
+    let absolute = std::path::absolute(start_dir)
+        .map_err(|error| format!("failed to resolve {}: {error}", start_dir.display()))?;
+    let start_dir = absolute.as_path();
     let start = if start_dir.is_file() {
         start_dir.parent().unwrap_or(start_dir).to_path_buf()
     } else {

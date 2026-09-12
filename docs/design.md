@@ -7319,6 +7319,13 @@ Jett compiles to native code via an **LLVM backend** (primary target) for perfor
 - **`jett test`** — run all `verify` and `property` blocks in the project. `verify` blocks execute at compile time for pure functions. `property` blocks run fuzz-based tests at test time (10,000 random inputs by default).
 - **`jett format`** — format source code (single canonical style, no configuration)
 
+Project testing uses the declaration order of the `jett.proj` entry: stdlib
+first, project siblings in lexical path order, and the entry file last.
+`jett test file.jett` selects that file's checks without changing this order;
+`jett test` reports every project check once. Relative source paths use the
+same project discovery as absolute paths. File selection never permits a
+forward reference within a file or between project siblings.
+
 ### Incremental Compiler Policy
 
 Incremental compilation is compiler policy rather than a source-language
