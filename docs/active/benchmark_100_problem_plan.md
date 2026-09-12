@@ -60,13 +60,12 @@ Future independent tasks and repeated samples are needed for broad rankings.
 - The campaign runner freezes inputs, journals completed rows, resumes missing
   work, stops new dispatch on infrastructure failure, and produces complete
   four-cell reports only when all expected rows and repair pairings exist.
-- The v0.6.0 four-cell campaign now has all 1,000 initial responses and grades:
-  766 passed, and the 234 failures are receiving one paired repair each. The
-  initial generator finished, and the checked staging merge preserved all
-  existing canonical grades. The three explicitly approved replacement calls
-  remain linked to their unchanged interrupted originals. Repairs, the full
-  report, and the separate skill-revision follow-up are still unfinished; these
-  initial-stage counts are not the complete four-cell comparison.
+- The v0.6.0 four-cell campaign is complete and published in
+  `benchmarks/results/2026-09-12_v0.6.0_four_cell/`: all 1,000 initial responses
+  and exactly 234 failed-only repairs have terminal grades. Initial passes
+  were 766; 79 repairs passed, producing 845/1,000 final passes. The original
+  Jett skill treatment passed 33/100 initially and 66/100 after repair.
+  The separate full-100-task skill-revision follow-up is still required.
 
 ## Run checkpoint (2026-09-12)
 
@@ -76,7 +75,7 @@ All paths below are relative to the repository and contain generated evidence:
 - `target/jett-bench/v0.6.0-container-baselines/`: all original container rows,
   `isolated-recheck/recheck.jsonl`, and combined `verification.json`.
 - `target/jett-bench/v0.6.0-four-cell/`: authoritative frozen campaign, raw
-  responses, event traces, and initial grading journal.
+  responses, event traces, both grading journals, and complete report.
 - `target/jett-bench/v0.6.0-four-cell-staging/`: a separate copy of the exact
   frozen plan/config/image, used to grade completed initial responses while
   generation holds the authoritative campaign lock. Refresh its raw-response
@@ -276,6 +275,31 @@ the 365-row raw journal and six-row grading journal remain exact prefixes of
 their completed initial-stage counterparts. The checkpoint archive's SHA-256
 still matches its published value. No earlier candidate or assessment was
 replaced or selected again.
+
+## Original campaign publication (2026-09-12)
+
+By 07:57 UTC, the supervisor and both repair processes were terminal, no campaign
+lock remained, and the frozen report was complete. The separate read-only audit
+passed all 1,234 retained responses, all 20 metric cells, exact failed-only repair
+pairing, and all preserved recovery links. Independent recomputation matched
+every summary cell and report row, including usage, code size, and latency.
+
+The immutable publication is `benchmarks/results/2026-09-12_v0.6.0_four_cell/`.
+It preserves the original report and summary bytes, independent accounting, and
+a 2,492-entry archive verified against its full SHA-256 manifest. The archive
+contains the canonical campaign plus deterministically reconstructed repair
+plans. Companion frozen-input and baseline archives remain separate and unchanged.
+
+Unique retained usage is 16,566,404 input tokens (including 14,347,008 cached),
+640,383 output tokens (including 377,465 reasoning), 16,012.357 seconds of summed
+call latency, and 993,944 generated source characters/UTF-8 bytes. These totals
+exclude unknowable overhead from the three interrupted original calls, and are
+not complete campaign consumption. All three approved replacements count once.
+
+The independent repair-feedback review found no hidden source or fixture leakage
+in the 234 actual plans. Its diagnostic-location and source-excerpt checks are
+bounded evidence for this campaign, not proof that the heuristic sanitizer can
+handle every future compiler diagnostic. No candidate or score was discarded.
 
 ## Skill follow-up execution constraints
 

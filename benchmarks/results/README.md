@@ -68,5 +68,13 @@ the ignored Cargo lockfile, are preserved separately in
 The immutable `2026-09-12_v0.6.0_interrupted_checkpoint/` preserves the original
 365 saved responses and three interrupted attempts without recoverable answers.
 The user subsequently approved repeating those exact three prompts once, with
-disclosure and unchanged original evidence. The complete four-cell campaign and
-Jett skill follow-up remain in progress; the checkpoint is not a final ranking.
+disclosure and unchanged original evidence. The checkpoint is not a final ranking.
+
+The complete 100-problem four-cell campaign is in
+[`2026-09-12_v0.6.0_four_cell/`](2026-09-12_v0.6.0_four_cell/README.md).
+It preserves all 1,000 initial responses and 234 failed-only repairs, with
+766/1,000 initial and 845/1,000 final passes. Jett's original skill treatment
+passed 33/100 initially and 66/100 after repair. The independent audit, all
+20 metric cells, and complete raw evidence are published together; consumption
+for the three lost original calls remains unknown. The separately versioned
+full-100-task Jett skill follow-up is still pending.
