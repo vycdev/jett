@@ -228,6 +228,36 @@ generator has stopped. A supervisor restart resumes saved grading. The unchanged
 generation guard still refuses an unjournaled model attempt; do not remove that
 evidence or authorize another repetition implicitly.
 
+## Final publication audit
+
+After both campaign stages, grading, and reporting have finished, run the
+separate read-only audit before publication:
+
+```text
+python tools/bench_campaign_audit.py target/jett-bench/v0.6.0-four-cell
+```
+
+Save successful JSON output outside the audited campaign directory. The audit
+rejects an active lock and changing evidence, verifies the complete task matrix
+and failed-only repair pairs, and checks completed grades, image identity,
+raw-to-grade fields, strict retained event metrics, response IDs, attempt
+coverage, and exact recovery approvals. It never calls models or graders and
+does not modify the evidence. It also supports the separate 100-row Jett skill
+follow-up by deriving its expected matrix from that campaign's manifest.
+
+The JSON includes all four cells and accounting over unique saved initial and
+repair responses. Do not sum all four-cell usage rows: repair-budget cells
+already include the initial calls. The legacy aggregate rollups describe
+initial responses only and are not complete campaign consumption.
+
+Publish the frozen report and summary unchanged, alongside the audit JSON,
+an explanatory README, and hash-verified raw evidence. For this recovered
+campaign, the three authorized replacement responses count once; their three
+lost predecessors retain unknown token use, latency, tool use, and server
+completion. Complete campaign consumption is therefore unavailable, not the
+sum of saved-response usage. Missing optional response metrics remain null;
+extraction failures retain response usage but have no measured source size.
+
 ## Skill follow-up execution constraints
 
 Complete and publish the original report before editing any frozen input.
