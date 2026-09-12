@@ -60,15 +60,13 @@ Future independent tasks and repeated samples are needed for broad rankings.
 - The campaign runner freezes inputs, journals completed rows, resumes missing
   work, stops new dispatch on infrastructure failure, and produces complete
   four-cell reports only when all expected rows and repair pairings exist.
-- The v0.6.0 four-cell campaign has 1,000 frozen initial prompts. Generation
-  initially stopped with 365 saved responses and three interrupted calls
-  without saved answers; all 365 saved responses are graded. The first six pipeline-check
-  responses (five passes, one test failure) remain in the campaign unchanged.
-  The user approved repeating only those three prompts with explicit disclosure;
-  all three replacements are now saved and graded, and initial generation has
-  resumed. The original interrupted receipts and all saved responses remain
-  unchanged. Remaining generation, paired repair, reporting, and the skill-revision
-  follow-up remain unfinished; no partial sample is a final language ranking.
+- The v0.6.0 four-cell campaign now has all 1,000 initial responses and grades:
+  766 passed, and the 234 failures are receiving one paired repair each. The
+  initial generator finished, and the checked staging merge preserved all
+  existing canonical grades. The three explicitly approved replacement calls
+  remain linked to their unchanged interrupted originals. Repairs, the full
+  report, and the separate skill-revision follow-up are still unfinished; these
+  initial-stage counts are not the complete four-cell comparison.
 
 ## Run checkpoint (2026-09-12)
 
@@ -257,6 +255,27 @@ lost predecessors retain unknown token use, latency, tool use, and server
 completion. Complete campaign consumption is therefore unavailable, not the
 sum of saved-response usage. Missing optional response metrics remain null;
 extraction failures retain response usage but have no measured source size.
+
+## Initial-stage completion (2026-09-12)
+
+By the 07:33:25 UTC checkpoint, initial generator 61200 was terminal and the
+supervisor had merged 994 missing grades into the six-row canonical journal.
+All 1,000 initial grades matched staging exactly. Repair generator 81820 was
+confirmed live under supervisor 101848, using the unchanged failed-only repair
+planner for exactly 234 responses. No initially passing response receives a
+repair prompt.
+
+A read-only initial-stage audit verified the full matrix, every response and
+grade, raw/event metrics, response IDs, image identity, exact attempt coverage,
+the three recovery approvals, and all 1,470 frozen input hashes. It found 766
+passes and 234 failures. This does not certify the still-running repair stage.
+
+A separate historical comparison checked all 741 canonical files in the
+published interrupted checkpoint. Immutable files still match byte for byte;
+the 365-row raw journal and six-row grading journal remain exact prefixes of
+their completed initial-stage counterparts. The checkpoint archive's SHA-256
+still matches its published value. No earlier candidate or assessment was
+replaced or selected again.
 
 ## Skill follow-up execution constraints
 
