@@ -60,11 +60,13 @@ Future independent tasks and repeated samples are needed for broad rankings.
 - The campaign runner freezes inputs, journals completed rows, resumes missing
   work, stops new dispatch on infrastructure failure, and produces complete
   four-cell reports only when all expected rows and repair pairings exist.
-- The v0.6.0 four-cell campaign has 1,000 frozen initial prompts. Luna generation
-  is running; the first six responses were graded successfully as a pipeline
-  check (five passes, one test failure), and are retained in the full campaign.
-  These six rows are not a language comparison. Full initial grading, paired
-  repair, reporting, and the skill-revision follow-up remain pending.
+- The v0.6.0 four-cell campaign has 1,000 frozen initial prompts. Generation
+  stopped with 365 saved responses and three interrupted calls without saved
+  answers; all 365 saved responses are graded. The first six pipeline-check
+  responses (five passes, one test failure) remain in the campaign unchanged.
+  A user decision on repeating the three interrupted prompts is pending.
+  Remaining generation, paired repair, reporting, and the skill-revision
+  follow-up remain unfinished; no partial sample is a final language ranking.
 
 ## Run checkpoint (2026-09-12)
 
@@ -99,9 +101,10 @@ and rules. Every raw row records the actual CLI version and subscription backend
 
 ## In-flight verification (2026-09-12)
 
-The original generator remains live; do not restart it while its process or
-execution handle is confirmed active. Incremental staging has completed 271
-initial assessments. This is a checkpoint, not a completed language comparison.
+At this earlier in-flight checkpoint, the original generator was live and
+incremental staging had completed 271 initial assessments. Later interruption
+details below supersede its live status. Never restart a generator while its
+process or execution handle is confirmed active.
 
 - A read-only audit compared all 254 responses present at that audit's snapshot
   with their retained event traces. Every input, cached-input, output, and
@@ -121,6 +124,39 @@ initial assessments. This is a checkpoint, not a completed language comparison.
   is a wording-clarity caveat to disclose, not an established contradiction or
   cross-language grader difference. Preserve the frozen task and its scores;
   consider clearer wording in a later task edition, outside this comparison.
+
+## Interrupted-process checkpoint (2026-09-12)
+
+At 06:26:41 UTC, direct process inspection confirmed that generator PID 51024
+and its scoped children were absent; the former execution handle was also
+unavailable. There were 365 unique saved initial rows, 368 attempt receipts,
+and 365 event files. All saved responses now have staging grades, verified
+against their exact raw rows and the pinned image. The six canonical grades
+agree exactly with their staging counterparts.
+
+Three unjournaled receipts remain unchanged with `status: started`:
+`score_lines` / Rust / skill-assisted; `score_lines` / Python / no skill;
+and `text_ipv4_parse` / Python / skill-assisted. Their matching event files
+are absent; three timestamp-associated temporary directories are empty. An
+independent audit found no recoverable answer or usage. The cause of process
+termination and server-side completion remain unknown. Do not infer zero
+tokens or fabricate failed candidates from these infrastructure interruptions.
+
+The frozen subprocess runner buffers events until it returns or handles an
+error. Abrupt termination can lose those buffered events. The existing resume
+guard correctly refuses all unjournaled attempts, regardless of status. No
+replacement-sampling policy existed for this case, so a user decision was
+requested before repeating the three exact prompts. No new model calls have
+been made since the interruption. Keep the guard and original receipts intact;
+any authorized recovery must separately link and disclose replacement attempts
+and keep interrupted-call consumption unavailable.
+
+The stale lock was moved, with its bytes and hash preserved, to
+`target/jett-bench/v0.6.0-four-cell/recovery/terminated-generator.lock.json`
+after another direct PID-absence check. The recovery receipt records the
+evidence and pending decision. The published partial evidence archive lives in
+`benchmarks/results/2026-09-12_v0.6.0_interrupted_checkpoint/`; it is not a
+completed four-cell result. The full goal remains open.
 
 ## Skill follow-up execution constraints
 
