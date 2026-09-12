@@ -12,29 +12,35 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_pilot_matrix_has_expected_size_and_unique_ids(self) -> None:
         runs = list(jett_bench.planned_runs())
-        self.assertEqual(len(runs), 1350)
+        config = jett_bench.read_json(jett_bench.DEFAULT_CONFIG)
+        expected = (len(jett_bench.load_tasks()) * len(config["languages"]) *
+                    len(config["tracks"]) * len(config["reasoning_efforts"]) * config["repetitions"])
+        self.assertEqual(len(runs), expected)
         self.assertEqual(len({run["run_id"] for run in runs}), len(runs))
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"low", "medium", "high"})
 
     def test_codex_calibration_is_the_balanced_medium_slice(self) -> None:
         runs = jett_bench.codex_calibration_runs()
-        self.assertEqual(len(runs), 150)
+        config = jett_bench.read_json(jett_bench.DEFAULT_CONFIG)
+        expected = len(jett_bench.load_tasks()) * len(config["languages"]) * len(config["tracks"])
+        self.assertEqual(len(runs), expected)
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"medium"})
         self.assertEqual({run["repetition"] for run in runs}, {1})
-        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 151)))
+        self.assertEqual({run["sequence"] for run in runs}, set(range(1, expected + 1)))
         cells = {(run["task_id"], run["language"], run["track"]) for run in runs}
-        self.assertEqual(len(cells), 150)
+        self.assertEqual(len(cells), expected)
 
     def test_codex_calibration_can_select_one_language_track(self) -> None:
         runs = jett_bench.codex_calibration_runs(
             language="jett", track="skill_assisted"
         )
-        self.assertEqual(len(runs), 10)
+        expected = len(jett_bench.load_tasks())
+        self.assertEqual(len(runs), expected)
         self.assertEqual({run["language"] for run in runs}, {"jett"})
         self.assertEqual({run["track"] for run in runs}, {"skill_assisted"})
         self.assertEqual({run["reasoning_effort"] for run in runs}, {"medium"})
-        self.assertEqual({run["sequence"] for run in runs}, set(range(1, 11)))
-        self.assertEqual(len({run["task_id"] for run in runs}), 10)
+        self.assertEqual({run["sequence"] for run in runs}, set(range(1, expected + 1)))
+        self.assertEqual(len({run["task_id"] for run in runs}), expected)
 
     def test_programming_skills_have_parity_and_no_task_material(self) -> None:
         tasks = jett_bench.load_tasks()

@@ -72,6 +72,35 @@ The isolated runner recipe and required no-network/resource controls are in
 
 ## Layout
 
+For the 100-problem expansion, `tools/jett_bench_campaign.py` adds a frozen,
+resumable four-cell campaign. It uses both `zero_shot` and `skill_assisted`
+contexts with every configured language; onboarding sheets remain a separate
+track. See `docs/active/benchmark_100_problem_plan.md` for the full goal.
+
+```text
+python tools/jett_bench_campaign.py verify-baselines target/jett-bench/baseline-gate --jobs 3
+python tools/jett_bench_campaign.py prepare target/jett-bench/campaign --baselines target/jett-bench/baseline-gate
+python tools/jett_bench_campaign.py generate target/jett-bench/campaign --jobs 3 --confirm-subscription-usage
+python tools/jett_bench_campaign.py grade target/jett-bench/campaign --image jett-bench:CURRENT --jobs 3
+python tools/jett_bench_campaign.py generate target/jett-bench/campaign --stage repair --jobs 3 --confirm-subscription-usage
+python tools/jett_bench_campaign.py grade target/jett-bench/campaign --stage repair --image jett-bench:CURRENT --jobs 3
+python tools/jett_bench_campaign.py report target/jett-bench/campaign
+```
+
+Build the named grading image from the same frozen inputs. Baseline verification
+executes trusted repository fixtures locally; generated submissions are each
+graded in a separate disposable no-network container. Generation and grading
+resume missing rows automatically. `--limit` bounds new work for a batch;
+`--jobs` allows 1-4 independent workers. An infrastructure error stops new
+dispatch while retaining completed rows. A complete report requires every
+initial row and exactly one repair per failed initial row.
+
+Preparation checks exactly 100 tasks by default and requires passing baselines
+for all configured task/language pairs. A subsequent Jett skill evaluation can
+select `--language jett --track skill_assisted` at preparation. Every campaign
+freezes prompts, task/compiler/skill hashes, and its grading image, and records
+cumulative token usage and code characters/bytes for the repair cells.
+
 - `config/pilot.json`: experiment matrix and mutable price assumption;
 - `tasks/*/task.json`: public semantics, signatures, and language adapters;
 - `tasks/*/baseline.*`: repository-owned known-good solutions;
