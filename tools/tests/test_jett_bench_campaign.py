@@ -156,6 +156,24 @@ class CampaignTests(unittest.TestCase):
                     campaign.report(root)
             self.assertFalse((root / "REPORT.md").exists())
 
+    def test_report_shows_cached_tokens_and_model_latency(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            initial = self.row("a", status="passed", passed=True, latency_ms=2500.0)
+            bench.write_jsonl(root / "initial-plan.jsonl", [initial])
+            bench.write_jsonl(root / "initial-raw.jsonl", [initial])
+            bench.write_jsonl(root / "initial-graded.jsonl", [
+                {**initial, "generation_sha256": campaign.row_digest(initial)},
+            ])
+            manifest = {"task_count": 1, "model": "gpt-5.6-luna", "reasoning_effort": "medium"}
+            with patch.object(campaign, "verify_snapshot", return_value=manifest), \
+                    patch.object(bench, "aggregate", return_value={}):
+                campaign.report(root)
+            report = (root / "REPORT.md").read_text(encoding="utf-8")
+            self.assertIn("Cached input", report)
+            self.assertIn("Latency (s)", report)
+            self.assertIn("| 100 | 30 | 20 | 10 | 2.5 | 2 | 3 |", report)
+
 
 if __name__ == "__main__":
     unittest.main()

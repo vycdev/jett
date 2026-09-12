@@ -19,6 +19,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1009,7 +1010,27 @@ def call_codex_subscription(
     timeout_seconds: int = 300,
 ) -> tuple[str, dict[str, Any], float, str]:
     event_directory.mkdir(parents=True, exist_ok=True)
-    event_path = event_directory / (sha256_text(run["run_id"])[:16] + ".jsonl")
+    # A resumed infrastructure failure must not overwrite evidence of its first call.
+    attempt_name = sha256_text(run["run_id"])[:16] + "-" + uuid.uuid4().hex
+    event_path = event_directory / (attempt_name + ".jsonl")
+    attempt_path = event_directory / (attempt_name + ".attempt.json")
+    attempt = {
+        "run_id": run["run_id"], "prompt_sha256": run["prompt_sha256"],
+        "started_at_utc": datetime.now(timezone.utc).isoformat(), "status": "started",
+    }
+
+    def record_attempt(status: str, stdout: str | bytes, stderr: str | bytes) -> None:
+        def decoded(value: str | bytes) -> str:
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+
+        event_path.write_text(decoded(stdout), encoding="utf-8", newline="\n")
+        attempt_path.write_text(json.dumps({
+            **attempt, "status": status, "stderr": decoded(stderr),
+            "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+            "raw_event_log": event_path.name,
+        }, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+    attempt_path.write_text(json.dumps(attempt, indent=2) + "\n", encoding="utf-8", newline="\n")
     prompt = (
         "Benchmark isolation rule: solve only from this prompt. Do not use shell commands, "
         "tools, filesystem inspection, network access, or prior knowledge of this repository.\n\n"
@@ -1035,11 +1056,14 @@ def call_codex_subscription(
                 env=codex_environment(),
             )
         except subprocess.TimeoutExpired as error:
-            raise BenchmarkError(f"Codex subscription run timed out: {error}") from error
+            record_attempt("timeout", error.stdout or "", error.stderr or "")
+            raise BenchmarkError(f"Codex subscription run timed out; evidence: {attempt_path}") from error
         except OSError as error:
+            record_attempt("launch_error", "", str(error))
             raise BenchmarkError(f"Codex subscription run failed: {error}") from error
         latency_ms = (time.perf_counter() - started) * 1000
-        event_path.write_text(completed.stdout, encoding="utf-8", newline="\n")
+        record_attempt("completed" if completed.returncode == 0 else "backend_error",
+                       completed.stdout, completed.stderr)
         if completed.returncode != 0:
             raise BenchmarkError(
                 f"Codex subscription run exited {completed.returncode}: "

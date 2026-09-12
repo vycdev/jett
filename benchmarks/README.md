@@ -70,7 +70,7 @@ pass-after-repair rates.
 The isolated runner recipe and required no-network/resource controls are in
 `sandbox/README.md`.
 
-## Layout
+## Resumable 100-problem campaign
 
 For the 100-problem expansion, `tools/jett_bench_campaign.py` adds a frozen,
 resumable four-cell campaign. It uses both `zero_shot` and `skill_assisted`
@@ -100,6 +100,8 @@ for all configured task/language pairs. A subsequent Jett skill evaluation can
 select `--language jett --track skill_assisted` at preparation. Every campaign
 freezes prompts, task/compiler/skill hashes, and its grading image, and records
 cumulative token usage and code characters/bytes for the repair cells.
+
+## Layout
 
 - `config/pilot.json`: experiment matrix and mutable price assumption;
 - `tasks/*/task.json`: public semantics, signatures, and language adapters;

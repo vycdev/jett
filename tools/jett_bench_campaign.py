@@ -402,17 +402,20 @@ def report(directory: Path) -> None:
     write_json(directory / "summary.json", summary)
     lines = [f"# {manifest['task_count']}-problem four-cell benchmark", "",
              f"Model: {manifest['model']}; reasoning: {manifest['reasoning_effort']}; backend: Codex subscription.", "",
-             "| Language | Context | Budget | Pass | Input tokens | Output tokens | Reasoning tokens | Code chars | Code bytes |",
-             "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+             "| Language | Context | Budget | Pass | Input tokens | Cached input | Output tokens | Reasoning tokens | Latency (s) | Code chars | Code bytes |",
+             "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for cell in cells:
         def count(field: str) -> str:
             value = cell[field]
             return "unavailable" if value is None else f"{value:,}"
+        latency = "unavailable" if cell["latency_ms"] is None else f"{cell['latency_ms'] / 1000:,.1f}"
         lines.append(f"| {cell['language']} | {cell['track']} | {cell['mode']} | {cell['passed']}/{cell['n']} | "
-                     f"{count('input_tokens')} | {count('output_tokens')} | {count('reasoning_tokens')} | "
+                     f"{count('input_tokens')} | {count('cached_input_tokens')} | {count('output_tokens')} | "
+                     f"{count('reasoning_tokens')} | {latency} | "
                      f"{count('code_chars')} | {count('code_bytes')} |")
     lines += ["", "Repair budgets include initial and repair usage; passing initial responses receive no second prompt.",
               "Code counts include every generated candidate, including failures. Reasoning tokens are included in output tokens.",
+              "Cached input is a subset of input tokens. Latency sums model-call durations, not parallel campaign wall time.",
               "", "Each task/context has one observation. The model alias can change; these are calibration results.",
               "The task set is used for skill development; repeated evaluation is not an untouched held-out estimate.",
               "No API-billed requests were used; subscription allowance was consumed."]
