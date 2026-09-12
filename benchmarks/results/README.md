@@ -58,3 +58,15 @@ The controlled v0.5.3 Jett 2x2 comparison is in
 one-shot and 1/10 after repair. Skill-assisted passed 9/10 one-shot and 9/10
 after repair. Its sole repair used reserved word `result` as an identifier,
 producing the v0.5.4 lexical clarification.
+
+The 100-problem v0.6.0 reference checks are in
+`2026-09-12_v0.6.0_reference_validation/`, with all 500 task/language cells
+validated locally and in containers. Its exact 1,470 source inputs, including
+the ignored Cargo lockfile, are preserved separately in
+`2026-09-12_v0.6.0_frozen_inputs/`.
+
+The immutable `2026-09-12_v0.6.0_interrupted_checkpoint/` preserves the original
+365 saved responses and three interrupted attempts without recoverable answers.
+The user subsequently approved repeating those exact three prompts once, with
+disclosure and unchanged original evidence. The complete four-cell campaign and
+Jett skill follow-up remain in progress; the checkpoint is not a final ranking.

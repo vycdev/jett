@@ -115,7 +115,7 @@ The frozen source revision is `bc6f96a`. The grading image is
 `sha256:5cd341ed3f4062c4c56ab6d267111041aa375c2e39ae20db1770d2b46ee02e80`
 (local tag `jett-bench:0.6.0`); all 1,470 frozen input files matched the image.
 Their exact bytes, including the Git-ignored `Cargo.lock`, are also preserved
-in `benchmarks/results/2026-09-12_v0.6.0_reference_validation/frozen-inputs.zip`.
+in `benchmarks/results/2026-09-12_v0.6.0_frozen_inputs/frozen-inputs.zip`.
 Every archived entry was verified against the campaign's input hash manifest.
 
 Use the already installed Codex CLI **0.153.4** through task-local PATH
