@@ -64,7 +64,8 @@ Future independent tasks and repeated samples are needed for broad rankings.
   stopped with 365 saved responses and three interrupted calls without saved
   answers; all 365 saved responses are graded. The first six pipeline-check
   responses (five passes, one test failure) remain in the campaign unchanged.
-  A user decision on repeating the three interrupted prompts is pending.
+  The user approved repeating only those three prompts with explicit disclosure;
+  the original interrupted receipts and all saved responses remain unchanged.
   Remaining generation, paired repair, reporting, and the skill-revision
   follow-up remain unfinished; no partial sample is a final language ranking.
 
@@ -87,6 +88,29 @@ digests against the authoritative raw rows before merging its grading journal.
 Already graded rows must agree exactly; never regrade them to select a better
 outcome. Complete any missing initial grades before constructing repair prompts.
 Retain event traces in the authoritative campaign for the final integrity check.
+
+Use the host-side staging operator for checked synchronization (substitute the
+two campaign directories for `SOURCE` and `STAGING`):
+
+```text
+python tools/bench_campaign_staging.py snapshot SOURCE STAGING --stage initial
+python tools/jett_bench_campaign.py grade STAGING --image jett-bench:0.6.0 --jobs 3
+python tools/bench_campaign_staging.py merge SOURCE STAGING --stage initial
+```
+
+Snapshot only after the previous staging batch finishes. It requires all prior
+staging responses to be graded and unchanged, and reads the source journal once
+without taking its generator-owned lock. A partial last JSONL row is rejected;
+retry the snapshot later without changing or reissuing any model call.
+
+Merge requires generation for the entire selected stage to be complete and
+both campaigns to be unlocked. It checks exact frozen metadata, prompt IDs,
+source/event hashes, the pinned image, and identical overlapping assessments.
+It appends only missing validated grades while preserving existing canonical
+grade bytes. Then the unchanged campaign grader can fill any remaining grades.
+For repairs, use `--stage repair` after both directories have identical complete
+initial grading. This operator never generates responses or executes candidates;
+the frozen generation/grading/reporting helpers and image remain unchanged.
 
 The frozen source revision is `bc6f96a`. The grading image is
 `sha256:5cd341ed3f4062c4c56ab6d267111041aa375c2e39ae20db1770d2b46ee02e80`
@@ -157,6 +181,15 @@ after another direct PID-absence check. The recovery receipt records the
 evidence and pending decision. The published partial evidence archive lives in
 `benchmarks/results/2026-09-12_v0.6.0_interrupted_checkpoint/`; it is not a
 completed four-cell result. The full goal remains open.
+
+The user subsequently answered **"Yes, repeat and disclose"**. A separate
+`recovery/2026-09-12_approved_repetition.json` decision binds that approval to
+the three exact original receipt and prompt hashes. The earlier interruption
+receipt and published checkpoint remain immutable historical evidence. Each
+replacement must carry a link to its original attempt and this decision;
+another interrupted replacement would require a new explicit decision, not an
+automatic third draw. Completed-response usage must remain distinguished from
+unknown interrupted-call overhead in the eventual report.
 
 ## Skill follow-up execution constraints
 
