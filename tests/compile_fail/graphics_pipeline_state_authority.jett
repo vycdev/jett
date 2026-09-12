@@ -1,0 +1,13 @@
+# ERROR: E0372
+namespace app
+struct State:
+    perform: function() returns int64
+function update(state: State, key: graphics.Key) returns State:
+    return state
+function render(view state: State) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function main(display: Graphics) returns result[nothing, string]:
+    State initial = State(perform: function() returns int64: return 0)
+    graphics.Config config = graphics.Config(title: "Callback review", width: 32, height: 32)
+    return display into view graphics.run[State](config, initial, update, render)

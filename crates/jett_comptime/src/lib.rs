@@ -6,7 +6,7 @@ pub mod verify;
 pub use explicit::evaluate_explicit_comptime_expressions;
 pub use interpreter::{
     ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
-    Interpreter, RandomTestSample,
+    GraphicsTestEvent, GraphicsTestKey, GraphicsTestObservation, Interpreter, RandomTestSample,
 };
 pub use value::Value;
 pub use verify::{

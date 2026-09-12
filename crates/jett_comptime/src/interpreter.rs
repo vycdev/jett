@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -18,6 +19,12 @@ use jett_types::{
 };
 
 use crate::value::Value;
+
+mod graphics;
+
+use graphics::GraphicsProvider;
+pub use graphics::{GraphicsTestEvent, GraphicsTestObservation};
+pub use jett_runtime::graphics::Key as GraphicsTestKey;
 
 // ---------------------------------------------------------------------------
 // Built-in argument checking (must be defined before call_builtin uses it)
@@ -274,7 +281,7 @@ pub struct Interpreter {
     /// Stack of block-scoped namespace aliases introduced by `use`.
     namespace_alias_scopes: Vec<HashMap<String, String>>,
     /// User-defined functions available for calling.
-    functions: HashMap<String, FunctionDef>,
+    functions: HashMap<String, Arc<FunctionDef>>,
     /// Function registry entries that came from compiler-shipped stdlib files.
     trusted_stdlib_functions: HashSet<String>,
     /// Registered user-defined structs available for construction and field access.
@@ -330,6 +337,10 @@ pub struct Interpreter {
     clock_provider: Option<ClockProvider>,
     /// Immutable launch arguments and environment. Compile-time interpreters leave this absent.
     launch_environment: Option<LaunchEnvironmentSnapshot>,
+    /// Runtime graphics authority and its native or scripted provider.
+    graphics_provider: Option<GraphicsProvider>,
+    /// Native sessions and their callbacks execute synchronously without nesting.
+    graphics_session_active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -592,6 +603,8 @@ impl Interpreter {
             random_provider: None,
             clock_provider: None,
             launch_environment: None,
+            graphics_provider: None,
+            graphics_session_active: false,
         }
     }
 
@@ -723,6 +736,24 @@ impl Interpreter {
             }
         }
         None
+    }
+
+    /// Locate an existing struct field without cloning its enclosing values.
+    /// The caller clones only the selected value, preserving independent values.
+    fn borrowed_struct_place(&self, expression: &Expr) -> Option<&Value> {
+        match expression {
+            Expr::Ident(ident) => self.get_variable(&ident.name),
+            Expr::Paren(inner, _) | Expr::View(inner, _) => self.borrowed_struct_place(inner),
+            Expr::FieldAccess(base, field, _) => {
+                let Value::Struct { fields, .. } = self.borrowed_struct_place(base)? else {
+                    return None;
+                };
+                fields
+                    .iter()
+                    .find_map(|(name, value)| (name == &field.name).then_some(value))
+            }
+            _ => None,
+        }
     }
 
     fn get_variable_type(&self, name: &str) -> Option<&TypeExpr> {
@@ -905,7 +936,8 @@ impl Interpreter {
     }
 
     fn register_function_named(&mut self, name: &str, func: &FunctionDef, trusted_stdlib: bool) {
-        self.functions.insert(name.to_string(), func.clone());
+        self.functions
+            .insert(name.to_string(), Arc::new(func.clone()));
         if trusted_stdlib {
             self.trusted_stdlib_functions.insert(name.to_string());
         } else {
@@ -1008,7 +1040,7 @@ impl Interpreter {
         for method in &strukt.methods {
             self.functions.insert(
                 format!("{}.{}", strukt.name.name, method.name.name),
-                method.clone(),
+                Arc::new(method.clone()),
             );
         }
     }
@@ -1103,7 +1135,8 @@ impl Interpreter {
             let concrete_name = format!("{}.{}", owner_name, method.name.name);
             let interface_method_name = format!("{}.{}", interface_name, method.name.name);
 
-            self.functions.insert(concrete_name.clone(), method.clone());
+            self.functions
+                .insert(concrete_name.clone(), Arc::new(method.clone()));
             self.interface_methods
                 .entry(interface_method_name)
                 .or_default()
@@ -1227,7 +1260,7 @@ impl Interpreter {
         value: Value,
     ) -> Result<Value, String> {
         let primitive_type_name = self.primitive_base_type_name(type_name);
-        match primitive_type_name.as_str() {
+        match primitive_type_name.as_ref() {
             "int8" => Self::normalize_sized_integer(
                 &primitive_type_name,
                 value,
@@ -1264,7 +1297,28 @@ impl Interpreter {
         }
     }
 
-    fn primitive_base_type_name(&self, type_name: &str) -> String {
+    fn primitive_base_type_name<'a>(&self, type_name: &'a str) -> Cow<'a, str> {
+        // Primitive type names cannot be redeclared by source programs. Avoid
+        // allocating an alias-cycle set for these common expression types.
+        if matches!(
+            type_name,
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "float32"
+                | "float64"
+                | "bool"
+                | "string"
+                | "bytes"
+                | "nothing"
+        ) {
+            return Cow::Borrowed(type_name);
+        }
         let mut current = type_name.to_string();
         let mut seen = HashSet::new();
 
@@ -1289,7 +1343,7 @@ impl Interpreter {
             current = Self::unwrapped_secret_type_expr_name(&base_ty);
         }
 
-        current
+        Cow::Owned(current)
     }
 
     fn unwrapped_secret_type_expr_name(ty: &TypeExpr) -> String {
@@ -1315,7 +1369,7 @@ impl Interpreter {
             Value::Uint64(value) => value,
             other => return self.normalize_value_for_type_name(type_name, other),
         };
-        let wrapped = match primitive_type_name.as_str() {
+        let wrapped = match primitive_type_name.as_ref() {
             "int8" => Value::Int64((value as i8) as i64),
             "int16" => Value::Int64((value as i16) as i64),
             "int32" => Value::Int64((value as i32) as i64),
@@ -1500,17 +1554,7 @@ impl Interpreter {
                 if let Some(val) = self.get_variable(&ident.name).cloned() {
                     Ok(ExprFlow::Value(val))
                 } else if let Some(func_name) = self.registry_name(&self.functions, &ident.name) {
-                    let func = self
-                        .functions
-                        .get(&func_name)
-                        .expect("registry lookup returned an existing function")
-                        .clone();
-                    // Named function reference — wrap as a function value.
-                    Ok(ExprFlow::Value(Value::Function {
-                        params: func.params.clone(),
-                        body: func.body.clone(),
-                        captures: HashMap::new(),
-                    }))
+                    Ok(ExprFlow::Value(Value::NamedFunction(func_name)))
                 } else {
                     Err(format!("undefined variable '{}'", ident.name))
                 }
@@ -1641,6 +1685,11 @@ impl Interpreter {
 
             // Field access: struct field access, or enum variant like `Color.red`
             Expr::FieldAccess(obj, field, _) => {
+                if let Some(name) = Self::dotted_expr_name(expr) {
+                    if let Some(function) = self.registry_name(&self.functions, &name) {
+                        return Ok(ExprFlow::Value(Value::NamedFunction(function)));
+                    }
+                }
                 if let Some(owner_name) = Self::dotted_expr_name(obj) {
                     if let Some(enum_name) = self.registry_name(&self.enums, &owner_name) {
                         return Ok(ExprFlow::Value(Value::Enum {
@@ -1649,6 +1698,9 @@ impl Interpreter {
                             fields: vec![],
                         }));
                     }
+                }
+                if let Some(value) = self.borrowed_struct_place(expr) {
+                    return Ok(ExprFlow::Value(value.clone()));
                 }
                 match obj.as_ref() {
                     Expr::Ident(ident) => {
@@ -1840,6 +1892,7 @@ impl Interpreter {
                     params: params.clone(),
                     body: body.clone(),
                     captures,
+                    namespace: self.current_namespace.clone(),
                 }))
             }
 
@@ -1880,12 +1933,88 @@ impl Interpreter {
         callee: &Expr,
         type_args: &[TypeExpr],
         args: &[CallArg],
+        argument_order: Option<&[usize]>,
     ) -> Option<Vec<TypeExpr>> {
+        self.generic_function_for_inference(callee, type_args)?;
         let actual_types = args
             .iter()
             .map(|arg| self.call_argument_type(&arg.value))
             .collect::<Option<Vec<_>>>()?;
+        let actual_types = Self::reorder_function_arguments(actual_types, argument_order).ok()?;
         self.inferred_user_function_type_args_from_types(callee, type_args, &actual_types)
+    }
+
+    /// Parameter-order indices into source-order arguments of a registered call.
+    /// Values are still evaluated lexically before this permutation is applied.
+    fn source_function_argument_order(
+        &self,
+        callee: &Expr,
+        args: &[CallArg],
+        piped: bool,
+    ) -> Result<Option<Vec<usize>>, String> {
+        if args.iter().all(|arg| arg.name.is_none()) {
+            return Ok(None);
+        }
+        let Some(source_name) = Self::dotted_expr_name(callee) else {
+            return Ok(None);
+        };
+        let name = self.runtime_name(&source_name);
+        let Some(function) = self.functions.get(&name) else {
+            return Ok(None);
+        };
+        let offset = usize::from(piped);
+        if function.params.len() != args.len() + offset {
+            return Err(format!(
+                "function '{name}' argument count does not match parameter count"
+            ));
+        }
+        let mut order = vec![None; function.params.len()];
+        if piped {
+            order[0] = Some(0);
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let source_index = index + offset;
+            let parameter_index = match &arg.name {
+                Some(argument_name) => function
+                    .params
+                    .iter()
+                    .position(|param| param.name.name == argument_name.name)
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown argument '{}' for function '{name}'",
+                            argument_name.name
+                        )
+                    })?,
+                None => source_index,
+            };
+            if order[parameter_index].replace(source_index).is_some() {
+                return Err(format!("duplicate argument for function '{name}'"));
+            }
+        }
+        order
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .map(Some)
+            .ok_or_else(|| format!("missing argument for function '{name}'"))
+    }
+
+    fn reorder_function_arguments<T>(
+        values: Vec<T>,
+        order: Option<&[usize]>,
+    ) -> Result<Vec<T>, String> {
+        let Some(order) = order else {
+            return Ok(values);
+        };
+        let mut values = values.into_iter().map(Some).collect::<Vec<_>>();
+        order
+            .iter()
+            .map(|&index| {
+                values
+                    .get_mut(index)
+                    .and_then(Option::take)
+                    .ok_or_else(|| "invalid function argument order".to_string())
+            })
+            .collect()
     }
 
     fn inferred_user_function_type_args_from_types(
@@ -1894,20 +2023,7 @@ impl Interpreter {
         type_args: &[TypeExpr],
         actual_types: &[TypeExpr],
     ) -> Option<Vec<TypeExpr>> {
-        if !type_args.is_empty() {
-            return None;
-        }
-        let source_name = match callee {
-            Expr::FieldAccess(owner, field, _) => Self::extract_dotted_name(owner, &field.name),
-            Expr::Ident(ident) => Some(ident.name.clone()),
-            _ => None,
-        }?;
-        let function_name = self.runtime_name(&source_name);
-        let function = self.functions.get(&function_name)?;
-        if function.type_params.is_empty() {
-            return None;
-        }
-
+        let function = self.generic_function_for_inference(callee, type_args)?;
         let mut inferred = HashMap::new();
         for (param, actual) in function.params.iter().zip(actual_types) {
             let actual = self.inference_base_type(actual);
@@ -1918,6 +2034,24 @@ impl Interpreter {
             .iter()
             .map(|param| inferred.get(&param.name).cloned())
             .collect()
+    }
+
+    fn generic_function_for_inference(
+        &self,
+        callee: &Expr,
+        type_args: &[TypeExpr],
+    ) -> Option<&FunctionDef> {
+        if !type_args.is_empty() {
+            return None;
+        }
+        let source_name = match callee {
+            Expr::FieldAccess(owner, field, _) => Self::extract_dotted_name(owner, &field.name),
+            Expr::Ident(ident) => Some(ident.name.clone()),
+            _ => None,
+        }?;
+        let function_name = self.runtime_name(&source_name);
+        let function = self.functions.get(&function_name)?;
+        (!function.type_params.is_empty()).then_some(function.as_ref())
     }
 
     fn inference_base_type(&self, ty: &TypeExpr) -> TypeExpr {
@@ -1944,7 +2078,9 @@ impl Interpreter {
 
     fn call_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
         match expression {
-            Expr::Ident(argument) => self.get_variable_type(&argument.name).cloned(),
+            Expr::Ident(argument) if self.get_variable_type(&argument.name).is_some() => {
+                self.get_variable_type(&argument.name).cloned()
+            }
             Expr::InlineFn(params, return_type, _, span) => Some(TypeExpr::Function(
                 params.iter().map(|param| param.ty.clone()).collect(),
                 Box::new(return_type.clone().unwrap_or_else(|| {
@@ -1955,14 +2091,52 @@ impl Interpreter {
                 })),
                 *span,
             )),
-            _ => self
-                .checked_expression_types
-                .as_ref()
-                .and_then(|types| types.get(&expression.span()))
-                .and_then(|type_name| {
-                    Self::simple_type_expr_from_name(type_name, expression.span())
-                }),
+            _ => self.named_function_argument_type(expression).or_else(|| {
+                self.checked_expression_types
+                    .as_ref()
+                    .and_then(|types| types.get(&expression.span()))
+                    .and_then(|type_name| {
+                        Self::simple_type_expr_from_name(type_name, expression.span())
+                    })
+            }),
         }
+    }
+
+    fn named_function_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
+        if let Expr::Ident(ident) = expression
+            && self.get_variable(&ident.name).is_some()
+        {
+            // Captures can omit runtime type metadata and shadow a namespaced
+            // function. Their checked expression type remains authoritative.
+            return None;
+        }
+        let source_name = Self::dotted_expr_name(expression)?;
+        let name = self.registry_name(&self.functions, &source_name)?;
+        let function = self.functions.get(&name)?;
+        if !function.type_params.is_empty() {
+            return None;
+        }
+        let namespace = Self::function_namespace(&name);
+        let params = function
+            .params
+            .iter()
+            .map(|param| self.substitute_type_expr_in_namespace(&param.ty, namespace.as_deref()))
+            .collect();
+        let return_type = function
+            .return_type
+            .as_ref()
+            .map(|ty| self.substitute_type_expr_in_namespace(ty, namespace.as_deref()))
+            .unwrap_or_else(|| {
+                TypeExpr::Named(Ident {
+                    name: "nothing".to_string(),
+                    span: expression.span(),
+                })
+            });
+        Some(TypeExpr::Function(
+            params,
+            Box::new(return_type),
+            expression.span(),
+        ))
     }
 
     fn infer_type_arguments(
@@ -2067,13 +2241,20 @@ impl Interpreter {
             _ => {}
         }
 
-        let inferred_type_args = self.inferred_user_function_type_args(callee, type_args, args);
+        let argument_order = self.source_function_argument_order(callee, args, false)?;
+        let inferred_type_args = self.inferred_user_function_type_args(
+            callee,
+            type_args,
+            args,
+            argument_order.as_deref(),
+        );
         let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
         let mut arg_values = Vec::with_capacity(args.len());
         for arg in args {
             arg_values.push(value_or_signal!(self, &arg.value));
         }
+        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
 
         match callee {
             Expr::Ident(ident) => {
@@ -2125,7 +2306,7 @@ impl Interpreter {
                         )?));
                     }
                     // Try higher-order built-ins first (require &mut self).
-                    if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
+                    if let Some(result) = self.call_higher_order_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     let runtime_name = self.runtime_name(name);
@@ -2276,8 +2457,10 @@ impl Interpreter {
         };
         let (function, type_args, extra_args): (&Expr, &[TypeExpr], &[CallArg]) = match function {
             Expr::GenericCall(callee, type_args, args, _) => (callee, type_args, args),
+            Expr::Call(callee, args, _) => (callee, &[], args),
             _ => (function, &[], &step.extra_args),
         };
+        let argument_order = self.source_function_argument_order(function, extra_args, true)?;
 
         let mut actual_types = Vec::with_capacity(extra_args.len() + 1);
         if let Some(piped_type) = self
@@ -2297,6 +2480,10 @@ impl Interpreter {
                 actual_types.clear();
             }
         }
+        if !actual_types.is_empty() {
+            actual_types =
+                Self::reorder_function_arguments(actual_types, argument_order.as_deref())?;
+        }
         let inferred_type_args =
             self.inferred_user_function_type_args_from_types(function, type_args, &actual_types);
         let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
@@ -2306,6 +2493,7 @@ impl Interpreter {
         for arg in extra_args {
             arg_values.push(value_or_signal!(self, &arg.value));
         }
+        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
 
         // Resolve the function name from the expression.
         match function {
@@ -2321,7 +2509,7 @@ impl Interpreter {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
                     // Check higher-order builtins first (need &mut self).
-                    if let Some(result) = self.call_higher_order_builtin(name, arg_values.clone()) {
+                    if let Some(result) = self.call_higher_order_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     let runtime_name = self.runtime_name(name);
@@ -2781,15 +2969,15 @@ impl Interpreter {
                 Ok(None)
             }
 
-            Stmt::Expr(expr_stmt) => {
-                // Type names appearing as bare ExprStmt (from parser producing ExprStmt
-                // instead of VarDecl for `Type name = expr`) are harmless — ignore errors.
-                match self.eval_expr_flow(&expr_stmt.expr) {
-                    Ok(ExprFlow::Value(_)) => Ok(None),
-                    Ok(ExprFlow::Signal(signal)) => Ok(Some(signal)),
-                    Err(_) => Ok(None),
-                }
+            // Preserve the parser's existing standalone builtin-type markers
+            // before legacy declarations, not arbitrary expression failures.
+            Stmt::Expr(expr_stmt) if matches!(&expr_stmt.expr, Expr::Ident(ident) if Self::is_builtin_type_name(&ident.name)) => {
+                Ok(None)
             }
+            Stmt::Expr(expr_stmt) => match self.eval_expr_flow(&expr_stmt.expr)? {
+                ExprFlow::Value(_) => Ok(None),
+                ExprFlow::Signal(signal) => Ok(Some(signal)),
+            },
 
             Stmt::Assert(assert_stmt) => {
                 let cond = match self.eval_expr_flow(&assert_stmt.condition)? {
@@ -9773,7 +9961,7 @@ impl Interpreter {
         }
 
         // Check higher-order built-ins first (require &mut self).
-        if let Some(result) = self.call_higher_order_builtin(name, args.clone()) {
+        if let Some(result) = self.call_higher_order_builtin(name, &args) {
             return result;
         }
         if let Some(result) = self.call_builtin_with_type_args(name, type_args, &args) {
@@ -9804,7 +9992,7 @@ impl Interpreter {
     ) -> Result<Value, String> {
         // Check if the name refers to a variable holding a function value (closure).
         if let Some(fn_val) = self.get_variable(name).cloned() {
-            if matches!(fn_val, Value::Function { .. }) {
+            if matches!(fn_val, Value::Function { .. } | Value::NamedFunction(_)) {
                 return self.call_fn_value(fn_val, args);
             }
         }
@@ -9838,6 +10026,7 @@ impl Interpreter {
         self.current_function_trusted_stdlib =
             self.trusted_stdlib_functions.contains(&resolved_name);
 
+        let scope_depth = self.scopes.len();
         self.push_scope();
         let call_result = (|| {
             for (param, arg) in func.params.iter().zip(args) {
@@ -9866,7 +10055,9 @@ impl Interpreter {
 
             Ok(value)
         })();
-        self.pop_scope();
+        while self.scopes.len() > scope_depth {
+            self.pop_scope();
+        }
         self.type_arg_scopes.pop();
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
@@ -9909,9 +10100,12 @@ impl Interpreter {
     fn call_higher_order_builtin(
         &mut self,
         name: &str,
-        args: Vec<Value>,
+        args: &[Value],
     ) -> Option<Result<Value, String>> {
         match name {
+            "graphics.__run" if self.current_function_trusted_stdlib => {
+                Some(self.run_graphics_builtin(args.to_vec()))
+            }
             "list.__sort_by" if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
                     return Some(Err(format!(
@@ -10020,10 +10214,12 @@ impl Interpreter {
     /// Call a `Value::Function` (inline function) with the given arguments.
     fn call_fn_value(&mut self, fn_val: Value, args: Vec<Value>) -> Result<Value, String> {
         match fn_val {
+            Value::NamedFunction(name) => self.call_function(&name, args),
             Value::Function {
                 params,
                 body,
                 captures,
+                namespace,
             } => {
                 if args.len() != params.len() {
                     return Err(format!(
@@ -10039,6 +10235,7 @@ impl Interpreter {
                 }
 
                 // Push the captured environment as a scope, then the parameter scope on top.
+                let scope_depth = self.scopes.len();
                 self.push_scope();
                 for (name, value) in &captures {
                     self.set_variable(name, value.clone());
@@ -10049,11 +10246,15 @@ impl Interpreter {
                     self.set_variable_with_type(&param.name.name, arg, param_ty);
                 }
                 let saved_trusted_stdlib = self.current_function_trusted_stdlib;
+                let saved_namespace = self.current_namespace.clone();
                 self.current_function_trusted_stdlib = false;
+                self.current_namespace = namespace;
                 let result = self.exec_block_inner(&body);
                 self.current_function_trusted_stdlib = saved_trusted_stdlib;
-                self.pop_scope(); // params
-                self.pop_scope(); // captures
+                self.current_namespace = saved_namespace;
+                while self.scopes.len() > scope_depth {
+                    self.pop_scope();
+                }
                 let result = result?;
                 Ok(match result {
                     Some(Signal::Return(v)) => v,
@@ -11094,7 +11295,7 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::Pending(_) => Some("pending".to_string()),
         Value::Map(_) => Some("map".to_string()),
         Value::Set(_) => Some("set".to_string()),
-        Value::Function { .. } => Some("function".to_string()),
+        Value::Function { .. } | Value::NamedFunction(_) => Some("function".to_string()),
     }
 }
 
@@ -15205,6 +15406,7 @@ mod tests {
             }],
             body: block(vec![return_stmt(var("value"))]),
             captures: HashMap::new(),
+            namespace: None,
         };
 
         assert_eq!(
@@ -16132,6 +16334,44 @@ mod tests {
         );
 
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(8));
+    }
+
+    #[test]
+    fn nested_struct_field_reads_preserve_independent_values_and_errors() {
+        let mut interp = Interpreter::new();
+        let items = Value::List(vec![Value::Int64(7)]);
+        let inner = Value::Struct {
+            type_name: "Inner".to_string(),
+            fields: vec![("items".to_string(), items.clone())],
+        };
+        interp.set_variable(
+            "outer",
+            Value::Struct {
+                type_name: "Outer".to_string(),
+                fields: vec![
+                    ("inner".to_string(), inner),
+                    ("other".to_string(), Value::String("preserved".to_string())),
+                ],
+            },
+        );
+        let selected = field_access(field_access(var("outer"), "inner"), "items");
+        let Value::List(mut copied_items) = interp.eval_expr(&selected).unwrap() else {
+            panic!("selected nested field should be a list");
+        };
+        copied_items.push(Value::Int64(9));
+
+        assert_eq!(interp.eval_expr(&selected), Ok(items));
+        assert_eq!(
+            interp.eval_expr(&field_access(var("outer"), "other")),
+            Ok(Value::String("preserved".to_string()))
+        );
+        assert_eq!(
+            interp.eval_expr(&field_access(
+                field_access(var("outer"), "inner"),
+                "missing"
+            )),
+            Err("struct 'Inner' has no field 'missing'".to_string())
+        );
     }
 
     #[test]

@@ -1,0 +1,43 @@
+namespace graphics
+export struct Config:
+    title: string
+    width: int64
+    height: int64
+export struct Color:
+    red: int64
+    green: int64
+    blue: int64
+export struct Rect:
+    x: int64
+    y: int64
+    width: int64
+    height: int64
+    color: Color
+export struct Text:
+    x: int64
+    y: int64
+    text: string
+    scale: int64
+    color: Color
+export struct Scene:
+    background: Color
+    rectangles: list[Rect]
+    texts: list[Text]
+export enum Key:
+    up
+    down
+    left
+    right
+    w
+    a
+    s
+    d
+    u
+    z
+    r
+    n
+    p
+    enter
+    space
+export function run[State](view display: Graphics, config: Config, initial: State, update: function(State, Key) returns State, render: function(view State) returns Scene) returns result[nothing, string]:
+    return graphics.__run[State](view display, config, initial, update, render)

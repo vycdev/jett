@@ -7065,6 +7065,12 @@ Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with
 
 Generic type parameters may be inferred when argument types uniquely determine every parameter, including direct and pipeline calls to source-owned stdlib functions such as `list.length(items)`. Calls with no inferable value argument, an ambiguous result-only parameter, or an explicit reflection target write the type arguments. When type arguments are written, their count must exactly match the callable's generic arity.
 
+A bare generic function template is not a concrete function value. To pass one
+as a callback, use a concrete named wrapper or inline function containing an
+ordinary generic call. Contextual specialization of generic function values is
+an [open design choice](open_design/generic_function_values.md); the compiler
+rejects unspecialized references instead of executing an unchecked generic body.
+
 ```
 # Inferred from value arguments
 string result = add("hello", " world")
@@ -7319,6 +7325,13 @@ Jett compiles to native code via an **LLVM backend** (primary target) for perfor
 - **`jett test`** — run all `verify` and `property` blocks in the project. `verify` blocks execute at compile time for pure functions. `property` blocks run fuzz-based tests at test time (10,000 random inputs by default).
 - **`jett format`** — format source code (single canonical style, no configuration)
 
+Project testing uses the declaration order of the `jett.proj` entry: stdlib
+first, project siblings in lexical path order, and the entry file last.
+`jett test file.jett` selects that file's checks without changing this order;
+`jett test` reports every project check once. Relative source paths use the
+same project discovery as absolute paths. File selection never permits a
+forward reference within a file or between project siblings.
+
 ### Incremental Compiler Policy
 
 Incremental compilation is compiler policy rather than a source-language
@@ -7332,6 +7345,32 @@ source of truth for later signature and body dependencies. Human versus agent
 rendering never changes compiler-query facts. The full input, invalidation,
 diagnostic, client snapshot, and staged migration policy is recorded in the
 [initial incremental query boundary](open_design/incremental_query_boundary.md).
+
+### Synchronous 2D Graphics
+
+The interpreter supports `graphics.run[State]` for a synchronous native window
+session. `main` requests a `Graphics` capability, and the public source-owned
+wrapper borrows it with `view`. Pure update and render functions receive only
+ordinary state and keyboard values; rendering returns a `graphics.Scene` of RGB
+rectangles and bitmap text. The runtime owns the window inside the call and
+closes it on normal return, host failure, or callback failure. No source-visible
+window handle or resource is exposed.
+
+The initial callback boundary accepts directly named functions (including
+qualified namespace references) or inline functions. Update owns its two
+arguments; render views its state. Callback variables and effectful callback
+signatures are rejected while ordinary function types still erase that metadata.
+State must recursively contain concrete data; function values, capabilities,
+resources, actors, and interfaces cannot cross this callback boundary, including
+through aliases or fields. Purity checks follow callback helpers and nested
+functions as well as the callback's own declaration. These gates apply equally
+to direct calls and pipeline steps, with explicit or inferred generic arguments.
+Legal `mutual` declaration ordering cannot change the callback effect boundary.
+The API is unavailable in comptime/verify/property evaluation. Escape and the
+OS close action end the session; supported key presses drive deterministic state
+updates. Animation ticks, audio, and source-owned windows remain outside this
+slice. See the [graphics contract](active/graphics_game_contract.md) for the exact
+data shapes, bounds, and cleanup guarantees.
 
 ### Project Structure
 

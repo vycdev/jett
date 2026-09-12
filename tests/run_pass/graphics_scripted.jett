@@ -1,0 +1,24 @@
+namespace app
+struct State:
+    moves: int64
+function increment(value: int64) returns int64:
+    return value + 1
+function update(state: State, key: graphics.Key) returns State:
+    match key:
+        right:
+            return State(moves: increment(state.moves))
+        left:
+            return State(moves: state.moves - 1)
+        other:
+            return state
+function render(view state: State) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: state.moves, green: 20, blue: 30)
+    list[graphics.Rect] rectangles = list.new[graphics.Rect]()
+    list[graphics.Text] texts = list.new[graphics.Text]()
+    return graphics.Scene(background: color, rectangles: rectangles, texts: texts)
+function main(display: Graphics, stdout: Stdout) returns nothing:
+    graphics.Config config = graphics.Config(title: "Scripted graphics", width: 32, height: 32)
+    graphics.run[State](view display, config, State(moves: 0), update, render) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    Stdout.write(view stdout, "closed\n")

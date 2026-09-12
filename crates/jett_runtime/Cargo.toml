@@ -5,3 +5,6 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+font8x8 = "0.3.1"
+# Keep the macOS focus-reporting adapter in graphics.rs aligned with this version.
+minifb = "=0.28.0"

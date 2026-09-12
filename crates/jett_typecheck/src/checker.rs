@@ -23,6 +23,8 @@ use jett_types::{
 use crate::capability;
 use crate::errors;
 
+mod graphics_audit;
+
 /// One accepted concrete generic function body produced by type checking.
 #[derive(Debug, Clone)]
 pub struct CheckedGenericFunctionInstantiation {
@@ -287,6 +289,20 @@ struct TypeChecker<'a> {
     function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// User-function parameter names in declaration order.
     function_parameter_names: HashMap<String, Vec<String>>,
+    /// Source signatures retained for the initial graphics callback policy.
+    graphics_callback_definitions: HashMap<String, FunctionDef>,
+    /// Audit after all bodies have populated expression and method metadata.
+    graphics_pending_callbacks: Vec<(Expr, Option<usize>)>,
+    graphics_audited_functions: HashSet<(Span, Option<usize>)>,
+    graphics_audit_instantiation: Option<usize>,
+    graphics_method_definitions: HashMap<Span, FunctionDef>,
+    /// Inline graphics callbacks must be checked as pure functions.
+    graphics_inline_callbacks: HashSet<Span>,
+    graphics_rejected_capture_spans: HashSet<Span>,
+    /// Includes nested closures inside an inline graphics callback.
+    in_graphics_callback: bool,
+    /// Graphics authority must be borrowed from a declared capability parameter.
+    graphics_authority_params: HashSet<DefId>,
     /// Function signatures originating from compiler-shipped stdlib files.
     trusted_stdlib_function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// Name of the function currently being type-checked (None outside functions).
@@ -418,6 +434,15 @@ impl<'a> TypeChecker<'a> {
             purity_map: HashMap::new(),
             function_signatures: HashMap::new(),
             function_parameter_names: HashMap::new(),
+            graphics_callback_definitions: HashMap::new(),
+            graphics_pending_callbacks: Vec::new(),
+            graphics_audited_functions: HashSet::new(),
+            graphics_audit_instantiation: None,
+            graphics_method_definitions: HashMap::new(),
+            graphics_inline_callbacks: HashSet::new(),
+            graphics_rejected_capture_spans: HashSet::new(),
+            in_graphics_callback: false,
+            graphics_authority_params: HashSet::new(),
             trusted_stdlib_function_signatures: HashMap::new(),
             current_function_name: None,
             current_function_pure: false,
@@ -890,6 +915,11 @@ impl<'a> TypeChecker<'a> {
                     return format!("{target}.{suffix}");
                 }
             }
+            // Unknown members of an imported alias still resolve to its target
+            // namespace; retain that canonical prefix for private kernel gates.
+            if def.name != prefix && !name.starts_with(&format!("{}.", def.name)) {
+                return format!("{}.{suffix}", def.name);
+            }
             return name.to_string();
         }
 
@@ -1315,6 +1345,7 @@ impl<'a> TypeChecker<'a> {
                 | "json.serialize_public"
                 | "json.serialize_raw"
                 | "Filesystem.write_file"
+                | "graphics.__run"
                 | "log.emit"
                 | "log.debug"
                 | "log.info"
@@ -1335,6 +1366,7 @@ impl<'a> TypeChecker<'a> {
                 | "Environment.__args"
                 | "Filesystem.read_file"
                 | "Filesystem.write_file"
+                | "graphics.__run"
         )
     }
 
@@ -2891,6 +2923,7 @@ impl<'a> TypeChecker<'a> {
                 | "test.mock.__clock"
                 | "test.mock.__environment"
                 | "log.__emit"
+                | "graphics.__run"
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
@@ -3854,6 +3887,22 @@ impl<'a> TypeChecker<'a> {
                 let list_str = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], list_str))
             }
+            // Private graphics kernel; public data and signature are source-owned.
+            "graphics.__run" => {
+                let state = self.optional_type_arg(&name, type_args, span);
+                let config = *self.named_types.get("graphics.Config")?;
+                let key = *self.named_types.get("graphics.Key")?;
+                let scene = *self.named_types.get("graphics.Scene")?;
+                let update = self.function_type(vec![state, key], state);
+                let render = self.function_type(vec![state], scene);
+                let result = self
+                    .interner
+                    .intern(Type::Result(TypeInterner::NOTHING, TypeInterner::STRING));
+                Some((
+                    vec![TypeInterner::ERROR, config, state, update, render],
+                    result,
+                ))
+            }
             // Private random kernels; public signatures live in stdlib/random.jett.
             "random.__bounded" => self.no_type_args_signature(
                 &name,
@@ -4219,6 +4268,19 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 Item::Function(func) => {
+                    for param in &func.params {
+                        if matches!(&param.ty, TypeExpr::Named(name) if name.name == "Graphics")
+                            && let Some(definition) = self.declaration_def_id(param.name.span)
+                        {
+                            self.graphics_authority_params.insert(definition);
+                        }
+                    }
+                    for name in
+                        Self::function_lookup_names(current_namespace.as_deref(), &func.name.name)
+                    {
+                        self.graphics_callback_definitions
+                            .insert(name, func.clone());
+                    }
                     if func.type_params.is_empty() {
                         self.register_function_sig(func);
                         let signature = self.function_signature(func);
@@ -4325,6 +4387,7 @@ impl<'a> TypeChecker<'a> {
                 _ => {}
             }
         }
+        self.audit_graphics_callbacks();
     }
 
     fn collect_type_aliases(&mut self, module: &Module) {
@@ -6692,8 +6755,15 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_function_impl(&mut self, func: &FunctionDef, function_name: String) {
+        self.graphics_method_definitions
+            .insert(func.span, func.clone());
         let is_main = func.name.name == "main" && !function_name.contains('.');
         for param in &func.params {
+            if matches!(&param.ty, TypeExpr::Named(name) if name.name == "Graphics")
+                && let Some(definition) = self.declaration_def_id(param.name.span)
+            {
+                self.graphics_authority_params.insert(definition);
+            }
             if !capability::type_expr_is_capability(&param.ty) {
                 continue;
             }
@@ -8333,6 +8403,11 @@ impl<'a> TypeChecker<'a> {
             Expr::BoolLiteral(_, _) => TypeInterner::BOOL,
             Expr::Nothing(_) => TypeInterner::NOTHING,
 
+            Expr::Ident(_) | Expr::FieldAccess(_, _, _)
+                if self.reject_unspecialized_generic_value(expr) =>
+            {
+                TypeInterner::ERROR
+            }
             Expr::Ident(ident) => self.check_ident(ident),
             Expr::Binary(lhs, op, rhs, span) => self.check_binary(lhs, *op, rhs, *span),
             Expr::Unary(op, operand, span) => self.check_unary(*op, operand, *span),
@@ -8475,18 +8550,23 @@ impl<'a> TypeChecker<'a> {
             Expr::EnumVariant(type_name, variant, span) => {
                 self.check_enum_variant(type_name, variant, &[], *span)
             }
-            Expr::InlineFn(params, return_type, body, _) => {
+            Expr::InlineFn(params, return_type, body, inline_span) => {
                 // Type-check the inline function body with parameters bound.
                 let saved_return_type = self.current_return_type;
                 let saved_fn_name = self.current_function_name.take();
                 let saved_pure = self.current_function_pure;
                 let saved_in_property_block = self.in_property_block;
+                let saved_graphics_callback = self.in_graphics_callback;
 
                 let ret = return_type
                     .as_ref()
                     .map(|t| self.resolve_type_expr(t))
                     .unwrap_or(TypeInterner::NOTHING);
                 self.current_return_type = Some(ret);
+                self.in_graphics_callback =
+                    saved_graphics_callback || self.graphics_inline_callbacks.contains(inline_span);
+                // Callback purity is audited once all method targets are known;
+                // checking it here would make mutual declarations order-sensitive.
                 self.current_function_pure = false;
                 self.in_property_block = false;
                 self.closure_capture_scopes
@@ -8512,6 +8592,7 @@ impl<'a> TypeChecker<'a> {
                 self.current_function_name = saved_fn_name;
                 self.current_function_pure = saved_pure;
                 self.in_property_block = saved_in_property_block;
+                self.in_graphics_callback = saved_graphics_callback;
 
                 self.interner.intern(Type::Function {
                     params: param_types,
@@ -8527,11 +8608,12 @@ impl<'a> TypeChecker<'a> {
 
     fn check_pipeline(&mut self, initial: &Expr, steps: &[ast::PipelineStep]) -> TypeId {
         let mut current_ty = self.check_expr(initial);
-        for step in steps {
+        for (index, step) in steps.iter().enumerate() {
             // The interpreter uses the checked input type to infer source-generic
             // arguments for the synthetic first argument of a pipeline call.
             self.record_expression_type(step.span, current_ty);
-            current_ty = self.check_pipeline_step(current_ty, step);
+            current_ty =
+                self.check_pipeline_step(current_ty, step, (index == 0).then_some(initial));
         }
         current_ty
     }
@@ -8552,8 +8634,33 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_pipeline_step(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
-        let step_ty = self.check_pipeline_step_call(current_ty, step);
+    fn check_pipeline_step(
+        &mut self,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+        initial: Option<&Expr>,
+    ) -> TypeId {
+        let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        let step_ty = if self.resolved_expr_name(function).as_deref() == Some("graphics.run") {
+            // Preserve the source authority expression while sharing every gate
+            // with ordinary calls, including named arguments and type inference.
+            // A prior pipeline result cannot be a declared capability parameter.
+            let input = initial.cloned().unwrap_or(Expr::Error(step.span));
+            let authority = if piped_as_view {
+                Expr::View(Box::new(input), step.span)
+            } else {
+                input
+            };
+            let mut args = vec![ast::CallArg {
+                name: None,
+                span: authority.span(),
+                value: authority,
+            }];
+            args.extend_from_slice(extra_args);
+            self.check_call(function, type_args, &args, step.span)
+        } else {
+            self.check_pipeline_step_call(current_ty, step)
+        };
         self.record_pipeline_step_call_type(step.span, step_ty);
         if let Some(handle) = &step.handle {
             return self.check_handle_with_target_type(
@@ -9318,6 +9425,28 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reject_unspecialized_generic_value(&mut self, expr: &Expr) -> bool {
+        let Some(definition) = self.resolve.resolutions.get(&expr.span()) else {
+            return false;
+        };
+        if self.resolve.scope_table.def(*definition).kind != DefKind::Function {
+            return false;
+        }
+        let Some(name) = self.resolved_expr_name(expr) else {
+            return false;
+        };
+        if !self.generic_function_templates.contains_key(&name) {
+            return false;
+        }
+        // Ordinary generic calls instantiate before checking the callee as a
+        // value. A bare template has no checked function type or body yet.
+        self.sink.emit(errors::unspecialized_generic_function_value(
+            &name,
+            expr.span(),
+        ));
+        true
+    }
+
     fn check_ident(&mut self, ident: &ast::Ident) -> TypeId {
         if let Some(&def_id) = self
             .resolve
@@ -9346,7 +9475,8 @@ impl<'a> TypeChecker<'a> {
             return;
         };
         if scope.locals.contains(&def_id)
-            || crate::ownership::is_implicitly_copyable(&self.interner, type_id)
+            || (crate::ownership::is_implicitly_copyable(&self.interner, type_id)
+                && !(self.in_graphics_callback && type_id == TypeInterner::ERROR))
         {
             return;
         }
@@ -9357,6 +9487,9 @@ impl<'a> TypeChecker<'a> {
         }
 
         let scope = self.closure_capture_scopes.last_mut().unwrap();
+        if self.in_graphics_callback {
+            self.graphics_rejected_capture_spans.insert(ident.span);
+        }
         if scope.rejected.insert(def_id) {
             self.sink.emit(crate::ownership::cannot_capture_move_only(
                 &ident.name,
@@ -10064,6 +10197,25 @@ impl<'a> TypeChecker<'a> {
 
         self.check_test_mock_constructor_call(callee_name.as_deref(), span);
 
+        if self.in_property_block
+            && callee_name.as_deref().is_some_and(|name| {
+                name == "graphics.__run"
+                    || self
+                        .graphics_callback_definitions
+                        .get(name)
+                        .is_some_and(|function| {
+                            function.params.iter().any(|param| {
+                            matches!(&param.ty, TypeExpr::Named(ty) if ty.name == "Graphics")
+                        })
+                        })
+            })
+        {
+            self.sink.emit(errors::graphics_contract(
+                "graphics sessions are unavailable in property blocks",
+                span,
+            ));
+        }
+
         if let Some(name) = callee_name.as_deref()
             && capability::is_capability_type(name)
         {
@@ -10225,11 +10377,13 @@ impl<'a> TypeChecker<'a> {
                         return TypeInterner::ERROR;
                     };
                     self.record_call_argument_order(span, argument_order.clone());
+                    self.check_graphics_run_policy(function_name, args, &argument_order);
                     let mut arguments_match = true;
                     for (&source_index, &expected) in argument_order.iter().zip(param_types.iter())
                     {
                         let arg = &args[source_index];
                         let got = self.check_expr_for_expected(&arg.value, expected, false);
+                        self.check_graphics_opaque_argument(function_name, expected, got, arg);
                         if !self.types_compatible(expected, got) {
                             arguments_match = false;
                             self.sink.emit(errors::type_mismatch(
@@ -10780,6 +10934,150 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn check_graphics_run_policy(
+        &mut self,
+        function_name: &str,
+        args: &[ast::CallArg],
+        order: &[usize],
+    ) {
+        if function_name != "graphics.run" || order.len() != 5 {
+            return;
+        }
+        let authority = &args[order[0]].value;
+        let valid_authority = match authority {
+            Expr::View(inner, _) => match inner.as_ref() {
+                Expr::Ident(ident) => self
+                    .resolve
+                    .resolutions
+                    .get(&ident.span)
+                    .is_some_and(|definition| self.graphics_authority_params.contains(definition)),
+                _ => false,
+            },
+            _ => false,
+        };
+        if !valid_authority {
+            self.sink.emit(errors::graphics_contract(
+                "display must be an explicit view of a Graphics capability parameter",
+                authority.span(),
+            ));
+        }
+        self.check_graphics_callback(&args[order[3]].value, "update", &[false, false]);
+        self.check_graphics_callback(&args[order[4]].value, "render", &[true]);
+        let initial = &args[order[2]].value;
+        let initial_type = self.check_expr(initial);
+        if self.graphics_state_contains_authority(initial_type) {
+            self.sink.emit(errors::graphics_contract(
+                "initial state cannot contain capabilities, functions, resources, actors, or interfaces",
+                initial.span(),
+            ));
+        }
+    }
+
+    fn check_graphics_callback(&mut self, callback: &Expr, label: &str, views: &[bool]) {
+        self.graphics_pending_callbacks.push((
+            callback.clone(),
+            self.active_generic_instantiations
+                .last()
+                .map(|active| active.manifest_index),
+        ));
+        let signature = if let Expr::InlineFn(params, return_type, _, span) = callback {
+            self.graphics_inline_callbacks.insert(*span);
+            Some((params.clone(), return_type.clone()))
+        } else if self.graphics_callback_is_named(callback) {
+            let definition = self
+                .resolved_expr_name(callback)
+                .and_then(|name| self.graphics_callback_definitions.get(&name).cloned());
+            definition.map(|function| (function.params, function.return_type))
+        } else {
+            None
+        };
+        let Some((params, return_type)) = signature else {
+            self.sink.emit(errors::graphics_contract(
+                &format!("{label} must be a directly named function or an inline function"),
+                callback.span(),
+            ));
+            return;
+        };
+        if params.len() != views.len()
+            || params.iter().zip(views).any(|(param, view)| {
+                param.view != *view || self.graphics_type_contains_capability(&param.ty)
+            })
+            || return_type
+                .as_ref()
+                .is_some_and(|ty| self.graphics_type_contains_capability(ty))
+        {
+            let expected = if label == "update" {
+                "update must be pure and take owned State and Key parameters"
+            } else {
+                "render must be pure and take one view State parameter"
+            };
+            self.sink
+                .emit(errors::graphics_contract(expected, callback.span()));
+        }
+    }
+
+    fn graphics_type_contains_capability(&self, ty: &TypeExpr) -> bool {
+        self.graphics_type_contains_capability_inner(ty, &mut HashSet::new())
+    }
+
+    fn graphics_type_contains_capability_inner(
+        &self,
+        ty: &TypeExpr,
+        aliases: &mut HashSet<String>,
+    ) -> bool {
+        match ty {
+            TypeExpr::Named(name) => {
+                if capability::is_capability_type(&name.name) {
+                    return true;
+                }
+                let canonical = self.resolved_or_expanded_name(&name.name, name.span);
+                self.type_aliases.get(&canonical).is_some_and(|alias| {
+                    aliases.insert(canonical.clone())
+                        && self.graphics_type_contains_capability_inner(&alias.base_type, aliases)
+                })
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.graphics_type_contains_capability_inner(inner, aliases)
+            }
+            TypeExpr::Generic(_, args, _) => args
+                .iter()
+                .any(|arg| self.graphics_type_contains_capability_inner(arg, aliases)),
+            TypeExpr::Function(params, return_type, _) => {
+                params
+                    .iter()
+                    .any(|param| self.graphics_type_contains_capability_inner(param, aliases))
+                    || self.graphics_type_contains_capability_inner(return_type, aliases)
+            }
+        }
+    }
+
+    fn graphics_callback_is_named(&self, expr: &Expr) -> bool {
+        self.resolve
+            .resolutions
+            .get(&expr.span())
+            .is_some_and(|definition| {
+                self.resolve.scope_table.def(*definition).kind == DefKind::Function
+            })
+    }
+
+    fn check_graphics_opaque_argument(
+        &mut self,
+        function_name: &str,
+        expected: TypeId,
+        got: TypeId,
+        arg: &ast::CallArg,
+    ) {
+        if function_name == "graphics.run"
+            && expected != TypeInterner::ERROR
+            && got == TypeInterner::ERROR
+        {
+            self.sink.emit(errors::graphics_contract(
+                "graphics data and callbacks cannot be capability values",
+                arg.span,
+            ));
+        }
+    }
+
     fn check_inferred_generic_function_call(
         &mut self,
         function_name: &str,
@@ -10806,6 +11104,7 @@ impl<'a> TypeChecker<'a> {
         };
         self.record_call_argument_order(span, argument_order.clone());
 
+        self.check_graphics_run_policy(function_name, args, &argument_order);
         let actual_types = argument_order
             .iter()
             .map(|&source_index| self.check_expr(&args[source_index].value))
@@ -10830,6 +11129,7 @@ impl<'a> TypeChecker<'a> {
         for (&source_index, &expected) in argument_order.iter().zip(&inferred.param_types) {
             let arg = &args[source_index];
             let got = self.check_expr_for_expected(&arg.value, expected, false);
+            self.check_graphics_opaque_argument(function_name, expected, got, arg);
             if !self.types_compatible(expected, got) {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
@@ -11000,6 +11300,23 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_field_access(&mut self, base: &Expr, field: &ast::Ident, span: Span) -> TypeId {
+        if !span.file.is_stdlib()
+            && let Some(prefix) = Self::extract_dotted_name(base)
+            && self.resolved_or_expanded_name(&format!("{prefix}.{}", field.name), span)
+                == "graphics.__run"
+        {
+            self.sink
+                .emit(errors::not_callable("private stdlib kernel", span));
+            return TypeInterner::ERROR;
+        }
+        // A namespace-qualified function value resolves as one complete path,
+        // rather than a runtime field read from the namespace prefix.
+        if let Some(definition) = self.resolve.resolutions.get(&span)
+            && self.resolve.scope_table.def(*definition).kind == DefKind::Function
+            && let Some(function_type) = self.type_env.get(definition)
+        {
+            return *function_type;
+        }
         if let Expr::Ident(base_ident) = base {
             if self.ident_def_kind(base_ident) == Some(DefKind::Enum) {
                 return self.check_enum_variant(base_ident, field, &[], span);
