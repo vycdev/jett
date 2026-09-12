@@ -257,7 +257,41 @@ struct InputState {
     escape: bool,
 }
 
+#[derive(Clone, Copy)]
+enum FocusConvention {
+    ActiveIsTrue,
+    ActiveIsFalse,
+}
+
+impl FocusConvention {
+    fn native() -> Self {
+        // minifb 0.28.0's macOS is_active compares mfb_is_active with zero,
+        // although its native implementation returns the active-window bool.
+        // Cargo.toml pins that version: recheck this adapter before upgrading.
+        if cfg!(target_os = "macos") {
+            Self::ActiveIsFalse
+        } else {
+            Self::ActiveIsTrue
+        }
+    }
+
+    fn is_active(self, reported: bool) -> bool {
+        match self {
+            Self::ActiveIsTrue => reported,
+            Self::ActiveIsFalse => !reported,
+        }
+    }
+}
+
 impl InputState {
+    fn update_focus(&mut self, active: bool) {
+        // A key may be released while another app has focus. Do not leave that
+        // key permanently marked as held when this window receives focus again.
+        if !active {
+            self.held.clear();
+        }
+    }
+
     fn key_changed(&mut self, key: minifb::Key, pressed: bool) {
         if !pressed {
             self.held.retain(|held| *held != key);
@@ -349,11 +383,7 @@ impl Session {
             input.pending.clear();
             return Ok(());
         }
-        // A key may be released while another app has focus. Do not leave that
-        // key permanently marked as held when this window receives focus again.
-        if !self.window.is_active() {
-            input.held.clear();
-        }
+        input.update_focus(FocusConvention::native().is_active(self.window.is_active()));
         Ok(())
     }
 }
@@ -596,5 +626,42 @@ mod tests {
         input.key_changed(minifb::Key::Escape, true);
         input.key_changed(minifb::Key::Escape, false);
         assert!(input.escape);
+    }
+
+    #[test]
+    fn graphics_normalizes_both_backend_focus_conventions() {
+        assert!(FocusConvention::ActiveIsTrue.is_active(true));
+        assert!(!FocusConvention::ActiveIsTrue.is_active(false));
+        assert!(FocusConvention::ActiveIsFalse.is_active(false));
+        assert!(!FocusConvention::ActiveIsFalse.is_active(true));
+        assert!(FocusConvention::native().is_active(!cfg!(target_os = "macos")));
+        assert!(!FocusConvention::native().is_active(cfg!(target_os = "macos")));
+    }
+
+    #[test]
+    fn graphics_focus_preserves_repeat_suppression_and_recovers_after_focus_loss() {
+        for (convention, active_report) in [
+            (FocusConvention::ActiveIsTrue, true),
+            (FocusConvention::ActiveIsFalse, false),
+        ] {
+            let mut input = InputState::default();
+            input.key_changed(minifb::Key::Right, true);
+            for _ in 0..10 {
+                input.update_focus(convention.is_active(active_report));
+                input.key_changed(minifb::Key::Right, true);
+            }
+            assert_eq!(input.pending, VecDeque::from([Key::Right]));
+            assert_eq!(input.held, vec![minifb::Key::Right]);
+
+            // The release happens in another app, so no key-up reaches us.
+            input.update_focus(convention.is_active(!active_report));
+            assert!(input.held.is_empty());
+            assert_eq!(input.pending, VecDeque::from([Key::Right]));
+            input.update_focus(convention.is_active(active_report));
+            input.key_changed(minifb::Key::Right, true);
+            input.update_focus(convention.is_active(active_report));
+            input.key_changed(minifb::Key::Right, true);
+            assert_eq!(input.pending, VecDeque::from([Key::Right, Key::Right]));
+        }
     }
 }
