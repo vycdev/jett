@@ -1,0 +1,29 @@
+namespace benchmark
+struct Entry:
+    source: int64
+    target: int64
+struct Report:
+    sources: int64
+    sinks: int64
+    balanced: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 sources = 0
+    mutable int64 sinks = 0
+    mutable int64 balanced = 0
+    mutable int64 vertex = 0
+    while (vertex < limit):
+        mutable int64 incoming = 0
+        mutable int64 outgoing = 0
+        for row in view rows:
+            if (row.source == vertex):
+                outgoing =(outgoing + 1)
+            if (row.target == vertex):
+                incoming =(incoming + 1)
+        if ((incoming == 0) and(outgoing > 0)):
+            sources =(sources + 1)
+        if ((outgoing == 0) and(incoming > 0)):
+            sinks =(sinks + 1)
+        if (incoming == outgoing):
+            balanced =(balanced + 1)
+        vertex =(vertex + 1)
+    return Report(sources: sources, sinks: sinks, balanced: balanced)

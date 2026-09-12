@@ -1,0 +1,23 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function lis_length(values: list[int64]) returns int64:
+    mutable list[int64] lengths = list.new[int64]()
+    mutable int64 best = 0
+    mutable int64 index = 0
+    while (index < list.length[int64](view values)):
+        mutable int64 ending = 1
+        mutable int64 prior = 0
+        while (prior < index):
+            if (nth(view values, prior) < nth(view values, index)):
+                mutable int64 candidate = (nth(view lengths, prior) + 1)
+                if (candidate > ending):
+                    ending = candidate
+            prior = (prior + 1)
+        lengths = list.append[int64](lengths, ending)
+        if (ending > best):
+            best = ending
+        index = (index + 1)
+    return best

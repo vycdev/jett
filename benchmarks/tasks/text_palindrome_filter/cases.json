@@ -1,0 +1,77 @@
+{
+  "task_id": "text_palindrome_filter",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "! ?"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "ab"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "Aa"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "Race car!"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "A man, a plan, a canal: Panama"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "12 21"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "12a21"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "12a22"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "0P"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "ab\tBA"
+      },
+      "expected": true
+    }
+  ]
+}

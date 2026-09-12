@@ -1,0 +1,77 @@
+{
+  "task_id": "text_reverse_words",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": " "
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": "a"
+    },
+    {
+      "inputs": {
+        "text": "a b"
+      },
+      "expected": "b a"
+    },
+    {
+      "inputs": {
+        "text": " a  b c "
+      },
+      "expected": "c b a"
+    },
+    {
+      "inputs": {
+        "text": "one two three"
+      },
+      "expected": "three two one"
+    },
+    {
+      "inputs": {
+        "text": "a a b"
+      },
+      "expected": "b a a"
+    },
+    {
+      "inputs": {
+        "text": "! ?"
+      },
+      "expected": "? !"
+    },
+    {
+      "inputs": {
+        "text": "a\tb c"
+      },
+      "expected": "c a\tb"
+    },
+    {
+      "inputs": {
+        "text": "word  "
+      },
+      "expected": "word"
+    },
+    {
+      "inputs": {
+        "text": "  x"
+      },
+      "expected": "x"
+    },
+    {
+      "inputs": {
+        "text": "ab cd ef gh"
+      },
+      "expected": "gh ef cd ab"
+    }
+  ]
+}

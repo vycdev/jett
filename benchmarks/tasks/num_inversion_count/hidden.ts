@@ -1,0 +1,21 @@
+import { inversionCount } from "./solution.js";
+
+if (inversionCount([]) !== 0n) throw new Error("case 0");
+if (inversionCount([0n]) !== 0n) throw new Error("case 1");
+if (inversionCount([-7n]) !== 0n) throw new Error("case 2");
+if (inversionCount([1n, 2n, 3n, 4n]) !== 0n) throw new Error("case 3");
+if (inversionCount([4n, 3n, 2n, 1n]) !== 6n) throw new Error("case 4");
+if (inversionCount([2n, 2n, 2n]) !== 0n) throw new Error("case 5");
+if (inversionCount([-3n, -2n, -1n]) !== 0n) throw new Error("case 6");
+if (inversionCount([3n, 1n, 2n, 1n, 4n]) !== 4n) throw new Error("case 7");
+if (inversionCount([5n, -1n, 5n, -1n, 5n]) !== 3n) throw new Error("case 8");
+if (inversionCount([0n, -1n, 2n, -3n, 4n, -5n]) !== 9n) throw new Error("case 9");
+if (inversionCount([9n, 3n, 7n, 1n, 8n, 2n, 6n, 4n, 5n]) !== 21n) throw new Error("case 10");
+if (inversionCount([100n, -100n, 100n, 0n]) !== 3n) throw new Error("case 11");
+if (inversionCount([0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n]) !== 0n) throw new Error("case 12");
+if (inversionCount([0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 14n, 15n, 16n, 17n, 18n, 19n]) !== 0n) throw new Error("case 13");
+if (inversionCount([20n, 19n, 18n, 17n, 16n, 15n, 14n, 13n, 12n, 11n, 10n, 9n, 8n, 7n, 6n, 5n, 4n, 3n, 2n, 1n, 0n]) !== 210n) throw new Error("case 14");
+if (inversionCount([1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n, 1000n, -1000n]) !== 1275n) throw new Error("case 15");
+if (inversionCount([100n, 99n, 98n, 97n, 96n, 95n, 94n, 93n, 92n, 91n, 90n, 89n, 88n, 87n, 86n, 85n, 84n, 83n, 82n, 81n, 80n, 79n, 78n, 77n, 76n, 75n, 74n, 73n, 72n, 71n, 70n, 69n, 68n, 67n, 66n, 65n, 64n, 63n, 62n, 61n, 60n, 59n, 58n, 57n, 56n, 55n, 54n, 53n, 52n, 51n, 50n, 49n, 48n, 47n, 46n, 45n, 44n, 43n, 42n, 41n, 40n, 39n, 38n, 37n, 36n, 35n, 34n, 33n, 32n, 31n, 30n, 29n, 28n, 27n, 26n, 25n, 24n, 23n, 22n, 21n, 20n, 19n, 18n, 17n, 16n, 15n, 14n, 13n, 12n, 11n, 10n, 9n, 8n, 7n, 6n, 5n, 4n, 3n, 2n, 1n]) !== 4950n) throw new Error("case 16");
+if (inversionCount([2n, 1n, 1n]) !== 2n) throw new Error("case 17");
+if (inversionCount([3n, 3n, 2n, 2n, 1n, 1n]) !== 12n) throw new Error("case 18");

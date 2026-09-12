@@ -1,0 +1,213 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows)
+    assert actual.ready == 0
+    assert actual.blocked == 0
+    assert actual.total_cost == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 3))
+    Report actual = solve(view rows)
+    assert actual.ready == 1
+    assert actual.blocked == 0
+    assert actual.total_cost == 3
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 10))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost: 5))
+    Report actual = solve(view rows)
+    assert actual.ready == 2
+    assert actual.blocked == 0
+    assert actual.total_cost == 15
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost: 8))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-8)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 0, cost:(-6)))
+    Report actual = solve(view rows)
+    assert actual.ready == 3
+    assert actual.blocked == 0
+    assert actual.total_cost == -6
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost: 6))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 3))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost: 10))
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 0, cost:(-2)))
+    Report actual = solve(view rows)
+    assert actual.ready == 4
+    assert actual.blocked == 0
+    assert actual.total_cost == 17
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 5, prerequisite: 4, cost:(-1)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost:(-7)))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost: 0))
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 0, cost: 5))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-4)))
+    Report actual = solve(view rows)
+    assert actual.ready == 5
+    assert actual.blocked == 0
+    assert actual.total_cost == -7
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 5, prerequisite: 2, cost:(-5)))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 2, cost:(-2)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost: 11))
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 0, cost:(-1)))
+    rows = list.append[Entry](rows, Entry(job: 6, prerequisite: 3, cost:(-4)))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-6)))
+    Report actual = solve(view rows)
+    assert actual.ready == 6
+    assert actual.blocked == 0
+    assert actual.total_cost == -7
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 6, prerequisite: 1, cost:(-7)))
+    rows = list.append[Entry](rows, Entry(job: 7, prerequisite: 6, cost: 7))
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 0, cost: 1))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost:(-3)))
+    rows = list.append[Entry](rows, Entry(job: 5, prerequisite: 1, cost: 5))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 1, cost:(-8)))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 9))
+    Report actual = solve(view rows)
+    assert actual.ready == 7
+    assert actual.blocked == 0
+    assert actual.total_cost == 4
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 11))
+    Report actual = solve(view rows)
+    assert actual.ready == 1
+    assert actual.blocked == 0
+    assert actual.total_cost == 11
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 4))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 0, cost:(-5)))
+    Report actual = solve(view rows)
+    assert actual.ready == 2
+    assert actual.blocked == 0
+    assert actual.total_cost == -1
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 0))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 1, cost:(-3)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 0, cost: 10))
+    Report actual = solve(view rows)
+    assert actual.ready == 3
+    assert actual.blocked == 0
+    assert actual.total_cost == 7
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 1, cost:(-7)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost: 10))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 0))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 1, cost: 7))
+    Report actual = solve(view rows)
+    assert actual.ready == 4
+    assert actual.blocked == 0
+    assert actual.total_cost == 10
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost:(-2)))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost:(-5)))
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 3, cost:(-8)))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 5))
+    rows = list.append[Entry](rows, Entry(job: 5, prerequisite: 0, cost:(-4)))
+    Report actual = solve(view rows)
+    assert actual.ready == 5
+    assert actual.blocked == 0
+    assert actual.total_cost == -14
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 4))
+    Report actual = solve(view rows)
+    assert actual.ready == 1
+    assert actual.blocked == 0
+    assert actual.total_cost == 4
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-5)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost: 0))
+    Report actual = solve(view rows)
+    assert actual.ready == 2
+    assert actual.blocked == 0
+    assert actual.total_cost == -5
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-3)))
+    Report actual = solve(view rows)
+    assert actual.ready == 1
+    assert actual.blocked == 0
+    assert actual.total_cost == -3
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-5)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost:(-2)))
+    Report actual = solve(view rows)
+    assert actual.ready == 2
+    assert actual.blocked == 0
+    assert actual.total_cost == -7
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 8))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost: 4))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost:(-2)))
+    Report actual = solve(view rows)
+    assert actual.ready == 3
+    assert actual.blocked == 0
+    assert actual.total_cost == 10
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 3, cost:(-1)))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-2)))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost: 8))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 0, cost: 0))
+    Report actual = solve(view rows)
+    assert actual.ready == 4
+    assert actual.blocked == 0
+    assert actual.total_cost == 5
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 3, cost: 6))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-2)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost:(-2)))
+    rows = list.append[Entry](rows, Entry(job: 5, prerequisite: 2, cost: 10))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost:(-3)))
+    Report actual = solve(view rows)
+    assert actual.ready == 5
+    assert actual.blocked == 0
+    assert actual.total_cost == 9
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 0, cost:(-1)))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 0, cost: 3))
+    rows = list.append[Entry](rows, Entry(job: 6, prerequisite: 0, cost:(-4)))
+    rows = list.append[Entry](rows, Entry(job: 5, prerequisite: 1, cost: 11))
+    rows = list.append[Entry](rows, Entry(job: 4, prerequisite: 2, cost:(-3)))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 9))
+    Report actual = solve(view rows)
+    assert actual.ready == 6
+    assert actual.blocked == 0
+    assert actual.total_cost == 15
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 9, prerequisite: 8, cost: 5))
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 2, cost: 1))
+    rows = list.append[Entry](rows, Entry(job: 2, prerequisite: 1, cost: 8))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost:(-2)))
+    rows = list.append[Entry](rows, Entry(job: 10, prerequisite: 9, cost: 3))
+    Report actual = solve(view rows)
+    assert actual.ready == 3
+    assert actual.blocked == 2
+    assert actual.total_cost == 7
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(job: 3, prerequisite: 2, cost: 5))
+    rows = list.append[Entry](rows, Entry(job: 1, prerequisite: 0, cost: 2))
+    rows = list.append[Entry](rows, Entry(job: 5, prerequisite: 3, cost: 9))
+    Report actual = solve(view rows)
+    assert actual.ready == 1
+    assert actual.blocked == 2
+    assert actual.total_cost == 2

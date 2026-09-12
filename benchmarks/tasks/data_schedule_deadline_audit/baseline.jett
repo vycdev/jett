@@ -1,0 +1,19 @@
+namespace benchmark
+struct Entry:
+    duration: int64
+    deadline: int64
+    penalty: int64
+struct Report:
+    late: int64
+    weighted_tardiness: int64
+    finish: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 late = 0
+    mutable int64 weighted = 0
+    mutable int64 finish = limit
+    for row in view rows:
+        finish =(finish + row.duration)
+        if (finish > row.deadline):
+            late =(late + 1)
+            weighted =(weighted +((finish - row.deadline) * row.penalty))
+    return Report(late: late, weighted_tardiness: weighted, finish: finish)

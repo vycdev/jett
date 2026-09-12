@@ -1,0 +1,89 @@
+{
+  "task_id": "text_common_prefix",
+  "cases": [
+    {
+      "inputs": {
+        "left": "",
+        "right": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "left": "a",
+        "right": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "left": "",
+        "right": "a"
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "left": "abc",
+        "right": "abc"
+      },
+      "expected": "abc"
+    },
+    {
+      "inputs": {
+        "left": "abc",
+        "right": "abd"
+      },
+      "expected": "ab"
+    },
+    {
+      "inputs": {
+        "left": "abc",
+        "right": "ab"
+      },
+      "expected": "ab"
+    },
+    {
+      "inputs": {
+        "left": "ab",
+        "right": "abc"
+      },
+      "expected": "ab"
+    },
+    {
+      "inputs": {
+        "left": "a",
+        "right": "A"
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "left": "foo bar",
+        "right": "foo baz"
+      },
+      "expected": "foo ba"
+    },
+    {
+      "inputs": {
+        "left": " x",
+        "right": " y"
+      },
+      "expected": " "
+    },
+    {
+      "inputs": {
+        "left": "123",
+        "right": "129"
+      },
+      "expected": "12"
+    },
+    {
+      "inputs": {
+        "left": "abc",
+        "right": "zabc"
+      },
+      "expected": ""
+    }
+  ]
+}

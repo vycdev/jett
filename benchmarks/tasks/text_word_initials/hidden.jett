@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("") == ""
+verify hidden_case_1:
+    assert solve("  ") == ""
+verify hidden_case_2:
+    assert solve("alice") == "A"
+verify hidden_case_3:
+    assert solve("alice bob") == "AB"
+verify hidden_case_4:
+    assert solve("  alice   bob ") == "AB"
+verify hidden_case_5:
+    assert solve("a b c") == "ABC"
+verify hidden_case_6:
+    assert solve("1 one") == "1O"
+verify hidden_case_7:
+    assert solve("! bang") == "!B"
+verify hidden_case_8:
+    assert solve("mixed CASE") == "MC"
+verify hidden_case_9:
+    assert solve("a\tb c") == "AC"
+verify hidden_case_10:
+    assert solve("z Z") == "ZZ"
+verify hidden_case_11:
+    assert solve("foo-bar baz") == "FB"

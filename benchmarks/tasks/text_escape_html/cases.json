@@ -1,0 +1,77 @@
+{
+  "task_id": "text_escape_html",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "abc"
+      },
+      "expected": "abc"
+    },
+    {
+      "inputs": {
+        "text": "&"
+      },
+      "expected": "&amp;"
+    },
+    {
+      "inputs": {
+        "text": "<>"
+      },
+      "expected": "&lt;&gt;"
+    },
+    {
+      "inputs": {
+        "text": "\"'"
+      },
+      "expected": "&quot;&#39;"
+    },
+    {
+      "inputs": {
+        "text": "&amp;"
+      },
+      "expected": "&amp;amp;"
+    },
+    {
+      "inputs": {
+        "text": "a&b<c"
+      },
+      "expected": "a&amp;b&lt;c"
+    },
+    {
+      "inputs": {
+        "text": "&&"
+      },
+      "expected": "&amp;&amp;"
+    },
+    {
+      "inputs": {
+        "text": "\n\t"
+      },
+      "expected": "\n\t"
+    },
+    {
+      "inputs": {
+        "text": "/a=1"
+      },
+      "expected": "/a=1"
+    },
+    {
+      "inputs": {
+        "text": "<a x=\"b\">"
+      },
+      "expected": "&lt;a x=&quot;b&quot;&gt;"
+    },
+    {
+      "inputs": {
+        "text": "'&'"
+      },
+      "expected": "&#39;&amp;&#39;"
+    }
+  ]
+}

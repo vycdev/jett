@@ -1,0 +1,267 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows)
+    assert actual.accepted == 0
+    assert actual.stale == 0
+    assert actual.checksum == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, version: 8, value: 3))
+    Report actual = solve(view rows)
+    assert actual.accepted == 1
+    assert actual.stale == 0
+    assert actual.checksum == 12
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, version: 6, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 7, value: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.stale == 0
+    assert actual.checksum == 26
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, version: 11, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 0, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-2), value: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.stale == 1
+    assert actual.checksum == 9
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, version: 10, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 2, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 0, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 11, value: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.stale == 0
+    assert actual.checksum == 39
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, version: 10, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 5, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 2, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 3, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 1, value: 1))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.stale == 1
+    assert actual.checksum == 49
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, version: 5, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 1, version:(-2), value: 5))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 11, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 2, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 10, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 6, value: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.stale == 2
+    assert actual.checksum == 50
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, version: 5, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 1, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, version:(-1), value: 1))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 8, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 7, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 5, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 11, value: 3))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.stale == 3
+    assert actual.checksum == 26
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-3), value: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 7, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 7, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, version:(-2), value: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, version:(-1), value: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 4, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 8, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, version:(-2), value: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 3
+    assert actual.stale == 5
+    assert actual.checksum == 25
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, version: 10, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 11, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 2, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 1, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 1, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 4, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 2, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, version:(-3), value: 4))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 2, value: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 5
+    assert actual.stale == 4
+    assert actual.checksum == 25
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, version: 7, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, version:(-3), value: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 5, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 10, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 8, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 6, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 2, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 5, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 2, version:(-1), value: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 1, value: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 6
+    assert actual.stale == 4
+    assert actual.checksum == 34
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, version: 5, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 3, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 11, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 8, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 4, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 1, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 3, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 5, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 6, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 9, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 7, value: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 8
+    assert actual.stale == 3
+    assert actual.checksum == 34
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, version: 3, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 7, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 4, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 6, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 11, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 0, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 2, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 10, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, version:(-1), value: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-1), value: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 11, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, version:(-3), value: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 8
+    assert actual.stale == 4
+    assert actual.checksum == 41
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, version:(-1), value: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 0
+    assert actual.stale == 1
+    assert actual.checksum == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, version: 4, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, version: 8, value: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.stale == 0
+    assert actual.checksum == 21
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, version: 7, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-1), value: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 3, value: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.stale == 1
+    assert actual.checksum == 16
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, version: 11, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 5, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 4, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 4, value: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 3
+    assert actual.stale == 1
+    assert actual.checksum == 20
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, version: 1, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 5, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 4, version:(-3), value: 3))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 5, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, version:(-3), value: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.stale == 3
+    assert actual.checksum == 22
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, version: 4, value: 4))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 1, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, version: 10, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, version:(-3), value: 1))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 4, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 4, value: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 5
+    assert actual.stale == 1
+    assert actual.checksum == 23
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, version: 1, value: 6))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 6, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 6, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 0, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 0, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 11, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, version:(-1), value: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.stale == 3
+    assert actual.checksum == 18
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 4, version: 6, value: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, version:(-1), value: 1))
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-3), value: 4))
+    rows = list.append[Entry](rows, Entry(key: 2, version: 9, value: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-1), value: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 2, value: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, version:(-2), value: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, version:(-1), value: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 3
+    assert actual.stale == 5
+    assert actual.checksum == 22
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, version: 0, value: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 0, value: 9))
+    Report actual = solve(view rows)
+    assert actual.accepted == 1
+    assert actual.stale == 1
+    assert actual.checksum == 3
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-1), value: 8))
+    rows = list.append[Entry](rows, Entry(key: 0, version:(-2), value: 9))
+    rows = list.append[Entry](rows, Entry(key: 0, version: 0, value: 0))
+    Report actual = solve(view rows)
+    assert actual.accepted == 1
+    assert actual.stale == 2
+    assert actual.checksum == 0
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, version: 0, value: 8))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 0, value: 9))
+    rows = list.append[Entry](rows, Entry(key: 1, version: 2, value:(-3)))
+    rows = list.append[Entry](rows, Entry(key: 2, version:(-1), value: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.stale == 2
+    assert actual.checksum == -6

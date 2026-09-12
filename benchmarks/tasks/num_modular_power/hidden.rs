@@ -1,0 +1,20 @@
+include!("solution.rs");
+
+#[test]
+fn hidden_cases() {
+
+    assert_eq!(modular_power(0, 0, 7), 1, "case 0");
+    assert_eq!(modular_power(0, 1, 7), 0, "case 1");
+    assert_eq!(modular_power(7, 0, 1), 0, "case 2");
+    assert_eq!(modular_power(2, 10, 1000), 24, "case 3");
+    assert_eq!(modular_power(3, 4, 5), 1, "case 4");
+    assert_eq!(modular_power(999999, 60, 1000000), 1, "case 5");
+    assert_eq!(modular_power(1000000, 60, 999983), 535869, "case 6");
+    assert_eq!(modular_power(1, 60, 2), 1, "case 7");
+    assert_eq!(modular_power(6, 5, 8), 0, "case 8");
+    assert_eq!(modular_power(12, 13, 17), 14, "case 9");
+    assert_eq!(modular_power(5, 8, 25), 0, "case 10");
+    assert_eq!(modular_power(17, 11, 97), 38, "case 11");
+    assert_eq!(modular_power(2, 60, 99991), 66329, "case 12");
+    assert_eq!(modular_power(999, 3, 1000), 999, "case 13");
+}

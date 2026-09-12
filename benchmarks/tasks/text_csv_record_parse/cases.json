@@ -1,0 +1,150 @@
+{
+  "task_id": "text_csv_record_parse",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          ""
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": ","
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          "",
+          ""
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": "a,b,c"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          "a",
+          "b",
+          "c"
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": "\"a,b\",c"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          "a,b",
+          "c"
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": "\"\""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          ""
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": "\"a\"\"b\",,"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          "a\"b",
+          "",
+          ""
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": "\""
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a\"b"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\"a\" x"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\"a\","
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          "a",
+          ""
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": "\"\"\"\""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          "\""
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "text": "\"\"\""
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a,b,,"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": [
+          "a",
+          "b",
+          "",
+          ""
+        ]
+      }
+    }
+  ]
+}

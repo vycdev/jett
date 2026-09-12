@@ -1,0 +1,20 @@
+import { trappedWater } from "./solution.js";
+
+if (trappedWater([]) !== 0n) throw new Error("case 0");
+if (trappedWater([0n]) !== 0n) throw new Error("case 1");
+if (trappedWater([5n]) !== 0n) throw new Error("case 2");
+if (trappedWater([5n, 0n]) !== 0n) throw new Error("case 3");
+if (trappedWater([0n, 5n]) !== 0n) throw new Error("case 4");
+if (trappedWater([3n, 3n, 3n]) !== 0n) throw new Error("case 5");
+if (trappedWater([3n, 0n, 3n]) !== 3n) throw new Error("case 6");
+if (trappedWater([5n, 0n, 2n]) !== 2n) throw new Error("case 7");
+if (trappedWater([2n, 0n, 5n]) !== 2n) throw new Error("case 8");
+if (trappedWater([3n, 0n, 2n, 0n, 4n]) !== 7n) throw new Error("case 9");
+if (trappedWater([0n, 1n, 0n, 2n, 1n, 0n, 1n, 3n, 2n, 1n, 2n, 1n]) !== 6n) throw new Error("case 10");
+if (trappedWater([5n, 4n, 3n, 2n, 1n]) !== 0n) throw new Error("case 11");
+if (trappedWater([1n, 2n, 3n, 4n, 5n]) !== 0n) throw new Error("case 12");
+if (trappedWater([4n, 2n, 0n, 3n, 2n, 5n]) !== 9n) throw new Error("case 13");
+if (trappedWater([3n, 0n, 0n, 3n]) !== 6n) throw new Error("case 14");
+if (trappedWater([1000n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 1000n]) !== 98000n) throw new Error("case 15");
+if (trappedWater([1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n, 1000n, 0n]) !== 49000n) throw new Error("case 16");
+if (trappedWater([0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n]) !== 0n) throw new Error("case 17");

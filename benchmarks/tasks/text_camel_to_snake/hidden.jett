@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("") == ""
+verify hidden_case_1:
+    assert solve("a") == "a"
+verify hidden_case_2:
+    assert solve("A") == "a"
+verify hidden_case_3:
+    assert solve("camelCase") == "camel_case"
+verify hidden_case_4:
+    assert solve("HTTPServer") == "http_server"
+verify hidden_case_5:
+    assert solve("XML") == "xml"
+verify hidden_case_6:
+    assert solve("parseURLValue") == "parse_url_value"
+verify hidden_case_7:
+    assert solve("x2Y") == "x2_y"
+verify hidden_case_8:
+    assert solve("ABc") == "a_bc"
+verify hidden_case_9:
+    assert solve("oneTwoThree") == "one_two_three"
+verify hidden_case_10:
+    assert solve("v123") == "v123"
+verify hidden_case_11:
+    assert solve("ABCdEF") == "ab_cd_ef"

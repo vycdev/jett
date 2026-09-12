@@ -1,0 +1,261 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows)
+    assert actual.rooms == 0
+    assert actual.assignment_checksum == 0
+    assert actual.reuses == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 11, end: 15))
+    Report actual = solve(view rows)
+    assert actual.rooms == 1
+    assert actual.assignment_checksum == 1
+    assert actual.reuses == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 3, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12))
+    Report actual = solve(view rows)
+    assert actual.rooms == 2
+    assert actual.assignment_checksum == 5
+    assert actual.reuses == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 13))
+    Report actual = solve(view rows)
+    assert actual.rooms == 2
+    assert actual.assignment_checksum == 8
+    assert actual.reuses == 1
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 3, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 10))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 13))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 8))
+    Report actual = solve(view rows)
+    assert actual.rooms == 3
+    assert actual.assignment_checksum == 20
+    assert actual.reuses == 1
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 5))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 5))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 15))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12))
+    Report actual = solve(view rows)
+    assert actual.rooms == 2
+    assert actual.assignment_checksum == 22
+    assert actual.reuses == 3
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 13))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 14))
+    Report actual = solve(view rows)
+    assert actual.rooms == 3
+    assert actual.assignment_checksum == 37
+    assert actual.reuses == 3
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 1))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 5))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 14))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 12))
+    Report actual = solve(view rows)
+    assert actual.rooms == 4
+    assert actual.assignment_checksum == 68
+    assert actual.reuses == 3
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 2, end: 3))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 14))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 17))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 12))
+    Report actual = solve(view rows)
+    assert actual.rooms == 4
+    assert actual.assignment_checksum == 77
+    assert actual.reuses == 4
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 4))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 4))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11))
+    Report actual = solve(view rows)
+    assert actual.rooms == 5
+    assert actual.assignment_checksum == 118
+    assert actual.reuses == 4
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 1, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 4))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 14))
+    Report actual = solve(view rows)
+    assert actual.rooms == 4
+    assert actual.assignment_checksum == 112
+    assert actual.reuses == 6
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 5))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 14))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 14))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 14))
+    Report actual = solve(view rows)
+    assert actual.rooms == 5
+    assert actual.assignment_checksum == 187
+    assert actual.reuses == 6
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 1, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 10))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 10))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 15))
+    Report actual = solve(view rows)
+    assert actual.rooms == 6
+    assert actual.assignment_checksum == 213
+    assert actual.reuses == 6
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 1, end: 3))
+    Report actual = solve(view rows)
+    assert actual.rooms == 1
+    assert actual.assignment_checksum == 1
+    assert actual.reuses == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 4))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 5))
+    Report actual = solve(view rows)
+    assert actual.rooms == 2
+    assert actual.assignment_checksum == 5
+    assert actual.reuses == 0
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 7, end: 10))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 10))
+    Report actual = solve(view rows)
+    assert actual.rooms == 3
+    assert actual.assignment_checksum == 14
+    assert actual.reuses == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 15))
+    Report actual = solve(view rows)
+    assert actual.rooms == 3
+    assert actual.assignment_checksum == 21
+    assert actual.reuses == 1
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 6, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 12))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 14))
+    Report actual = solve(view rows)
+    assert actual.rooms == 3
+    assert actual.assignment_checksum == 31
+    assert actual.reuses == 2
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 3, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 10))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 16))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 16))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 12))
+    Report actual = solve(view rows)
+    assert actual.rooms == 3
+    assert actual.assignment_checksum == 45
+    assert actual.reuses == 3
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 8))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 5))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 13))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 10))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11))
+    Report actual = solve(view rows)
+    assert actual.rooms == 4
+    assert actual.assignment_checksum == 67
+    assert actual.reuses == 3
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 2, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 5))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 9))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 7))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 14))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 15))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 12))
+    Report actual = solve(view rows)
+    assert actual.rooms == 4
+    assert actual.assignment_checksum == 87
+    assert actual.reuses == 4
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 1))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 4))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 4))
+    Report actual = solve(view rows)
+    assert actual.rooms == 3
+    assert actual.assignment_checksum == 28
+    assert actual.reuses == 2
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 5))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 3))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 6))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 7))
+    Report actual = solve(view rows)
+    assert actual.rooms == 2
+    assert actual.assignment_checksum == 15
+    assert actual.reuses == 2

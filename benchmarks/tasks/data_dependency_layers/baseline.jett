@@ -1,0 +1,31 @@
+namespace benchmark
+struct Entry:
+    prerequisite: int64
+    dependent: int64
+struct Report:
+    layers: int64
+    last_layer_count: int64
+    layer_sum: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] levels = map.new[int64, int64]()
+    mutable int64 maximum =(-1)
+    mutable int64 last_count = 0
+    mutable int64 total = 0
+    mutable int64 vertex = 0
+    while (vertex < limit):
+        mutable int64 level = 0
+        for row in view rows:
+            if (row.dependent == vertex):
+                mutable int64 prior =(map.get_or[int64, int64](clone levels, row.prerequisite, 0) + 1)
+                if (prior > level):
+                    level = prior
+        mutable int64 updated_value_0 = level
+        levels = map.set[int64, int64](levels, vertex, updated_value_0)
+        total =(total + level)
+        if (level > maximum):
+            maximum = level
+            last_count = 0
+        if (level == maximum):
+            last_count =(last_count + 1)
+        vertex =(vertex + 1)
+    return Report(layers:(maximum + 1), last_layer_count: last_count, layer_sum: total)

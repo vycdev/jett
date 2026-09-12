@@ -1,0 +1,89 @@
+{
+  "task_id": "text_wrap_words",
+  "cases": [
+    {
+      "inputs": {
+        "text": "",
+        "width": 5
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "   ",
+        "width": 3
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "a b c",
+        "width": 3
+      },
+      "expected": "a b\nc"
+    },
+    {
+      "inputs": {
+        "text": "a b c",
+        "width": 1
+      },
+      "expected": "a\nb\nc"
+    },
+    {
+      "inputs": {
+        "text": "longword x",
+        "width": 3
+      },
+      "expected": "longword\nx"
+    },
+    {
+      "inputs": {
+        "text": "one two three",
+        "width": 7
+      },
+      "expected": "one two\nthree"
+    },
+    {
+      "inputs": {
+        "text": " one  two ",
+        "width": 80
+      },
+      "expected": "one two"
+    },
+    {
+      "inputs": {
+        "text": "ab cd ef",
+        "width": 5
+      },
+      "expected": "ab cd\nef"
+    },
+    {
+      "inputs": {
+        "text": "abc d",
+        "width": 3
+      },
+      "expected": "abc\nd"
+    },
+    {
+      "inputs": {
+        "text": "a bc",
+        "width": 4
+      },
+      "expected": "a bc"
+    },
+    {
+      "inputs": {
+        "text": "a bc",
+        "width": 3
+      },
+      "expected": "a\nbc"
+    },
+    {
+      "inputs": {
+        "text": "x longword y",
+        "width": 3
+      },
+      "expected": "x\nlongword\ny"
+    }
+  ]
+}

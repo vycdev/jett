@@ -1,0 +1,32 @@
+namespace benchmark
+struct Mode:
+    value: int64
+    count: int64
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function occurrence_count(view values: list[int64], target: int64) returns int64:
+    mutable int64 count = 0
+    mutable int64 index = 0
+    while (index < list.length[int64](view values)):
+        if (nth(view values, index) == target):
+            count = (count + 1)
+        index = (index + 1)
+    return count
+function histogram_mode(values: list[int64]) returns Mode:
+    mutable int64 best_value = 0
+    mutable int64 best_count = 0
+    mutable int64 index = 0
+    while (index < list.length[int64](view values)):
+        mutable int64 value = nth(view values, index)
+        mutable int64 count = occurrence_count(view values, value)
+        mutable bool replace = (count > best_count)
+        if (count == best_count):
+            if (value < best_value):
+                replace = true
+        if replace:
+            best_value = value
+            best_count = count
+        index = (index + 1)
+    return Mode(value: best_value, count: best_count)

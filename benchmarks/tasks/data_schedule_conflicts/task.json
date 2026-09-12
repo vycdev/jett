@@ -1,0 +1,169 @@
+{
+  "id": "data_schedule_conflicts",
+  "version": "1.0.0",
+  "title": "Count intersecting bookings by resource",
+  "category": "schedule",
+  "difficulty": "medium",
+  "statement": "Bookings are half-open [start,end). Two distinct bookings conflict only if they have the same resource and their intervals overlap for positive duration. Return the number of unordered conflicting pairs, number of bookings in at least one conflicting pair, and maximum overlap duration among conflicting pairs (zero if none). Duplicate records represent separate bookings.",
+  "constraints": [
+    "0 <= start < end; resource is nonnegative; records may be unsorted.",
+    "Use the exact declared Entry and Report record fields and solve signature. Return all three Report fields; do not mutate the caller's records.",
+    "All arithmetic fits signed int64; there are at most 30 records. Return fresh results; no I/O, tests, exceptions, panic, or static-check bypasses."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nstruct Entry:\n    start: int64\n    end: int64\n    resource_id: int64\n\nstruct Report:\n    conflict_pairs: int64\n    affected_bookings: int64\n    longest_overlap: int64\n\nfunction solve(view rows: list[Entry]) returns Report",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": []
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Entry:\n    start: int\n    end: int\n    resource_id: int\n\n@dataclass(frozen=True)\nclass Report:\n    conflict_pairs: int\n    affected_bookings: int\n    longest_overlap: int\n\ndef solve(rows: list[Entry]) -> Report",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "typescript": {
+      "signature": "\nexport interface Entry {\n    readonly start: bigint;\n    readonly end: bigint;\n    readonly resource_id: bigint;\n}\n\nexport interface Report {\n    readonly conflict_pairs: bigint;\n    readonly affected_bookings: bigint;\n    readonly longest_overlap: bigint;\n}\n\nexport function solve(rows: readonly Entry[]): Report",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--noFallthroughCasesInSwitch",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype Entry struct {\n    Start int64\n    End int64\n    ResourceId int64\n}\n\ntype Report struct {\n    ConflictPairs int64\n    AffectedBookings int64\n    LongestOverlap int64\n}\n\nfunc solve(rows []Entry) Report",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    },
+    "rust": {
+      "signature": "\n#[derive(Debug, PartialEq, Eq)]\npub struct Entry {\n    pub start: i64,\n    pub end: i64,\n    pub resource_id: i64,\n}\n\n#[derive(Debug, PartialEq, Eq)]\npub struct Report {\n    pub conflict_pairs: i64,\n    pub affected_bookings: i64,\n    pub longest_overlap: i64,\n}\n\npub fn solve(rows: &[Entry]) -> Report",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    }
+  }
+}

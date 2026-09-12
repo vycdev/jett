@@ -1,0 +1,16 @@
+
+verify numerical_cases_0:
+    assert knapsack_value(list(), list(), 0) == 0
+    assert knapsack_value(list(), list(), 8) == 0
+    assert knapsack_value(list(1), list(7), 0) == 0
+    assert knapsack_value(list(5), list(10), 4) == 0
+    assert knapsack_value(list(5), list(10), 5) == 10
+    assert knapsack_value(list(2, 3, 4), list(4, 5, 7), 5) == 9
+    assert knapsack_value(list(2, 2, 2), list(3, 3, 3), 4) == 6
+    assert knapsack_value(list(1, 1, 1), list(0, 5, 7), 2) == 12
+verify numerical_cases_1:
+    assert knapsack_value(list(6, 3, 4, 2), list(30, 14, 16, 9), 10) == 46
+    assert knapsack_value(list(10, 20, 30), list(60, 100, 100), 40) == 160
+    assert knapsack_value(list(1, 3, 4), list(1, 4, 5), 7) == 9
+    assert knapsack_value(list(40), list(100), 40) == 100
+    assert knapsack_value(list(7, 6, 5, 4, 3, 2), list(5, 6, 7, 8, 9, 10), 12) == 27

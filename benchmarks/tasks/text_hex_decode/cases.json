@@ -1,0 +1,122 @@
+{
+  "task_id": "text_hex_decode",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "41"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "A"
+      }
+    },
+    {
+      "inputs": {
+        "text": "6869"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "hi"
+      }
+    },
+    {
+      "inputs": {
+        "text": "207E"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": " ~"
+      }
+    },
+    {
+      "inputs": {
+        "text": "5c22"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "\\\""
+      }
+    },
+    {
+      "inputs": {
+        "text": "0"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "GG"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "7f"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "ff"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "00g"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "002G"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "2G00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    }
+  ]
+}

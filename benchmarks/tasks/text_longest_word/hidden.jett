@@ -1,0 +1,38 @@
+function hidden_error(error: TextError) returns string:
+    match error:
+        empty:
+            return "empty"
+        malformed:
+            return "malformed"
+        range:
+            return "range"
+function hidden_outcome(outcome: TextOutcome) returns string:
+    match outcome:
+        accepted(value):
+            return "accepted:{value}"
+        rejected(error):
+            return "rejected:{hidden_error(error)}"
+verify hidden_case_0:
+    assert hidden_outcome(solve("")) == "rejected:empty"
+verify hidden_case_1:
+    assert hidden_outcome(solve("  ")) == "rejected:empty"
+verify hidden_case_2:
+    assert hidden_outcome(solve("a")) == "accepted:a"
+verify hidden_case_3:
+    assert hidden_outcome(solve("a bb c")) == "accepted:bb"
+verify hidden_case_4:
+    assert hidden_outcome(solve("ab cd")) == "accepted:ab"
+verify hidden_case_5:
+    assert hidden_outcome(solve(" xxx yy ")) == "accepted:xxx"
+verify hidden_case_6:
+    assert hidden_outcome(solve("a\tb zz")) == "accepted:a\tb"
+verify hidden_case_7:
+    assert hidden_outcome(solve("! ??")) == "accepted:??"
+verify hidden_case_8:
+    assert hidden_outcome(solve("long short")) == "accepted:short"
+verify hidden_case_9:
+    assert hidden_outcome(solve("same same")) == "accepted:same"
+verify hidden_case_10:
+    assert hidden_outcome(solve("   end")) == "accepted:end"
+verify hidden_case_11:
+    assert hidden_outcome(solve("ab abc abcd")) == "accepted:abcd"

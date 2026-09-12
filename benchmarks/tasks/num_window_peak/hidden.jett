@@ -1,0 +1,21 @@
+function fixture_label(outcome: optional[int64]) returns string:
+    int64 value = outcome handle:
+        return "none"
+    return string.from_int64(value)
+
+verify numerical_cases_0:
+    assert fixture_label(window_peak(list(), 0)) == "none"
+    assert fixture_label(window_peak(list(), 1)) == "none"
+    assert fixture_label(window_peak(list(7), 0)) == "none"
+    assert fixture_label(window_peak(list(7), 1)) == "7"
+    assert fixture_label(window_peak(list(7), 2)) == "none"
+    assert fixture_label(window_peak(list(1, 2, 3, 4), 2)) == "7"
+    assert fixture_label(window_peak(list(-5, -2, -7), 2)) == "-7"
+    assert fixture_label(window_peak(list(2, -1, 2, -1, 2), 3)) == "3"
+verify numerical_cases_1:
+    assert fixture_label(window_peak(list(5, -9, 5), 1)) == "5"
+    assert fixture_label(window_peak(list(5, -9, 5), 3)) == "1"
+    assert fixture_label(window_peak(list(0, 0, 0), 2)) == "0"
+    assert fixture_label(window_peak(list(10, -5, -5, 10), 2)) == "5"
+    assert fixture_label(window_peak(list(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19), 5)) == "85"
+    assert fixture_label(window_peak(list(20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0), 7)) == "119"

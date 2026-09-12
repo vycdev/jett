@@ -2,6 +2,12 @@
 
 Status: active
 
+Current work: the 100-problem four-cell development campaign is defined in
+`benchmark_100_problem_plan.md` and `benchmarks/protocol_v0.6.0.md`. It uses
+subscription-only Luna medium, 1,000 initial responses, one repair per failure,
+and a full Jett skill-revision follow-up. Historical sections below describe
+earlier pilot matrices and are not completion evidence for this campaign.
+
 ## Goal
 
 Measure how reliably coding agents can solve the same bounded programming

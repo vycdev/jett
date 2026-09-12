@@ -1,0 +1,36 @@
+namespace benchmark
+struct Entry:
+    sensor: int64
+    operation: int64
+    timestamp: int64
+struct Report:
+    completed: int64
+    active: int64
+    rejected: int64
+function step(operation: int64, timestamp: int64, opened: int64) returns int64:
+    if (timestamp < 0):
+        return(-2)
+    if ((operation == 0) and(opened ==(-1))):
+        return timestamp
+    if ((operation == 1) and(opened >= 0) and(timestamp >= opened)):
+        return(-1)
+    return(-2)
+function solve(view rows: list[Entry]) returns Report:
+    mutable map[int64, int64] opened = map.new[int64, int64]()
+    mutable int64 completed = 0
+    mutable int64 active = 0
+    mutable int64 rejected = 0
+    for row in view rows:
+        mutable int64 prior = map.get_or[int64, int64](clone opened, row.sensor,(-1))
+        mutable int64 next_time = step(row.operation, row.timestamp, prior)
+        if (next_time ==(-2)):
+            rejected =(rejected + 1)
+        else:
+            mutable int64 updated_value_0 = next_time
+            opened = map.set[int64, int64](opened, row.sensor, updated_value_0)
+            if (next_time ==(-1)):
+                completed =(completed + 1)
+                active =(active - 1)
+            else:
+                active =(active + 1)
+    return Report(completed: completed, active: active, rejected: rejected)

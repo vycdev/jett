@@ -40,8 +40,10 @@ timeouts do not provide a security boundary.
 
 `codex-calibration` uses the ChatGPT login held by the Codex CLI, removes API
 credential variables from the child environment, and refuses to run unless
-`codex login status` reports `Logged in using ChatGPT`. The current v0.5.4
-calibration is a 150-cell medium-reasoning slice run in fresh ephemeral sessions
+`codex login status` reports `Logged in using ChatGPT`. The v0.6.0 generic
+calibration contains 1,500 medium-reasoning rows across three context tracks;
+the four-cell campaign below selects 1,000 initial rows across two tracks.
+Both run in fresh ephemeral sessions
 from empty temporary directories. The Luna name is currently a rolling alias
 rather than a dated snapshot, so every row records the alias, UTC completion time, Codex version,
 backend, deterministic sequence, and event-log hash. Do not pool these rows with
@@ -110,9 +112,9 @@ cumulative token usage and code characters/bytes for the repair cells.
 - `references/*.md`: controlled-onboarding sheets;
 - `schemas/*.json`: machine-readable result and task contracts.
 
-The current skill-assisted extension is specified by `protocol_v0.5.4.md` and
-`jett_subset_v0.5.4.md`. It inherits v0.5.3 and records that Jett keywords and
-built-in type spellings cannot be used as identifiers. Its Python
+The current expansion is specified by `protocol_v0.6.0.md` and
+`jett_subset_v0.6.0.md`. Its initial Jett skill retains v0.5.4 guidance;
+all skills remain general language references. The Python
 adapter adds pinned Pyright strict checking; all five typed-task adapters perform a
 static-check phase before hidden runtime tests.
 Task-specific forbidden patterns are a narrow preflight against type erasure
@@ -122,12 +124,16 @@ The v0.3 task set adds recursive closed data and a maintenance task that asks
 the model to evolve supplied source. Starter-source hashes are recorded with
 planned and generated rows so the maintenance input is auditable.
 
-The task set contains ten tasks. The four v0.4 additions cover optional values
+The task set contains 100 tasks: the original ten plus 30 numerical/sequence,
+30 text/parsing, and 30 structured-data/state/graph tasks. Each new task has
+auditable language-neutral fixtures; maintenance tasks also supply starter code.
+The four historical v0.4 additions cover optional values
 and sets, struct/list transformation, typed map updates, and canonical string
 parsing with structured failures.
 
-The v0.5 matrix adds a third `skill_assisted` context track, for 1,350 planned
-rows and a 150-row balanced medium calibration. Five repo-scoped skills live in
+The historical v0.5 matrix added a third `skill_assisted` context track. With
+100 tasks the complete matrix is 13,500 planned rows; this campaign uses only
+the 1,000 initials and paired repairs specified above. Five repo-scoped skills live in
 `.agents/skills/`. The harness materializes their instruction files directly
 for deterministic evaluation, records their hashes and byte counts, and checks
 that they contain no task identifiers or complete benchmark source fixtures.

@@ -1,0 +1,72 @@
+namespace benchmark
+function from_ascii_hex(text: string) returns string:
+    bytes encoded = bytes.from_hex(text) handle error:
+        return ""
+    string decoded = bytes.to_string(view encoded) handle error:
+        return ""
+    return decoded
+function concat(left: string, right: string) returns string:
+    return "{left}{right}"
+function length(text: string) returns int64:
+    return string.length(text)
+function char_read(text: string, pos: int64) returns string:
+    string ch = string.char_at(text, pos) handle:
+        default ""
+    return ch
+function part(text: string, start: int64, end: int64) returns string:
+    return string.slice(text, start, end)
+function contains(text: string, needle: string) returns bool:
+    return string.contains(text, needle)
+function lower(text: string) returns string:
+    return string.lower(text)
+function upper(text: string) returns string:
+    return string.upper(text)
+function render(value: int64) returns string:
+    return string.from_int64(value)
+function digit(ch: string) returns int64:
+    mutable int64 pos = 0
+    while (pos < 10):
+        if (char_read("0123456789", pos) == ch):
+            return pos
+        pos =(pos + 1)
+    return(-1)
+function uint_value(text: string, bound: int64) returns int64:
+    if (length(text) == 0):
+        return(-1)
+    mutable int64 value = 0
+    mutable int64 pos = 0
+    while (pos < length(text)):
+        mutable int64 num = digit(char_read(text, pos))
+        if (num < 0):
+            return(-1)
+        value =((value * 10) + num)
+        if (value > bound):
+            return(-1)
+        pos =(pos + 1)
+    return value
+function component_end(text: string, start: int64) returns int64:
+    mutable int64 pos = start
+    while (pos < length(text)):
+        if (char_read(text, pos) == "."):
+            return pos
+        pos =(pos + 1)
+    return pos
+function component_value(text: string, start: int64, end: int64) returns int64:
+    if (start >= length(text)):
+        return 0
+    return uint_value(part(text, start, end), 999)
+function solve(left: string, right: string) returns int64:
+    mutable int64 lp = 0
+    mutable int64 rp = 0
+    while ((lp < length(left)) or(rp < length(right))):
+        mutable int64 le = component_end(left, lp)
+        mutable int64 re = component_end(right, rp)
+        mutable int64 lv = component_value(left, lp, le)
+        mutable int64 rv = component_value(right, rp, re)
+        if (lv < rv):
+            return(-1)
+        if (lv > rv):
+            return 1
+        lp =(le + 1)
+        rp =(re + 1)
+    return 0

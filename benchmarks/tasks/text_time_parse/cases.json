@@ -1,0 +1,113 @@
+{
+  "task_id": "text_time_parse",
+  "cases": [
+    {
+      "inputs": {
+        "text": "00:00:00"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 0
+      }
+    },
+    {
+      "inputs": {
+        "text": "23:59:59"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 86399
+      }
+    },
+    {
+      "inputs": {
+        "text": "12:34:56"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 45296
+      }
+    },
+    {
+      "inputs": {
+        "text": "01:02:03"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 3723
+      }
+    },
+    {
+      "inputs": {
+        "text": "24:00:00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "00:60:00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "00:00:60"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "0:00:00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "00-00-00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "aa:00:00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "99:xx:00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    }
+  ]
+}

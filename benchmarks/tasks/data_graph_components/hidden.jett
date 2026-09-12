@@ -1,0 +1,277 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 0)
+    assert actual.components == 0
+    assert actual.largest == 0
+    assert actual.isolated == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 5)
+    assert actual.components == 5
+    assert actual.largest == 1
+    assert actual.isolated == 5
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 1)
+    assert actual.components == 1
+    assert actual.largest == 1
+    assert actual.isolated == 1
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.components == 2
+    assert actual.largest == 1
+    assert actual.isolated == 1
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 2, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 2))
+    Report actual = solve(view rows, 3)
+    assert actual.components == 2
+    assert actual.largest == 2
+    assert actual.isolated == 1
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 1))
+    Report actual = solve(view rows, 4)
+    assert actual.components == 1
+    assert actual.largest == 4
+    assert actual.isolated == 0
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 2, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    Report actual = solve(view rows, 5)
+    assert actual.components == 3
+    assert actual.largest == 2
+    assert actual.isolated == 1
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 4, target: 4))
+    rows = list.append[Entry](rows, Entry(source: 5, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 5, target: 1))
+    Report actual = solve(view rows, 6)
+    assert actual.components == 3
+    assert actual.largest == 4
+    assert actual.isolated == 1
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 6, target: 4))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 5))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 6, target: 5))
+    rows = list.append[Entry](rows, Entry(source: 4, target: 4))
+    rows = list.append[Entry](rows, Entry(source: 4, target: 0))
+    Report actual = solve(view rows, 7)
+    assert actual.components == 2
+    assert actual.largest == 6
+    assert actual.isolated == 1
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 4, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 6, target: 6))
+    rows = list.append[Entry](rows, Entry(source: 6, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 7, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 6))
+    Report actual = solve(view rows, 8)
+    assert actual.components == 3
+    assert actual.largest == 5
+    assert actual.isolated == 1
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    Report actual = solve(view rows, 1)
+    assert actual.components == 1
+    assert actual.largest == 1
+    assert actual.isolated == 0
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.components == 1
+    assert actual.largest == 2
+    assert actual.isolated == 0
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 2, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    Report actual = solve(view rows, 3)
+    assert actual.components == 1
+    assert actual.largest == 3
+    assert actual.isolated == 0
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 0, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    Report actual = solve(view rows, 4)
+    assert actual.components == 1
+    assert actual.largest == 4
+    assert actual.isolated == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 0, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 4, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    Report actual = solve(view rows, 5)
+    assert actual.components == 1
+    assert actual.largest == 5
+    assert actual.isolated == 0
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 6)
+    assert actual.components == 6
+    assert actual.largest == 1
+    assert actual.isolated == 6
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 4, target: 6))
+    Report actual = solve(view rows, 7)
+    assert actual.components == 6
+    assert actual.largest == 2
+    assert actual.isolated == 5
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 5, target: 6))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 4))
+    Report actual = solve(view rows, 8)
+    assert actual.components == 6
+    assert actual.largest == 2
+    assert actual.isolated == 4
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    Report actual = solve(view rows, 1)
+    assert actual.components == 1
+    assert actual.largest == 1
+    assert actual.isolated == 0
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.components == 1
+    assert actual.largest == 2
+    assert actual.isolated == 0
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    Report actual = solve(view rows, 3)
+    assert actual.components == 2
+    assert actual.largest == 2
+    assert actual.isolated == 1
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 1, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 0))
+    Report actual = solve(view rows, 4)
+    assert actual.components == 1
+    assert actual.largest == 4
+    assert actual.isolated == 0
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 1, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 2, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 4, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 4))
+    rows = list.append[Entry](rows, Entry(source: 4, target: 3))
+    Report actual = solve(view rows, 5)
+    assert actual.components == 1
+    assert actual.largest == 5
+    assert actual.isolated == 0
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 2, target: 4))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 4))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 0))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 5))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 5, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 3))
+    Report actual = solve(view rows, 6)
+    assert actual.components == 1
+    assert actual.largest == 6
+    assert actual.isolated == 0
+verify fixture_024:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 2, target: 3))
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 4, target: 4))
+    Report actual = solve(view rows, 6)
+    assert actual.components == 3
+    assert actual.largest == 4
+    assert actual.isolated == 1
+verify fixture_025:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(source: 0, target: 1))
+    rows = list.append[Entry](rows, Entry(source: 1, target: 2))
+    rows = list.append[Entry](rows, Entry(source: 3, target: 3))
+    Report actual = solve(view rows, 5)
+    assert actual.components == 3
+    assert actual.largest == 3
+    assert actual.isolated == 1

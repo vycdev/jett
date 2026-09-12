@@ -1,0 +1,16 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function inversion_count(values: list[int64]) returns int64:
+    mutable int64 count = 0
+    mutable int64 first = 0
+    while (first < list.length[int64](view values)):
+        mutable int64 second = (first + 1)
+        while (second < list.length[int64](view values)):
+            if (nth(view values, first) > nth(view values, second)):
+                count = (count + 1)
+            second = (second + 1)
+        first = (first + 1)
+    return count

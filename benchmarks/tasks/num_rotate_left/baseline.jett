@@ -1,0 +1,21 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function safe_mod(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left modulo right
+function rotate_left(values: list[int64], distance: int64) returns list[int64]:
+    mutable list[int64] rotated = list.new[int64]()
+    mutable int64 count = list.length[int64](view values)
+    if (count == 0):
+        return rotated
+    mutable int64 shift = safe_mod(distance, count)
+    mutable int64 index = 0
+    while (index < count):
+        mutable int64 position = safe_mod((index + shift), count)
+        rotated = list.append[int64](rotated, nth(view values, position))
+        index = (index + 1)
+    return rotated

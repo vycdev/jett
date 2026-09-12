@@ -1,0 +1,36 @@
+namespace benchmark
+struct Entry:
+    patient: int64
+    severity: int64
+    arrival: int64
+struct Report:
+    selected: int64
+    patient_checksum: int64
+    severity_sum: int64
+function precedes(severity: int64, arrival: int64, index: int64, other_severity: int64, other_arrival: int64, other_index: int64) returns bool:
+    if (other_severity != severity):
+        return(other_severity > severity)
+    if (other_arrival != arrival):
+        return(other_arrival < arrival)
+    return(other_index < index)
+function rank_of(view rows: list[Entry], severity: int64, arrival: int64, index: int64) returns int64:
+    mutable int64 rank = 1
+    mutable int64 other_index = 0
+    for other in view rows:
+        if precedes(severity, arrival, index, other.severity, other.arrival, other_index):
+            rank =(rank + 1)
+        other_index =(other_index + 1)
+    return rank
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 selected = 0
+    mutable int64 checksum = 0
+    mutable int64 total = 0
+    mutable int64 index = 0
+    for row in view rows:
+        mutable int64 rank = rank_of(view rows, row.severity, row.arrival, index)
+        if (rank <= limit):
+            selected =(selected + 1)
+            checksum =(checksum +(rank *(row.patient + 1)))
+            total =(total + row.severity)
+        index =(index + 1)
+    return Report(selected: selected, patient_checksum: checksum, severity_sum: total)

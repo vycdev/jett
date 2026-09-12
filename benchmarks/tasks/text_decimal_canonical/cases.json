@@ -1,0 +1,122 @@
+{
+  "task_id": "text_decimal_canonical",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "empty"
+      }
+    },
+    {
+      "inputs": {
+        "text": "0"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "0"
+      }
+    },
+    {
+      "inputs": {
+        "text": "-000"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "0"
+      }
+    },
+    {
+      "inputs": {
+        "text": "+0012"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "12"
+      }
+    },
+    {
+      "inputs": {
+        "text": "-012"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "-12"
+      }
+    },
+    {
+      "inputs": {
+        "text": "123"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "123"
+      }
+    },
+    {
+      "inputs": {
+        "text": "+"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "--1"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": " 1"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "1.0"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "0x0"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+      }
+    },
+    {
+      "inputs": {
+        "text": "-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "-1"
+      }
+    }
+  ]
+}

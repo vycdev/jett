@@ -1,0 +1,131 @@
+{
+  "task_id": "text_percent_decode",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "abc"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "abc"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a+b"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "a+b"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%41%20%7e"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "A ~"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%25"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "%"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%2"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%GG"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%7F"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%ff"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%00%G0"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "%G0%00"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "x%2fy"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "x/y"
+      }
+    }
+  ]
+}

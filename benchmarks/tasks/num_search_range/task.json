@@ -1,0 +1,175 @@
+{
+  "id": "num_search_range",
+  "version": "1.0.0",
+  "title": "Inclusive range of a target in sorted data",
+  "category": "numerical_sequence_algorithms",
+  "difficulty": "medium",
+  "statement": "Return SearchRange(first, last) containing the zero-based first and last positions of target in nondecreasing values. Both positions are inclusive. If absent, return first=-1 and last=-1.",
+  "constraints": [
+    "values has at most 100 entries, each in [-1000, 1000], in nondecreasing order",
+    "-1000 <= target <= 1000",
+    "Inputs obey the stated domain; do not mutate caller-owned inputs.",
+    "The required return value fits signed 64-bit integers; choose arithmetic that keeps intermediate values within that range. TypeScript uses bigint for integer values.",
+    "Do not perform input/output, throw, panic, add tests, or suppress static diagnostics."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nstruct SearchRange:\n    first: int64\n    last: int64\n\nfunction search_range(values: list[int64], target: int64) returns SearchRange",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "(?m)^\\s*(?:other|_)\\s*:",
+          "message": "catch-all match arms are forbidden"
+        }
+      ]
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass SearchRange:\n    first: int\n    last: int\n\ndef search_range(values: list[int], target: int) -> SearchRange",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden"
+        }
+      ]
+    },
+    "typescript": {
+      "signature": "export type SearchRange = { readonly first: bigint; readonly last: bigint };\n\nexport function searchRange(values: readonly bigint[], target: bigint): SearchRange",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden"
+        }
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype SearchRange struct { first int64; last int64 }\n\nfunc FindSearchRange(values []int64, target int64) SearchRange",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden"
+        }
+      ]
+    },
+    "rust": {
+      "signature": "#[derive(Debug, PartialEq, Eq)]\npub struct SearchRange { pub first: i64, pub last: i64 }\n\npub fn search_range(values: &[i64], target: i64) -> SearchRange",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden"
+        }
+      ]
+    }
+  }
+}

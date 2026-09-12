@@ -1,0 +1,66 @@
+fn length(text: String) -> i64 {
+    i64::try_from(text.len()).unwrap_or(0)
+}
+fn at(text: String, pos: i64) -> String {
+    usize::try_from(pos)
+        .ok()
+        .and_then(|p| text.get(p..p + 1))
+        .unwrap_or("")
+        .to_string()
+}
+fn part(text: String, start: i64, end: i64) -> String {
+    match (usize::try_from(start), usize::try_from(end)) {
+        (Ok(a), Ok(b)) => text.get(a..b).unwrap_or("").to_string(),
+        _ => String::new(),
+    }
+}
+fn contains(text: String, needle: String) -> bool {
+    text.contains(&needle)
+}
+fn lower(text: String) -> String {
+    text.to_ascii_lowercase()
+}
+fn upper(text: String) -> String {
+    text.to_ascii_uppercase()
+}
+fn render(value: i64) -> String {
+    value.to_string()
+}
+
+pub fn quote_mode(mode: i64, ch: String) -> i64 {
+    if (mode == 2) {
+        return 1;
+    }
+    if ((mode == 1) && (ch.clone() == "\\".to_string())) {
+        return 2;
+    }
+    if (ch.clone() == "\"".to_string()) {
+        return (1 - mode);
+    }
+    return mode;
+}
+
+pub fn solve(text: String) -> String {
+    let mut out: String = "".to_string();
+    let mut mode: i64 = 0;
+    let mut comment: bool = false;
+    let mut pos: i64 = 0;
+    while (pos < length(text.clone())) {
+        let mut ch: String = at(text.clone(), pos);
+        if comment {
+            if (ch.clone() == "\n".to_string()) {
+                comment = false;
+                out = (out.clone() + &ch.clone());
+            }
+        } else {
+            if ((mode == 0) && (ch.clone() == "#".to_string())) {
+                comment = true;
+            } else {
+                out = (out.clone() + &ch.clone());
+                mode = quote_mode(mode, ch.clone());
+            }
+        }
+        pos = (pos + 1);
+    }
+    return out.clone();
+}

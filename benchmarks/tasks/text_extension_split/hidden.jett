@@ -1,0 +1,26 @@
+function hidden_pair(value: TextPair) returns string:
+    return "{string.length(value.first)}:{value.first}{string.length(value.second)}:{value.second}"
+verify hidden_case_0:
+    assert hidden_pair(solve("")) == "0:0:"
+verify hidden_case_1:
+    assert hidden_pair(solve("a")) == "1:a0:"
+verify hidden_case_2:
+    assert hidden_pair(solve("a.txt")) == "1:a3:txt"
+verify hidden_case_3:
+    assert hidden_pair(solve("a.tar.gz")) == "5:a.tar2:gz"
+verify hidden_case_4:
+    assert hidden_pair(solve(".env")) == "4:.env0:"
+verify hidden_case_5:
+    assert hidden_pair(solve(".env.local")) == "4:.env5:local"
+verify hidden_case_6:
+    assert hidden_pair(solve("a.")) == "1:a0:"
+verify hidden_case_7:
+    assert hidden_pair(solve(".")) == "1:.0:"
+verify hidden_case_8:
+    assert hidden_pair(solve("..")) == "1:.0:"
+verify hidden_case_9:
+    assert hidden_pair(solve("...")) == "2:..0:"
+verify hidden_case_10:
+    assert hidden_pair(solve("A.TXT")) == "1:A3:TXT"
+verify hidden_case_11:
+    assert hidden_pair(solve(" a .x")) == "3: a 1:x"

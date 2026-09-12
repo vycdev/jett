@@ -1,0 +1,22 @@
+
+verify numerical_cases_0:
+    assert totient(1) == 1
+    assert totient(2) == 1
+    assert totient(3) == 2
+    assert totient(4) == 2
+    assert totient(5) == 4
+    assert totient(6) == 2
+    assert totient(8) == 4
+    assert totient(9) == 6
+verify numerical_cases_1:
+    assert totient(10) == 4
+    assert totient(12) == 4
+    assert totient(30) == 8
+    assert totient(36) == 12
+    assert totient(49) == 42
+    assert totient(97) == 96
+    assert totient(210) == 48
+    assert totient(1024) == 512
+verify numerical_cases_2:
+    assert totient(9999) == 6000
+    assert totient(10000) == 4000

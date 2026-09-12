@@ -1,0 +1,31 @@
+namespace benchmark
+struct Entry:
+    start: int64
+    end: int64
+struct Report:
+    rooms: int64
+    assignment_checksum: int64
+    reuses: int64
+function solve(view rows: list[Entry]) returns Report:
+    mutable map[int64, int64] ends = map.new[int64, int64]()
+    mutable int64 rooms = 0
+    mutable int64 checksum = 0
+    mutable int64 reuses = 0
+    mutable int64 index = 1
+    for row in view rows:
+        mutable int64 selected = 0
+        mutable int64 room = 1
+        while (room <= rooms):
+            if ((selected == 0) and(map.get_or[int64, int64](clone ends, room, 0) <= row.start)):
+                selected = room
+            room =(room + 1)
+        if (selected == 0):
+            rooms =(rooms + 1)
+            selected = rooms
+        else:
+            reuses =(reuses + 1)
+        mutable int64 updated_value_0 = row.end
+        ends = map.set[int64, int64](ends, selected, updated_value_0)
+        checksum =(checksum +(index * selected))
+        index =(index + 1)
+    return Report(rooms: rooms, assignment_checksum: checksum, reuses: reuses)

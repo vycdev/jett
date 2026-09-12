@@ -1,0 +1,38 @@
+namespace benchmark
+struct Entry:
+    passenger: int64
+    preferred: int64
+struct Report:
+    assigned: int64
+    rejected: int64
+    seat_checksum: int64
+function choose_seat(view occupied: map[int64, int64], preferred: int64, limit: int64) returns int64:
+    if ((preferred > 0) and(preferred <= limit)):
+        if (map.get_or[int64, int64](clone occupied, preferred, 0) == 0):
+            return preferred
+    mutable int64 seat = 1
+    while (seat <= limit):
+        if (map.get_or[int64, int64](clone occupied, seat, 0) == 0):
+            return seat
+        seat =(seat + 1)
+    return 0
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] occupied = map.new[int64, int64]()
+    mutable map[int64, int64] passengers = map.new[int64, int64]()
+    mutable int64 assigned = 0
+    mutable int64 rejected = 0
+    mutable int64 checksum = 0
+    for row in view rows:
+        mutable int64 seat = 0
+        if (map.get_or[int64, int64](clone passengers, row.passenger, 0) == 0):
+            seat = choose_seat(view occupied, row.preferred, limit)
+        if (seat == 0):
+            rejected =(rejected + 1)
+        else:
+            assigned =(assigned + 1)
+            checksum =(checksum +((row.passenger + 1) * seat))
+            mutable int64 updated_value_0 = 1
+            occupied = map.set[int64, int64](occupied, seat, updated_value_0)
+            mutable int64 updated_value_1 = 1
+            passengers = map.set[int64, int64](passengers, row.passenger, updated_value_1)
+    return Report(assigned: assigned, rejected: rejected, seat_checksum: checksum)

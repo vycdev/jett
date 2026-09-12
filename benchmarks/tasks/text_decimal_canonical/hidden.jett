@@ -1,0 +1,40 @@
+function hidden_error(error: TextError) returns string:
+    match error:
+        empty:
+            return "empty"
+        malformed:
+            return "malformed"
+        range:
+            return "range"
+function hidden_outcome(outcome: TextOutcome) returns string:
+    match outcome:
+        accepted(value):
+            return "accepted:{value}"
+        rejected(error):
+            return "rejected:{hidden_error(error)}"
+verify hidden_case_0:
+    assert hidden_outcome(solve("")) == "rejected:empty"
+verify hidden_case_1:
+    assert hidden_outcome(solve("0")) == "accepted:0"
+verify hidden_case_2:
+    assert hidden_outcome(solve("-000")) == "accepted:0"
+verify hidden_case_3:
+    assert hidden_outcome(solve("+0012")) == "accepted:12"
+verify hidden_case_4:
+    assert hidden_outcome(solve("-012")) == "accepted:-12"
+verify hidden_case_5:
+    assert hidden_outcome(solve("123")) == "accepted:123"
+verify hidden_case_6:
+    assert hidden_outcome(solve("+")) == "rejected:malformed"
+verify hidden_case_7:
+    assert hidden_outcome(solve("--1")) == "rejected:malformed"
+verify hidden_case_8:
+    assert hidden_outcome(solve(" 1")) == "rejected:malformed"
+verify hidden_case_9:
+    assert hidden_outcome(solve("1.0")) == "rejected:malformed"
+verify hidden_case_10:
+    assert hidden_outcome(solve("0x0")) == "rejected:malformed"
+verify hidden_case_11:
+    assert hidden_outcome(solve("9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999")) == "accepted:9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+verify hidden_case_12:
+    assert hidden_outcome(solve("-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001")) == "accepted:-1"

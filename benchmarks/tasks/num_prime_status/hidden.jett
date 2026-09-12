@@ -1,0 +1,21 @@
+
+verify numerical_cases_0:
+    assert prime_status(-100) == false
+    assert prime_status(-1) == false
+    assert prime_status(0) == false
+    assert prime_status(1) == false
+    assert prime_status(2) == true
+    assert prime_status(3) == true
+    assert prime_status(4) == false
+    assert prime_status(9) == false
+verify numerical_cases_1:
+    assert prime_status(25) == false
+    assert prime_status(49) == false
+    assert prime_status(97) == true
+    assert prime_status(121) == false
+    assert prime_status(997) == true
+    assert prime_status(1024) == false
+    assert prime_status(65521) == true
+    assert prime_status(999983) == true
+verify numerical_cases_2:
+    assert prime_status(1000000) == false

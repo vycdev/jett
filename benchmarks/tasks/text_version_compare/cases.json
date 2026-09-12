@@ -1,0 +1,89 @@
+{
+  "task_id": "text_version_compare",
+  "cases": [
+    {
+      "inputs": {
+        "left": "1",
+        "right": "1"
+      },
+      "expected": 0
+    },
+    {
+      "inputs": {
+        "left": "1",
+        "right": "1.0.0"
+      },
+      "expected": 0
+    },
+    {
+      "inputs": {
+        "left": "0.0",
+        "right": "0"
+      },
+      "expected": 0
+    },
+    {
+      "inputs": {
+        "left": "1.2",
+        "right": "1.10"
+      },
+      "expected": -1
+    },
+    {
+      "inputs": {
+        "left": "2",
+        "right": "1.999"
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "left": "1.0.1",
+        "right": "1"
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "left": "1",
+        "right": "1.0.1"
+      },
+      "expected": -1
+    },
+    {
+      "inputs": {
+        "left": "999",
+        "right": "998.999"
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "left": "0.1",
+        "right": "0.0.9"
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "left": "1.2.3",
+        "right": "1.2.3"
+      },
+      "expected": 0
+    },
+    {
+      "inputs": {
+        "left": "1.2.3",
+        "right": "1.2.4"
+      },
+      "expected": -1
+    },
+    {
+      "inputs": {
+        "left": "1.0.0.0.0.0.0.0",
+        "right": "1"
+      },
+      "expected": 0
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function max_subarray(values: list[int64]) returns optional[int64]:
+    if (list.length[int64](view values) == 0):
+        return none
+    mutable int64 ending = nth(view values, 0)
+    mutable int64 best = ending
+    mutable int64 index = 1
+    while (index < list.length[int64](view values)):
+        mutable int64 value = nth(view values, index)
+        if (ending > 0):
+            ending = (ending + value)
+        else:
+            ending = value
+        if (ending > best):
+            best = ending
+        index = (index + 1)
+    return some(best)

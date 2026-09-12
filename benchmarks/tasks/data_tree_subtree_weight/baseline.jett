@@ -1,0 +1,36 @@
+namespace benchmark
+struct Entry:
+    node: int64
+    parent: int64
+    weight: int64
+struct Report:
+    node_count: int64
+    total_weight: int64
+    leaf_count: int64
+function belongs(view rows: list[Entry], node: int64, selected: int64) returns bool:
+    mutable int64 current = node
+    while (current != 0):
+        if (current == selected):
+            return true
+        mutable int64 parent = 0
+        for row in view rows:
+            if (row.node == current):
+                parent = row.parent
+        current = parent
+    return false
+function is_leaf(view rows: list[Entry], node: int64) returns bool:
+    for row in view rows:
+        if (row.parent == node):
+            return false
+    return true
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 count = 0
+    mutable int64 total = 0
+    mutable int64 leaves = 0
+    for row in view rows:
+        if belongs(view rows, row.node, limit):
+            count =(count + 1)
+            total =(total + row.weight)
+            if is_leaf(view rows, row.node):
+                leaves =(leaves + 1)
+    return Report(node_count: count, total_weight: total, leaf_count: leaves)

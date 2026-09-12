@@ -1,0 +1,169 @@
+{
+  "id": "data_tree_lowest_ancestor",
+  "version": "1.0.0",
+  "title": "Find a lowest common ancestor and path distances",
+  "category": "tree",
+  "difficulty": "medium",
+  "statement": "Find the lowest common ancestor of node ID limit and the largest node ID in the forest. Return its ID and the edge distances from it to the selected node and to the largest-ID node. Return (0,-1,-1) if the forest is empty, the selected node is absent, or they belong to different roots.",
+  "constraints": [
+    "Unique positive IDs, 0 <= parent < node, and every nonzero parent exists. Forest is finite and acyclic; rows may be shuffled.",
+    "Use the exact declared Entry and Report record fields and solve signature. Return all three Report fields; do not mutate the caller's records.",
+    "All arithmetic fits signed int64; there are at most 30 records. limit is in [0, 30]. Return fresh results; no I/O, tests, exceptions, panic, or static-check bypasses."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nstruct Entry:\n    node: int64\n    parent: int64\n\nstruct Report:\n    ancestor: int64\n    selected_distance: int64\n    largest_distance: int64\n\nfunction solve(view rows: list[Entry], limit: int64) returns Report",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": []
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Entry:\n    node: int\n    parent: int\n\n@dataclass(frozen=True)\nclass Report:\n    ancestor: int\n    selected_distance: int\n    largest_distance: int\n\ndef solve(rows: list[Entry], limit: int) -> Report",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "typescript": {
+      "signature": "\nexport interface Entry {\n    readonly node: bigint;\n    readonly parent: bigint;\n}\n\nexport interface Report {\n    readonly ancestor: bigint;\n    readonly selected_distance: bigint;\n    readonly largest_distance: bigint;\n}\n\nexport function solve(rows: readonly Entry[], limit: bigint): Report",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--noFallthroughCasesInSwitch",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype Entry struct {\n    Node int64\n    Parent int64\n}\n\ntype Report struct {\n    Ancestor int64\n    SelectedDistance int64\n    LargestDistance int64\n}\n\nfunc solve(rows []Entry, limit int64) Report",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    },
+    "rust": {
+      "signature": "\n#[derive(Debug, PartialEq, Eq)]\npub struct Entry {\n    pub node: i64,\n    pub parent: i64,\n}\n\n#[derive(Debug, PartialEq, Eq)]\npub struct Report {\n    pub ancestor: i64,\n    pub selected_distance: i64,\n    pub largest_distance: i64,\n}\n\npub fn solve(rows: &[Entry], limit: i64) -> Report",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    }
+  }
+}

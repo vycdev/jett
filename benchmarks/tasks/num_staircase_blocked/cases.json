@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "inputs": [
+        0,
+        []
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        1,
+        []
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        1,
+        [
+          1
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "inputs": [
+        2,
+        [
+          1
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        2,
+        [
+          2
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "inputs": [
+        3,
+        []
+      ],
+      "expected": 3
+    },
+    {
+      "inputs": [
+        4,
+        [
+          2
+        ]
+      ],
+      "expected": 1
+    },
+    {
+      "inputs": [
+        5,
+        [
+          2,
+          3
+        ]
+      ],
+      "expected": 0
+    },
+    {
+      "inputs": [
+        6,
+        [
+          5,
+          1
+        ]
+      ],
+      "expected": 2
+    },
+    {
+      "inputs": [
+        10,
+        [
+          4,
+          4,
+          7
+        ]
+      ],
+      "expected": 6
+    },
+    {
+      "inputs": [
+        20,
+        []
+      ],
+      "expected": 10946
+    },
+    {
+      "inputs": [
+        40,
+        []
+      ],
+      "expected": 165580141
+    },
+    {
+      "inputs": [
+        40,
+        [
+          39
+        ]
+      ],
+      "expected": 63245986
+    },
+    {
+      "inputs": [
+        8,
+        [
+          1,
+          2
+        ]
+      ],
+      "expected": 0
+    }
+  ]
+}

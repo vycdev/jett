@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("/") == "/"
+verify hidden_case_1:
+    assert solve("///") == "/"
+verify hidden_case_2:
+    assert solve("/a/b") == "/a/b"
+verify hidden_case_3:
+    assert solve("/a//b/") == "/a/b"
+verify hidden_case_4:
+    assert solve("/./a/.") == "/a"
+verify hidden_case_5:
+    assert solve("/a/../b") == "/b"
+verify hidden_case_6:
+    assert solve("/../../a") == "/a"
+verify hidden_case_7:
+    assert solve("/a/b/../../") == "/"
+verify hidden_case_8:
+    assert solve("/.../..") == "/"
+verify hidden_case_9:
+    assert solve("/a/...") == "/a/..."
+verify hidden_case_10:
+    assert solve("/a/ /b") == "/a/ /b"
+verify hidden_case_11:
+    assert solve("/a/../a/./b/..") == "/a"

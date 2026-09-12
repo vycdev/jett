@@ -1,0 +1,173 @@
+{
+  "id": "text_longest_word",
+  "version": "1.0.0",
+  "title": "Longest word",
+  "category": "text_parsing",
+  "difficulty": "medium",
+  "statement": "Return accepted(value) holding the longest maximal non-space ASCII word; ties choose the earliest word. Return rejected(empty) when there are no words. Spaces are U+0020 only.",
+  "constraints": [
+    "All text is ASCII; unless a narrower task bound is stated, each input string has at most 1000 characters.",
+    "Preserve the exact declared public types and solve signature. Helpers are allowed.",
+    "No input/output, exception throwing, panic, tests, or static diagnostic suppression in the submitted source."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nenum TextError:\n    empty\n    malformed\n    range\nenum TextOutcome:\n    accepted(value: string)\n    rejected(error: TextError)\nfunction solve(text: string) returns TextOutcome",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "(?m)^\\s*(?:other|_)\\s*:",
+          "message": "catch-all match arms are forbidden; handle all declared enum variants explicitly"
+        }
+      ]
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\nfrom enum import Enum\n\nclass TextError(Enum):\n    EMPTY = \"empty\"\n    MALFORMED = \"malformed\"\n    RANGE = \"range\"\n@dataclass(frozen=True)\nclass TextAccepted:\n    value: str\n@dataclass(frozen=True)\nclass TextRejected:\n    error: TextError\ntype TextOutcome = TextAccepted | TextRejected\ndef solve(text: str) -> TextOutcome",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden; use the declared return type"
+        }
+      ]
+    },
+    "typescript": {
+      "signature": "export type TextError = \"empty\" | \"malformed\" | \"range\";\nexport type TextOutcome = { readonly kind: \"accepted\"; readonly value: string } | { readonly kind: \"rejected\"; readonly error: TextError };\nexport function solve(text: string): TextOutcome",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden; use the declared return type"
+        }
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype TextError int\nconst (Empty TextError = iota; Malformed; Range)\ntype TextOutcome interface { isTextOutcome() }\ntype TextAccepted struct { Value string }\ntype TextRejected struct { Error TextError }\nfunc (TextAccepted) isTextOutcome() {}\nfunc (TextRejected) isTextOutcome() {}\nfunc solve(text string) TextOutcome",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden; use the declared return type"
+        }
+      ]
+    },
+    "rust": {
+      "signature": "#[derive(Debug, PartialEq, Eq)]\npub enum TextError { Empty, Malformed, Range }\n#[derive(Debug, PartialEq, Eq)]\npub enum TextOutcome { Accepted(String), Rejected(TextError) }\npub fn solve(text: String) -> TextOutcome",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden; use the declared return type"
+        }
+      ]
+    }
+  }
+}

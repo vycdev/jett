@@ -1,0 +1,122 @@
+{
+  "task_id": "text_binary_parse",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "empty"
+      }
+    },
+    {
+      "inputs": {
+        "text": "0"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 0
+      }
+    },
+    {
+      "inputs": {
+        "text": "1"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 1
+      }
+    },
+    {
+      "inputs": {
+        "text": "00101"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 5
+      }
+    },
+    {
+      "inputs": {
+        "text": "1111111111111111"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 65535
+      }
+    },
+    {
+      "inputs": {
+        "text": "1000000000000000"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 32768
+      }
+    },
+    {
+      "inputs": {
+        "text": "00000000000000000"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "2"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "10x"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": " 1"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "+1"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "101010"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 42
+      }
+    },
+    {
+      "inputs": {
+        "text": "xxxxxxxxxxxxxxxxx"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    }
+  ]
+}

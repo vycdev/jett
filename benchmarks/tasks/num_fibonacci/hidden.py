@@ -1,0 +1,16 @@
+from solution import fibonacci
+
+assert fibonacci(0) == 0, 'case 0'
+assert fibonacci(1) == 1, 'case 1'
+assert fibonacci(2) == 1, 'case 2'
+assert fibonacci(3) == 2, 'case 3'
+assert fibonacci(4) == 3, 'case 4'
+assert fibonacci(5) == 5, 'case 5'
+assert fibonacci(8) == 21, 'case 6'
+assert fibonacci(10) == 55, 'case 7'
+assert fibonacci(20) == 6765, 'case 8'
+assert fibonacci(30) == 832040, 'case 9'
+assert fibonacci(40) == 102334155, 'case 10'
+assert fibonacci(50) == 12586269025, 'case 11'
+assert fibonacci(60) == 1548008755920, 'case 12'
+assert fibonacci(70) == 190392490709135, 'case 13'

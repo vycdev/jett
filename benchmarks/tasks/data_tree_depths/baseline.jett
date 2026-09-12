@@ -1,0 +1,32 @@
+namespace benchmark
+struct Entry:
+    node: int64
+    parent: int64
+    weight: int64
+struct Report:
+    roots: int64
+    max_depth: int64
+    weighted_depth: int64
+function depth_of(view rows: list[Entry], node: int64) returns int64:
+    mutable int64 current = node
+    mutable int64 depth =(-1)
+    while (current != 0):
+        mutable int64 parent = 0
+        for row in view rows:
+            if (row.node == current):
+                parent = row.parent
+        current = parent
+        depth =(depth + 1)
+    return depth
+function solve(view rows: list[Entry]) returns Report:
+    mutable int64 roots = 0
+    mutable int64 maximum = 0
+    mutable int64 total = 0
+    for row in view rows:
+        mutable int64 depth = depth_of(view rows, row.node)
+        if (depth == 0):
+            roots =(roots + 1)
+        if (depth > maximum):
+            maximum = depth
+        total =(total +(row.weight * depth))
+    return Report(roots: roots, max_depth: maximum, weighted_depth: total)

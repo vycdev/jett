@@ -1,0 +1,169 @@
+{
+  "id": "data_join_unmatched",
+  "version": "1.0.0",
+  "title": "Reconcile multiplicities in a two-sided ID join",
+  "category": "records",
+  "difficulty": "medium",
+  "statement": "Rows with side=0 contribute quantity units to the left relation; side=1 contributes to the right. Ignore other side values. For each key, pair min(left_units,right_units) units. Return total matched units and residual left-only and right-only units. Repeated keys accumulate.",
+  "constraints": [
+    "key is nonnegative; quantity is positive; side may be any integer.",
+    "Use the exact declared Entry and Report record fields and solve signature. Return all three Report fields; do not mutate the caller's records.",
+    "All arithmetic fits signed int64; there are at most 30 records. Return fresh results; no I/O, tests, exceptions, panic, or static-check bypasses."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nstruct Entry:\n    key: int64\n    side: int64\n    quantity: int64\n\nstruct Report:\n    matched: int64\n    left_only: int64\n    right_only: int64\n\nfunction solve(view rows: list[Entry]) returns Report",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": []
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Entry:\n    key: int\n    side: int\n    quantity: int\n\n@dataclass(frozen=True)\nclass Report:\n    matched: int\n    left_only: int\n    right_only: int\n\ndef solve(rows: list[Entry]) -> Report",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "typescript": {
+      "signature": "\nexport interface Entry {\n    readonly key: bigint;\n    readonly side: bigint;\n    readonly quantity: bigint;\n}\n\nexport interface Report {\n    readonly matched: bigint;\n    readonly left_only: bigint;\n    readonly right_only: bigint;\n}\n\nexport function solve(rows: readonly Entry[]): Report",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--noFallthroughCasesInSwitch",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype Entry struct {\n    Key int64\n    Side int64\n    Quantity int64\n}\n\ntype Report struct {\n    Matched int64\n    LeftOnly int64\n    RightOnly int64\n}\n\nfunc solve(rows []Entry) Report",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    },
+    "rust": {
+      "signature": "\n#[derive(Debug, PartialEq, Eq)]\npub struct Entry {\n    pub key: i64,\n    pub side: i64,\n    pub quantity: i64,\n}\n\n#[derive(Debug, PartialEq, Eq)]\npub struct Report {\n    pub matched: i64,\n    pub left_only: i64,\n    pub right_only: i64,\n}\n\npub fn solve(rows: &[Entry]) -> Report",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    }
+  }
+}

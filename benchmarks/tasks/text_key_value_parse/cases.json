@@ -1,0 +1,113 @@
+{
+  "task_id": "text_key_value_parse",
+  "cases": [
+    {
+      "inputs": {
+        "text": "a=b"
+      },
+      "expected": {
+        "first": "a",
+        "second": "b"
+      }
+    },
+    {
+      "inputs": {
+        "text": " a = b "
+      },
+      "expected": {
+        "first": "a",
+        "second": "b"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a="
+      },
+      "expected": {
+        "first": "a",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "a=  "
+      },
+      "expected": {
+        "first": "a",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "a=b=c"
+      },
+      "expected": {
+        "first": "a",
+        "second": "b=c"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a=="
+      },
+      "expected": {
+        "first": "a",
+        "second": "="
+      }
+    },
+    {
+      "inputs": {
+        "text": "x y=z z"
+      },
+      "expected": {
+        "first": "x y",
+        "second": "z z"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\ta\t=\tb\t"
+      },
+      "expected": {
+        "first": "\ta\t",
+        "second": "\tb\t"
+      }
+    },
+    {
+      "inputs": {
+        "text": "x= a  b "
+      },
+      "expected": {
+        "first": "x",
+        "second": "a  b"
+      }
+    },
+    {
+      "inputs": {
+        "text": "KEY=value"
+      },
+      "expected": {
+        "first": "KEY",
+        "second": "value"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a= = "
+      },
+      "expected": {
+        "first": "a",
+        "second": "="
+      }
+    },
+    {
+      "inputs": {
+        "text": "  k  = v=x "
+      },
+      "expected": {
+        "first": "k",
+        "second": "v=x"
+      }
+    }
+  ]
+}

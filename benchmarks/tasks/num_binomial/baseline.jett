@@ -1,0 +1,14 @@
+namespace benchmark
+function safe_div(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left / right
+function binomial(n: int64, k: int64) returns int64:
+    if (k > n):
+        return 0
+    mutable int64 answer = 1
+    mutable int64 index = 1
+    while (index <= k):
+        answer = safe_div((answer * ((n - index) + 1)), index)
+        index = (index + 1)
+    return answer

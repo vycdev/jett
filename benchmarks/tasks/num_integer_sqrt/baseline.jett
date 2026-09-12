@@ -1,0 +1,15 @@
+namespace benchmark
+function safe_div(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left / right
+function integer_sqrt(n: int64) returns int64:
+    mutable int64 lower = 0
+    mutable int64 upper = 1000001
+    while ((lower + 1) < upper):
+        mutable int64 middle = safe_div((lower + upper), 2)
+        if ((middle * middle) <= n):
+            lower = middle
+        else:
+            upper = middle
+    return lower

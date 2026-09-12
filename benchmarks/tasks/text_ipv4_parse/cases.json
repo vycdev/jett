@@ -1,0 +1,122 @@
+{
+  "task_id": "text_ipv4_parse",
+  "cases": [
+    {
+      "inputs": {
+        "text": "0.0.0.0"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 0
+      }
+    },
+    {
+      "inputs": {
+        "text": "255.255.255.255"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 4294967295
+      }
+    },
+    {
+      "inputs": {
+        "text": "127.0.0.1"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 2130706433
+      }
+    },
+    {
+      "inputs": {
+        "text": "192.168.1.1"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 3232235777
+      }
+    },
+    {
+      "inputs": {
+        "text": "1.2.3.4"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": 16909060
+      }
+    },
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "1.2.3"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "1.2.3.4.5"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "01.2.3.4"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "256.0.0.1"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "1..2.3"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "1.2.3.-1"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "1.2.3.4 "
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    }
+  ]
+}

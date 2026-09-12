@@ -1,0 +1,285 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 0)
+    assert actual.selected == 0
+    assert actual.rank_sum == 0
+    assert actual.tie_groups == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 0
+    assert actual.rank_sum == 0
+    assert actual.tie_groups == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 1)
+    assert actual.selected == 0
+    assert actual.rank_sum == 0
+    assert actual.tie_groups == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 3))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 1
+    assert actual.rank_sum == 1
+    assert actual.tie_groups == 0
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 5))
+    Report actual = solve(view rows, 3)
+    assert actual.selected == 2
+    assert actual.rank_sum == 3
+    assert actual.tie_groups == 0
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 0, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score:(-2), penalty: 5))
+    Report actual = solve(view rows, 4)
+    assert actual.selected == 3
+    assert actual.rank_sum == 6
+    assert actual.tie_groups == 0
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 10, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 0, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 2))
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 4
+    assert actual.rank_sum == 10
+    assert actual.tie_groups == 0
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 10, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 3, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 1))
+    Report actual = solve(view rows, 6)
+    assert actual.selected == 5
+    assert actual.rank_sum == 15
+    assert actual.tie_groups == 0
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score:(-2), penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 10, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 5))
+    Report actual = solve(view rows, 7)
+    assert actual.selected == 6
+    assert actual.rank_sum == 21
+    assert actual.tie_groups == 0
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 3))
+    Report actual = solve(view rows, 8)
+    assert actual.selected == 7
+    assert actual.rank_sum == 28
+    assert actual.tie_groups == 0
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-2), penalty: 3))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score:(-2), penalty: 6))
+    Report actual = solve(view rows, 1)
+    assert actual.selected == 1
+    assert actual.rank_sum == 1
+    assert actual.tie_groups == 0
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 10, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 2
+    assert actual.rank_sum == 3
+    assert actual.tie_groups == 1
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 10, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 2))
+    Report actual = solve(view rows, 3)
+    assert actual.selected == 3
+    assert actual.rank_sum == 6
+    assert actual.tie_groups == 0
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 3, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 3, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 9, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 2))
+    Report actual = solve(view rows, 4)
+    assert actual.selected == 4
+    assert actual.rank_sum == 10
+    assert actual.tie_groups == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 3, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 0, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 10, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 5))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 4))
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 5
+    assert actual.rank_sum == 15
+    assert actual.tie_groups == 0
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 6)
+    assert actual.selected == 0
+    assert actual.rank_sum == 0
+    assert actual.tie_groups == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 5))
+    Report actual = solve(view rows, 7)
+    assert actual.selected == 1
+    assert actual.rank_sum == 1
+    assert actual.tie_groups == 0
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 4))
+    Report actual = solve(view rows, 8)
+    assert actual.selected == 2
+    assert actual.rank_sum == 3
+    assert actual.tie_groups == 0
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 7, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 3, penalty: 4))
+    Report actual = solve(view rows, 1)
+    assert actual.selected == 1
+    assert actual.rank_sum == 1
+    assert actual.tie_groups == 0
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 2
+    assert actual.rank_sum == 3
+    assert actual.tie_groups == 0
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 3))
+    rows = list.append[Entry](rows, Entry(score: 5, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 6))
+    Report actual = solve(view rows, 3)
+    assert actual.selected == 3
+    assert actual.rank_sum == 6
+    assert actual.tie_groups == 0
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 10, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 4, penalty: 6))
+    Report actual = solve(view rows, 4)
+    assert actual.selected == 4
+    assert actual.rank_sum == 10
+    assert actual.tie_groups == 0
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 1, penalty: 6))
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 0, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score: 0, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 11, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 4))
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 5
+    assert actual.rank_sum == 14
+    assert actual.tie_groups == 1
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 6, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 1))
+    rows = list.append[Entry](rows, Entry(score:(-3), penalty: 4))
+    rows = list.append[Entry](rows, Entry(score: 9, penalty: 5))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 2, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score:(-2), penalty: 3))
+    rows = list.append[Entry](rows, Entry(score:(-1), penalty: 6))
+    Report actual = solve(view rows, 6)
+    assert actual.selected == 6
+    assert actual.rank_sum == 21
+    assert actual.tie_groups == 0
+verify fixture_024:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 9, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 9, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 2
+    assert actual.rank_sum == 2
+    assert actual.tie_groups == 1
+verify fixture_025:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 0, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 0, penalty: 1))
+    Report actual = solve(view rows, 1)
+    assert actual.selected == 1
+    assert actual.rank_sum == 1
+    assert actual.tie_groups == 0
+verify fixture_026:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(score: 9, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 9, penalty: 1))
+    rows = list.append[Entry](rows, Entry(score: 9, penalty: 2))
+    rows = list.append[Entry](rows, Entry(score: 8, penalty: 0))
+    Report actual = solve(view rows, 3)
+    assert actual.selected == 3
+    assert actual.rank_sum == 5
+    assert actual.tie_groups == 1

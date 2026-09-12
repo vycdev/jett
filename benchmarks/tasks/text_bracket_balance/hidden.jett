@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("") == true
+verify hidden_case_1:
+    assert solve("abc") == true
+verify hidden_case_2:
+    assert solve("()[]{{}}") == true
+verify hidden_case_3:
+    assert solve("([{{}}])") == true
+verify hidden_case_4:
+    assert solve("([)]") == false
+verify hidden_case_5:
+    assert solve("(") == false
+verify hidden_case_6:
+    assert solve(")") == false
+verify hidden_case_7:
+    assert solve("a[b(c)d]e") == true
+verify hidden_case_8:
+    assert solve("{{{{}}}}") == true
+verify hidden_case_9:
+    assert solve("{{]") == false
+verify hidden_case_10:
+    assert solve("\"(\"") == false
+verify hidden_case_11:
+    assert solve("(()())") == true

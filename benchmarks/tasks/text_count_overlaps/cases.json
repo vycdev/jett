@@ -1,0 +1,89 @@
+{
+  "task_id": "text_count_overlaps",
+  "cases": [
+    {
+      "inputs": {
+        "text": "",
+        "needle": ""
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "text": "",
+        "needle": "a"
+      },
+      "expected": 0
+    },
+    {
+      "inputs": {
+        "text": "abc",
+        "needle": ""
+      },
+      "expected": 4
+    },
+    {
+      "inputs": {
+        "text": "aaaa",
+        "needle": "aa"
+      },
+      "expected": 3
+    },
+    {
+      "inputs": {
+        "text": "ababa",
+        "needle": "aba"
+      },
+      "expected": 2
+    },
+    {
+      "inputs": {
+        "text": "abc",
+        "needle": "abc"
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "text": "ab",
+        "needle": "abc"
+      },
+      "expected": 0
+    },
+    {
+      "inputs": {
+        "text": "AaA",
+        "needle": "a"
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "text": "xxxxx",
+        "needle": "xx"
+      },
+      "expected": 4
+    },
+    {
+      "inputs": {
+        "text": "one one",
+        "needle": "one"
+      },
+      "expected": 2
+    },
+    {
+      "inputs": {
+        "text": " ",
+        "needle": " "
+      },
+      "expected": 1
+    },
+    {
+      "inputs": {
+        "text": "abc",
+        "needle": "z"
+      },
+      "expected": 0
+    }
+  ]
+}

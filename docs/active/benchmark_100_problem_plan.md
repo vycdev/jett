@@ -49,9 +49,11 @@ Future independent tasks and repeated samples are needed for broad rankings.
 
 ## Current work
 
-- Numerical, text, and structured task batches are being authored in parallel.
+- All 90 additions are authored. Individual five-language baseline checks pass;
+  final independent review and the combined frozen 500-baseline gate follow.
 - The campaign runner freezes inputs, journals completed rows, resumes missing
   work, stops new dispatch on infrastructure failure, and produces complete
   four-cell reports only when all expected rows and repair pairings exist.
-- Compiler and subscription availability are being revalidated against the
-  updated repository before any large model run.
+- The updated compiler builds, Docker is available, and Codex uses ChatGPT
+  subscription authentication. No model responses for this expansion have
+  been generated yet; the full campaign and skill follow-up remain pending.

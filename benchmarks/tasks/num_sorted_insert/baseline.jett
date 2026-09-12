@@ -1,0 +1,20 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function sorted_insert(values: list[int64], value: int64) returns list[int64]:
+    mutable list[int64] output = list.new[int64]()
+    mutable bool inserted = false
+    mutable int64 index = 0
+    while (index < list.length[int64](view values)):
+        mutable int64 item = nth(view values, index)
+        if not (inserted):
+            if (value <= item):
+                output = list.append[int64](output, value)
+                inserted = true
+        output = list.append[int64](output, item)
+        index = (index + 1)
+    if not (inserted):
+        output = list.append[int64](output, value)
+    return output

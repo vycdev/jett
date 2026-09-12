@@ -1,0 +1,49 @@
+namespace benchmark
+function from_ascii_hex(text: string) returns string:
+    bytes encoded = bytes.from_hex(text) handle error:
+        return ""
+    string decoded = bytes.to_string(view encoded) handle error:
+        return ""
+    return decoded
+function concat(left: string, right: string) returns string:
+    return "{left}{right}"
+function length(text: string) returns int64:
+    return string.length(text)
+function char_read(text: string, pos: int64) returns string:
+    string ch = string.char_at(text, pos) handle:
+        default ""
+    return ch
+function part(text: string, start: int64, end: int64) returns string:
+    return string.slice(text, start, end)
+function contains(text: string, needle: string) returns bool:
+    return string.contains(text, needle)
+function lower(text: string) returns string:
+    return string.lower(text)
+function upper(text: string) returns string:
+    return string.upper(text)
+function render(value: int64) returns string:
+    return string.from_int64(value)
+function solve(text: string, pattern: string) returns bool:
+    mutable int64 ti = 0
+    mutable int64 pi = 0
+    mutable int64 star =(-1)
+    mutable int64 retry = 0
+    while (ti < length(text)):
+        mutable string ch = char_read(pattern, pi)
+        if ((pi < length(pattern)) and((ch == "?") or(ch == char_read(text, ti)))):
+            ti =(ti + 1)
+            pi =(pi + 1)
+        else:
+            if (ch == "*"):
+                star = pi
+                retry = ti
+                pi =(pi + 1)
+            else:
+                if (star < 0):
+                    return false
+                retry =(retry + 1)
+                ti = retry
+                pi =(star + 1)
+    while (char_read(pattern, pi) == "*"):
+        pi =(pi + 1)
+    return(pi == length(pattern))

@@ -1,0 +1,122 @@
+{
+  "task_id": "text_rle_decode",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "1A"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "A"
+      }
+    },
+    {
+      "inputs": {
+        "text": "3A2B"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "AAABB"
+      }
+    },
+    {
+      "inputs": {
+        "text": "1A1A"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "AA"
+      }
+    },
+    {
+      "inputs": {
+        "text": "100Z"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+      }
+    },
+    {
+      "inputs": {
+        "text": "0A"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "01A"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "101A"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "2a"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "A"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "12"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "60A41B"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "range"
+      }
+    },
+    {
+      "inputs": {
+        "text": "2A0B"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    }
+  ]
+}

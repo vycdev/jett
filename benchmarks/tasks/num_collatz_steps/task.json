@@ -1,0 +1,175 @@
+{
+  "id": "num_collatz_steps",
+  "version": "1.0.0",
+  "title": "Budgeted Collatz trajectory",
+  "category": "numerical_sequence_algorithms",
+  "difficulty": "medium",
+  "statement": "Starting with n, repeatedly divide an even value by 2 or replace an odd value by 3*n+1. Return the number of transitions needed to first reach 1 if this is at most limit, otherwise return the empty optional. Starting at 1 returns 0 even with a zero budget.",
+  "constraints": [
+    "1 <= n <= 1000000",
+    "0 <= limit <= 200",
+    "Inputs obey the stated domain; do not mutate caller-owned inputs.",
+    "The required return value fits signed 64-bit integers; choose arithmetic that keeps intermediate values within that range. TypeScript uses bigint for integer values.",
+    "Do not perform input/output, throw, panic, add tests, or suppress static diagnostics."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nfunction collatz_steps(n: int64, limit: int64) returns optional[int64]",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "(?m)^\\s*(?:other|_)\\s*:",
+          "message": "catch-all match arms are forbidden"
+        }
+      ]
+    },
+    "python": {
+      "signature": "def collatz_steps(n: int, limit: int) -> int | None",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden"
+        }
+      ]
+    },
+    "typescript": {
+      "signature": "export function collatzSteps(n: bigint, limit: bigint): bigint | null",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden"
+        }
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype MaybeInt struct { Found bool; Value int64 }\n\nfunc CollatzSteps(n int64, limit int64) MaybeInt",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden"
+        }
+      ]
+    },
+    "rust": {
+      "signature": "pub fn collatz_steps(n: i64, limit: i64) -> Option<i64>",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden"
+        }
+      ]
+    }
+  }
+}

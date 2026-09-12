@@ -1,0 +1,77 @@
+{
+  "task_id": "text_path_normalize",
+  "cases": [
+    {
+      "inputs": {
+        "text": "/"
+      },
+      "expected": "/"
+    },
+    {
+      "inputs": {
+        "text": "///"
+      },
+      "expected": "/"
+    },
+    {
+      "inputs": {
+        "text": "/a/b"
+      },
+      "expected": "/a/b"
+    },
+    {
+      "inputs": {
+        "text": "/a//b/"
+      },
+      "expected": "/a/b"
+    },
+    {
+      "inputs": {
+        "text": "/./a/."
+      },
+      "expected": "/a"
+    },
+    {
+      "inputs": {
+        "text": "/a/../b"
+      },
+      "expected": "/b"
+    },
+    {
+      "inputs": {
+        "text": "/../../a"
+      },
+      "expected": "/a"
+    },
+    {
+      "inputs": {
+        "text": "/a/b/../../"
+      },
+      "expected": "/"
+    },
+    {
+      "inputs": {
+        "text": "/.../.."
+      },
+      "expected": "/"
+    },
+    {
+      "inputs": {
+        "text": "/a/..."
+      },
+      "expected": "/a/..."
+    },
+    {
+      "inputs": {
+        "text": "/a/ /b"
+      },
+      "expected": "/a/ /b"
+    },
+    {
+      "inputs": {
+        "text": "/a/../a/./b/.."
+      },
+      "expected": "/a"
+    }
+  ]
+}

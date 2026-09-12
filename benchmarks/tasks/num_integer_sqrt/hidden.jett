@@ -1,0 +1,19 @@
+
+verify numerical_cases_0:
+    assert integer_sqrt(0) == 0
+    assert integer_sqrt(1) == 1
+    assert integer_sqrt(2) == 1
+    assert integer_sqrt(3) == 1
+    assert integer_sqrt(4) == 2
+    assert integer_sqrt(8) == 2
+    assert integer_sqrt(9) == 3
+    assert integer_sqrt(10) == 3
+verify numerical_cases_1:
+    assert integer_sqrt(15) == 3
+    assert integer_sqrt(16) == 4
+    assert integer_sqrt(17) == 4
+    assert integer_sqrt(99980000) == 9998
+    assert integer_sqrt(99980001) == 9999
+    assert integer_sqrt(99980002) == 9999
+    assert integer_sqrt(999999999999) == 999999
+    assert integer_sqrt(1000000000000) == 1000000

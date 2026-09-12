@@ -1,0 +1,77 @@
+{
+  "task_id": "text_word_initials",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "  "
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "alice"
+      },
+      "expected": "A"
+    },
+    {
+      "inputs": {
+        "text": "alice bob"
+      },
+      "expected": "AB"
+    },
+    {
+      "inputs": {
+        "text": "  alice   bob "
+      },
+      "expected": "AB"
+    },
+    {
+      "inputs": {
+        "text": "a b c"
+      },
+      "expected": "ABC"
+    },
+    {
+      "inputs": {
+        "text": "1 one"
+      },
+      "expected": "1O"
+    },
+    {
+      "inputs": {
+        "text": "! bang"
+      },
+      "expected": "!B"
+    },
+    {
+      "inputs": {
+        "text": "mixed CASE"
+      },
+      "expected": "MC"
+    },
+    {
+      "inputs": {
+        "text": "a\tb c"
+      },
+      "expected": "AC"
+    },
+    {
+      "inputs": {
+        "text": "z Z"
+      },
+      "expected": "ZZ"
+    },
+    {
+      "inputs": {
+        "text": "foo-bar baz"
+      },
+      "expected": "FB"
+    }
+  ]
+}

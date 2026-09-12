@@ -1,0 +1,23 @@
+namespace benchmark
+struct Entry:
+    event: int64
+    key: int64
+    delta: int64
+struct Report:
+    applied: int64
+    duplicates: int64
+    checksum: int64
+function solve(view rows: list[Entry]) returns Report:
+    mutable map[int64, int64] seen = map.new[int64, int64]()
+    mutable int64 applied = 0
+    mutable int64 duplicates = 0
+    mutable int64 checksum = 0
+    for row in view rows:
+        if (map.get_or[int64, int64](clone seen, row.event, 0) == 0):
+            mutable int64 updated_value_0 = 1
+            seen = map.set[int64, int64](seen, row.event, updated_value_0)
+            checksum =(checksum +((row.key + 1) * row.delta))
+            applied =(applied + 1)
+        else:
+            duplicates =(duplicates + 1)
+    return Report(applied: applied, duplicates: duplicates, checksum: checksum)

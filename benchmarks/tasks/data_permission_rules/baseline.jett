@@ -1,0 +1,27 @@
+namespace benchmark
+struct Entry:
+    principal: int64
+    allowed: int64
+    specificity: int64
+struct Report:
+    allowed: int64
+    denied: int64
+    defaulted: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 allowed = 0
+    mutable int64 denied = 0
+    mutable int64 defaulted = 0
+    mutable int64 principal = 0
+    while (principal < limit):
+        mutable int64 priority =(-1)
+        mutable int64 decision = 0
+        for row in view rows:
+            if ((row.principal == principal) and(row.specificity >= priority)):
+                priority = row.specificity
+                decision = row.allowed
+        if (priority ==(-1)):
+            defaulted =(defaulted + 1)
+        allowed =(allowed + decision)
+        denied =((denied + 1) - decision)
+        principal =(principal + 1)
+    return Report(allowed: allowed, denied: denied, defaulted: defaulted)

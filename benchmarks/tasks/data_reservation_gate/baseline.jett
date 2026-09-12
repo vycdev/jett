@@ -1,0 +1,23 @@
+namespace benchmark
+struct Entry:
+    party: int64
+    seats: int64
+struct Report:
+    accepted: int64
+    rejected: int64
+    occupied: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] parties = map.new[int64, int64]()
+    mutable int64 accepted = 0
+    mutable int64 rejected = 0
+    mutable int64 occupied = 0
+    for row in view rows:
+        mutable bool invalid =((row.seats <= 0) or(map.get_or[int64, int64](clone parties, row.party, 0) == 1))
+        if (invalid or((occupied + row.seats) > limit)):
+            rejected =(rejected + 1)
+        else:
+            accepted =(accepted + 1)
+            occupied =(occupied + row.seats)
+            mutable int64 updated_value_0 = 1
+            parties = map.set[int64, int64](parties, row.party, updated_value_0)
+    return Report(accepted: accepted, rejected: rejected, occupied: occupied)

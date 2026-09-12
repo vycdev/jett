@@ -1,6 +1,6 @@
 {
-  "benchmark_version": "0.5.4-pilot",
-  "subset": "jett-v0.5.4",
+  "benchmark_version": "0.6.0-pilot",
+  "subset": "jett-v0.6.0",
   "model": "gpt-5.6-luna",
   "model_snapshot": null,
   "reasoning_efforts": ["low", "medium", "high"],
@@ -18,7 +18,7 @@
   },
   "prices_usd_per_million_tokens": {
     "source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-    "checked_on": "2026-08-30",
+    "checked_on": "2026-09-12",
     "input": 0.20,
     "cached_input": 0.02,
     "output": 1.20

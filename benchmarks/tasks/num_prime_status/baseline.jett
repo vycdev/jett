@@ -1,0 +1,14 @@
+namespace benchmark
+function safe_mod(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left modulo right
+function prime_status(n: int64) returns bool:
+    if (n < 2):
+        return false
+    mutable int64 divisor = 2
+    while ((divisor * divisor) <= n):
+        if (safe_mod(n, divisor) == 0):
+            return false
+        divisor = (divisor + 1)
+    return true

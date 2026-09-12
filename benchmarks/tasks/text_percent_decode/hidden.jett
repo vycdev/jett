@@ -1,0 +1,42 @@
+function hidden_error(error: TextError) returns string:
+    match error:
+        empty:
+            return "empty"
+        malformed:
+            return "malformed"
+        range:
+            return "range"
+function hidden_outcome(outcome: TextOutcome) returns string:
+    match outcome:
+        accepted(value):
+            return "accepted:{value}"
+        rejected(error):
+            return "rejected:{hidden_error(error)}"
+verify hidden_case_0:
+    assert hidden_outcome(solve("")) == "accepted:"
+verify hidden_case_1:
+    assert hidden_outcome(solve("abc")) == "accepted:abc"
+verify hidden_case_2:
+    assert hidden_outcome(solve("a+b")) == "accepted:a+b"
+verify hidden_case_3:
+    assert hidden_outcome(solve("%41%20%7e")) == "accepted:A ~"
+verify hidden_case_4:
+    assert hidden_outcome(solve("%25")) == "accepted:%"
+verify hidden_case_5:
+    assert hidden_outcome(solve("%")) == "rejected:malformed"
+verify hidden_case_6:
+    assert hidden_outcome(solve("%2")) == "rejected:malformed"
+verify hidden_case_7:
+    assert hidden_outcome(solve("%GG")) == "rejected:malformed"
+verify hidden_case_8:
+    assert hidden_outcome(solve("%00")) == "rejected:range"
+verify hidden_case_9:
+    assert hidden_outcome(solve("%7F")) == "rejected:range"
+verify hidden_case_10:
+    assert hidden_outcome(solve("%ff")) == "rejected:range"
+verify hidden_case_11:
+    assert hidden_outcome(solve("%00%G0")) == "rejected:range"
+verify hidden_case_12:
+    assert hidden_outcome(solve("%G0%00")) == "rejected:malformed"
+verify hidden_case_13:
+    assert hidden_outcome(solve("x%2fy")) == "accepted:x/y"

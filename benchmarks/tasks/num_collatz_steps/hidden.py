@@ -1,0 +1,16 @@
+from solution import collatz_steps
+
+assert collatz_steps(1, 0) == 0, 'case 0'
+assert collatz_steps(2, 0) == None, 'case 1'
+assert collatz_steps(2, 1) == 1, 'case 2'
+assert collatz_steps(3, 6) == None, 'case 3'
+assert collatz_steps(3, 7) == 7, 'case 4'
+assert collatz_steps(6, 8) == 8, 'case 5'
+assert collatz_steps(7, 15) == None, 'case 6'
+assert collatz_steps(7, 16) == 16, 'case 7'
+assert collatz_steps(27, 110) == None, 'case 8'
+assert collatz_steps(27, 111) == 111, 'case 9'
+assert collatz_steps(1000000, 200) == 152, 'case 10'
+assert collatz_steps(999999, 200) == None, 'case 11'
+assert collatz_steps(1024, 9) == None, 'case 12'
+assert collatz_steps(1024, 10) == 10, 'case 13'

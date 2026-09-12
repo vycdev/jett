@@ -1,0 +1,30 @@
+namespace benchmark
+struct Entry:
+    account: int64
+    delta: int64
+struct Report:
+    total: int64
+    lowest_balance: int64
+    first_overdraw: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] balances = map.new[int64, int64]()
+    mutable map[int64, int64] seen = map.new[int64, int64]()
+    mutable int64 total = 0
+    mutable int64 lowest = limit
+    mutable int64 first =(-1)
+    mutable int64 index = 0
+    for row in view rows:
+        if (map.get_or[int64, int64](clone seen, row.account, 0) == 0):
+            total =(total + limit)
+            mutable int64 updated_value_0 = 1
+            seen = map.set[int64, int64](seen, row.account, updated_value_0)
+        mutable int64 balance =(map.get_or[int64, int64](clone balances, row.account, limit) + row.delta)
+        mutable int64 updated_value_1 = balance
+        balances = map.set[int64, int64](balances, row.account, updated_value_1)
+        total =(total + row.delta)
+        if ((index == 0) or(balance < lowest)):
+            lowest = balance
+        if ((balance < 0) and(first ==(-1))):
+            first = index
+        index =(index + 1)
+    return Report(total: total, lowest_balance: lowest, first_overdraw: first)

@@ -1,0 +1,45 @@
+function hidden_words(values: list[string]) returns string:
+    mutable string encoded = ""
+    for value in values:
+        encoded = "{encoded}{string.length(value)}:{value}"
+    return encoded
+function hidden_error(error: TextError) returns string:
+    match error:
+        empty:
+            return "empty"
+        malformed:
+            return "malformed"
+        range:
+            return "range"
+function hidden_outcome(outcome: TextOutcome) returns string:
+    match outcome:
+        accepted(value):
+            return "accepted:{hidden_words(value)}"
+        rejected(error):
+            return "rejected:{hidden_error(error)}"
+verify hidden_case_0:
+    assert hidden_outcome(solve("")) == "accepted:0:"
+verify hidden_case_1:
+    assert hidden_outcome(solve(",")) == "accepted:0:0:"
+verify hidden_case_2:
+    assert hidden_outcome(solve("a,b,c")) == "accepted:1:a1:b1:c"
+verify hidden_case_3:
+    assert hidden_outcome(solve("\"a,b\",c")) == "accepted:3:a,b1:c"
+verify hidden_case_4:
+    assert hidden_outcome(solve("\"\"")) == "accepted:0:"
+verify hidden_case_5:
+    assert hidden_outcome(solve("\"a\"\"b\",,")) == "accepted:3:a\"b0:0:"
+verify hidden_case_6:
+    assert hidden_outcome(solve("\"")) == "rejected:malformed"
+verify hidden_case_7:
+    assert hidden_outcome(solve("a\"b")) == "rejected:malformed"
+verify hidden_case_8:
+    assert hidden_outcome(solve("\"a\" x")) == "rejected:malformed"
+verify hidden_case_9:
+    assert hidden_outcome(solve("\"a\",")) == "accepted:1:a0:"
+verify hidden_case_10:
+    assert hidden_outcome(solve("\"\"\"\"")) == "accepted:1:\""
+verify hidden_case_11:
+    assert hidden_outcome(solve("\"\"\"")) == "rejected:malformed"
+verify hidden_case_12:
+    assert hidden_outcome(solve("a,b,,")) == "accepted:1:a1:b0:0:"

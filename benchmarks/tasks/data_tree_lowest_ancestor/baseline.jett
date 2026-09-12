@@ -1,0 +1,33 @@
+namespace benchmark
+struct Entry:
+    node: int64
+    parent: int64
+struct Report:
+    ancestor: int64
+    selected_distance: int64
+    largest_distance: int64
+function parent_of(view rows: list[Entry], node: int64) returns int64:
+    for row in view rows:
+        if (row.node == node):
+            return row.parent
+    return(-1)
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 largest = 0
+    for row in view rows:
+        if (row.node > largest):
+            largest = row.node
+    if (parent_of(view rows, limit) ==(-1)):
+        return Report(ancestor: 0, selected_distance:(-1), largest_distance:(-1))
+    mutable int64 selected = limit
+    mutable int64 selected_distance = 0
+    while (selected > 0):
+        mutable int64 other = largest
+        mutable int64 other_distance = 0
+        while (other > 0):
+            if (other == selected):
+                return Report(ancestor: selected, selected_distance: selected_distance, largest_distance: other_distance)
+            other = parent_of(view rows, other)
+            other_distance =(other_distance + 1)
+        selected = parent_of(view rows, selected)
+        selected_distance =(selected_distance + 1)
+    return Report(ancestor: 0, selected_distance:(-1), largest_distance:(-1))

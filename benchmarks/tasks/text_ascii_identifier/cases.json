@@ -1,0 +1,77 @@
+{
+  "task_id": "text_ascii_identifier",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "_"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "A0_z"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "0a"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "a-b"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "a b"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "if"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "__"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "a\n"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "$a"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "z9"
+      },
+      "expected": true
+    }
+  ]
+}

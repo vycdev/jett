@@ -1,0 +1,29 @@
+namespace benchmark
+struct Entry:
+    invoice: int64
+    amount: int64
+struct Report:
+    settled: int64
+    outstanding: int64
+    credit: int64
+function solve(view rows: list[Entry]) returns Report:
+    mutable map[int64, int64] sums = map.new[int64, int64]()
+    for row in view rows:
+        mutable int64 updated_value_0 =(map.get_or[int64, int64](clone sums, row.invoice, 0) + row.amount)
+        sums = map.set[int64, int64](sums, row.invoice, updated_value_0)
+    mutable map[int64, int64] seen = map.new[int64, int64]()
+    mutable int64 settled = 0
+    mutable int64 outstanding = 0
+    mutable int64 credit = 0
+    for row in view rows:
+        if (map.get_or[int64, int64](clone seen, row.invoice, 0) == 0):
+            mutable int64 updated_value_1 = 1
+            seen = map.set[int64, int64](seen, row.invoice, updated_value_1)
+            mutable int64 balance = map.get_or[int64, int64](clone sums, row.invoice, 0)
+            if (balance == 0):
+                settled =(settled + 1)
+            if (balance > 0):
+                outstanding =(outstanding + balance)
+            if (balance < 0):
+                credit =(credit - balance)
+    return Report(settled: settled, outstanding: outstanding, credit: credit)

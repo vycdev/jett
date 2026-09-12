@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("") == ""
+verify hidden_case_1:
+    assert solve("abc") == "abc"
+verify hidden_case_2:
+    assert solve("#x") == ""
+verify hidden_case_3:
+    assert solve("a#b") == "a"
+verify hidden_case_4:
+    assert solve("a#b\nc") == "a\nc"
+verify hidden_case_5:
+    assert solve("\"#x\"#y") == "\"#x\""
+verify hidden_case_6:
+    assert solve("#a\n#b\n") == "\n\n"
+verify hidden_case_7:
+    assert solve("a # x") == "a "
+verify hidden_case_8:
+    assert solve("\"a\\\"#b\"#c") == "\"a\\\"#b\""
+verify hidden_case_9:
+    assert solve("\\#x") == "\\"
+verify hidden_case_10:
+    assert solve("\"#open") == "\"#open"
+verify hidden_case_11:
+    assert solve("a\n#x\nb") == "a\n\nb"

@@ -1,0 +1,169 @@
+{
+  "id": "data_tree_subtree_weight",
+  "version": "1.0.0",
+  "title": "Measure the selected subtree",
+  "category": "tree",
+  "difficulty": "medium",
+  "statement": "Select node ID limit. Return the number of nodes in its subtree, sum of their weights, and number of leaves in that subtree. A leaf has no children in the complete input forest. Include the selected node itself. Missing selection (including ID zero) yields all zeros. Input order is arbitrary.",
+  "constraints": [
+    "Unique positive node IDs; 0 <= parent < node; all nonzero parents exist, yielding a finite rooted forest. Weights may be negative.",
+    "Use the exact declared Entry and Report record fields and solve signature. Return all three Report fields; do not mutate the caller's records.",
+    "All arithmetic fits signed int64; there are at most 30 records. limit is in [0, 30]. Return fresh results; no I/O, tests, exceptions, panic, or static-check bypasses."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nstruct Entry:\n    node: int64\n    parent: int64\n    weight: int64\n\nstruct Report:\n    node_count: int64\n    total_weight: int64\n    leaf_count: int64\n\nfunction solve(view rows: list[Entry], limit: int64) returns Report",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": []
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Entry:\n    node: int\n    parent: int\n    weight: int\n\n@dataclass(frozen=True)\nclass Report:\n    node_count: int\n    total_weight: int\n    leaf_count: int\n\ndef solve(rows: list[Entry], limit: int) -> Report",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "typescript": {
+      "signature": "\nexport interface Entry {\n    readonly node: bigint;\n    readonly parent: bigint;\n    readonly weight: bigint;\n}\n\nexport interface Report {\n    readonly node_count: bigint;\n    readonly total_weight: bigint;\n    readonly leaf_count: bigint;\n}\n\nexport function solve(rows: readonly Entry[], limit: bigint): Report",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--noFallthroughCasesInSwitch",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden; return the documented report"
+        }
+      ]
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype Entry struct {\n    Node int64\n    Parent int64\n    Weight int64\n}\n\ntype Report struct {\n    NodeCount int64\n    TotalWeight int64\n    LeafCount int64\n}\n\nfunc solve(rows []Entry, limit int64) Report",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    },
+    "rust": {
+      "signature": "\n#[derive(Debug, PartialEq, Eq)]\npub struct Entry {\n    pub node: i64,\n    pub parent: i64,\n    pub weight: i64,\n}\n\n#[derive(Debug, PartialEq, Eq)]\npub struct Report {\n    pub node_count: i64,\n    pub total_weight: i64,\n    pub leaf_count: i64,\n}\n\npub fn solve(rows: &[Entry], limit: i64) -> Report",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ]
+    }
+  }
+}

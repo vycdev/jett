@@ -1,0 +1,113 @@
+{
+  "task_id": "text_longest_word",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "empty"
+      }
+    },
+    {
+      "inputs": {
+        "text": "  "
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "empty"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "a"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a bb c"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "bb"
+      }
+    },
+    {
+      "inputs": {
+        "text": "ab cd"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "ab"
+      }
+    },
+    {
+      "inputs": {
+        "text": " xxx yy "
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "xxx"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a\tb zz"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "a\tb"
+      }
+    },
+    {
+      "inputs": {
+        "text": "! ??"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "??"
+      }
+    },
+    {
+      "inputs": {
+        "text": "long short"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "short"
+      }
+    },
+    {
+      "inputs": {
+        "text": "same same"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "same"
+      }
+    },
+    {
+      "inputs": {
+        "text": "   end"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "end"
+      }
+    },
+    {
+      "inputs": {
+        "text": "ab abc abcd"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "abcd"
+      }
+    }
+  ]
+}

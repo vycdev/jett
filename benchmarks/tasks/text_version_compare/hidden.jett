@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("1", "1") == 0
+verify hidden_case_1:
+    assert solve("1", "1.0.0") == 0
+verify hidden_case_2:
+    assert solve("0.0", "0") == 0
+verify hidden_case_3:
+    assert solve("1.2", "1.10") == -1
+verify hidden_case_4:
+    assert solve("2", "1.999") == 1
+verify hidden_case_5:
+    assert solve("1.0.1", "1") == 1
+verify hidden_case_6:
+    assert solve("1", "1.0.1") == -1
+verify hidden_case_7:
+    assert solve("999", "998.999") == 1
+verify hidden_case_8:
+    assert solve("0.1", "0.0.9") == 1
+verify hidden_case_9:
+    assert solve("1.2.3", "1.2.3") == 0
+verify hidden_case_10:
+    assert solve("1.2.3", "1.2.4") == -1
+verify hidden_case_11:
+    assert solve("1.0.0.0.0.0.0.0", "1") == 0

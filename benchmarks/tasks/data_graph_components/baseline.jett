@@ -1,0 +1,58 @@
+namespace benchmark
+struct Entry:
+    source: int64
+    target: int64
+struct Report:
+    components: int64
+    largest: int64
+    isolated: int64
+function spread(view rows: list[Entry], view seen: map[int64, int64], vertex: int64) returns int64:
+    mutable int64 found = map.get_or[int64, int64](clone seen, vertex, 0)
+    for row in view rows:
+        if (row.source == vertex):
+            if (map.get_or[int64, int64](clone seen, row.target, 0) == 1):
+                found = 1
+        if (row.target == vertex):
+            if (map.get_or[int64, int64](clone seen, row.source, 0) == 1):
+                found = 1
+    return found
+function component_size(view rows: list[Entry], start: int64, limit: int64) returns int64:
+    mutable map[int64, int64] seen = map.new[int64, int64]()
+    mutable int64 updated_value_0 = 1
+    seen = map.set[int64, int64](seen, start, updated_value_0)
+    mutable int64 turn = 0
+    while (turn < limit):
+        mutable int64 vertex = 0
+        while (vertex < limit):
+            mutable int64 updated_value_1 = spread(view rows, view seen, vertex)
+            seen = map.set[int64, int64](seen, vertex, updated_value_1)
+            vertex =(vertex + 1)
+        turn =(turn + 1)
+    mutable int64 count = 0
+    mutable int64 vertex = 0
+    while (vertex < limit):
+        if (map.get_or[int64, int64](clone seen, vertex, 0) == 1):
+            if (vertex < start):
+                return 0
+            count =(count + 1)
+        vertex =(vertex + 1)
+    return count
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 components = 0
+    mutable int64 largest = 0
+    mutable int64 isolated = 0
+    mutable int64 vertex = 0
+    while (vertex < limit):
+        mutable int64 count = component_size(view rows, vertex, limit)
+        if (count > 0):
+            components =(components + 1)
+        if (count > largest):
+            largest = count
+        mutable int64 incident = 0
+        for row in view rows:
+            if ((row.source == vertex) or(row.target == vertex)):
+                incident =(incident + 1)
+        if (incident == 0):
+            isolated =(isolated + 1)
+        vertex =(vertex + 1)
+    return Report(components: components, largest: largest, isolated: isolated)

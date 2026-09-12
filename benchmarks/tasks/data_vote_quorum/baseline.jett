@@ -1,0 +1,31 @@
+namespace benchmark
+struct Entry:
+    voter: int64
+    choice: int64
+    weight: int64
+struct Report:
+    yes_weight: int64
+    no_weight: int64
+    quorum_met: int64
+function contribution(choice: int64, weight: int64, wanted: int64) returns int64:
+    if ((choice == wanted) and(weight > 0)):
+        return weight
+    return 0
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] yes_votes = map.new[int64, int64]()
+    mutable map[int64, int64] no_votes = map.new[int64, int64]()
+    mutable int64 yes = 0
+    mutable int64 no = 0
+    for row in view rows:
+        mutable int64 next_yes = contribution(row.choice, row.weight, 1)
+        mutable int64 next_no = contribution(row.choice, row.weight, 0)
+        yes =((yes + next_yes) - map.get_or[int64, int64](clone yes_votes, row.voter, 0))
+        no =((no + next_no) - map.get_or[int64, int64](clone no_votes, row.voter, 0))
+        mutable int64 updated_value_0 = next_yes
+        yes_votes = map.set[int64, int64](yes_votes, row.voter, updated_value_0)
+        mutable int64 updated_value_1 = next_no
+        no_votes = map.set[int64, int64](no_votes, row.voter, updated_value_1)
+    mutable int64 met = 0
+    if ((yes >= limit) and(yes > no)):
+        met = 1
+    return Report(yes_weight: yes, no_weight: no, quorum_met: met)

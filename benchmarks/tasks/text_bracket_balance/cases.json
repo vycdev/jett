@@ -1,0 +1,77 @@
+{
+  "task_id": "text_bracket_balance",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "abc"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "()[]{}"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "([{}])"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "([)]"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "("
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": ")"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "a[b(c)d]e"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "{{}}"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "{]"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "\"(\""
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "(()())"
+      },
+      "expected": true
+    }
+  ]
+}

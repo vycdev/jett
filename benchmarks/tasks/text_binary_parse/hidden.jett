@@ -1,0 +1,40 @@
+function hidden_error(error: TextError) returns string:
+    match error:
+        empty:
+            return "empty"
+        malformed:
+            return "malformed"
+        range:
+            return "range"
+function hidden_outcome(outcome: TextOutcome) returns string:
+    match outcome:
+        accepted(value):
+            return "accepted:{value}"
+        rejected(error):
+            return "rejected:{hidden_error(error)}"
+verify hidden_case_0:
+    assert hidden_outcome(solve("")) == "rejected:empty"
+verify hidden_case_1:
+    assert hidden_outcome(solve("0")) == "accepted:0"
+verify hidden_case_2:
+    assert hidden_outcome(solve("1")) == "accepted:1"
+verify hidden_case_3:
+    assert hidden_outcome(solve("00101")) == "accepted:5"
+verify hidden_case_4:
+    assert hidden_outcome(solve("1111111111111111")) == "accepted:65535"
+verify hidden_case_5:
+    assert hidden_outcome(solve("1000000000000000")) == "accepted:32768"
+verify hidden_case_6:
+    assert hidden_outcome(solve("00000000000000000")) == "rejected:range"
+verify hidden_case_7:
+    assert hidden_outcome(solve("2")) == "rejected:malformed"
+verify hidden_case_8:
+    assert hidden_outcome(solve("10x")) == "rejected:malformed"
+verify hidden_case_9:
+    assert hidden_outcome(solve(" 1")) == "rejected:malformed"
+verify hidden_case_10:
+    assert hidden_outcome(solve("+1")) == "rejected:malformed"
+verify hidden_case_11:
+    assert hidden_outcome(solve("101010")) == "accepted:42"
+verify hidden_case_12:
+    assert hidden_outcome(solve("xxxxxxxxxxxxxxxxx")) == "rejected:range"

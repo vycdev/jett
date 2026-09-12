@@ -1,0 +1,21 @@
+function fixture_label(outcome: optional[int64]) returns string:
+    int64 value = outcome handle:
+        return "none"
+    return string.from_int64(value)
+
+verify numerical_cases_0:
+    assert fixture_label(collatz_steps(1, 0)) == "0"
+    assert fixture_label(collatz_steps(2, 0)) == "none"
+    assert fixture_label(collatz_steps(2, 1)) == "1"
+    assert fixture_label(collatz_steps(3, 6)) == "none"
+    assert fixture_label(collatz_steps(3, 7)) == "7"
+    assert fixture_label(collatz_steps(6, 8)) == "8"
+    assert fixture_label(collatz_steps(7, 15)) == "none"
+    assert fixture_label(collatz_steps(7, 16)) == "16"
+verify numerical_cases_1:
+    assert fixture_label(collatz_steps(27, 110)) == "none"
+    assert fixture_label(collatz_steps(27, 111)) == "111"
+    assert fixture_label(collatz_steps(1000000, 200)) == "152"
+    assert fixture_label(collatz_steps(999999, 200)) == "none"
+    assert fixture_label(collatz_steps(1024, 9)) == "none"
+    assert fixture_label(collatz_steps(1024, 10)) == "10"

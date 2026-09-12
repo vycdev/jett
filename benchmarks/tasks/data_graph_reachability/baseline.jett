@@ -1,0 +1,29 @@
+namespace benchmark
+struct Entry:
+    source: int64
+    target: int64
+struct Report:
+    reachable: int64
+    unreachable: int64
+    reachable_edge_count: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] seen = map.new[int64, int64]()
+    if (limit > 0):
+        mutable int64 updated_value_0 = 1
+        seen = map.set[int64, int64](seen, 0, updated_value_0)
+    mutable int64 turn = 0
+    while (turn < limit):
+        for row in view rows:
+            if (map.get_or[int64, int64](clone seen, row.source, 0) == 1):
+                mutable int64 updated_value_1 = 1
+                seen = map.set[int64, int64](seen, row.target, updated_value_1)
+        turn =(turn + 1)
+    mutable int64 reachable = 0
+    mutable int64 vertex = 0
+    while (vertex < limit):
+        reachable =(reachable + map.get_or[int64, int64](clone seen, vertex, 0))
+        vertex =(vertex + 1)
+    mutable int64 edges = 0
+    for row in view rows:
+        edges =(edges + map.get_or[int64, int64](clone seen, row.source, 0))
+    return Report(reachable: reachable, unreachable:(limit - reachable), reachable_edge_count: edges)

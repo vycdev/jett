@@ -1,0 +1,20 @@
+namespace benchmark
+function safe_div(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left / right
+function safe_mod(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left modulo right
+function divisor_sum(n: int64) returns int64:
+    mutable int64 total = 0
+    mutable int64 divisor = 1
+    while ((divisor * divisor) <= n):
+        if (safe_mod(n, divisor) == 0):
+            total = (total + divisor)
+            mutable int64 partner = safe_div(n, divisor)
+            if (partner != divisor):
+                total = (total + partner)
+        divisor = (divisor + 1)
+    return total

@@ -1,0 +1,283 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 0)
+    assert actual.restock_units == 0
+    assert actual.at_risk == 0
+    assert actual.worst_shortfall == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 5)
+    assert actual.restock_units == 0
+    assert actual.at_risk == 0
+    assert actual.worst_shortfall == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 1)
+    assert actual.restock_units == 0
+    assert actual.at_risk == 0
+    assert actual.worst_shortfall == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 8, daily_demand: 3))
+    Report actual = solve(view rows, 2)
+    assert actual.restock_units == 0
+    assert actual.at_risk == 0
+    assert actual.worst_shortfall == 0
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 5))
+    Report actual = solve(view rows, 3)
+    assert actual.restock_units == 11
+    assert actual.at_risk == 2
+    assert actual.worst_shortfall == 8
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 0, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock:(-2), daily_demand: 5))
+    Report actual = solve(view rows, 4)
+    assert actual.restock_units == 46
+    assert actual.at_risk == 2
+    assert actual.worst_shortfall == 24
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 10, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 0, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 2))
+    Report actual = solve(view rows, 5)
+    assert actual.restock_units == 33
+    assert actual.at_risk == 2
+    assert actual.worst_shortfall == 20
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 10, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 3, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 1))
+    Report actual = solve(view rows, 6)
+    assert actual.restock_units == 75
+    assert actual.at_risk == 5
+    assert actual.worst_shortfall == 34
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock:(-2), daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 10, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 5))
+    Report actual = solve(view rows, 7)
+    assert actual.restock_units == 192
+    assert actual.at_risk == 6
+    assert actual.worst_shortfall == 37
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 8, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 3))
+    Report actual = solve(view rows, 8)
+    assert actual.restock_units == 108
+    assert actual.at_risk == 7
+    assert actual.worst_shortfall == 27
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-2), daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 8, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock:(-2), daily_demand: 6))
+    Report actual = solve(view rows, 1)
+    assert actual.restock_units == 25
+    assert actual.at_risk == 5
+    assert actual.worst_shortfall == 8
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 10, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.restock_units == 27
+    assert actual.at_risk == 5
+    assert actual.worst_shortfall == 11
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 10, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 8, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 2))
+    Report actual = solve(view rows, 3)
+    assert actual.restock_units == 46
+    assert actual.at_risk == 8
+    assert actual.worst_shortfall == 13
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 3, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 8, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 3, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 9, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 2))
+    Report actual = solve(view rows, 4)
+    assert actual.restock_units == 101
+    assert actual.at_risk == 10
+    assert actual.worst_shortfall == 21
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 3, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 0, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 10, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 4))
+    Report actual = solve(view rows, 5)
+    assert actual.restock_units == 161
+    assert actual.at_risk == 12
+    assert actual.worst_shortfall == 26
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 6)
+    assert actual.restock_units == 0
+    assert actual.at_risk == 0
+    assert actual.worst_shortfall == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 5))
+    Report actual = solve(view rows, 7)
+    assert actual.restock_units == 36
+    assert actual.at_risk == 1
+    assert actual.worst_shortfall == 36
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 8, daily_demand: 4))
+    Report actual = solve(view rows, 8)
+    assert actual.restock_units == 28
+    assert actual.at_risk == 2
+    assert actual.worst_shortfall == 24
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 7, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 3, daily_demand: 4))
+    Report actual = solve(view rows, 1)
+    assert actual.restock_units == 6
+    assert actual.at_risk == 2
+    assert actual.worst_shortfall == 5
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.restock_units == 2
+    assert actual.at_risk == 1
+    assert actual.worst_shortfall == 2
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 6))
+    Report actual = solve(view rows, 3)
+    assert actual.restock_units == 64
+    assert actual.at_risk == 5
+    assert actual.worst_shortfall == 21
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 10, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock: 4, daily_demand: 6))
+    Report actual = solve(view rows, 4)
+    assert actual.restock_units == 62
+    assert actual.at_risk == 4
+    assert actual.worst_shortfall == 23
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 1, daily_demand: 6))
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 0, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock: 0, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 11, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 4))
+    Report actual = solve(view rows, 5)
+    assert actual.restock_units == 123
+    assert actual.at_risk == 6
+    assert actual.worst_shortfall == 29
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 1))
+    rows = list.append[Entry](rows, Entry(stock:(-3), daily_demand: 4))
+    rows = list.append[Entry](rows, Entry(stock: 9, daily_demand: 5))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock: 2, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock:(-2), daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock:(-1), daily_demand: 6))
+    Report actual = solve(view rows, 6)
+    assert actual.restock_units == 135
+    assert actual.at_risk == 7
+    assert actual.worst_shortfall == 37
+verify fixture_024:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock:(-5), daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 0, daily_demand: 3))
+    Report actual = solve(view rows, 0)
+    assert actual.restock_units == 5
+    assert actual.at_risk == 1
+    assert actual.worst_shortfall == 5
+verify fixture_025:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 6, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 3))
+    Report actual = solve(view rows, 2)
+    assert actual.restock_units == 1
+    assert actual.at_risk == 1
+    assert actual.worst_shortfall == 1
+verify fixture_026:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(stock: 5, daily_demand: 3))
+    rows = list.append[Entry](rows, Entry(stock: 8, daily_demand: 2))
+    rows = list.append[Entry](rows, Entry(stock:(-2), daily_demand: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.restock_units == 5
+    assert actual.at_risk == 2
+    assert actual.worst_shortfall == 4

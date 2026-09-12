@@ -1,0 +1,28 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function knapsack_value(weights: list[int64], values: list[int64], capacity: int64) returns int64:
+    mutable list[int64] costs = list.new[int64]()
+    mutable int64 size = 0
+    while (size <= capacity):
+        costs = list.append[int64](costs, 0)
+        size = (size + 1)
+    mutable int64 item = 0
+    while (item < list.length[int64](view weights)):
+        mutable list[int64] next_costs = list.new[int64]()
+        mutable int64 room = 0
+        mutable int64 weight = nth(view weights, item)
+        mutable int64 value = nth(view values, item)
+        while (room <= capacity):
+            mutable int64 best = nth(view costs, room)
+            if (weight <= room):
+                mutable int64 candidate = (nth(view costs, (room - weight)) + value)
+                if (candidate > best):
+                    best = candidate
+            next_costs = list.append[int64](next_costs, best)
+            room = (room + 1)
+        costs = next_costs
+        item = (item + 1)
+    return nth(view costs, capacity)

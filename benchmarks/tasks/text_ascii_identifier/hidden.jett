@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("") == false
+verify hidden_case_1:
+    assert solve("_") == true
+verify hidden_case_2:
+    assert solve("a") == true
+verify hidden_case_3:
+    assert solve("A0_z") == true
+verify hidden_case_4:
+    assert solve("0a") == false
+verify hidden_case_5:
+    assert solve("a-b") == false
+verify hidden_case_6:
+    assert solve("a b") == false
+verify hidden_case_7:
+    assert solve("if") == true
+verify hidden_case_8:
+    assert solve("__") == true
+verify hidden_case_9:
+    assert solve("a\n") == false
+verify hidden_case_10:
+    assert solve("$a") == false
+verify hidden_case_11:
+    assert solve("z9") == true

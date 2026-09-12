@@ -1,0 +1,20 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function stable_partition(values: list[int64]) returns list[int64]:
+    mutable list[int64] output = list.new[int64]()
+    mutable int64 index = 0
+    while (index < list.length[int64](view values)):
+        mutable int64 value = nth(view values, index)
+        if (value < 0):
+            output = list.append[int64](output, value)
+        index = (index + 1)
+    index = 0
+    while (index < list.length[int64](view values)):
+        mutable int64 value = nth(view values, index)
+        if (value >= 0):
+            output = list.append[int64](output, value)
+        index = (index + 1)
+    return output

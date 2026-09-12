@@ -1,0 +1,21 @@
+function fixture_label(values: list[int64]) returns string:
+    mutable string label = ""
+    for value in values:
+        label = "{label}{value},"
+    return label
+
+verify numerical_cases_0:
+    assert fixture_label(sorted_insert(list(), 3)) == "3,"
+    assert fixture_label(sorted_insert(list(1), 0)) == "0,1,"
+    assert fixture_label(sorted_insert(list(1), 1)) == "1,1,"
+    assert fixture_label(sorted_insert(list(1), 2)) == "1,2,"
+    assert fixture_label(sorted_insert(list(1, 2, 3), 0)) == "0,1,2,3,"
+    assert fixture_label(sorted_insert(list(1, 2, 3), 2)) == "1,2,2,3,"
+    assert fixture_label(sorted_insert(list(1, 2, 3), 4)) == "1,2,3,4,"
+    assert fixture_label(sorted_insert(list(0, 0, 0), 0)) == "0,0,0,0,"
+verify numerical_cases_1:
+    assert fixture_label(sorted_insert(list(-5, -2, 0, 3), -3)) == "-5,-3,-2,0,3,"
+    assert fixture_label(sorted_insert(list(-5, -2, 0, 3), 0)) == "-5,-2,0,0,3,"
+    assert fixture_label(sorted_insert(list(1, 1, 2, 2), 1)) == "1,1,1,2,2,"
+    assert fixture_label(sorted_insert(list(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19), 10)) == "0,1,2,3,4,5,6,7,8,9,10,10,11,12,13,14,15,16,17,18,19,"
+    assert fixture_label(sorted_insert(list(1000), -1000)) == "-1000,1000,"

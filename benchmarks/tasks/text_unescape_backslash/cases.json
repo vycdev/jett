@@ -1,0 +1,113 @@
+{
+  "task_id": "text_unescape_backslash",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "abc"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "abc"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\\n"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "\n"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\\t\\r"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "\t\r"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\\\\"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "\\"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\\\""
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "\""
+      }
+    },
+    {
+      "inputs": {
+        "text": "a\\nb"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "a\nb"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\\"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "x\\q"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\\0"
+      },
+      "expected": {
+        "kind": "rejected",
+        "error": "malformed"
+      }
+    },
+    {
+      "inputs": {
+        "text": "\\\\n"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "\\n"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a\nb"
+      },
+      "expected": {
+        "kind": "accepted",
+        "value": "a\nb"
+      }
+    }
+  ]
+}

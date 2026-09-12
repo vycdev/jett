@@ -1,0 +1,19 @@
+namespace benchmark
+function safe_div(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left / right
+function safe_mod(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left modulo right
+function modular_power(base: int64, exponent: int64, modulus: int64) returns int64:
+    mutable int64 power = safe_mod(base, modulus)
+    mutable int64 remaining = exponent
+    mutable int64 answer = safe_mod(1, modulus)
+    while (remaining > 0):
+        if (safe_mod(remaining, 2) == 1):
+            answer = safe_mod((answer * power), modulus)
+        power = safe_mod((power * power), modulus)
+        remaining = safe_div(remaining, 2)
+    return answer

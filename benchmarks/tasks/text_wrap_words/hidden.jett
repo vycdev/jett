@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("", 5) == ""
+verify hidden_case_1:
+    assert solve("   ", 3) == ""
+verify hidden_case_2:
+    assert solve("a b c", 3) == "a b\nc"
+verify hidden_case_3:
+    assert solve("a b c", 1) == "a\nb\nc"
+verify hidden_case_4:
+    assert solve("longword x", 3) == "longword\nx"
+verify hidden_case_5:
+    assert solve("one two three", 7) == "one two\nthree"
+verify hidden_case_6:
+    assert solve(" one  two ", 80) == "one two"
+verify hidden_case_7:
+    assert solve("ab cd ef", 5) == "ab cd\nef"
+verify hidden_case_8:
+    assert solve("abc d", 3) == "abc\nd"
+verify hidden_case_9:
+    assert solve("a bc", 4) == "a bc"
+verify hidden_case_10:
+    assert solve("a bc", 3) == "a\nbc"
+verify hidden_case_11:
+    assert solve("x longword y", 3) == "x\nlongword\ny"

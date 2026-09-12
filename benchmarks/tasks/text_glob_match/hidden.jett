@@ -1,0 +1,28 @@
+verify hidden_case_0:
+    assert solve("", "") == true
+verify hidden_case_1:
+    assert solve("", "*") == true
+verify hidden_case_2:
+    assert solve("", "?") == false
+verify hidden_case_3:
+    assert solve("abc", "a?c") == true
+verify hidden_case_4:
+    assert solve("abc", "a*c") == true
+verify hidden_case_5:
+    assert solve("abbbc", "a*b*c") == true
+verify hidden_case_6:
+    assert solve("abc", "*d") == false
+verify hidden_case_7:
+    assert solve("abcd", "a*d?") == false
+verify hidden_case_8:
+    assert solve("abcdef", "*?c*f") == true
+verify hidden_case_9:
+    assert solve("aaaab", "a*b") == true
+verify hidden_case_10:
+    assert solve("abc", "**a**?**c**") == true
+verify hidden_case_11:
+    assert solve("ab", "a") == false
+verify hidden_case_12:
+    assert solve("a.b", "a.b") == true
+verify hidden_case_13:
+    assert solve("ABC", "abc") == false

@@ -1,0 +1,30 @@
+function hidden_ascii(text: string) returns string:
+    bytes encoded = bytes.from_hex(text) handle error:
+        return ""
+    string decoded = bytes.to_string(view encoded) handle error:
+        return ""
+    return decoded
+verify hidden_case_0:
+    assert solve("") == "\"\""
+verify hidden_case_1:
+    assert solve("a") == "\"a\""
+verify hidden_case_2:
+    assert solve("\"") == "\"\\\"\""
+verify hidden_case_3:
+    assert solve("\\") == "\"\\\\\""
+verify hidden_case_4:
+    assert solve("\n") == "\"\\n\""
+verify hidden_case_5:
+    assert solve("\t") == "\"\\t\""
+verify hidden_case_6:
+    assert solve("\r") == "\"\\r\""
+verify hidden_case_7:
+    assert solve(hidden_ascii("08")) == "\"\\b\""
+verify hidden_case_8:
+    assert solve(hidden_ascii("0c")) == "\"\\f\""
+verify hidden_case_9:
+    assert solve("/") == "\"/\""
+verify hidden_case_10:
+    assert solve("a\"b\\c") == "\"a\\\"b\\\\c\""
+verify hidden_case_11:
+    assert solve("x\ny\tz") == "\"x\\ny\\tz\""

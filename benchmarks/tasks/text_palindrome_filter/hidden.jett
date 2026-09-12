@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("") == true
+verify hidden_case_1:
+    assert solve("! ?") == true
+verify hidden_case_2:
+    assert solve("a") == true
+verify hidden_case_3:
+    assert solve("ab") == false
+verify hidden_case_4:
+    assert solve("Aa") == true
+verify hidden_case_5:
+    assert solve("Race car!") == true
+verify hidden_case_6:
+    assert solve("A man, a plan, a canal: Panama") == true
+verify hidden_case_7:
+    assert solve("12 21") == true
+verify hidden_case_8:
+    assert solve("12a21") == true
+verify hidden_case_9:
+    assert solve("12a22") == false
+verify hidden_case_10:
+    assert solve("0P") == false
+verify hidden_case_11:
+    assert solve("ab\tBA") == true

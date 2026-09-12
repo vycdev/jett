@@ -1,0 +1,77 @@
+{
+  "task_id": "text_camel_to_snake",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": "a"
+    },
+    {
+      "inputs": {
+        "text": "A"
+      },
+      "expected": "a"
+    },
+    {
+      "inputs": {
+        "text": "camelCase"
+      },
+      "expected": "camel_case"
+    },
+    {
+      "inputs": {
+        "text": "HTTPServer"
+      },
+      "expected": "http_server"
+    },
+    {
+      "inputs": {
+        "text": "XML"
+      },
+      "expected": "xml"
+    },
+    {
+      "inputs": {
+        "text": "parseURLValue"
+      },
+      "expected": "parse_url_value"
+    },
+    {
+      "inputs": {
+        "text": "x2Y"
+      },
+      "expected": "x2_y"
+    },
+    {
+      "inputs": {
+        "text": "ABc"
+      },
+      "expected": "a_bc"
+    },
+    {
+      "inputs": {
+        "text": "oneTwoThree"
+      },
+      "expected": "one_two_three"
+    },
+    {
+      "inputs": {
+        "text": "v123"
+      },
+      "expected": "v123"
+    },
+    {
+      "inputs": {
+        "text": "ABCdEF"
+      },
+      "expected": "ab_cd_ef"
+    }
+  ]
+}

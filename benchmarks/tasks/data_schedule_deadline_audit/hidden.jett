@@ -1,0 +1,282 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 0)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 5)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 5
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 1)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 1
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 23, penalty: 3))
+    Report actual = solve(view rows, 2)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 10
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 18, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 20, penalty: 3))
+    Report actual = solve(view rows, 3)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 14
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 0, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 2, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 11, penalty: 3))
+    Report actual = solve(view rows, 4)
+    assert actual.late == 2
+    assert actual.weighted_tardiness == 30
+    assert actual.finish == 11
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 18, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 2, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 27, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 17, penalty: 3))
+    Report actual = solve(view rows, 5)
+    assert actual.late == 2
+    assert actual.weighted_tardiness == 64
+    assert actual.finish == 27
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 12, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 8, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 16, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 24, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 14, penalty: 1))
+    Report actual = solve(view rows, 6)
+    assert actual.late == 3
+    assert actual.weighted_tardiness == 27
+    assert actual.finish == 28
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 19, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 7, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 14, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 0, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 21, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 17, penalty: 4))
+    Report actual = solve(view rows, 7)
+    assert actual.late == 5
+    assert actual.weighted_tardiness == 154
+    assert actual.finish == 26
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 29, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 1, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 21, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 21, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 3, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 26, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 15, penalty: 3))
+    Report actual = solve(view rows, 8)
+    assert actual.late == 4
+    assert actual.weighted_tardiness == 172
+    assert actual.finish == 32
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 24, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 24, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 21, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 27, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 13, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 8, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 15, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 10, penalty: 1))
+    Report actual = solve(view rows, 1)
+    assert actual.late == 4
+    assert actual.weighted_tardiness == 114
+    assert actual.finish == 30
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 0, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 6, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 15, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 4, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 20, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 12, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 10, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 29, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 6, penalty: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.late == 9
+    assert actual.weighted_tardiness == 218
+    assert actual.finish == 37
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 6, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 16, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 29, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 22, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 6, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 29, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 7, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 24, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 13, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 21, penalty: 2))
+    Report actual = solve(view rows, 3)
+    assert actual.late == 8
+    assert actual.weighted_tardiness == 310
+    assert actual.finish == 54
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 14, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 8, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 6, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 4, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 5, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 4, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 28, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 12, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 16, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 2, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 21, penalty: 3))
+    Report actual = solve(view rows, 4)
+    assert actual.late == 10
+    assert actual.weighted_tardiness == 735
+    assert actual.finish == 62
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 5, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 13, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 29, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 17, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 14, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 15, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 9, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 16, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 9, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 21, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 13, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 25, penalty: 4))
+    Report actual = solve(view rows, 5)
+    assert actual.late == 9
+    assert actual.weighted_tardiness == 378
+    assert actual.finish == 51
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 6)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 6
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 16, penalty: 1))
+    Report actual = solve(view rows, 7)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 8
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 11, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 28, penalty: 2))
+    Report actual = solve(view rows, 8)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 11
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 23, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 21, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 19, penalty: 1))
+    Report actual = solve(view rows, 1)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 17
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 18, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 7, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 22, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 16, penalty: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.late == 2
+    assert actual.weighted_tardiness == 12
+    assert actual.finish == 19
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 2, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 29, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 24, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 28, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 10, penalty: 2))
+    Report actual = solve(view rows, 3)
+    assert actual.late == 2
+    assert actual.weighted_tardiness == 18
+    assert actual.finish == 17
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 3, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 4, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 9, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 7, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 2, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 0, penalty: 4))
+    Report actual = solve(view rows, 4)
+    assert actual.late == 6
+    assert actual.weighted_tardiness == 266
+    assert actual.finish == 27
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 26, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 5, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 15, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 3, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 15, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 0, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 7, penalty: 1))
+    Report actual = solve(view rows, 5)
+    assert actual.late == 5
+    assert actual.weighted_tardiness == 129
+    assert actual.finish == 30
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 6, deadline: 10, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 10, penalty: 4))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 8, penalty: 1))
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 28, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 5, deadline: 15, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 11, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 8, deadline: 2, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 7, deadline: 2, penalty: 2))
+    Report actual = solve(view rows, 6)
+    assert actual.late == 7
+    assert actual.weighted_tardiness == 263
+    assert actual.finish == 45
+verify fixture_024:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 2, deadline: 5, penalty: 1))
+    Report actual = solve(view rows, 3)
+    assert actual.late == 0
+    assert actual.weighted_tardiness == 0
+    assert actual.finish == 5
+verify fixture_025:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 0, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 4, penalty: 5))
+    Report actual = solve(view rows, 0)
+    assert actual.late == 1
+    assert actual.weighted_tardiness == 2
+    assert actual.finish == 4
+verify fixture_026:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(duration: 3, deadline: 5, penalty: 2))
+    rows = list.append[Entry](rows, Entry(duration: 4, deadline: 6, penalty: 3))
+    rows = list.append[Entry](rows, Entry(duration: 1, deadline: 20, penalty: 9))
+    Report actual = solve(view rows, 2)
+    assert actual.late == 1
+    assert actual.weighted_tardiness == 9
+    assert actual.finish == 10

@@ -1,0 +1,17 @@
+
+verify numerical_cases_0:
+    assert binomial(0, 0) == 1
+    assert binomial(0, 1) == 0
+    assert binomial(1, 0) == 1
+    assert binomial(1, 1) == 1
+    assert binomial(1, 2) == 0
+    assert binomial(5, 2) == 10
+    assert binomial(5, 3) == 10
+    assert binomial(10, 1) == 10
+verify numerical_cases_1:
+    assert binomial(10, 9) == 10
+    assert binomial(20, 10) == 184756
+    assert binomial(30, 15) == 155117520
+    assert binomial(30, 0) == 1
+    assert binomial(30, 30) == 1
+    assert binomial(30, 35) == 0

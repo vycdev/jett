@@ -1,0 +1,77 @@
+{
+  "task_id": "text_collapse_spaces",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": " "
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "   "
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": "a"
+    },
+    {
+      "inputs": {
+        "text": " a "
+      },
+      "expected": "a"
+    },
+    {
+      "inputs": {
+        "text": "a  b"
+      },
+      "expected": "a b"
+    },
+    {
+      "inputs": {
+        "text": " a  b c "
+      },
+      "expected": "a b c"
+    },
+    {
+      "inputs": {
+        "text": "a\tb"
+      },
+      "expected": "a\tb"
+    },
+    {
+      "inputs": {
+        "text": " \t "
+      },
+      "expected": "\t"
+    },
+    {
+      "inputs": {
+        "text": "a\n  b"
+      },
+      "expected": "a\n b"
+    },
+    {
+      "inputs": {
+        "text": "!  ?"
+      },
+      "expected": "! ?"
+    },
+    {
+      "inputs": {
+        "text": " x   x  x "
+      },
+      "expected": "x x x"
+    }
+  ]
+}

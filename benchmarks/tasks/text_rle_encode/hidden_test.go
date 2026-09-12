@@ -1,0 +1,45 @@
+package benchmark
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestHidden(t *testing.T) {
+	if got := solve(""); !reflect.DeepEqual(got, "") {
+		t.Fatalf("case 0: got %#v", got)
+	}
+	if got := solve("A"); !reflect.DeepEqual(got, "1A") {
+		t.Fatalf("case 1: got %#v", got)
+	}
+	if got := solve("AA"); !reflect.DeepEqual(got, "2A") {
+		t.Fatalf("case 2: got %#v", got)
+	}
+	if got := solve("AB"); !reflect.DeepEqual(got, "1A1B") {
+		t.Fatalf("case 3: got %#v", got)
+	}
+	if got := solve("AAABB"); !reflect.DeepEqual(got, "3A2B") {
+		t.Fatalf("case 4: got %#v", got)
+	}
+	if got := solve("ABBA"); !reflect.DeepEqual(got, "1A2B1A") {
+		t.Fatalf("case 5: got %#v", got)
+	}
+	if got := solve("ZZZZZZZZZZZZ"); !reflect.DeepEqual(got, "12Z") {
+		t.Fatalf("case 6: got %#v", got)
+	}
+	if got := solve("ABCABC"); !reflect.DeepEqual(got, "1A1B1C1A1B1C") {
+		t.Fatalf("case 7: got %#v", got)
+	}
+	if got := solve("AAAABCCCC"); !reflect.DeepEqual(got, "4A1B4C") {
+		t.Fatalf("case 8: got %#v", got)
+	}
+	if got := solve("AZZA"); !reflect.DeepEqual(got, "1A2Z1A") {
+		t.Fatalf("case 9: got %#v", got)
+	}
+	if got := solve("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); !reflect.DeepEqual(got, "1000A") {
+		t.Fatalf("case 10: got %#v", got)
+	}
+	if got := solve("XXYYYZ"); !reflect.DeepEqual(got, "2X3Y1Z") {
+		t.Fatalf("case 11: got %#v", got)
+	}
+}

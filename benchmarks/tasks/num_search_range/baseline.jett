@@ -1,0 +1,19 @@
+namespace benchmark
+struct SearchRange:
+    first: int64
+    last: int64
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function search_range(values: list[int64], target: int64) returns SearchRange:
+    mutable int64 first = -(1)
+    mutable int64 last = -(1)
+    mutable int64 index = 0
+    while (index < list.length[int64](view values)):
+        if (nth(view values, index) == target):
+            if (first == -(1)):
+                first = index
+            last = index
+        index = (index + 1)
+    return SearchRange(first: first, last: last)

@@ -1,0 +1,20 @@
+import { totient } from "./solution.js";
+
+if (totient(1n) !== 1n) throw new Error("case 0");
+if (totient(2n) !== 1n) throw new Error("case 1");
+if (totient(3n) !== 2n) throw new Error("case 2");
+if (totient(4n) !== 2n) throw new Error("case 3");
+if (totient(5n) !== 4n) throw new Error("case 4");
+if (totient(6n) !== 2n) throw new Error("case 5");
+if (totient(8n) !== 4n) throw new Error("case 6");
+if (totient(9n) !== 6n) throw new Error("case 7");
+if (totient(10n) !== 4n) throw new Error("case 8");
+if (totient(12n) !== 4n) throw new Error("case 9");
+if (totient(30n) !== 8n) throw new Error("case 10");
+if (totient(36n) !== 12n) throw new Error("case 11");
+if (totient(49n) !== 42n) throw new Error("case 12");
+if (totient(97n) !== 96n) throw new Error("case 13");
+if (totient(210n) !== 48n) throw new Error("case 14");
+if (totient(1024n) !== 512n) throw new Error("case 15");
+if (totient(9999n) !== 6000n) throw new Error("case 16");
+if (totient(10000n) !== 4000n) throw new Error("case 17");

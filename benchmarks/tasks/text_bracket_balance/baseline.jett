@@ -1,0 +1,47 @@
+namespace benchmark
+function from_ascii_hex(text: string) returns string:
+    bytes encoded = bytes.from_hex(text) handle error:
+        return ""
+    string decoded = bytes.to_string(view encoded) handle error:
+        return ""
+    return decoded
+function concat(left: string, right: string) returns string:
+    return "{left}{right}"
+function length(text: string) returns int64:
+    return string.length(text)
+function char_read(text: string, pos: int64) returns string:
+    string ch = string.char_at(text, pos) handle:
+        default ""
+    return ch
+function part(text: string, start: int64, end: int64) returns string:
+    return string.slice(text, start, end)
+function contains(text: string, needle: string) returns bool:
+    return string.contains(text, needle)
+function lower(text: string) returns string:
+    return string.lower(text)
+function upper(text: string) returns string:
+    return string.upper(text)
+function render(value: int64) returns string:
+    return string.from_int64(value)
+function closing(ch: string) returns string:
+    if (ch == ")"):
+        return "("
+    if (ch == "]"):
+        return "["
+    return "{{"
+function solve(text: string) returns bool:
+    mutable string stack = ""
+    mutable int64 pos = 0
+    while (pos < length(text)):
+        mutable string ch = char_read(text, pos)
+        if contains("([{{", ch):
+            stack = concat(stack, ch)
+        else:
+            if contains(")]}}", ch):
+                if (length(stack) == 0):
+                    return false
+                if (char_read(stack,(length(stack) - 1)) != closing(ch)):
+                    return false
+                stack = part(stack, 0,(length(stack) - 1))
+        pos =(pos + 1)
+    return(stack == "")

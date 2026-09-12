@@ -1,0 +1,31 @@
+namespace benchmark
+struct Entry:
+    start: int64
+    end: int64
+    demand: int64
+struct Report:
+    peak: int64
+    earliest: int64
+    overloaded_starts: int64
+function load_at(view rows: list[Entry], moment: int64) returns int64:
+    mutable int64 total = 0
+    for row in view rows:
+        if ((row.start <= moment) and(row.end > moment)):
+            total =(total + row.demand)
+    return total
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] seen = map.new[int64, int64]()
+    mutable int64 peak = 0
+    mutable int64 earliest =(-1)
+    mutable int64 overloaded = 0
+    for row in view rows:
+        mutable int64 load = load_at(view rows, row.start)
+        if ((load > peak) or((load == peak) and(row.start < earliest))):
+            peak = load
+            earliest = row.start
+        if (map.get_or[int64, int64](clone seen, row.start, 0) == 0):
+            if (load > limit):
+                overloaded =(overloaded + 1)
+            mutable int64 updated_value_0 = 1
+            seen = map.set[int64, int64](seen, row.start, updated_value_0)
+    return Report(peak: peak, earliest: earliest, overloaded_starts: overloaded)

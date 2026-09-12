@@ -1,0 +1,40 @@
+function hidden_error(error: TextError) returns string:
+    match error:
+        empty:
+            return "empty"
+        malformed:
+            return "malformed"
+        range:
+            return "range"
+function hidden_outcome(outcome: TextOutcome) returns string:
+    match outcome:
+        accepted(value):
+            return "accepted:{value}"
+        rejected(error):
+            return "rejected:{hidden_error(error)}"
+verify hidden_case_0:
+    assert hidden_outcome(solve("0.0.0.0")) == "accepted:0"
+verify hidden_case_1:
+    assert hidden_outcome(solve("255.255.255.255")) == "accepted:4294967295"
+verify hidden_case_2:
+    assert hidden_outcome(solve("127.0.0.1")) == "accepted:2130706433"
+verify hidden_case_3:
+    assert hidden_outcome(solve("192.168.1.1")) == "accepted:3232235777"
+verify hidden_case_4:
+    assert hidden_outcome(solve("1.2.3.4")) == "accepted:16909060"
+verify hidden_case_5:
+    assert hidden_outcome(solve("")) == "rejected:malformed"
+verify hidden_case_6:
+    assert hidden_outcome(solve("1.2.3")) == "rejected:malformed"
+verify hidden_case_7:
+    assert hidden_outcome(solve("1.2.3.4.5")) == "rejected:malformed"
+verify hidden_case_8:
+    assert hidden_outcome(solve("01.2.3.4")) == "rejected:malformed"
+verify hidden_case_9:
+    assert hidden_outcome(solve("256.0.0.1")) == "rejected:malformed"
+verify hidden_case_10:
+    assert hidden_outcome(solve("1..2.3")) == "rejected:malformed"
+verify hidden_case_11:
+    assert hidden_outcome(solve("1.2.3.-1")) == "rejected:malformed"
+verify hidden_case_12:
+    assert hidden_outcome(solve("1.2.3.4 ")) == "rejected:malformed"

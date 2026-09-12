@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("") == ""
+verify hidden_case_1:
+    assert solve("abc") == "abc"
+verify hidden_case_2:
+    assert solve("&") == "&amp;"
+verify hidden_case_3:
+    assert solve("<>") == "&lt;&gt;"
+verify hidden_case_4:
+    assert solve("\"'") == "&quot;&#39;"
+verify hidden_case_5:
+    assert solve("&amp;") == "&amp;amp;"
+verify hidden_case_6:
+    assert solve("a&b<c") == "a&amp;b&lt;c"
+verify hidden_case_7:
+    assert solve("&&") == "&amp;&amp;"
+verify hidden_case_8:
+    assert solve("\n\t") == "\n\t"
+verify hidden_case_9:
+    assert solve("/a=1") == "/a=1"
+verify hidden_case_10:
+    assert solve("<a x=\"b\">") == "&lt;a x=&quot;b&quot;&gt;"
+verify hidden_case_11:
+    assert solve("'&'") == "&#39;&amp;&#39;"

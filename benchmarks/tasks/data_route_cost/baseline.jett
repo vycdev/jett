@@ -1,0 +1,33 @@
+namespace benchmark
+struct Entry:
+    source: int64
+    target: int64
+    cost: int64
+struct Report:
+    reachable: int64
+    cost_sum: int64
+    most_expensive: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] costs = map.new[int64, int64]()
+    mutable int64 updated_value_0 = 0
+    costs = map.set[int64, int64](costs, 0, updated_value_0)
+    mutable int64 reachable = 0
+    mutable int64 total = 0
+    mutable int64 maximum = 0
+    mutable int64 vertex = 0
+    while (vertex < limit):
+        mutable int64 best = map.get_or[int64, int64](clone costs, vertex, 1000000)
+        for row in view rows:
+            if (row.target == vertex):
+                mutable int64 candidate =(map.get_or[int64, int64](clone costs, row.source, 1000000) + row.cost)
+                if (candidate < best):
+                    best = candidate
+        mutable int64 updated_value_1 = best
+        costs = map.set[int64, int64](costs, vertex, updated_value_1)
+        if (best < 1000000):
+            reachable =(reachable + 1)
+            total =(total + best)
+            if (best > maximum):
+                maximum = best
+        vertex =(vertex + 1)
+    return Report(reachable: reachable, cost_sum: total, most_expensive: maximum)

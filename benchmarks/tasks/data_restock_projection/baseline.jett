@@ -1,0 +1,20 @@
+namespace benchmark
+struct Entry:
+    stock: int64
+    daily_demand: int64
+struct Report:
+    restock_units: int64
+    at_risk: int64
+    worst_shortfall: int64
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 units = 0
+    mutable int64 risk = 0
+    mutable int64 worst = 0
+    for row in view rows:
+        mutable int64 shortage =((row.daily_demand * limit) - row.stock)
+        if (shortage > 0):
+            units =(units + shortage)
+            risk =(risk + 1)
+            if (shortage > worst):
+                worst = shortage
+    return Report(restock_units: units, at_risk: risk, worst_shortfall: worst)

@@ -1,0 +1,24 @@
+verify hidden_case_0:
+    assert solve("", "") == 1
+verify hidden_case_1:
+    assert solve("", "a") == 0
+verify hidden_case_2:
+    assert solve("abc", "") == 4
+verify hidden_case_3:
+    assert solve("aaaa", "aa") == 3
+verify hidden_case_4:
+    assert solve("ababa", "aba") == 2
+verify hidden_case_5:
+    assert solve("abc", "abc") == 1
+verify hidden_case_6:
+    assert solve("ab", "abc") == 0
+verify hidden_case_7:
+    assert solve("AaA", "a") == 1
+verify hidden_case_8:
+    assert solve("xxxxx", "xx") == 4
+verify hidden_case_9:
+    assert solve("one one", "one") == 2
+verify hidden_case_10:
+    assert solve(" ", " ") == 1
+verify hidden_case_11:
+    assert solve("abc", "z") == 0

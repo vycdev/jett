@@ -1,0 +1,52 @@
+namespace benchmark
+function from_ascii_hex(text: string) returns string:
+    bytes encoded = bytes.from_hex(text) handle error:
+        return ""
+    string decoded = bytes.to_string(view encoded) handle error:
+        return ""
+    return decoded
+function concat(left: string, right: string) returns string:
+    return "{left}{right}"
+function length(text: string) returns int64:
+    return string.length(text)
+function char_read(text: string, pos: int64) returns string:
+    string ch = string.char_at(text, pos) handle:
+        default ""
+    return ch
+function part(text: string, start: int64, end: int64) returns string:
+    return string.slice(text, start, end)
+function contains(text: string, needle: string) returns bool:
+    return string.contains(text, needle)
+function lower(text: string) returns string:
+    return string.lower(text)
+function upper(text: string) returns string:
+    return string.upper(text)
+function render(value: int64) returns string:
+    return string.from_int64(value)
+function quote_mode(mode: int64, ch: string) returns int64:
+    if (mode == 2):
+        return 1
+    if ((mode == 1) and(ch == "\\")):
+        return 2
+    if (ch == "\""):
+        return(1 - mode)
+    return mode
+function solve(text: string) returns string:
+    mutable string out = ""
+    mutable int64 mode = 0
+    mutable bool comment = false
+    mutable int64 pos = 0
+    while (pos < length(text)):
+        mutable string ch = char_read(text, pos)
+        if comment:
+            if (ch == "\n"):
+                comment = false
+                out = concat(out, ch)
+        else:
+            if ((mode == 0) and(ch == "#")):
+                comment = true
+            else:
+                out = concat(out, ch)
+                mode = quote_mode(mode, ch)
+        pos =(pos + 1)
+    return out

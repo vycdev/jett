@@ -1,0 +1,12 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function polynomial_value(coefficients: list[int64], x: int64) returns int64:
+    mutable int64 answer = 0
+    mutable int64 index = list.length[int64](view coefficients)
+    while (index > 0):
+        index = (index - 1)
+        answer = ((answer * x) + nth(view coefficients, index))
+    return answer

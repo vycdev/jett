@@ -1,0 +1,32 @@
+namespace benchmark
+struct Entry:
+    key: int64
+    modified: int64
+    size: int64
+struct Report:
+    removed: int64
+    reclaimed: int64
+    retained: int64
+function newest_index(view rows: list[Entry], key: int64) returns int64:
+    mutable int64 best_index =(-1)
+    mutable int64 best_time =(-1000000)
+    mutable int64 index = 0
+    for row in view rows:
+        if ((row.key == key) and(row.modified > best_time)):
+            best_index = index
+            best_time = row.modified
+        index =(index + 1)
+    return best_index
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 removed = 0
+    mutable int64 reclaimed = 0
+    mutable int64 retained = 0
+    mutable int64 index = 0
+    for row in view rows:
+        if ((row.modified < limit) and(index != newest_index(view rows, row.key))):
+            removed =(removed + 1)
+            reclaimed =(reclaimed + row.size)
+        else:
+            retained =(retained + 1)
+        index =(index + 1)
+    return Report(removed: removed, reclaimed: reclaimed, retained: retained)

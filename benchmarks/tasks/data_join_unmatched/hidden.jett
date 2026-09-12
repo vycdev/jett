@@ -1,0 +1,260 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, side: 8, quantity: 3))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, side: 6, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 7, quantity: 5))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, side: 11, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 0, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 0, side:(-2), quantity: 5))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 6
+    assert actual.right_only == 0
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, side: 10, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 2, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 0, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 11, quantity: 2))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 4
+    assert actual.right_only == 0
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, side: 10, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 5, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 2, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 3, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 1, quantity: 1))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 1
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, side: 5, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 1, side:(-2), quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 11, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 2, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 10, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 6, quantity: 5))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, side: 5, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 1, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, side:(-1), quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 8, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 7, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 5, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 11, quantity: 3))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 1
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, side:(-3), quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 7, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 7, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, side:(-2), quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, side:(-1), quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 4, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 8, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, side:(-2), quantity: 6))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, side: 10, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 11, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 2, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 1, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 1, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 4, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 2, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, side:(-3), quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 2, quantity: 2))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 7
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, side: 7, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, side:(-3), quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 5, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 10, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 8, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 6, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 2, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 5, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 2, side:(-1), quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 1, quantity: 2))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 2
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, side: 5, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 3, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 11, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 8, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 4, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 1, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 3, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 5, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 6, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 9, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 7, quantity: 2))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 1
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, side: 3, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 7, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 4, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 6, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 11, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 0, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 2, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 10, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, side:(-1), quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, side:(-1), quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 11, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, side:(-3), quantity: 4))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 5
+    assert actual.right_only == 0
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, side:(-1), quantity: 5))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, side: 4, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, side: 8, quantity: 4))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 3, side: 7, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, side:(-1), quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 3, quantity: 4))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, side: 11, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 5, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 4, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 4, quantity: 2))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, side: 1, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 5, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 4, side:(-3), quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 5, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, side:(-3), quantity: 6))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 5
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, side: 4, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 1, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 3, side: 10, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, side:(-3), quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 4, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 4, quantity: 6))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 6
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 2, side: 1, quantity: 6))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 6, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 6, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 0, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 0, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 11, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, side:(-1), quantity: 4))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 7
+    assert actual.right_only == 6
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 4, side: 6, quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 4, side:(-1), quantity: 1))
+    rows = list.append[Entry](rows, Entry(key: 0, side:(-3), quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 9, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 0, side:(-1), quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 2, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 1, side:(-2), quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 1, side:(-1), quantity: 6))
+    Report actual = solve(view rows)
+    assert actual.matched == 0
+    assert actual.left_only == 0
+    assert actual.right_only == 0
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 0, side: 0, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 0, quantity: 3))
+    rows = list.append[Entry](rows, Entry(key: 0, side: 1, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 2, quantity: 9))
+    Report actual = solve(view rows)
+    assert actual.matched == 4
+    assert actual.left_only == 1
+    assert actual.right_only == 0
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(key: 1, side: 0, quantity: 4))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 1, quantity: 2))
+    rows = list.append[Entry](rows, Entry(key: 2, side: 1, quantity: 5))
+    rows = list.append[Entry](rows, Entry(key: 1, side: 0, quantity: 1))
+    Report actual = solve(view rows)
+    assert actual.matched == 2
+    assert actual.left_only == 3
+    assert actual.right_only == 5

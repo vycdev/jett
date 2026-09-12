@@ -1,0 +1,22 @@
+namespace benchmark
+function safe_div(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left / right
+function safe_mod(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left modulo right
+function totient(n: int64) returns int64:
+    mutable int64 remaining = n
+    mutable int64 count = n
+    mutable int64 factor = 2
+    while ((factor * factor) <= remaining):
+        if (safe_mod(remaining, factor) == 0):
+            count = (count - safe_div(count, factor))
+            while (safe_mod(remaining, factor) == 0):
+                remaining = safe_div(remaining, factor)
+        factor = (factor + 1)
+    if (remaining > 1):
+        count = (count - safe_div(count, remaining))
+    return count

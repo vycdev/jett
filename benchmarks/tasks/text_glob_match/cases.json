@@ -1,0 +1,103 @@
+{
+  "task_id": "text_glob_match",
+  "cases": [
+    {
+      "inputs": {
+        "text": "",
+        "pattern": ""
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "",
+        "pattern": "*"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "",
+        "pattern": "?"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "abc",
+        "pattern": "a?c"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "abc",
+        "pattern": "a*c"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "abbbc",
+        "pattern": "a*b*c"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "abc",
+        "pattern": "*d"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "abcd",
+        "pattern": "a*d?"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "abcdef",
+        "pattern": "*?c*f"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "aaaab",
+        "pattern": "a*b"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "abc",
+        "pattern": "**a**?**c**"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "ab",
+        "pattern": "a"
+      },
+      "expected": false
+    },
+    {
+      "inputs": {
+        "text": "a.b",
+        "pattern": "a.b"
+      },
+      "expected": true
+    },
+    {
+      "inputs": {
+        "text": "ABC",
+        "pattern": "abc"
+      },
+      "expected": false
+    }
+  ]
+}

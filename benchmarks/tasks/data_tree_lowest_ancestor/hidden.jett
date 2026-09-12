@@ -1,0 +1,242 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 0)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 5)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 1)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    Report actual = solve(view rows, 2)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    Report actual = solve(view rows, 3)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 0))
+    Report actual = solve(view rows, 4)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 0))
+    Report actual = solve(view rows, 5)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 5, parent: 4))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    Report actual = solve(view rows, 6)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 5, parent: 2))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 2))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 6, parent: 3))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    Report actual = solve(view rows, 7)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 6, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 7, parent: 6))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 5, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    Report actual = solve(view rows, 8)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    Report actual = solve(view rows, 1)
+    assert actual.ancestor == 1
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 0))
+    Report actual = solve(view rows, 2)
+    assert actual.ancestor == 2
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 0))
+    Report actual = solve(view rows, 3)
+    assert actual.ancestor == 3
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 1))
+    Report actual = solve(view rows, 4)
+    assert actual.ancestor == 4
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 3))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 5, parent: 0))
+    Report actual = solve(view rows, 5)
+    assert actual.ancestor == 5
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 6)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    Report actual = solve(view rows, 7)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    Report actual = solve(view rows, 8)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.ancestor == 2
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    Report actual = solve(view rows, 3)
+    assert actual.ancestor == 3
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 3))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 0))
+    Report actual = solve(view rows, 4)
+    assert actual.ancestor == 4
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 3))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 5, parent: 2))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    Report actual = solve(view rows, 5)
+    assert actual.ancestor == 5
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 6, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 5, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 2))
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    Report actual = solve(view rows, 6)
+    assert actual.ancestor == 6
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 0
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 2))
+    Report actual = solve(view rows, 1)
+    assert actual.ancestor == 1
+    assert actual.selected_distance == 0
+    assert actual.largest_distance == 2
+verify fixture_024:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 0))
+    Report actual = solve(view rows, 1)
+    assert actual.ancestor == 0
+    assert actual.selected_distance == -1
+    assert actual.largest_distance == -1
+verify fixture_025:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 1, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 3, parent: 1))
+    rows = list.append[Entry](rows, Entry(node: 4, parent: 2))
+    Report actual = solve(view rows, 3)
+    assert actual.ancestor == 1
+    assert actual.selected_distance == 1
+    assert actual.largest_distance == 2
+verify fixture_026:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(node: 30, parent: 2))
+    rows = list.append[Entry](rows, Entry(node: 12, parent: 9))
+    rows = list.append[Entry](rows, Entry(node: 2, parent: 0))
+    rows = list.append[Entry](rows, Entry(node: 9, parent: 2))
+    Report actual = solve(view rows, 12)
+    assert actual.ancestor == 2
+    assert actual.selected_distance == 2
+    assert actual.largest_distance == 1

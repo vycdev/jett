@@ -1,0 +1,61 @@
+namespace benchmark
+function from_ascii_hex(text: string) returns string:
+    bytes encoded = bytes.from_hex(text) handle error:
+        return ""
+    string decoded = bytes.to_string(view encoded) handle error:
+        return ""
+    return decoded
+function concat(left: string, right: string) returns string:
+    return "{left}{right}"
+function length(text: string) returns int64:
+    return string.length(text)
+function char_read(text: string, pos: int64) returns string:
+    string ch = string.char_at(text, pos) handle:
+        default ""
+    return ch
+function part(text: string, start: int64, end: int64) returns string:
+    return string.slice(text, start, end)
+function contains(text: string, needle: string) returns bool:
+    return string.contains(text, needle)
+function lower(text: string) returns string:
+    return string.lower(text)
+function upper(text: string) returns string:
+    return string.upper(text)
+function render(value: int64) returns string:
+    return string.from_int64(value)
+enum TextError:
+    empty
+    malformed
+    range
+enum TextOutcome:
+    accepted(value: string)
+    rejected(error: TextError)
+function hex_digit(ch: string) returns int64:
+    mutable int64 pos = 0
+    while (pos < 16):
+        if (char_read("0123456789abcdef", pos) == lower(ch)):
+            return pos
+        pos =(pos + 1)
+    return(-1)
+function ascii_print(code: int64) returns string:
+    return char_read(" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{{|}}~",(code - 32))
+function solve(text: string) returns TextOutcome:
+    mutable string out = ""
+    mutable int64 pos = 0
+    while (pos < length(text)):
+        mutable string ch = char_read(text, pos)
+        if (ch == "%"):
+            if ((pos + 2) >= length(text)):
+                return TextOutcome.rejected(TextError.malformed)
+            mutable int64 high = hex_digit(char_read(text,(pos + 1)))
+            mutable int64 low = hex_digit(char_read(text,(pos + 2)))
+            if ((high < 0) or(low < 0)):
+                return TextOutcome.rejected(TextError.malformed)
+            mutable int64 code =((high * 16) + low)
+            if ((code < 32) or(code > 126)):
+                return TextOutcome.rejected(TextError.range)
+            ch = ascii_print(code)
+            pos =(pos + 2)
+        out = concat(out, ch)
+        pos =(pos + 1)
+    return TextOutcome.accepted(out)

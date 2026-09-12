@@ -1,0 +1,16 @@
+from solution import digit_checksum
+
+assert digit_checksum(0) == 0, 'case 0'
+assert digit_checksum(1) == 1, 'case 1'
+assert digit_checksum(9) == 9, 'case 2'
+assert digit_checksum(10) == -1, 'case 3'
+assert digit_checksum(11) == 0, 'case 4'
+assert digit_checksum(12) == 1, 'case 5'
+assert digit_checksum(123) == 2, 'case 6'
+assert digit_checksum(1234) == 2, 'case 7'
+assert digit_checksum(90909) == 27, 'case 8'
+assert digit_checksum(100001) == 0, 'case 9'
+assert digit_checksum(987654321) == 5, 'case 10'
+assert digit_checksum(1000000000000) == 1, 'case 11'
+assert digit_checksum(999999999999) == 0, 'case 12'
+assert digit_checksum(10101010101) == 6, 'case 13'

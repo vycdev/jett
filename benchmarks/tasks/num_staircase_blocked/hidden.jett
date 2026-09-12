@@ -1,0 +1,17 @@
+
+verify numerical_cases_0:
+    assert staircase_blocked(0, list()) == 1
+    assert staircase_blocked(1, list()) == 1
+    assert staircase_blocked(1, list(1)) == 0
+    assert staircase_blocked(2, list(1)) == 1
+    assert staircase_blocked(2, list(2)) == 0
+    assert staircase_blocked(3, list()) == 3
+    assert staircase_blocked(4, list(2)) == 1
+    assert staircase_blocked(5, list(2, 3)) == 0
+verify numerical_cases_1:
+    assert staircase_blocked(6, list(5, 1)) == 2
+    assert staircase_blocked(10, list(4, 4, 7)) == 6
+    assert staircase_blocked(20, list()) == 10946
+    assert staircase_blocked(40, list()) == 165580141
+    assert staircase_blocked(40, list(39)) == 63245986
+    assert staircase_blocked(8, list(1, 2)) == 0

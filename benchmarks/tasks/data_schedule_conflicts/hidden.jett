@@ -1,0 +1,267 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 11, end: 15, resource_id: 3))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 3, end: 8, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12, resource_id: 5))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 10, end: 13, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 6, resource_id: 4))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 3, end: 6, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 10, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 8, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 13, resource_id: 3))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 1
+    assert actual.affected_bookings == 2
+    assert actual.longest_overlap == 1
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 5, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 7, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 5, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 15, resource_id: 2))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 1
+    assert actual.affected_bookings == 2
+    assert actual.longest_overlap == 3
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 1, end: 8, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 13, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 9, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 14, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 11, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2, resource_id: 3))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 4
+    assert actual.affected_bookings == 4
+    assert actual.longest_overlap == 3
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 1, end: 5, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 1, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 12, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 14, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 12, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3, resource_id: 2))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 1
+    assert actual.affected_bookings == 2
+    assert actual.longest_overlap == 2
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 10, end: 14, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 17, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 8, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 11, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 12, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 3, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 9, resource_id: 3))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 3
+    assert actual.affected_bookings == 5
+    assert actual.longest_overlap == 2
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 2, end: 9, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 7, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 6, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 11, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 9, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 4, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 11, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 4, resource_id: 1))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 3
+    assert actual.affected_bookings == 6
+    assert actual.longest_overlap == 5
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 7, end: 8, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 7, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 7, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 14, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 8, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 11, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 4, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 6, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 11, resource_id: 5))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 1
+    assert actual.affected_bookings == 2
+    assert actual.longest_overlap == 2
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 9, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 5, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 8, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 14, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 14, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 14, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 7, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 8, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 11, resource_id: 3))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 4
+    assert actual.affected_bookings == 5
+    assert actual.longest_overlap == 5
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 9, end: 12, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 12, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 8, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 7, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 6, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 10, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 8, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 11, end: 15, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 10, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 9, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 1, end: 6, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 12, resource_id: 3))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 9
+    assert actual.affected_bookings == 9
+    assert actual.longest_overlap == 5
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 1, end: 3, resource_id: 4))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 4, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 5, resource_id: 1))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 8, end: 10, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 10, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 7, end: 9, resource_id: 2))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 4, end: 9, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 12, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 15, resource_id: 5))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 1
+    assert actual.affected_bookings == 2
+    assert actual.longest_overlap == 4
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 10, end: 12, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 6, end: 9, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 14, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 9, resource_id: 1))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 1
+    assert actual.affected_bookings == 2
+    assert actual.longest_overlap == 2
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 5, end: 9, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 7, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 10, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 16, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 12, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 9, end: 16, resource_id: 1))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 3
+    assert actual.affected_bookings == 5
+    assert actual.longest_overlap == 4
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 3, end: 8, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 5, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 6, resource_id: 5))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 9, resource_id: 4))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 13, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 10, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11, resource_id: 1))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 2
+    assert actual.affected_bookings == 3
+    assert actual.longest_overlap == 2
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 7, end: 14, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 8, end: 15, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 9, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 11, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 3, end: 5, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 5, end: 7, resource_id: 2))
+    rows = list.append[Entry](rows, Entry(start: 10, end: 12, resource_id: 3))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 9, resource_id: 4))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 4
+    assert actual.affected_bookings == 5
+    assert actual.longest_overlap == 2
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 2, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 4, resource_id: 1))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 0
+    assert actual.affected_bookings == 0
+    assert actual.longest_overlap == 0
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 3, resource_id: 2))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 1
+    assert actual.affected_bookings == 2
+    assert actual.longest_overlap == 3
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(start: 0, end: 4, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 4, end: 9, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 2, end: 6, resource_id: 1))
+    rows = list.append[Entry](rows, Entry(start: 0, end: 8, resource_id: 2))
+    Report actual = solve(view rows)
+    assert actual.conflict_pairs == 2
+    assert actual.affected_bookings == 3
+    assert actual.longest_overlap == 2

@@ -1,0 +1,279 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 0)
+    assert actual.assigned == 0
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 5)
+    assert actual.assigned == 0
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 1)
+    assert actual.assigned == 0
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 8))
+    Report actual = solve(view rows, 2)
+    assert actual.assigned == 1
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 4
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 6))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 7))
+    Report actual = solve(view rows, 3)
+    assert actual.assigned == 2
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 10
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 0))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred:(-2)))
+    Report actual = solve(view rows, 4)
+    assert actual.assigned == 2
+    assert actual.rejected == 1
+    assert actual.seat_checksum == 5
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 10))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 0))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 11))
+    Report actual = solve(view rows, 5)
+    assert actual.assigned == 4
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 29
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 10))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 3))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 1))
+    Report actual = solve(view rows, 6)
+    assert actual.assigned == 4
+    assert actual.rejected == 1
+    assert actual.seat_checksum == 25
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred:(-2)))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 10))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 6))
+    Report actual = solve(view rows, 7)
+    assert actual.assigned == 4
+    assert actual.rejected == 2
+    assert actual.seat_checksum == 35
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 1))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 8))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 7))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 11))
+    Report actual = solve(view rows, 8)
+    assert actual.assigned == 3
+    assert actual.rejected == 4
+    assert actual.seat_checksum == 22
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred:(-3)))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 7))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 7))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred:(-2)))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 8))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred:(-2)))
+    Report actual = solve(view rows, 1)
+    assert actual.assigned == 1
+    assert actual.rejected == 7
+    assert actual.seat_checksum == 1
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 10))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 1))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 1))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred:(-3)))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.assigned == 2
+    assert actual.rejected == 7
+    assert actual.seat_checksum == 13
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 7))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred:(-3)))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 10))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 8))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 6))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 1))
+    Report actual = solve(view rows, 3)
+    assert actual.assigned == 3
+    assert actual.rejected == 7
+    assert actual.seat_checksum == 15
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 3))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 8))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 1))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 3))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 6))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 9))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 7))
+    Report actual = solve(view rows, 4)
+    assert actual.assigned == 4
+    assert actual.rejected == 7
+    assert actual.seat_checksum == 34
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 3))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 7))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 6))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 0))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 10))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred:(-3)))
+    Report actual = solve(view rows, 5)
+    assert actual.assigned == 4
+    assert actual.rejected == 8
+    assert actual.seat_checksum == 27
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 6)
+    assert actual.assigned == 0
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred:(-1)))
+    Report actual = solve(view rows, 7)
+    assert actual.assigned == 1
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 4
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 8))
+    Report actual = solve(view rows, 8)
+    assert actual.assigned == 2
+    assert actual.rejected == 0
+    assert actual.seat_checksum == 44
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 7))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 3))
+    Report actual = solve(view rows, 1)
+    assert actual.assigned == 1
+    assert actual.rejected == 2
+    assert actual.seat_checksum == 4
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 4))
+    Report actual = solve(view rows, 2)
+    assert actual.assigned == 2
+    assert actual.rejected == 2
+    assert actual.seat_checksum == 4
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 1))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred:(-3)))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 5))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred:(-3)))
+    Report actual = solve(view rows, 3)
+    assert actual.assigned == 3
+    assert actual.rejected == 2
+    assert actual.seat_checksum == 23
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 1))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 10))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred:(-3)))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 4))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 4))
+    Report actual = solve(view rows, 4)
+    assert actual.assigned == 4
+    assert actual.rejected == 2
+    assert actual.seat_checksum == 30
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 1))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 6))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 6))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 0))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred: 0))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 11))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred:(-1)))
+    Report actual = solve(view rows, 5)
+    assert actual.assigned == 4
+    assert actual.rejected == 3
+    assert actual.seat_checksum == 31
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 6))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred:(-3)))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 9))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred:(-2)))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred:(-1)))
+    Report actual = solve(view rows, 6)
+    assert actual.assigned == 4
+    assert actual.rejected == 4
+    assert actual.seat_checksum == 43
+verify fixture_024:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 0))
+    rows = list.append[Entry](rows, Entry(passenger: 1, preferred:(-1)))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 9))
+    rows = list.append[Entry](rows, Entry(passenger: 0, preferred: 3))
+    Report actual = solve(view rows, 3)
+    assert actual.assigned == 3
+    assert actual.rejected == 1
+    assert actual.seat_checksum == 14
+verify fixture_025:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 3, preferred: 2))
+    rows = list.append[Entry](rows, Entry(passenger: 2, preferred: 3))
+    rows = list.append[Entry](rows, Entry(passenger: 4, preferred: 9))
+    rows = list.append[Entry](rows, Entry(passenger: 5, preferred: 1))
+    Report actual = solve(view rows, 3)
+    assert actual.assigned == 3
+    assert actual.rejected == 2
+    assert actual.seat_checksum == 25

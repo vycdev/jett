@@ -1,0 +1,18 @@
+namespace benchmark
+function safe_div(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left / right
+function safe_mod(left: int64, right: int64) returns int64:
+    if right == 0:
+        return 0
+    return left modulo right
+function digit_checksum(n: int64) returns int64:
+    mutable int64 remaining = n
+    mutable int64 sign = 1
+    mutable int64 checksum = 0
+    while (remaining > 0):
+        checksum = (checksum + (sign * safe_mod(remaining, 10)))
+        sign = -(sign)
+        remaining = safe_div(remaining, 10)
+    return checksum

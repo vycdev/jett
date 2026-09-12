@@ -1,0 +1,31 @@
+namespace benchmark
+struct Entry:
+    start: int64
+    end: int64
+struct Report:
+    covered: int64
+    gaps: int64
+    longest_gap: int64
+function covered_at(view rows: list[Entry], moment: int64) returns bool:
+    for row in view rows:
+        if ((row.start <= moment) and(row.end > moment)):
+            return true
+    return false
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable int64 covered = 0
+    mutable int64 gaps = 0
+    mutable int64 longest = 0
+    mutable int64 current = 0
+    mutable int64 moment = 0
+    while (moment < limit):
+        if covered_at(view rows, moment):
+            covered =(covered + 1)
+            current = 0
+        else:
+            if (current == 0):
+                gaps =(gaps + 1)
+            current =(current + 1)
+            if (current > longest):
+                longest = current
+        moment =(moment + 1)
+    return Report(covered: covered, gaps: gaps, longest_gap: longest)

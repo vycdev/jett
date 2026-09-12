@@ -1,0 +1,77 @@
+{
+  "task_id": "text_strip_line_comments",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "abc"
+      },
+      "expected": "abc"
+    },
+    {
+      "inputs": {
+        "text": "#x"
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": "a#b"
+      },
+      "expected": "a"
+    },
+    {
+      "inputs": {
+        "text": "a#b\nc"
+      },
+      "expected": "a\nc"
+    },
+    {
+      "inputs": {
+        "text": "\"#x\"#y"
+      },
+      "expected": "\"#x\""
+    },
+    {
+      "inputs": {
+        "text": "#a\n#b\n"
+      },
+      "expected": "\n\n"
+    },
+    {
+      "inputs": {
+        "text": "a # x"
+      },
+      "expected": "a "
+    },
+    {
+      "inputs": {
+        "text": "\"a\\\"#b\"#c"
+      },
+      "expected": "\"a\\\"#b\""
+    },
+    {
+      "inputs": {
+        "text": "\\#x"
+      },
+      "expected": "\\"
+    },
+    {
+      "inputs": {
+        "text": "\"#open"
+      },
+      "expected": "\"#open"
+    },
+    {
+      "inputs": {
+        "text": "a\n#x\nb"
+      },
+      "expected": "a\n\nb"
+    }
+  ]
+}

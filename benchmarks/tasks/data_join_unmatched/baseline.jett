@@ -1,0 +1,36 @@
+namespace benchmark
+struct Entry:
+    key: int64
+    side: int64
+    quantity: int64
+struct Report:
+    matched: int64
+    left_only: int64
+    right_only: int64
+function solve(view rows: list[Entry]) returns Report:
+    mutable map[int64, int64] left = map.new[int64, int64]()
+    mutable map[int64, int64] right = map.new[int64, int64]()
+    for row in view rows:
+        if (row.side == 0):
+            mutable int64 updated_value_0 =(map.get_or[int64, int64](clone left, row.key, 0) + row.quantity)
+            left = map.set[int64, int64](left, row.key, updated_value_0)
+        if (row.side == 1):
+            mutable int64 updated_value_1 =(map.get_or[int64, int64](clone right, row.key, 0) + row.quantity)
+            right = map.set[int64, int64](right, row.key, updated_value_1)
+    mutable map[int64, int64] seen = map.new[int64, int64]()
+    mutable int64 matched = 0
+    mutable int64 left_only = 0
+    mutable int64 right_only = 0
+    for row in view rows:
+        if (map.get_or[int64, int64](clone seen, row.key, 0) == 0):
+            mutable int64 updated_value_2 = 1
+            seen = map.set[int64, int64](seen, row.key, updated_value_2)
+            mutable int64 a = map.get_or[int64, int64](clone left, row.key, 0)
+            mutable int64 b = map.get_or[int64, int64](clone right, row.key, 0)
+            mutable int64 pairs = a
+            if (b < pairs):
+                pairs = b
+            matched =(matched + pairs)
+            left_only =((left_only + a) - pairs)
+            right_only =((right_only + b) - pairs)
+    return Report(matched: matched, left_only: left_only, right_only: right_only)

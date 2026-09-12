@@ -1,0 +1,267 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 0
+    assert actual.credit == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 8))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 8
+    assert actual.credit == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 6))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 7))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 13
+    assert actual.credit == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 0))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount:(-2)))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 11
+    assert actual.credit == 2
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 10))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 0))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 11))
+    Report actual = solve(view rows)
+    assert actual.settled == 1
+    assert actual.outstanding == 23
+    assert actual.credit == 0
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 10))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 3))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 1))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 21
+    assert actual.credit == 0
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-2)))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 10))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 6))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 34
+    assert actual.credit == 2
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 1))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 8))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 7))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 11))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 36
+    assert actual.credit == 0
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount:(-3)))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 7))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 7))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount:(-2)))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 8))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-2)))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 21
+    assert actual.credit == 3
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 10))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 1))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 1))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount:(-3)))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 2))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 32
+    assert actual.credit == 2
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 7))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount:(-3)))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 10))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 8))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 6))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 1))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 41
+    assert actual.credit == 1
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 3))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 8))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 1))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 3))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 6))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 9))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 7))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 62
+    assert actual.credit == 0
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 3))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 7))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 6))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 0))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 10))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount:(-3)))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 49
+    assert actual.credit == 0
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount:(-1)))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 0
+    assert actual.credit == 1
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 8))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 12
+    assert actual.credit == 0
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 7))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 3))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 9
+    assert actual.credit == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 4))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 24
+    assert actual.credit == 0
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 1))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount:(-3)))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-3)))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 10
+    assert actual.credit == 5
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 1))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 10))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount:(-3)))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 4))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 4))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 23
+    assert actual.credit == 3
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 1))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 6))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 6))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 0))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 0))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 11))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount:(-1)))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 24
+    assert actual.credit == 1
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount: 6))
+    rows = list.append[Entry](rows, Entry(invoice: 4, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount:(-3)))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount: 9))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 0, amount: 2))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-2)))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-1)))
+    Report actual = solve(view rows)
+    assert actual.settled == 0
+    assert actual.outstanding == 14
+    assert actual.credit == 5
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 0))
+    Report actual = solve(view rows)
+    assert actual.settled == 1
+    assert actual.outstanding == 0
+    assert actual.credit == 0
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-3)))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 3))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount:(-1)))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 2))
+    Report actual = solve(view rows)
+    assert actual.settled == 1
+    assert actual.outstanding == 2
+    assert actual.credit == 1
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount: 5))
+    rows = list.append[Entry](rows, Entry(invoice: 2, amount:(-4)))
+    rows = list.append[Entry](rows, Entry(invoice: 1, amount:(-5)))
+    rows = list.append[Entry](rows, Entry(invoice: 3, amount: 7))
+    Report actual = solve(view rows)
+    assert actual.settled == 1
+    assert actual.outstanding == 7
+    assert actual.credit == 4

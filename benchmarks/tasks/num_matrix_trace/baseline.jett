@@ -1,0 +1,12 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function matrix_trace(values: list[int64], rows: int64) returns int64:
+    mutable int64 total = 0
+    mutable int64 row = 0
+    while (row < rows):
+        total = (total + nth(view values, ((row * rows) + row)))
+        row = (row + 1)
+    return total

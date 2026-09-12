@@ -1,0 +1,24 @@
+namespace benchmark
+function nth(view values: list[int64], index: int64) returns int64:
+    int64 item = list.get[int64](view values, index) handle:
+        default 0
+    return item
+function has_step(view blocked: list[int64], step: int64) returns bool:
+    mutable int64 index = 0
+    while (index < list.length[int64](view blocked)):
+        if (nth(view blocked, index) == step):
+            return true
+        index = (index + 1)
+    return false
+function staircase_blocked(height: int64, blocked: list[int64]) returns int64:
+    mutable int64 previous = 0
+    mutable int64 current = 1
+    mutable int64 step = 1
+    while (step <= height):
+        mutable int64 following = (current + previous)
+        if has_step(view blocked, step):
+            following = 0
+        previous = current
+        current = following
+        step = (step + 1)
+    return current

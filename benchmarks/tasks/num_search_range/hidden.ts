@@ -1,0 +1,28 @@
+import { searchRange } from "./solution.js";
+
+const case0 = searchRange([], 0n);
+if (case0.first !== -1n || case0.last !== -1n) throw new Error("case 0");
+const case1 = searchRange([1n], 1n);
+if (case1.first !== 0n || case1.last !== 0n) throw new Error("case 1");
+const case2 = searchRange([1n], 0n);
+if (case2.first !== -1n || case2.last !== -1n) throw new Error("case 2");
+const case3 = searchRange([1n], 2n);
+if (case3.first !== -1n || case3.last !== -1n) throw new Error("case 3");
+const case4 = searchRange([1n, 2n, 2n, 2n, 3n], 2n);
+if (case4.first !== 1n || case4.last !== 3n) throw new Error("case 4");
+const case5 = searchRange([1n, 1n, 2n], 1n);
+if (case5.first !== 0n || case5.last !== 1n) throw new Error("case 5");
+const case6 = searchRange([1n, 2n, 2n], 2n);
+if (case6.first !== 1n || case6.last !== 2n) throw new Error("case 6");
+const case7 = searchRange([0n, 0n, 0n], 0n);
+if (case7.first !== 0n || case7.last !== 2n) throw new Error("case 7");
+const case8 = searchRange([-5n, -2n, -2n, 0n, 3n], -2n);
+if (case8.first !== 1n || case8.last !== 2n) throw new Error("case 8");
+const case9 = searchRange([-5n, -2n, 0n, 3n], 1n);
+if (case9.first !== -1n || case9.last !== -1n) throw new Error("case 9");
+const case10 = searchRange([0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 14n, 15n, 16n, 17n, 18n, 19n], 10n);
+if (case10.first !== 10n || case10.last !== 10n) throw new Error("case 10");
+const case11 = searchRange([0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 14n, 15n, 16n, 17n, 18n, 19n], 20n);
+if (case11.first !== -1n || case11.last !== -1n) throw new Error("case 11");
+const case12 = searchRange([7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n, 7n], 7n);
+if (case12.first !== 0n || case12.last !== 99n) throw new Error("case 12");

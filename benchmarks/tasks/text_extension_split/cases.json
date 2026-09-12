@@ -1,0 +1,113 @@
+{
+  "task_id": "text_extension_split",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": {
+        "first": "",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": {
+        "first": "a",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "a.txt"
+      },
+      "expected": {
+        "first": "a",
+        "second": "txt"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a.tar.gz"
+      },
+      "expected": {
+        "first": "a.tar",
+        "second": "gz"
+      }
+    },
+    {
+      "inputs": {
+        "text": ".env"
+      },
+      "expected": {
+        "first": ".env",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": ".env.local"
+      },
+      "expected": {
+        "first": ".env",
+        "second": "local"
+      }
+    },
+    {
+      "inputs": {
+        "text": "a."
+      },
+      "expected": {
+        "first": "a",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "."
+      },
+      "expected": {
+        "first": ".",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": ".."
+      },
+      "expected": {
+        "first": ".",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "..."
+      },
+      "expected": {
+        "first": "..",
+        "second": ""
+      }
+    },
+    {
+      "inputs": {
+        "text": "A.TXT"
+      },
+      "expected": {
+        "first": "A",
+        "second": "TXT"
+      }
+    },
+    {
+      "inputs": {
+        "text": " a .x"
+      },
+      "expected": {
+        "first": " a ",
+        "second": "x"
+      }
+    }
+  ]
+}

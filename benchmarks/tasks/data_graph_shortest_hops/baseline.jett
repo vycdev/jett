@@ -1,0 +1,45 @@
+namespace benchmark
+struct Entry:
+    source: int64
+    target: int64
+struct Report:
+    distance_sum: int64
+    farthest: int64
+    unreachable: int64
+function relax(view rows: list[Entry], view distance: map[int64, int64]) returns map[int64, int64]:
+    mutable map[int64, int64] updated = map.new[int64, int64]()
+    for row in view rows:
+        mutable int64 prior = map.get_or[int64, int64](clone distance, row.source, 1000)
+        mutable int64 old = map.get_or[int64, int64](clone distance, row.target, 1000)
+        mutable int64 best = map.get_or[int64, int64](clone updated, row.target, old)
+        if ((prior + 1) < best):
+            mutable int64 updated_value_0 =(prior + 1)
+            updated = map.set[int64, int64](updated, row.target, updated_value_0)
+    return updated
+function solve(view rows: list[Entry], limit: int64) returns Report:
+    mutable map[int64, int64] distance = map.new[int64, int64]()
+    mutable int64 updated_value_1 = 0
+    distance = map.set[int64, int64](distance, 0, updated_value_1)
+    mutable int64 turn = 0
+    while (turn < limit):
+        mutable map[int64, int64] updated = relax(view rows, view distance)
+        mutable int64 vertex = 0
+        while (vertex < limit):
+            mutable int64 updated_value_2 = map.get_or[int64, int64](clone updated, vertex, map.get_or[int64, int64](clone distance, vertex, 1000))
+            distance = map.set[int64, int64](distance, vertex, updated_value_2)
+            vertex =(vertex + 1)
+        turn =(turn + 1)
+    mutable int64 total = 0
+    mutable int64 farthest = 0
+    mutable int64 missing = 0
+    mutable int64 vertex = 0
+    while (vertex < limit):
+        mutable int64 hops = map.get_or[int64, int64](clone distance, vertex, 1000)
+        if (hops == 1000):
+            missing =(missing + 1)
+        else:
+            total =(total + hops)
+            if (hops > farthest):
+                farthest = hops
+        vertex =(vertex + 1)
+    return Report(distance_sum: total, farthest: farthest, unreachable: missing)

@@ -1,0 +1,277 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 0)
+    assert actual.selected == 0
+    assert actual.patient_checksum == 0
+    assert actual.severity_sum == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 0
+    assert actual.patient_checksum == 0
+    assert actual.severity_sum == 0
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 1)
+    assert actual.selected == 0
+    assert actual.patient_checksum == 0
+    assert actual.severity_sum == 0
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 8, arrival: 3))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 1
+    assert actual.patient_checksum == 4
+    assert actual.severity_sum == 8
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 6, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 7, arrival: 5))
+    Report actual = solve(view rows, 3)
+    assert actual.selected == 2
+    assert actual.patient_checksum == 8
+    assert actual.severity_sum == 13
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 11, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 0, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity:(-2), arrival: 5))
+    Report actual = solve(view rows, 4)
+    assert actual.selected == 3
+    assert actual.patient_checksum == 8
+    assert actual.severity_sum == 9
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 10, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 2, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 0, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 11, arrival: 2))
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 4
+    assert actual.patient_checksum == 38
+    assert actual.severity_sum == 23
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 10, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 5, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 2, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 3, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 1, arrival: 1))
+    Report actual = solve(view rows, 6)
+    assert actual.selected == 5
+    assert actual.patient_checksum == 42
+    assert actual.severity_sum == 21
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 5, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity:(-2), arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 11, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 2, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 10, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 6, arrival: 5))
+    Report actual = solve(view rows, 7)
+    assert actual.selected == 6
+    assert actual.patient_checksum == 71
+    assert actual.severity_sum == 32
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 5, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 1, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity:(-1), arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 8, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 7, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 5, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 11, arrival: 3))
+    Report actual = solve(view rows, 8)
+    assert actual.selected == 7
+    assert actual.patient_checksum == 69
+    assert actual.severity_sum == 36
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 0, severity:(-3), arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 7, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 7, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity:(-2), arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity:(-1), arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 4, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 8, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity:(-2), arrival: 6))
+    Report actual = solve(view rows, 1)
+    assert actual.selected == 1
+    assert actual.patient_checksum == 3
+    assert actual.severity_sum == 8
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 10, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 11, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 2, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 1, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 1, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 4, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 2, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity:(-3), arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 2, arrival: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 2
+    assert actual.patient_checksum == 9
+    assert actual.severity_sum == 21
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 7, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity:(-3), arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 5, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 10, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 8, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 6, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 2, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 5, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity:(-1), arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 1, arrival: 2))
+    Report actual = solve(view rows, 3)
+    assert actual.selected == 3
+    assert actual.patient_checksum == 8
+    assert actual.severity_sum == 25
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 5, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 3, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 11, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 8, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 4, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 1, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 3, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 5, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 6, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 9, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 7, arrival: 2))
+    Report actual = solve(view rows, 4)
+    assert actual.selected == 4
+    assert actual.patient_checksum == 34
+    assert actual.severity_sum == 35
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 3, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 7, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 4, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 6, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 11, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 0, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 2, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 10, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity:(-1), arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity:(-1), arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 11, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity:(-3), arrival: 4))
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 5
+    assert actual.patient_checksum == 40
+    assert actual.severity_sum == 45
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows, 6)
+    assert actual.selected == 0
+    assert actual.patient_checksum == 0
+    assert actual.severity_sum == 0
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 3, severity:(-1), arrival: 5))
+    Report actual = solve(view rows, 7)
+    assert actual.selected == 1
+    assert actual.patient_checksum == 4
+    assert actual.severity_sum == -1
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 4, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 8, arrival: 4))
+    Report actual = solve(view rows, 8)
+    assert actual.selected == 2
+    assert actual.patient_checksum == 7
+    assert actual.severity_sum == 12
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 7, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity:(-1), arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 3, arrival: 4))
+    Report actual = solve(view rows, 1)
+    assert actual.selected == 1
+    assert actual.patient_checksum == 4
+    assert actual.severity_sum == 7
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 11, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 5, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 4, arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 4, arrival: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 2
+    assert actual.patient_checksum == 4
+    assert actual.severity_sum == 16
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 1, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 5, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity:(-3), arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 5, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity:(-3), arrival: 6))
+    Report actual = solve(view rows, 3)
+    assert actual.selected == 3
+    assert actual.patient_checksum == 15
+    assert actual.severity_sum == 11
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 4, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 1, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 10, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity:(-3), arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 4, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 4, arrival: 6))
+    Report actual = solve(view rows, 4)
+    assert actual.selected == 4
+    assert actual.patient_checksum == 21
+    assert actual.severity_sum == 22
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 1, arrival: 6))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 6, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 6, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 0, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 0, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 11, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity:(-1), arrival: 4))
+    Report actual = solve(view rows, 5)
+    assert actual.selected == 5
+    assert actual.patient_checksum == 33
+    assert actual.severity_sum == 24
+verify fixture_023:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 6, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity:(-1), arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity:(-3), arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 2, severity: 9, arrival: 5))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity:(-1), arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 0, severity: 2, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity:(-2), arrival: 3))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity:(-1), arrival: 6))
+    Report actual = solve(view rows, 6)
+    assert actual.selected == 6
+    assert actual.patient_checksum == 53
+    assert actual.severity_sum == 14
+verify fixture_024:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 8, severity: 5, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 1, severity: 5, arrival: 2))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 5, arrival: 1))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 2
+    assert actual.patient_checksum == 22
+    assert actual.severity_sum == 10
+verify fixture_025:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(patient: 9, severity: 2, arrival: 1))
+    rows = list.append[Entry](rows, Entry(patient: 3, severity: 5, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 4, severity: 5, arrival: 4))
+    rows = list.append[Entry](rows, Entry(patient: 8, severity: 5, arrival: 2))
+    Report actual = solve(view rows, 2)
+    assert actual.selected == 2
+    assert actual.patient_checksum == 17
+    assert actual.severity_sum == 10

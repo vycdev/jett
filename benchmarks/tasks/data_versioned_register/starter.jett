@@ -1,0 +1,26 @@
+namespace benchmark
+struct Entry:
+    key: int64
+    version: int64
+    value: int64
+struct Report:
+    accepted: int64
+    stale: int64
+    checksum: int64
+function solve(view rows: list[Entry]) returns Report:
+    mutable map[int64, int64] versions = map.new[int64, int64]()
+    mutable map[int64, int64] values = map.new[int64, int64]()
+    mutable int64 accepted = 0
+    mutable int64 stale = 0
+    mutable int64 checksum = 0
+    for row in view rows:
+        if (row.version >= map.get_or[int64, int64](clone versions, row.key,(-1))):
+            checksum =(checksum +((row.key + 1) *(row.value - map.get_or[int64, int64](clone values, row.key, 0))))
+            mutable int64 updated_value_0 = row.value
+            values = map.set[int64, int64](values, row.key, updated_value_0)
+            mutable int64 updated_value_1 = row.version
+            versions = map.set[int64, int64](versions, row.key, updated_value_1)
+            accepted =(accepted + 1)
+        else:
+            stale =(stale + 1)
+    return Report(accepted: accepted, stale: stale, checksum: checksum)

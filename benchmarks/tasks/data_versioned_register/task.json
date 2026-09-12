@@ -1,0 +1,174 @@
+{
+  "id": "data_versioned_register",
+  "version": "1.0.0",
+  "title": "Apply per-key monotonic version updates",
+  "category": "maintenance",
+  "difficulty": "medium",
+  "statement": "Repair the supplied implementation to satisfy this contract, preserving the public types and signature. Each key initially has version -1 and no value. Accept a row only if version >= 0 and strictly greater than the key's current version, updating its value; otherwise count it as stale. Return accepted/stale counts and sum of (key+1)*final_value over keys that accepted at least one row. Negative values are valid.",
+  "constraints": [
+    "key is nonnegative; versions and values may be negative. Equal versions are stale even when values differ.",
+    "Use the exact declared Entry and Report record fields and solve signature. Return all three Report fields; do not mutate the caller's records.",
+    "All arithmetic fits signed int64; there are at most 30 records. Return fresh results; no I/O, tests, exceptions, panic, or static-check bypasses."
+  ],
+  "adapters": {
+    "jett": {
+      "signature": "namespace benchmark\n\nstruct Entry:\n    key: int64\n    version: int64\n    value: int64\n\nstruct Report:\n    accepted: int64\n    stale: int64\n    checksum: int64\n\nfunction solve(view rows: list[Entry]) returns Report",
+      "baseline": "baseline.jett",
+      "hidden": "hidden.jett",
+      "candidate": "solution.jett",
+      "grade_mode": "append",
+      "commands": [
+        [
+          "{jett}",
+          "build",
+          "{candidate}"
+        ],
+        [
+          "{jett}",
+          "test",
+          "{candidate}"
+        ]
+      ],
+      "forbidden_patterns": [],
+      "starter": "starter.jett"
+    },
+    "python": {
+      "signature": "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Entry:\n    key: int\n    version: int\n    value: int\n\n@dataclass(frozen=True)\nclass Report:\n    accepted: int\n    stale: int\n    checksum: int\n\ndef solve(rows: list[Entry]) -> Report",
+      "baseline": "baseline.py",
+      "hidden": "hidden.py",
+      "support_files": [
+        "pyrightconfig.json"
+      ],
+      "candidate": "solution.py",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "{pyright}",
+          "--project",
+          "pyrightconfig.json"
+        ],
+        [
+          "python",
+          "hidden.py"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bAny\\b|#\\s*(?:type:\\s*ignore|pyright:\\s*ignore)|\\bcast\\s*\\(",
+          "message": "Python type bypasses such as Any, casts, and ignored diagnostics are forbidden"
+        },
+        {
+          "pattern": "\\braise\\b",
+          "message": "raising exceptions is forbidden; return the documented report"
+        }
+      ],
+      "starter": "starter.py"
+    },
+    "typescript": {
+      "signature": "\nexport interface Entry {\n    readonly key: bigint;\n    readonly version: bigint;\n    readonly value: bigint;\n}\n\nexport interface Report {\n    readonly accepted: bigint;\n    readonly stale: bigint;\n    readonly checksum: bigint;\n}\n\nexport function solve(rows: readonly Entry[]): Report",
+      "baseline": "baseline.ts",
+      "hidden": "hidden.ts",
+      "candidate": "solution.ts",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "npx",
+          "tsc",
+          "--strict",
+          "--noImplicitReturns",
+          "--noFallthroughCasesInSwitch",
+          "--target",
+          "ES2022",
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "solution.ts",
+          "hidden.ts",
+          "--outDir",
+          "out"
+        ],
+        [
+          "node",
+          "out/hidden.js"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|@ts-(?:ignore|nocheck)|\\bas\\s+(?:const|[A-Za-z_$][A-Za-z0-9_$]*)\\b",
+          "message": "TypeScript type bypasses such as any, suppressed diagnostics, and unchecked assertions are forbidden"
+        },
+        {
+          "pattern": "\\bthrow\\b",
+          "message": "throwing exceptions is forbidden; return the documented report"
+        }
+      ],
+      "starter": "starter.ts"
+    },
+    "go": {
+      "signature": "package benchmark\n\ntype Entry struct {\n    Key int64\n    Version int64\n    Value int64\n}\n\ntype Report struct {\n    Accepted int64\n    Stale int64\n    Checksum int64\n}\n\nfunc solve(rows []Entry) Report",
+      "baseline": "baseline.go",
+      "hidden": "hidden_test.go",
+      "candidate": "solution.go",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "solution.go",
+          "hidden_test.go"
+        ],
+        [
+          "go",
+          "test",
+          "solution.go",
+          "hidden_test.go"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bany\\b|interface\\s*\\{\\s*\\}",
+          "message": "Go type erasure through any or interface{} is forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*\\(",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ],
+      "starter": "starter.go"
+    },
+    "rust": {
+      "signature": "\n#[derive(Debug, PartialEq, Eq)]\npub struct Entry {\n    pub key: i64,\n    pub version: i64,\n    pub value: i64,\n}\n\n#[derive(Debug, PartialEq, Eq)]\npub struct Report {\n    pub accepted: i64,\n    pub stale: i64,\n    pub checksum: i64,\n}\n\npub fn solve(rows: &[Entry]) -> Report",
+      "baseline": "baseline.rs",
+      "hidden": "hidden.rs",
+      "candidate": "solution.rs",
+      "grade_mode": "separate",
+      "commands": [
+        [
+          "rustc",
+          "--edition=2024",
+          "--test",
+          "hidden.rs",
+          "-o",
+          "{executable}"
+        ],
+        [
+          "{executable}"
+        ]
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "\\bunsafe\\b|\\b(?:transmute|unreachable_unchecked)\\b",
+          "message": "unsafe Rust and unchecked type escapes are forbidden"
+        },
+        {
+          "pattern": "\\bpanic\\s*!",
+          "message": "panic is forbidden; return the documented report"
+        }
+      ],
+      "starter": "starter.rs"
+    }
+  }
+}

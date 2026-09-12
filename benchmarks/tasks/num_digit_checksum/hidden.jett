@@ -1,0 +1,17 @@
+
+verify numerical_cases_0:
+    assert digit_checksum(0) == 0
+    assert digit_checksum(1) == 1
+    assert digit_checksum(9) == 9
+    assert digit_checksum(10) == -1
+    assert digit_checksum(11) == 0
+    assert digit_checksum(12) == 1
+    assert digit_checksum(123) == 2
+    assert digit_checksum(1234) == 2
+verify numerical_cases_1:
+    assert digit_checksum(90909) == 27
+    assert digit_checksum(100001) == 0
+    assert digit_checksum(987654321) == 5
+    assert digit_checksum(1000000000000) == 1
+    assert digit_checksum(999999999999) == 0
+    assert digit_checksum(10101010101) == 6

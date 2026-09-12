@@ -1,0 +1,77 @@
+{
+  "task_id": "text_escape_json_string",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": "\"\""
+    },
+    {
+      "inputs": {
+        "text": "a"
+      },
+      "expected": "\"a\""
+    },
+    {
+      "inputs": {
+        "text": "\""
+      },
+      "expected": "\"\\\"\""
+    },
+    {
+      "inputs": {
+        "text": "\\"
+      },
+      "expected": "\"\\\\\""
+    },
+    {
+      "inputs": {
+        "text": "\n"
+      },
+      "expected": "\"\\n\""
+    },
+    {
+      "inputs": {
+        "text": "\t"
+      },
+      "expected": "\"\\t\""
+    },
+    {
+      "inputs": {
+        "text": "\r"
+      },
+      "expected": "\"\\r\""
+    },
+    {
+      "inputs": {
+        "text": "\b"
+      },
+      "expected": "\"\\b\""
+    },
+    {
+      "inputs": {
+        "text": "\f"
+      },
+      "expected": "\"\\f\""
+    },
+    {
+      "inputs": {
+        "text": "/"
+      },
+      "expected": "\"/\""
+    },
+    {
+      "inputs": {
+        "text": "a\"b\\c"
+      },
+      "expected": "\"a\\\"b\\\\c\""
+    },
+    {
+      "inputs": {
+        "text": "x\ny\tz"
+      },
+      "expected": "\"x\\ny\\tz\""
+    }
+  ]
+}

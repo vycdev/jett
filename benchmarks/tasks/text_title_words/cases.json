@@ -1,0 +1,77 @@
+{
+  "task_id": "text_title_words",
+  "cases": [
+    {
+      "inputs": {
+        "text": ""
+      },
+      "expected": ""
+    },
+    {
+      "inputs": {
+        "text": " "
+      },
+      "expected": " "
+    },
+    {
+      "inputs": {
+        "text": "HELLO"
+      },
+      "expected": "Hello"
+    },
+    {
+      "inputs": {
+        "text": "hello WORLD"
+      },
+      "expected": "Hello World"
+    },
+    {
+      "inputs": {
+        "text": "  a  B "
+      },
+      "expected": "  A  B "
+    },
+    {
+      "inputs": {
+        "text": "a-b"
+      },
+      "expected": "A-b"
+    },
+    {
+      "inputs": {
+        "text": "1ABC"
+      },
+      "expected": "1abc"
+    },
+    {
+      "inputs": {
+        "text": "!HELLO"
+      },
+      "expected": "!hello"
+    },
+    {
+      "inputs": {
+        "text": "x\tY"
+      },
+      "expected": "X\ty"
+    },
+    {
+      "inputs": {
+        "text": "a b c"
+      },
+      "expected": "A B C"
+    },
+    {
+      "inputs": {
+        "text": "MiXeD"
+      },
+      "expected": "Mixed"
+    },
+    {
+      "inputs": {
+        "text": "A  B  C"
+      },
+      "expected": "A  B  C"
+    }
+  ]
+}

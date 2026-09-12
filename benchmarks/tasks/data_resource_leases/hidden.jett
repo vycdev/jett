@@ -1,0 +1,260 @@
+verify fixture_000:
+    mutable list[Entry] rows = list.new[Entry]()
+    Report actual = solve(view rows)
+    assert actual.accepted == 0
+    assert actual.rejected == 0
+    assert actual.expires_sum == 0
+verify fixture_001:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 8, duration: 3))
+    Report actual = solve(view rows)
+    assert actual.accepted == 1
+    assert actual.rejected == 0
+    assert actual.expires_sum == 11
+verify fixture_002:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 6, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 7, duration: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.rejected == 0
+    assert actual.expires_sum == 21
+verify fixture_003:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 11, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 0, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp:(-2), duration: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.rejected == 1
+    assert actual.expires_sum == 18
+verify fixture_004:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 10, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 2, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 0, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 11, duration: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.rejected == 0
+    assert actual.expires_sum == 34
+verify fixture_005:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 10, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 5, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 2, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 3, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 1, duration: 1))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.rejected == 1
+    assert actual.expires_sum == 35
+verify fixture_006:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 5, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp:(-2), duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 11, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 2, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 10, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 6, duration: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.rejected == 2
+    assert actual.expires_sum == 39
+verify fixture_007:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 5, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 1, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp:(-1), duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 8, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 7, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 5, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 11, duration: 3))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.rejected == 3
+    assert actual.expires_sum == 37
+verify fixture_008:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp:(-3), duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 7, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 7, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp:(-2), duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp:(-1), duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 4, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 8, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp:(-2), duration: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 3
+    assert actual.rejected == 5
+    assert actual.expires_sum == 32
+verify fixture_009:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 10, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 11, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 2, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 1, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 1, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 4, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 2, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp:(-3), duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 2, duration: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.rejected == 5
+    assert actual.expires_sum == 22
+verify fixture_010:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 7, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp:(-3), duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 5, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 10, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 8, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 6, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 2, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 5, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp:(-1), duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 1, duration: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 5
+    assert actual.rejected == 5
+    assert actual.expires_sum == 39
+verify fixture_011:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 5, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 3, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 11, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 8, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 4, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 1, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 3, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 5, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 6, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 9, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 7, duration: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 5
+    assert actual.rejected == 6
+    assert actual.expires_sum == 45
+verify fixture_012:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 3, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 7, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 4, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 6, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 11, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 0, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 2, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 10, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp:(-1), duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp:(-1), duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 11, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp:(-3), duration: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 8
+    assert actual.rejected == 4
+    assert actual.expires_sum == 48
+verify fixture_013:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp:(-1), duration: 5))
+    Report actual = solve(view rows)
+    assert actual.accepted == 0
+    assert actual.rejected == 1
+    assert actual.expires_sum == 0
+verify fixture_014:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 4, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 8, duration: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.rejected == 0
+    assert actual.expires_sum == 17
+verify fixture_015:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 7, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp:(-1), duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 3, duration: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.rejected == 1
+    assert actual.expires_sum == 17
+verify fixture_016:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 11, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 5, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 4, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 4, duration: 2))
+    Report actual = solve(view rows)
+    assert actual.accepted == 3
+    assert actual.rejected == 1
+    assert actual.expires_sum == 28
+verify fixture_017:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 1, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 5, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp:(-3), duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 5, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp:(-3), duration: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.rejected == 3
+    assert actual.expires_sum == 15
+verify fixture_018:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 4, duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 1, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 3, timestamp: 10, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp:(-3), duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 4, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 4, duration: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.rejected == 2
+    assert actual.expires_sum == 36
+verify fixture_019:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 1, duration: 6))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 6, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 6, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 0, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 0, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 11, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp:(-1), duration: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 4
+    assert actual.rejected == 3
+    assert actual.expires_sum == 34
+verify fixture_020:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp: 6, duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 4, timestamp:(-1), duration: 1))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp:(-3), duration: 4))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp: 9, duration: 5))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp:(-1), duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 2, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp:(-2), duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp:(-1), duration: 6))
+    Report actual = solve(view rows)
+    assert actual.accepted == 3
+    assert actual.rejected == 5
+    assert actual.expires_sum == 25
+verify fixture_021:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 0, duration: 0))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 0, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 2, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 0, timestamp: 1, duration: 9))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.rejected == 2
+    assert actual.expires_sum == 5
+verify fixture_022:
+    mutable list[Entry] rows = list.new[Entry]()
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 0, duration: 3))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 2, duration: 7))
+    rows = list.append[Entry](rows, Entry(resource_id: 1, timestamp: 3, duration: 2))
+    rows = list.append[Entry](rows, Entry(resource_id: 2, timestamp:(-1), duration: 4))
+    Report actual = solve(view rows)
+    assert actual.accepted == 2
+    assert actual.rejected == 2
+    assert actual.expires_sum == 5
