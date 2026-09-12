@@ -1,4 +1,8 @@
-# 100-problem benchmark expansion
+# 100-problem benchmark campaign
+
+Status: completed on 2026-09-12. Both the original four-cell campaign and the
+separate full-task Jett skill follow-up are verified and preserved. Historical
+checkpoints below describe the execution sequence, not outstanding work.
 
 The user goal is to build the benchmark to 100 distinct problems, execute it,
 and improve results through a general Jett programming skill. Earlier agreement
@@ -47,7 +51,7 @@ evidence. Repeated evaluation on this suite is not an untouched held-out
 estimate; one observation per cell and a rolling model alias limit claims.
 Future independent tasks and repeated samples are needed for broad rankings.
 
-## Current work
+## Completed work
 
 - The 100-task catalog is committed. Its 90 additions contain 1,621 distinct
   shared fixtures, with independent oracles or hand-written expected values.
@@ -65,11 +69,14 @@ Future independent tasks and repeated samples are needed for broad rankings.
   and exactly 234 failed-only repairs have terminal grades. Initial passes
   were 766; 79 repairs passed, producing 845/1,000 final passes. The original
   Jett skill treatment passed 33/100 initially and 66/100 after repair.
-  The separate full-100-task skill-revision follow-up is still required.
-- The v0.6.1 follow-up skill revision is ready for its fresh baseline gate:
-  only the Jett skill entrypoint/reference change among frozen source inputs.
-  Its separate configuration is `benchmarks/config/jett_skill_v0.6.1.json`.
-  No follow-up scores are available yet.
+- The v0.6.1 follow-up is complete and preserved in
+  `benchmarks/results/2026-09-12_v0.6.1_jett_skill/`: 100 initial responses
+  passed 71 tasks, and 16 of 29 repairs passed, producing 87/100 final passes.
+  Its fresh 500-reference gate passed with unchanged toolchains. Only the Jett
+  skill entrypoint/reference changed among the 1,470 frozen source inputs.
+- Both complete audits, all original and follow-up metrics, paired gains and
+  regressions, raw events/attempts/responses/grades, and exact source archives
+  are retained. No required execution or reporting phase remains open.
 
 ## Run checkpoint (2026-09-12)
 
@@ -371,3 +378,56 @@ must select exactly 100 Jett skill-assisted cells; the original five-language
 configuration remains intact for the fresh 500-reference gate. The comparison
 will change guidance length as well as content, and remains development-set
 informed rather than a held-out experiment.
+
+## Follow-up completion and paired comparison (2026-09-12)
+
+The fresh reference gate passed all 500 task/language pairs with the same seven
+host toolchain records as the original. The new grading image inherits all 12
+original layers and adds exactly two skill-file COPY layers; its compiler binary
+hash is unchanged. Its full 1,470-file snapshot matches the follow-up manifest.
+Both original and follow-up images remain available locally. They are identified
+by local content IDs, not public registry download URLs.
+
+The frozen follow-up source is `9e3690e14ce70c454eb1bd2d1ce5386bb30c15e9`.
+Its image is
+`sha256:ee84de2c6178dabe8532b57402d6d9c271991d71caf3cb40e9c2bbad03c1e4ae`.
+All 100 prompt prefixes outside the hashed skill suffix, system instructions,
+task/adapter/starter identities, and model settings match the original Jett
+skill treatment. The skill bundle grew from 8,723 to 11,245 bytes.
+
+The complete follow-up audit passed all 129 saved responses, exactly 29
+failed-only repairs, event-derived usage, zero tool calls, exact attempt
+coverage, and all frozen hashes. There were no interrupted or replacement
+calls in this follow-up. Independent recomputation matched both reports and
+every paired outcome category:
+
+| Budget | Original skill | Revised skill | Gains | Regressions | Unchanged pass | Unchanged fail |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| One-shot | 33/100 | 71/100 | 43 | 5 | 28 | 24 |
+| After repair | 66/100 | 87/100 | 26 | 5 | 61 | 8 |
+
+Follow-up usage was 1,995,017 input tokens (1,469,184 cached), 109,518 output
+tokens (70,592 reasoning), 2,533.308 seconds of summed call latency, and 165,362
+generated source characters/UTF-8 bytes. The original Jett skill treatment used
+2,493,187 input tokens and 190,698 source characters with repairs included.
+Neither Jett cohort contains an interrupted original attempt.
+
+The immutable follow-up directory contains the unchanged reporter output,
+independent accounting, full paired task lists, and a 298-entry checked evidence
+archive, plus the complete 1,470-entry source archive. Supporting evidence includes
+the fresh reference gate, operator logs, image verification, neutral skill checks,
+and the exact host-side audit helpers. All original canonical evidence still
+matches its published audit inventory byte for byte.
+
+Across the original campaign and follow-up, 1,363 unique saved responses used
+18,561,421 known input tokens (15,816,192 cached), 749,901 output tokens (448,057
+reasoning), and 1,159,306 source characters/UTF-8 bytes. The original three
+interrupted Rust/Python calls still have unknown overhead; complete series
+consumption is unavailable. Series accounting combines consumption only, never
+performance scores across revisions, and excludes earlier calibrations and
+benchmark-development/orchestration usage.
+
+The general guidance revision improved observed development-suite results, not
+held-out generalization. All regressions remain in the report. Any future guide
+revision, task clarification, independent test set, or multi-sample study is
+separate work requiring a new versioned experiment.

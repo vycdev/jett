@@ -1,0 +1,2998 @@
+{
+  "after": {
+    "benchmark_version": "0.6.1-jett-skill",
+    "cells": [
+      {
+        "cached_input_tokens": 1132544,
+        "cached_input_tokens_known_rows": 100,
+        "code_bytes": 111093,
+        "code_chars": 111093,
+        "input_tokens": 1534606,
+        "input_tokens_known_rows": 100,
+        "language": "jett",
+        "latency_ms": 1933103.208999848,
+        "latency_ms_known_rows": 100,
+        "mode": "one_shot",
+        "n": 100,
+        "output_tokens": 83045,
+        "output_tokens_known_rows": 100,
+        "pass_rate": 0.71,
+        "passed": 71,
+        "reasoning_tokens": 56638,
+        "reasoning_tokens_known_rows": 100,
+        "repair_attempts": 0,
+        "responses": 100,
+        "track": "skill_assisted"
+      },
+      {
+        "cached_input_tokens": 1469184,
+        "cached_input_tokens_known_rows": 129,
+        "code_bytes": 165362,
+        "code_chars": 165362,
+        "input_tokens": 1995017,
+        "input_tokens_known_rows": 129,
+        "language": "jett",
+        "latency_ms": 2533307.8648995142,
+        "latency_ms_known_rows": 129,
+        "mode": "compile_repair",
+        "n": 100,
+        "output_tokens": 109518,
+        "output_tokens_known_rows": 129,
+        "pass_rate": 0.87,
+        "passed": 87,
+        "reasoning_tokens": 70592,
+        "reasoning_tokens_known_rows": 129,
+        "repair_attempts": 29,
+        "responses": 129,
+        "track": "skill_assisted"
+      }
+    ],
+    "grading_image": "sha256:ee84de2c6178dabe8532b57402d6d9c271991d71caf3cb40e9c2bbad03c1e4ae",
+    "skill_bytes": 11245,
+    "skill_sha256": "81ff440dc56c069fd612715d55deb6efa90a54d968c3a7799500586223f155b5",
+    "source_revision": "9e3690e14ce70c454eb1bd2d1ce5386bb30c15e9"
+  },
+  "after_skill_revision": "v0.6.1",
+  "backend": "codex_subscription",
+  "before": {
+    "benchmark_version": "0.6.0-pilot",
+    "cells": [
+      {
+        "cached_input_tokens": 1187840,
+        "cached_input_tokens_known_rows": 100,
+        "code_bytes": 103174,
+        "code_chars": 103174,
+        "input_tokens": 1476343,
+        "input_tokens_known_rows": 100,
+        "language": "jett",
+        "latency_ms": 2102732.3812006507,
+        "latency_ms_known_rows": 100,
+        "mode": "one_shot",
+        "n": 100,
+        "output_tokens": 96501,
+        "output_tokens_known_rows": 100,
+        "pass_rate": 0.33,
+        "passed": 33,
+        "reasoning_tokens": 71461,
+        "reasoning_tokens_known_rows": 100,
+        "repair_attempts": 0,
+        "responses": 100,
+        "track": "skill_assisted"
+      },
+      {
+        "cached_input_tokens": 1987840,
+        "cached_input_tokens_known_rows": 167,
+        "code_bytes": 190698,
+        "code_chars": 190698,
+        "input_tokens": 2493187,
+        "input_tokens_known_rows": 167,
+        "language": "jett",
+        "latency_ms": 3243292.7481010556,
+        "latency_ms_known_rows": 167,
+        "mode": "compile_repair",
+        "n": 100,
+        "output_tokens": 145918,
+        "output_tokens_known_rows": 167,
+        "pass_rate": 0.66,
+        "passed": 66,
+        "reasoning_tokens": 99554,
+        "reasoning_tokens_known_rows": 167,
+        "repair_attempts": 67,
+        "responses": 167,
+        "track": "skill_assisted"
+      }
+    ],
+    "grading_image": "sha256:5cd341ed3f4062c4c56ab6d267111041aa375c2e39ae20db1770d2b46ee02e80",
+    "skill_bytes": 8723,
+    "skill_sha256": "81e55dcb8948d754bd839453fd257cb80d2c33e3b23de3c8063f600862643fb4",
+    "source_revision": "bc6f96aab412b0b6f36f2652a0ce7ef4f10edbef"
+  },
+  "before_skill_revision": "v0.5.4",
+  "comparisons": [
+    {
+      "after_passed": 71,
+      "before_passed": 33,
+      "metric_deltas_after_minus_before": {
+        "cached_input_tokens": -55296,
+        "code_bytes": 7919,
+        "code_chars": 7919,
+        "input_tokens": 58263,
+        "latency_ms": -169629.1722008027,
+        "output_tokens": -13456,
+        "reasoning_tokens": -14823,
+        "responses": 0
+      },
+      "mode": "one_shot",
+      "n": 100,
+      "net_pass_gain": 38,
+      "paired_counts": {
+        "gains": 43,
+        "regressions": 5,
+        "unchanged_failures": 24,
+        "unchanged_passes": 28
+      },
+      "task_ids": {
+        "gains": [
+          "data_change_log",
+          "data_dependency_layers",
+          "data_graph_components",
+          "data_invoice_reconciliation",
+          "data_job_readiness",
+          "data_join_unmatched",
+          "data_ranking_ties",
+          "data_restock_projection",
+          "data_retention_sweep",
+          "data_schedule_peak_load",
+          "data_schedule_room_reuse",
+          "data_tree_depths",
+          "data_union_coverage",
+          "data_vote_quorum",
+          "num_binomial",
+          "num_coin_change",
+          "num_divisor_sum",
+          "num_equilibrium_index",
+          "num_matrix_trace",
+          "num_prime_status",
+          "num_stable_partition",
+          "num_staircase_blocked",
+          "num_totient",
+          "num_window_peak",
+          "text_ascii_identifier",
+          "text_camel_to_snake",
+          "text_collapse_spaces",
+          "text_common_prefix",
+          "text_count_overlaps",
+          "text_escape_html",
+          "text_extension_split",
+          "text_glob_match",
+          "text_key_value_parse",
+          "text_longest_word",
+          "text_palindrome_filter",
+          "text_path_normalize",
+          "text_reverse_words",
+          "text_rle_encode",
+          "text_strip_line_comments",
+          "text_title_words",
+          "text_unescape_backslash",
+          "text_word_initials",
+          "text_wrap_words"
+        ],
+        "regressions": [
+          "num_knapsack_value",
+          "num_prefix_balances",
+          "order_lifecycle",
+          "score_lines",
+          "triangle_kind"
+        ],
+        "unchanged_failures": [
+          "data_graph_degrees",
+          "data_graph_reachability",
+          "data_graph_shortest_hops",
+          "data_ledger_audit",
+          "data_patient_triage",
+          "data_permission_rules",
+          "data_resource_leases",
+          "data_route_cost",
+          "data_schedule_conflicts",
+          "data_seat_assignments",
+          "data_sensor_sessions",
+          "data_tree_lowest_ancestor",
+          "data_tree_subtree_weight",
+          "num_modular_power",
+          "recursive_expression",
+          "text_bracket_balance",
+          "text_csv_record_parse",
+          "text_decimal_canonical",
+          "text_escape_json_string",
+          "text_hex_decode",
+          "text_ipv4_parse",
+          "text_percent_decode",
+          "text_rle_decode",
+          "text_time_parse"
+        ],
+        "unchanged_passes": [
+          "account_state_evolution",
+          "bounded_weighted_sum",
+          "data_reservation_gate",
+          "data_schedule_deadline_audit",
+          "data_versioned_register",
+          "first_duplicate",
+          "inventory_batch",
+          "merge_sorted_intervals",
+          "num_collatz_steps",
+          "num_digit_checksum",
+          "num_fibonacci",
+          "num_histogram_mode",
+          "num_integer_sqrt",
+          "num_inversion_count",
+          "num_lis_length",
+          "num_longest_positive_run",
+          "num_max_product_pair",
+          "num_max_subarray",
+          "num_pair_sum_count",
+          "num_polynomial_value",
+          "num_rotate_left",
+          "num_search_range",
+          "num_sorted_insert",
+          "num_trapped_water",
+          "num_unique_sorted",
+          "signed_gcd",
+          "text_binary_parse",
+          "text_version_compare"
+        ]
+      }
+    },
+    {
+      "after_passed": 87,
+      "before_passed": 66,
+      "metric_deltas_after_minus_before": {
+        "cached_input_tokens": -518656,
+        "code_bytes": -25336,
+        "code_chars": -25336,
+        "input_tokens": -498170,
+        "latency_ms": -709984.8832015414,
+        "output_tokens": -36400,
+        "reasoning_tokens": -28962,
+        "responses": -38
+      },
+      "mode": "compile_repair",
+      "n": 100,
+      "net_pass_gain": 21,
+      "paired_counts": {
+        "gains": 26,
+        "regressions": 5,
+        "unchanged_failures": 8,
+        "unchanged_passes": 61
+      },
+      "task_ids": {
+        "gains": [
+          "data_dependency_layers",
+          "data_graph_reachability",
+          "data_ledger_audit",
+          "data_restock_projection",
+          "data_route_cost",
+          "data_schedule_room_reuse",
+          "data_tree_lowest_ancestor",
+          "num_coin_change",
+          "text_ascii_identifier",
+          "text_camel_to_snake",
+          "text_collapse_spaces",
+          "text_count_overlaps",
+          "text_escape_html",
+          "text_extension_split",
+          "text_key_value_parse",
+          "text_longest_word",
+          "text_palindrome_filter",
+          "text_path_normalize",
+          "text_reverse_words",
+          "text_rle_decode",
+          "text_rle_encode",
+          "text_strip_line_comments",
+          "text_title_words",
+          "text_unescape_backslash",
+          "text_word_initials",
+          "text_wrap_words"
+        ],
+        "regressions": [
+          "data_patient_triage",
+          "data_sensor_sessions",
+          "data_tree_subtree_weight",
+          "num_knapsack_value",
+          "recursive_expression"
+        ],
+        "unchanged_failures": [
+          "data_schedule_conflicts",
+          "text_bracket_balance",
+          "text_csv_record_parse",
+          "text_decimal_canonical",
+          "text_escape_json_string",
+          "text_hex_decode",
+          "text_percent_decode",
+          "text_time_parse"
+        ],
+        "unchanged_passes": [
+          "account_state_evolution",
+          "bounded_weighted_sum",
+          "data_change_log",
+          "data_graph_components",
+          "data_graph_degrees",
+          "data_graph_shortest_hops",
+          "data_invoice_reconciliation",
+          "data_job_readiness",
+          "data_join_unmatched",
+          "data_permission_rules",
+          "data_ranking_ties",
+          "data_reservation_gate",
+          "data_resource_leases",
+          "data_retention_sweep",
+          "data_schedule_deadline_audit",
+          "data_schedule_peak_load",
+          "data_seat_assignments",
+          "data_tree_depths",
+          "data_union_coverage",
+          "data_versioned_register",
+          "data_vote_quorum",
+          "first_duplicate",
+          "inventory_batch",
+          "merge_sorted_intervals",
+          "num_binomial",
+          "num_collatz_steps",
+          "num_digit_checksum",
+          "num_divisor_sum",
+          "num_equilibrium_index",
+          "num_fibonacci",
+          "num_histogram_mode",
+          "num_integer_sqrt",
+          "num_inversion_count",
+          "num_lis_length",
+          "num_longest_positive_run",
+          "num_matrix_trace",
+          "num_max_product_pair",
+          "num_max_subarray",
+          "num_modular_power",
+          "num_pair_sum_count",
+          "num_polynomial_value",
+          "num_prefix_balances",
+          "num_prime_status",
+          "num_rotate_left",
+          "num_search_range",
+          "num_sorted_insert",
+          "num_stable_partition",
+          "num_staircase_blocked",
+          "num_totient",
+          "num_trapped_water",
+          "num_unique_sorted",
+          "num_window_peak",
+          "order_lifecycle",
+          "score_lines",
+          "signed_gcd",
+          "text_binary_parse",
+          "text_common_prefix",
+          "text_glob_match",
+          "text_ipv4_parse",
+          "text_version_compare",
+          "triangle_kind"
+        ]
+      }
+    }
+  ],
+  "integrity": {
+    "all_pairings_verified": true,
+    "followup_evidence_unchanged": true,
+    "no_interrupted_jett_calls_in_either_treatment": true,
+    "original_evidence_unchanged": true
+  },
+  "interpretation": [
+    "one observation per task/treatment; rolling model alias",
+    "skill revision is informed by development-set public diagnostics, not held-out validation",
+    "guidance content and length change together; sampling and timing also differ",
+    "initial and repair-budget usage overlaps; do not sum both budgets",
+    "three original Rust/Python interruptions leave whole-experiment consumption unknown"
+  ],
+  "model": "gpt-5.6-luna",
+  "reasoning_effort": "medium",
+  "schema_version": 1,
+  "scope": "paired 100-task Jett skill-assisted development comparison",
+  "tasks": [
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "6e0fe0aabfaa69e2f608b58021174635da42f028dc21ac30f131057cb8879e6e",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-2235-7f12-8d6c-f1988ce69507",
+        "initial_run_id": "0.6.1-jett-skill:account_state_evolution:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "bab48223b9a22bebbdc82c3ffce2215e83b44fbf4014d7c5d987c13fad441af7",
+        "initial_passed": true,
+        "initial_response_id": "01a0947b-8082-7972-a0c1-2ca39158a644",
+        "initial_run_id": "0.6.0-pilot:account_state_evolution:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "account_state_evolution",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "209603a613da93addf1214fcdaf157822a26a34b3a8538764a6ac6c0186e00a7",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-e6f5-70b2-bb62-86a51b5bf23d",
+        "initial_run_id": "0.6.1-jett-skill:bounded_weighted_sum:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "ef89611669b74c3d792d6b5c862037512f0e6a1f405fe43fd9944474e65f02d1",
+        "initial_passed": true,
+        "initial_response_id": "01a0943b-d504-7612-9c09-52e4765bf6b2",
+        "initial_run_id": "0.6.0-pilot:bounded_weighted_sum:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "bounded_weighted_sum",
+      "task_version": "1.0.1"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "3083182f887c8c05cd7188356aca2f68f013d9044454debec106259fb3ac8f8d",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-4f6f-74e1-92d0-95e2f171f7fc",
+        "initial_run_id": "0.6.1-jett-skill:data_change_log:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "7ad467cc09d30b92f41203b2cb3a3c01718fc6e52cb0a8ea8d6737669f672911",
+        "initial_passed": false,
+        "initial_response_id": "01a0943d-1573-7772-85c2-75aa3e7d22e4",
+        "initial_run_id": "0.6.0-pilot:data_change_log:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_change_log:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_change_log",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "671720b24a2a5a7838b0539a412f58e9df68c61db2b0a02f08ae78ff2cd68d7a",
+        "initial_passed": true,
+        "initial_response_id": "01a094bb-eec5-7ed3-9d98-95cf4ee699be",
+        "initial_run_id": "0.6.1-jett-skill:data_dependency_layers:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "36e73d199231138eee5f08554536ff96d12363e9abbb80b8dfb5f056959d1277",
+        "initial_passed": false,
+        "initial_response_id": "01a09474-5233-7822-bee5-967dbd101b29",
+        "initial_run_id": "0.6.0-pilot:data_dependency_layers:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_dependency_layers:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_dependency_layers",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "512f145d25d1f6a5d8272de73a360bae61a7eb883a0de177210c0df9027f63d3",
+        "initial_passed": true,
+        "initial_response_id": "01a094bd-0984-7c50-8fb8-f0db9576f8e0",
+        "initial_run_id": "0.6.1-jett-skill:data_graph_components:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "445ea74829cb9cbec3ebb06e2fa49b43a7dca25abf70a5ad8cde46f627d33662",
+        "initial_passed": false,
+        "initial_response_id": "01a0946f-05a9-7ae3-9a3d-27f830653dff",
+        "initial_run_id": "0.6.0-pilot:data_graph_components:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_graph_components:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_graph_components",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "d3a6cf6bf0ed38fd488260f4b44878adbadb0aaa1b69d664577e11e229cad223",
+        "initial_passed": false,
+        "initial_response_id": "01a094c2-1410-70b3-905f-94dd2bcdf072",
+        "initial_run_id": "0.6.1-jett-skill:data_graph_degrees:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_graph_degrees:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "d2a0eff96c19f342af65496855aa99f72169aedeb81e6b06f500faecf41ddb10",
+        "initial_passed": false,
+        "initial_response_id": "01a09467-2172-7c33-8e0d-09caa5362d72",
+        "initial_run_id": "0.6.0-pilot:data_graph_degrees:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_graph_degrees:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_graph_degrees",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "4e254b627ea761f55a2ed796235f023b3681cd95943768fcb0ea537954b904ad",
+        "initial_passed": false,
+        "initial_response_id": "01a094be-9e6a-78c0-a98c-441cd7d65f81",
+        "initial_run_id": "0.6.1-jett-skill:data_graph_reachability:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_graph_reachability:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "6dc0bdfdb9e95b567e8ce19d48dd888c4483c736af7522f5328858dbed541781",
+        "initial_passed": false,
+        "initial_response_id": "01a0947a-bf84-74e2-84bb-f072677399e5",
+        "initial_run_id": "0.6.0-pilot:data_graph_reachability:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_graph_reachability:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_graph_reachability",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "4ad5883867d1dcd9bc549714e9c380df054eab0c38fb764f4506c7d0bf9085c7",
+        "initial_passed": false,
+        "initial_response_id": "01a094b9-d930-71a1-8472-6e03c1b7ecc1",
+        "initial_run_id": "0.6.1-jett-skill:data_graph_shortest_hops:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_graph_shortest_hops:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "43aa99b8ca61fa65677799da031f0dde4415732c9870ce088ae7119975130494",
+        "initial_passed": false,
+        "initial_response_id": "01a09437-d40d-76b1-a929-afc6274e7378",
+        "initial_run_id": "0.6.0-pilot:data_graph_shortest_hops:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_graph_shortest_hops:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_graph_shortest_hops",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "dded55beac8fd4fcf894a082687515b96c47df320b3d88e2f54643c9fa5561ca",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-19c0-7b52-be0e-ad543a25dbc5",
+        "initial_run_id": "0.6.1-jett-skill:data_invoice_reconciliation:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "8f9ea56dd2fe9a3d21d8819693348ea7a5fbfc363e84c81a71ac7fb787558cb3",
+        "initial_passed": false,
+        "initial_response_id": "01a09433-58ee-7aa3-8b1d-9b95ad114beb",
+        "initial_run_id": "0.6.0-pilot:data_invoice_reconciliation:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_invoice_reconciliation:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_invoice_reconciliation",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "9986b0de57fdfd6136a0aa166bec443920bd45687dc77079b898b393ceb0dd23",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-3808-7080-b52c-480d72f31867",
+        "initial_run_id": "0.6.1-jett-skill:data_job_readiness:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "73763fd1714e342882c6d9c9a7a722a036488892d10195160ae8bc578a669955",
+        "initial_passed": false,
+        "initial_response_id": "01a09438-5a99-7df1-9d81-1f22283903c1",
+        "initial_run_id": "0.6.0-pilot:data_job_readiness:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_job_readiness:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_job_readiness",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "10673c8dc3abc86a073e8bc4f26fe050f1b209a8d8c98ca043ac29817b446936",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-8ec5-7861-ae43-d77ecb7c35d4",
+        "initial_run_id": "0.6.1-jett-skill:data_join_unmatched:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "586ec89b3e91a72c26bc4962d126a0782a1eae4c3f8a735676a15956ee4f329e",
+        "initial_passed": false,
+        "initial_response_id": "01a0946c-6c4d-7cf2-8d88-9e1f45e72991",
+        "initial_run_id": "0.6.0-pilot:data_join_unmatched:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_join_unmatched:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_join_unmatched",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "34e6a03d85d77e820261bfe7bae305f4a65cee5d1f53fdee1597887c8b75e092",
+        "initial_passed": false,
+        "initial_response_id": "01a094bf-602b-7fd1-883d-16d86e471fa7",
+        "initial_run_id": "0.6.1-jett-skill:data_ledger_audit:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "test_failure",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_ledger_audit:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "50f003dee957f8bbf01baa433afb48af5860f3ce6225a6f13940ebc60d67244a",
+        "initial_passed": false,
+        "initial_response_id": "01a0946d-51e1-71c2-9d33-c823a8a56aa4",
+        "initial_run_id": "0.6.0-pilot:data_ledger_audit:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_ledger_audit:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_ledger_audit",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "9754410e4995d659aad3359f4888c0c139c51ef0c6caba2c67950dffec260fb8",
+        "initial_passed": false,
+        "initial_response_id": "01a094c2-fb63-7032-b238-c9fe1c756bc8",
+        "initial_run_id": "0.6.1-jett-skill:data_patient_triage:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:data_patient_triage:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "625b8dd19890d757396353c853fdf1635ea8456a26b3b4b2d5ee1134a8491ae8",
+        "initial_passed": false,
+        "initial_response_id": "01a0946e-179a-7d63-8a89-363b4515c35d",
+        "initial_run_id": "0.6.0-pilot:data_patient_triage:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_patient_triage:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_patient_triage",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "29457b0022ae6ae30d5597e7737ad8c065df390c3ae437cdec1a2efe327d8823",
+        "initial_passed": false,
+        "initial_response_id": "01a094bd-c211-7833-aada-fab425271b49",
+        "initial_run_id": "0.6.1-jett-skill:data_permission_rules:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_permission_rules:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "82dd8a9a83f3d374b5ac49ea775de0eaa5de85de976a2286fab6fbd46d30a833",
+        "initial_passed": false,
+        "initial_response_id": "01a0947f-5421-7151-8045-6e8c33abd3ee",
+        "initial_run_id": "0.6.0-pilot:data_permission_rules:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_permission_rules:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_permission_rules",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "eb4243f1bb364909884a9293b2ff694fc95894927c10b03cd401c23ddeedabb0",
+        "initial_passed": true,
+        "initial_response_id": "01a094bf-48f2-7012-9700-97d00a7612a9",
+        "initial_run_id": "0.6.1-jett-skill:data_ranking_ties:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "472205ea5922cf7dd38a3209983ee2d73bece320183562e7ac3a1279f8cd081b",
+        "initial_passed": false,
+        "initial_response_id": "01a09464-42ae-74c0-b167-ef164ec4bc12",
+        "initial_run_id": "0.6.0-pilot:data_ranking_ties:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_ranking_ties:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_ranking_ties",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "b256269fdb99c80a8cfe9aab69956cfe6f09c3ba9ab159af397299f4afc2efdf",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-59cd-7343-95ca-f8dc27fd1f7d",
+        "initial_run_id": "0.6.1-jett-skill:data_reservation_gate:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "64bef270683d6d5e18935da8908fab4ceb4eaa8a7a042ef30baf198ae5ea9bfe",
+        "initial_passed": true,
+        "initial_response_id": "01a09466-1ed9-7fe3-a79e-543ac87671ba",
+        "initial_run_id": "0.6.0-pilot:data_reservation_gate:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "data_reservation_gate",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "af8aa3eaa6fdbd4177937b0c225eb8c9d93fd20c76f6149c1b8a53d46dd00a0b",
+        "initial_passed": false,
+        "initial_response_id": "01a094bd-704a-7a93-9050-51cef039f0e2",
+        "initial_run_id": "0.6.1-jett-skill:data_resource_leases:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_resource_leases:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "1fc0a6864f8f1c5677273ae9a990fe99d5c8c9dd49b37108bbae3c51d3802edc",
+        "initial_passed": false,
+        "initial_response_id": "01a09437-c62a-7c62-aeb6-d44808999593",
+        "initial_run_id": "0.6.0-pilot:data_resource_leases:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_resource_leases:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_resource_leases",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "2bdb56829bfd17b7b88da9d5f1497915d605cd1e8da80047d9874df2289037eb",
+        "initial_passed": true,
+        "initial_response_id": "01a094bf-af7c-72c2-91e5-b2123b496c08",
+        "initial_run_id": "0.6.1-jett-skill:data_restock_projection:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "7107a230117eb3a503b7e868f418cc6492c3497fd16e029b06a5b5bd5cb2b4d7",
+        "initial_passed": false,
+        "initial_response_id": "01a09433-068a-7863-8006-db9a0248cad3",
+        "initial_run_id": "0.6.0-pilot:data_restock_projection:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_restock_projection:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_restock_projection",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "7c17c02ac68ebae0caf2f49b5ef4d4670e61d7b08879ec425c2f1b9407a79a79",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-c895-7962-a9f3-d17dab2fef96",
+        "initial_run_id": "0.6.1-jett-skill:data_retention_sweep:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "8819caf87d6eea2c28dfc66dedac4375b66f54796fc94eb8c9bbde55d97d19b3",
+        "initial_passed": false,
+        "initial_response_id": "01a0942d-f222-7a52-b99f-3c17ffde9f7c",
+        "initial_run_id": "0.6.0-pilot:data_retention_sweep:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_retention_sweep:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_retention_sweep",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "00c794031cf70d45c7222d1f9bbaaad3375e9a953f933b10040a6ad77add8cfb",
+        "initial_passed": false,
+        "initial_response_id": "01a094c1-8984-7b01-9231-558796cbdf02",
+        "initial_run_id": "0.6.1-jett-skill:data_route_cost:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_route_cost:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "78071dd4e60b936d1fe4526fcb0dd58a378236f5a89a5709a9e0289cab2be255",
+        "initial_passed": false,
+        "initial_response_id": "01a0947d-a098-7763-b19a-ddd911077d2d",
+        "initial_run_id": "0.6.0-pilot:data_route_cost:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_route_cost:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_route_cost",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "05414e5071122fe2a465b14ed6a9e4a33a08b362af4d120017acd4f0fefd6b89",
+        "initial_passed": false,
+        "initial_response_id": "01a094bf-a026-73d3-a525-ebc509f23fe2",
+        "initial_run_id": "0.6.1-jett-skill:data_schedule_conflicts:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:data_schedule_conflicts:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "c04560d448e4d22f635f42dbe128e71448de829e6d04583fba6c4df1aebd4c7e",
+        "initial_passed": false,
+        "initial_response_id": "01a09436-4505-7e33-b612-ad43c25e4d3b",
+        "initial_run_id": "0.6.0-pilot:data_schedule_conflicts:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_schedule_conflicts:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_schedule_conflicts",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "f533ad8f642ace80cbba99075b6fb41de7ccba5ebc2d7f1965b3c08e0e129744",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-4c2f-7cb0-89df-48777a1b3273",
+        "initial_run_id": "0.6.1-jett-skill:data_schedule_deadline_audit:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "ff098a9dbc3c3b2c67a53e79077ea6f72eba32046d6babf284b368ae5c67b64b",
+        "initial_passed": true,
+        "initial_response_id": "01a0942c-119c-7bf2-b8e9-0301f82db727",
+        "initial_run_id": "0.6.0-pilot:data_schedule_deadline_audit:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "data_schedule_deadline_audit",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "3a7955118e2b33201251dc3b936f12c2e316a58496619e44a6fcd11edff3d03d",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-793f-7c91-885a-6db8b7d87af6",
+        "initial_run_id": "0.6.1-jett-skill:data_schedule_peak_load:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "a320d082bc0d845bdeb7bf577a9255c89e04790c5f622f24d14b30c9fa540f07",
+        "initial_passed": false,
+        "initial_response_id": "01a0946c-f13f-7a93-ba4e-9930bd7165c5",
+        "initial_run_id": "0.6.0-pilot:data_schedule_peak_load:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_schedule_peak_load:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_schedule_peak_load",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "49f7086527f1508644453259f172f4754fbb48dfb817f696c01f9de9a38e686a",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-4942-7832-908b-0667152781e2",
+        "initial_run_id": "0.6.1-jett-skill:data_schedule_room_reuse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "d6e4553eea6f9aa8a04c8aa84a317ae54f3e942ffd552239edbd600ece33d58e",
+        "initial_passed": false,
+        "initial_response_id": "01a0946d-552e-7081-8df8-d753494696b9",
+        "initial_run_id": "0.6.0-pilot:data_schedule_room_reuse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_schedule_room_reuse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_schedule_room_reuse",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "d2c9fc2b19a205c82d34d3a0c59f164b0b3ce7dfde9e480c1a53c30dbb845d22",
+        "initial_passed": false,
+        "initial_response_id": "01a094bf-0fa8-7f10-b207-f7dcb2f50ab0",
+        "initial_run_id": "0.6.1-jett-skill:data_seat_assignments:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_seat_assignments:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "701531121138d294551977336b4674dbae931767268236878ac04fb110d6af05",
+        "initial_passed": false,
+        "initial_response_id": "01a0947e-7bd6-7903-ad1a-2a330f918f9a",
+        "initial_run_id": "0.6.0-pilot:data_seat_assignments:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_seat_assignments:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_seat_assignments",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "aff5fae5b3dcddb515bb7c2eaafcce7ee1a07d4f741869b3e74b092da228427e",
+        "initial_passed": false,
+        "initial_response_id": "01a094bf-27d1-7751-aeaf-f888964eb234",
+        "initial_run_id": "0.6.1-jett-skill:data_sensor_sessions:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "test_failure",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:data_sensor_sessions:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "5f844cc7acf6fca0e54da3ec96a03027d38e16feee098d78f435373fb4f71c01",
+        "initial_passed": false,
+        "initial_response_id": "01a09430-f409-7510-9a1f-70f6cd3bf5fb",
+        "initial_run_id": "0.6.0-pilot:data_sensor_sessions:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_sensor_sessions:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_sensor_sessions",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "81c8854ed2d8cc56f7b4137034af5b995ac4bae325a2a4a3730234ecc88e6c29",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-4e4b-77c2-b150-38a99460ab1d",
+        "initial_run_id": "0.6.1-jett-skill:data_tree_depths:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "1a51ed65ec64640de81cb1ecf7654fc41141ee89bd6c2d8cbec0879fca284691",
+        "initial_passed": false,
+        "initial_response_id": "01a0946f-1100-71e1-812a-b5fa8a6da5cc",
+        "initial_run_id": "0.6.0-pilot:data_tree_depths:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_tree_depths:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_tree_depths",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "a69c7281e6543013b263d94c131fa32322cc2dd3e29e756d2cc87374c1135e4b",
+        "initial_passed": false,
+        "initial_response_id": "01a094c1-cf52-74b3-82e2-7abad46a8e10",
+        "initial_run_id": "0.6.1-jett-skill:data_tree_lowest_ancestor:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "test_failure",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:data_tree_lowest_ancestor:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "f39968e6c646bc19a5330a528ad2dcbdacae2760e8dfeaf0aea5c0c6de7b84a9",
+        "initial_passed": false,
+        "initial_response_id": "01a09469-55c3-73b3-83ef-72e8e764ca58",
+        "initial_run_id": "0.6.0-pilot:data_tree_lowest_ancestor:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:data_tree_lowest_ancestor:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "data_tree_lowest_ancestor",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "116ceae214297da6b467fd2c701f75133e8a727d4dd32656c493ea2074832943",
+        "initial_passed": false,
+        "initial_response_id": "01a094bb-2da8-72f0-a65e-953c5e945e3d",
+        "initial_run_id": "0.6.1-jett-skill:data_tree_subtree_weight:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "test_failure",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:data_tree_subtree_weight:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "08198786073a599344ede5ea4aef83621cdc5c2be92b82d8df5e2655a42c6f3c",
+        "initial_passed": false,
+        "initial_response_id": "01a09432-8e40-7f21-a5f1-43055f37308c",
+        "initial_run_id": "0.6.0-pilot:data_tree_subtree_weight:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_tree_subtree_weight:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_tree_subtree_weight",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "51cdc9293dbcb8b12f8627d4c2a314e48e172af87ca95260f082456cd7c969a8",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-870e-75d3-9e29-f756558a5a6a",
+        "initial_run_id": "0.6.1-jett-skill:data_union_coverage:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "5aea50ab69bb41f264dcd5f84965b28910917bc66b50a5fc300b8fc7d227e161",
+        "initial_passed": false,
+        "initial_response_id": "01a0946a-3c45-7703-9a0e-6717509ae59e",
+        "initial_run_id": "0.6.0-pilot:data_union_coverage:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_union_coverage:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_union_coverage",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "bbded9e8551ba6c0cb2aa5c0f75645d835ef9e381d744745abb17bf3638d84cb",
+        "initial_passed": true,
+        "initial_response_id": "01a094b9-e69b-75b0-9cf6-bf22332fe1cf",
+        "initial_run_id": "0.6.1-jett-skill:data_versioned_register:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "38a9c6fe05db2fd2eed4860e12079bc8ea048c4149c84dadd6c35124b0b265e2",
+        "initial_passed": true,
+        "initial_response_id": "01a09478-0a20-7022-bc5d-78f2054748ea",
+        "initial_run_id": "0.6.0-pilot:data_versioned_register:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "data_versioned_register",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "14fc56d94908e89efbaeb2d8c456da0281f6b9c686a6606ba15d65f9dfadd8d0",
+        "initial_passed": true,
+        "initial_response_id": "01a094bd-00c1-7c41-a1d1-5ea21b23c85b",
+        "initial_run_id": "0.6.1-jett-skill:data_vote_quorum:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "de6d0d9df4c8f6da11186a362892b6c32b9a207b572952b4f93151de034d8c04",
+        "initial_passed": false,
+        "initial_response_id": "01a09467-7e01-7a53-a425-1d7444fc85a9",
+        "initial_run_id": "0.6.0-pilot:data_vote_quorum:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:data_vote_quorum:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "data_vote_quorum",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "ea8d4090618b0eec907fefd177ce232d81263df29f54ce2227a8316940e4d0d4",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-b2dc-7db1-a0c7-ebee2c361b87",
+        "initial_run_id": "0.6.1-jett-skill:first_duplicate:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "c20a6bd103413691132bf9e5c58f431459e0b4afdac536243d22872c61ccc7cc",
+        "initial_passed": true,
+        "initial_response_id": "01a09476-735e-7113-9f60-ef57d477d018",
+        "initial_run_id": "0.6.0-pilot:first_duplicate:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "first_duplicate",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "54c8be40bd1cbebe3edf5b10a6baa631c8bc0300d48687988a4afafa5d5cb177",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-c362-7cb2-b977-c667f4fe76b3",
+        "initial_run_id": "0.6.1-jett-skill:inventory_batch:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "4786dfe19c3849297ccdfebe1235530c8a319b71402f366d56eee4915047b187",
+        "initial_passed": true,
+        "initial_response_id": "01a09431-649a-71f0-bbdc-28e5a9dcf5aa",
+        "initial_run_id": "0.6.0-pilot:inventory_batch:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "inventory_batch",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "3c5a7746711c3cc4564a05d2eb6cad98ce542a3a4c651990e476da63b428d1f6",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-8f94-7811-a858-d1aed697ae73",
+        "initial_run_id": "0.6.1-jett-skill:merge_sorted_intervals:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "3709859004fb5e9660702abd6f2280cfae7d09360b3a1a61a337bc809a2528ac",
+        "initial_passed": true,
+        "initial_response_id": "01a0947f-e073-7653-b58d-0d96daadab62",
+        "initial_run_id": "0.6.0-pilot:merge_sorted_intervals:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "merge_sorted_intervals",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "fac0d6fb8364e7bab289cdd07d6466b44a88912d6e9677aa425687b8ba1611e3",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-467b-73d2-ba8d-b26d6d657fe7",
+        "initial_run_id": "0.6.1-jett-skill:num_binomial:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "46d46f86b0564ea5d9d08c3c05f9b843b1bc9f092f97e4ebb6435839de7cc3a8",
+        "initial_passed": false,
+        "initial_response_id": "01a0946d-1223-7c91-9703-a6f38c25429a",
+        "initial_run_id": "0.6.0-pilot:num_binomial:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_binomial:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_binomial",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "7a99a25023c04eb8aa7096a43334959cfe02800b427e42cefe5af7d28aa06e32",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-1eda-78d1-8ac7-74efa375620c",
+        "initial_run_id": "0.6.1-jett-skill:num_coin_change:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "0833e19e5680e0165aa1f3a7529024d9ec150ae0a1f4285ba9a7021e3aa8e0c2",
+        "initial_passed": false,
+        "initial_response_id": "01a0946a-d012-72d2-a330-feedafbdeeb4",
+        "initial_run_id": "0.6.0-pilot:num_coin_change:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:num_coin_change:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "num_coin_change",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "cf8ec8cd776d5498e5fb921aa2185f6aa5c6a04adfb5ff295eb32f66f449fb11",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-10f6-73e1-a16c-1a86a93e93cc",
+        "initial_run_id": "0.6.1-jett-skill:num_collatz_steps:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "2e304ec97c08c3b2c3046546cffbdab1a229dff1229c26dc51d5057d12ef9d74",
+        "initial_passed": true,
+        "initial_response_id": "01a0946a-4a28-7a43-9d36-295bc2139fe5",
+        "initial_run_id": "0.6.0-pilot:num_collatz_steps:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_collatz_steps",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "86f877d3692e15f06b7d436bd44ff5ea39e3a27a655ad99eb65d020286626123",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-8271-7c93-a304-2dc83d027f1c",
+        "initial_run_id": "0.6.1-jett-skill:num_digit_checksum:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "5f9d669aaa8cd98439b1b9913981bb38cf65ae8f99e3fd5924a8954a4c6af8d8",
+        "initial_passed": true,
+        "initial_response_id": "01a09435-75f4-77d0-b6c5-0867fcdaf6a6",
+        "initial_run_id": "0.6.0-pilot:num_digit_checksum:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_digit_checksum",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "ce65e37e70ee8f5989c8f53ceb56de9481d0fc29161e4a921e31c7ddec908599",
+        "initial_passed": true,
+        "initial_response_id": "01a094bd-ef8b-7982-8c5d-83d85fb46b11",
+        "initial_run_id": "0.6.1-jett-skill:num_divisor_sum:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "a70728f09e0713a5382b464ab3973260086b84e48bb44eb7d0c8fdfe470c36ee",
+        "initial_passed": false,
+        "initial_response_id": "01a09473-c0e6-7e43-b3db-62651b74e2d4",
+        "initial_run_id": "0.6.0-pilot:num_divisor_sum:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_divisor_sum:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_divisor_sum",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "5bcb1b5f905027dfb626e3cec6814c1237101dcf724819191ad9e315f7b71df1",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-6a3c-7f43-90f5-a3eaac1a4fbf",
+        "initial_run_id": "0.6.1-jett-skill:num_equilibrium_index:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "82d85300a2dd073a9565e8165b224f8065cdfaf9d10be2e8608c33dece861211",
+        "initial_passed": false,
+        "initial_response_id": "01a09480-7410-7fb2-91de-b1d314657a8a",
+        "initial_run_id": "0.6.0-pilot:num_equilibrium_index:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_equilibrium_index:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_equilibrium_index",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "513c18f68e5d874ed0da2ada5dc437dbe61a55aa48941fb6e2b3b79f9017cdb3",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-a096-7ed1-aed9-7a7b96468dcf",
+        "initial_run_id": "0.6.1-jett-skill:num_fibonacci:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "139c9183dd873403392d63e969ea24247ce3030d7d4be7325ae549cbf0f516c3",
+        "initial_passed": true,
+        "initial_response_id": "01a09482-1311-7050-b73d-bf42c4b41d0d",
+        "initial_run_id": "0.6.0-pilot:num_fibonacci:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_fibonacci",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "50d97a08aadc6d71da83ad7dcec54c910de6f88a8b6bba4397aabada0eeae52d",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-bc4f-71f1-9d5e-b21b282ea616",
+        "initial_run_id": "0.6.1-jett-skill:num_histogram_mode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "270a9e10b408a5785546fe6913c4dffebd8fbc02146096c6e53a7ab3fb04d984",
+        "initial_passed": true,
+        "initial_response_id": "01a09472-33bb-7482-b921-3bc60ffa994d",
+        "initial_run_id": "0.6.0-pilot:num_histogram_mode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_histogram_mode",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "f5f9d675f912c018d3b2b860688250eb16471c4534d69f00ca63416175c53c2b",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-e016-79a1-b6c3-17acc4d7b687",
+        "initial_run_id": "0.6.1-jett-skill:num_integer_sqrt:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "6f8f9ce0e0adbe68757174cdf952ac7a4bd018cd19c531ffdb9683173e97b99e",
+        "initial_passed": true,
+        "initial_response_id": "01a09471-6772-7822-98be-bdea95dc3fba",
+        "initial_run_id": "0.6.0-pilot:num_integer_sqrt:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_integer_sqrt",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "232c0e8893d38f5164cbefa4f62bd8884db4eb03e689686cdb548e54b32d5de4",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-2f26-7fd3-bfe1-117c716d3915",
+        "initial_run_id": "0.6.1-jett-skill:num_inversion_count:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "e4d5295d529541bf239ba1c7f9c5de2ce14b004371d4aa3e5372da41700f5781",
+        "initial_passed": true,
+        "initial_response_id": "01a0943a-eb4e-7632-b3d4-58c2376ea814",
+        "initial_run_id": "0.6.0-pilot:num_inversion_count:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_inversion_count",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "da094c182bd695ac205a7c43ee95ef20ae77b8f556b2ccd2561285d72d72fce5",
+        "initial_passed": false,
+        "initial_response_id": "01a094bd-b5d4-73a3-b7be-0fffc6a10a34",
+        "initial_run_id": "0.6.1-jett-skill:num_knapsack_value:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:num_knapsack_value:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "1537a5b34887f90a59764e21bd9b1416ce35ca2fb1bcbafb43b8dd654a549b22",
+        "initial_passed": true,
+        "initial_response_id": "01a09437-8de9-7341-aef5-8b6af976b6de",
+        "initial_run_id": "0.6.0-pilot:num_knapsack_value:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_knapsack_value",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "7836e2d4ab27cfcadceb3dc5ee525b1ca9b29ea943e9e5926c3f539f503fc851",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-e687-7ed0-a6f8-07ee61f1cf12",
+        "initial_run_id": "0.6.1-jett-skill:num_lis_length:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "e7662da2f720f0c17917edd974474a945934a4d72f92d8c4b1b49331af192f3b",
+        "initial_passed": true,
+        "initial_response_id": "01a09473-4f29-71f3-aacc-4bccc0ea3295",
+        "initial_run_id": "0.6.0-pilot:num_lis_length:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_lis_length",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "9d442d61c5d6e9f97b969a9b9d288c0c6b53d0632b56326bb50c6a3a44082765",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-9f3f-7980-9c04-a79d453166da",
+        "initial_run_id": "0.6.1-jett-skill:num_longest_positive_run:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "0577cea7fe1d6c19b9f73e47bd4f1cb1dea201f1f064b9318e3e5675dfa3da08",
+        "initial_passed": true,
+        "initial_response_id": "01a0947c-19d8-7e52-b82e-6fbcabf1c0c8",
+        "initial_run_id": "0.6.0-pilot:num_longest_positive_run:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_longest_positive_run",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "0d7aeafaa15a1ec84cd7a267bdd311a16d4d27a34c5cc093f083d74d94e7d267",
+        "initial_passed": true,
+        "initial_response_id": "01a094bf-e299-7e52-9f94-ca768ced05b9",
+        "initial_run_id": "0.6.1-jett-skill:num_matrix_trace:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "8063b0df9a66512bb447cd54daaf0a068a1576ca1f55275eb0a718234c2c8ae1",
+        "initial_passed": false,
+        "initial_response_id": "01a0943d-785b-71f1-be51-f8cc254b292f",
+        "initial_run_id": "0.6.0-pilot:num_matrix_trace:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_matrix_trace:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_matrix_trace",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "d6e9ef7da22ca939de8db221b845e419262a2c0571580aeaf18792a7256b8b53",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-88bb-7af2-bb3c-0a9a7f15e921",
+        "initial_run_id": "0.6.1-jett-skill:num_max_product_pair:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "64d5491e3a2a1ae0eb4b6a43582aedfa2953a4cfdf519dbec37b68803d6965fa",
+        "initial_passed": true,
+        "initial_response_id": "01a09470-5c1f-7630-95e2-f88be2d95395",
+        "initial_run_id": "0.6.0-pilot:num_max_product_pair:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_max_product_pair",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "29d2c984cab328b347753b2114d92e633f928c67fc97a00db4bfae5c9daf3a87",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-2fbb-7081-aa8d-bc22477d573e",
+        "initial_run_id": "0.6.1-jett-skill:num_max_subarray:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "2a86bf4a63af95bd3152c095c6f73df9c8ad059d94b5c0c85fcc59a3ed8cae42",
+        "initial_passed": true,
+        "initial_response_id": "01a0946e-f4b3-7d62-b6f7-55121324898d",
+        "initial_run_id": "0.6.0-pilot:num_max_subarray:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_max_subarray",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "c81e40446fb41febd1bfe36864e1f8fa34910884a77f84f64efbce5298f08810",
+        "initial_passed": false,
+        "initial_response_id": "01a094bd-fced-7461-b3be-7a80326501c0",
+        "initial_run_id": "0.6.1-jett-skill:num_modular_power:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:num_modular_power:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "916fc86a9336140193b592d5f93cc7537f032ce6ac6ba93f36f258b942284740",
+        "initial_passed": false,
+        "initial_response_id": "01a09480-6c58-78b3-991c-80af2364dc37",
+        "initial_run_id": "0.6.0-pilot:num_modular_power:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_modular_power:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_modular_power",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "c50bd4ff70fc8802cf671da3fb886a387476fb1236e525bd7b5da4c9f4f0e4bd",
+        "initial_passed": true,
+        "initial_response_id": "01a094bd-880a-7e31-bb19-231e5e216cfb",
+        "initial_run_id": "0.6.1-jett-skill:num_pair_sum_count:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "33242b2e2c0fb4a841e35fc70c43af97999351af3f7c13bd386c0f84af6f9320",
+        "initial_passed": true,
+        "initial_response_id": "01a09485-eafa-79f0-8941-3f4a6f4e2272",
+        "initial_run_id": "0.6.0-pilot:num_pair_sum_count:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_pair_sum_count",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "220f0aa2d095436da807c0a23b5558435cfcfe5beadc89209f7534326ace0a29",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-6e70-7a70-b45f-95c1375453a0",
+        "initial_run_id": "0.6.1-jett-skill:num_polynomial_value:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "5e57ef88f7c0e5a5cccfe1a5e88945dfe94b504a5698fbf34750f0027ee91f77",
+        "initial_passed": true,
+        "initial_response_id": "01a09466-6550-7c52-9474-00e8dc9c9aa8",
+        "initial_run_id": "0.6.0-pilot:num_polynomial_value:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_polynomial_value",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "6d24dbe187fa457976d8b4c68e9097f6846f0471ebf2f4777229c1efedbe170e",
+        "initial_passed": false,
+        "initial_response_id": "01a094bb-e88f-7861-a8f0-5c4e73a0ef1e",
+        "initial_run_id": "0.6.1-jett-skill:num_prefix_balances:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:num_prefix_balances:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "2c8b9986a8f9e342f52b37fff0ca329026b6cfdbe3f2c67cf10f78f2a36233f4",
+        "initial_passed": true,
+        "initial_response_id": "01a09462-8c9a-76f1-904d-cba2f3d3d35b",
+        "initial_run_id": "0.6.0-pilot:num_prefix_balances:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_prefix_balances",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "577025b02287ba0054301a39f9a3a02689d05533e5c0093ccd77a3fa639fe422",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-f922-7f51-839c-cd29e30e5beb",
+        "initial_run_id": "0.6.1-jett-skill:num_prime_status:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "de112c6d979bf574678ec75392c9b7c2cd07eef2793e9fd4d72f4caaad84a401",
+        "initial_passed": false,
+        "initial_response_id": "01a09432-fc6b-7210-8ebd-f3d2bf007015",
+        "initial_run_id": "0.6.0-pilot:num_prime_status:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_prime_status:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_prime_status",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "ee72937344d10442a71edd0a671055964b4cfd6f212b0ea09248a809096dd29c",
+        "initial_passed": true,
+        "initial_response_id": "01a094bb-a0c0-7803-82d6-090711ada2eb",
+        "initial_run_id": "0.6.1-jett-skill:num_rotate_left:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "af2659f2636f0638719c27374d9c9042d151fc78dd610fe30d72d9cf3108a750",
+        "initial_passed": true,
+        "initial_response_id": "01a09465-9fe5-7ff2-a956-70089d984cf9",
+        "initial_run_id": "0.6.0-pilot:num_rotate_left:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_rotate_left",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "b80226de553b8661bdf7ef3a6a07a6a7a57f134231d577d02f8d370715290129",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-e988-71e0-bff9-7503438c0e0b",
+        "initial_run_id": "0.6.1-jett-skill:num_search_range:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "7573be9ac272ce335f5d6723303287b11dcd2a8983ace346f25a6c5a68dda053",
+        "initial_passed": true,
+        "initial_response_id": "01a0943c-8b5e-75a1-a324-2c999aa12dae",
+        "initial_run_id": "0.6.0-pilot:num_search_range:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_search_range",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "845e01437c3b6b722b5a6b01b4a7718eeb8a946c8ad68062e381fb08c7d7c641",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-21c9-7111-9b92-825373c96f23",
+        "initial_run_id": "0.6.1-jett-skill:num_sorted_insert:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "aa1a1b56241236ab64df0ecab42564fcfcb4378ffdabc99876b0af6569808f56",
+        "initial_passed": true,
+        "initial_response_id": "01a0947e-badb-7ee0-9c33-ab0859393252",
+        "initial_run_id": "0.6.0-pilot:num_sorted_insert:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_sorted_insert",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "f9a5ec235eb3363966937cea082546ed175af23caec139ce9b33d4e0a13232bd",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-a512-7a02-b0db-9b12ff71b552",
+        "initial_run_id": "0.6.1-jett-skill:num_stable_partition:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "30a31676944f8a779f54349e8af477b0786b1c9f539a0bd9154817c61eecc501",
+        "initial_passed": false,
+        "initial_response_id": "01a09477-6223-7362-89e2-d6fcca2f5a2e",
+        "initial_run_id": "0.6.0-pilot:num_stable_partition:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_stable_partition:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_stable_partition",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "6486736e1077d221960402bbdc5dacae7fc480e09d7f0c510b0ec1d9f08abe7b",
+        "initial_passed": true,
+        "initial_response_id": "01a094b9-a313-7d00-9a19-4980e3c84ce0",
+        "initial_run_id": "0.6.1-jett-skill:num_staircase_blocked:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "bf5fbb97b640a46214f9974eb3175bf39eb1e2d0e3017c5d5604daab55c5310b",
+        "initial_passed": false,
+        "initial_response_id": "01a09464-434a-7ae3-a6d6-eedf12916208",
+        "initial_run_id": "0.6.0-pilot:num_staircase_blocked:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_staircase_blocked:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_staircase_blocked",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "ebc508582b6ea900ea1cc4eca3677d5cae9fd9b64b2f2f1a3d2a1c20851012b4",
+        "initial_passed": true,
+        "initial_response_id": "01a094bb-72a9-7b42-9369-9781d7459586",
+        "initial_run_id": "0.6.1-jett-skill:num_totient:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "0d64f79460cffffad0d266cc1880a897cc78db545de14b2a21edc236f15b9121",
+        "initial_passed": false,
+        "initial_response_id": "01a09431-fe3f-7c31-b93a-7bd3b9b79756",
+        "initial_run_id": "0.6.0-pilot:num_totient:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_totient:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_totient",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "e721c4417a723496b09d9da09490f5c7a169acb90fd819a0e3188d260212d0d1",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-7ed9-7122-9056-313b472cfefe",
+        "initial_run_id": "0.6.1-jett-skill:num_trapped_water:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "96129160556924856e693469b424df04b6bfc64a96854385d65aa71f932afd42",
+        "initial_passed": true,
+        "initial_response_id": "01a09477-9f3d-7f93-816a-58b03ef61b4f",
+        "initial_run_id": "0.6.0-pilot:num_trapped_water:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_trapped_water",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "b9015daa835f3d58dc100f257e90189d04f10220f5301db6132ea960278dd98c",
+        "initial_passed": true,
+        "initial_response_id": "01a094bb-1408-79d3-a911-0bdce2aa64dc",
+        "initial_run_id": "0.6.1-jett-skill:num_unique_sorted:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "1a291f029220849cf80ed65de120b0c020ab945930d4a8c17c781d46e8a6e77e",
+        "initial_passed": true,
+        "initial_response_id": "01a09482-637f-7952-83ab-dde1f79ac3c4",
+        "initial_run_id": "0.6.0-pilot:num_unique_sorted:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "num_unique_sorted",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "730593e7b90ed9182ec8fecfc62895e362576d22d64cdae6d2ba6fb34654f75a",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-d2e3-70d2-9d15-4dba2b6a1e19",
+        "initial_run_id": "0.6.1-jett-skill:num_window_peak:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "6ab84a2ebeb052d8cb00c13dc7a9a33a937bad395a7241bced4261260531d94e",
+        "initial_passed": false,
+        "initial_response_id": "01a09427-f046-7373-ba5f-4480b811abc4",
+        "initial_run_id": "0.6.0-pilot:num_window_peak:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:num_window_peak:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "num_window_peak",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "66d559056c5ffb21e0e243fff86c7f31f4d3e542b8563a46cce6127ddbb9344c",
+        "initial_passed": false,
+        "initial_response_id": "01a094b9-e388-7a32-8a3d-dbeb1d8b8f6e",
+        "initial_run_id": "0.6.1-jett-skill:order_lifecycle:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:order_lifecycle:1.0.1:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "ee7c1f98b462c31dad90930584b7a360d4052ea8b5cdcd2ee8f3c52d1fbab724",
+        "initial_passed": true,
+        "initial_response_id": "01a09435-6743-7b20-8540-59ec1821b1b5",
+        "initial_run_id": "0.6.0-pilot:order_lifecycle:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "order_lifecycle",
+      "task_version": "1.0.1"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "1ea3313496d78a45c94e2dbba9478f5421f95ae882f234f1734e03f9c3119ef8",
+        "initial_passed": false,
+        "initial_response_id": "01a094c0-43da-7e51-a751-5c52d922d75e",
+        "initial_run_id": "0.6.1-jett-skill:recursive_expression:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:recursive_expression:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "1c00146492d8ce7dac29d38c1db459a1c1851384c3dc99f72c2affc281da7e68",
+        "initial_passed": false,
+        "initial_response_id": "01a0943a-b886-7c93-90fe-f357aab5f355",
+        "initial_run_id": "0.6.0-pilot:recursive_expression:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:recursive_expression:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "recursive_expression",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "33d4f8a2d32e60ed30b69cc67c85bb7abfaeff0ef0437d40aaade2917f8c3867",
+        "initial_passed": false,
+        "initial_response_id": "01a094bb-b3c0-7b52-8e65-b5b900077a95",
+        "initial_run_id": "0.6.1-jett-skill:score_lines:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:score_lines:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "8a7fb59f21604b28536257fcc19af6f690088a20d76ffb8bce80e50a110ffd85",
+        "initial_passed": true,
+        "initial_response_id": "01a0942a-9883-7441-9174-65cb32d59548",
+        "initial_run_id": "0.6.0-pilot:score_lines:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "score_lines",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "78dc1b7ba02d390702f6152ec703b2448157e1ec17817ce29102190fad8145b0",
+        "initial_passed": true,
+        "initial_response_id": "01a094bb-4898-73e3-9b02-52c562c2b1f0",
+        "initial_run_id": "0.6.1-jett-skill:signed_gcd:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "f2cd5cde264a3547c8408664bedab1eddb9b8938f7ae32d2de49e98e89220f73",
+        "initial_passed": true,
+        "initial_response_id": "01a0942b-18ff-79a2-b6b6-05d7b6c51580",
+        "initial_run_id": "0.6.0-pilot:signed_gcd:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "signed_gcd",
+      "task_version": "1.0.1"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "092fc6c0c1679d7597c99ba3c2eda5dae39a582697e99ca1fe6170820791fb4e",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-894c-7f21-ba3c-84a866a27c79",
+        "initial_run_id": "0.6.1-jett-skill:text_ascii_identifier:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "3eea7a72af0057490d6f92d951c162a5a55ce6ccb78095460c11ab25d51da699",
+        "initial_passed": false,
+        "initial_response_id": "01a09434-503d-75d1-a1f0-4932c13cad5e",
+        "initial_run_id": "0.6.0-pilot:text_ascii_identifier:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "test_failure",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_ascii_identifier:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "task_id": "text_ascii_identifier",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "8200bd6922933957b351d8d5a1c0d4affe41d6fcd073919b27ba77741f72fee9",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-f688-72a1-8e81-ff4dbe48b949",
+        "initial_run_id": "0.6.1-jett-skill:text_binary_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "787f3e156cffad818dde68b8d7cc677916ad0a3cd4cb18a6913a0635e30581e4",
+        "initial_passed": true,
+        "initial_response_id": "01a0947e-d2f5-7532-93a8-9ef776e1646c",
+        "initial_run_id": "0.6.0-pilot:text_binary_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "text_binary_parse",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "da3bc16abfbeb4f191c0ef2287dd677337e6fd5494720092c268b2eff606bfcd",
+        "initial_passed": false,
+        "initial_response_id": "01a094c1-6362-7870-8769-b89361202bc5",
+        "initial_run_id": "0.6.1-jett-skill:text_bracket_balance:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:text_bracket_balance:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "a4e5424ef1cb0764f61057b310b793b029e9644c97a350a395aa341aad74132d",
+        "initial_passed": false,
+        "initial_response_id": "01a09470-0699-7a62-8d4b-a718a41ecfa1",
+        "initial_run_id": "0.6.0-pilot:text_bracket_balance:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_bracket_balance:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_bracket_balance",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "00ac8e8de8f8a695a2ab4763b5961578260f5a2486f7fa9bad8eeebdaf276fcd",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-a32a-7ce2-90b1-079c26c26127",
+        "initial_run_id": "0.6.1-jett-skill:text_camel_to_snake:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "58461a588bb0aa21080937905290274067f230ec10de731ddd30bab32fdd5a45",
+        "initial_passed": false,
+        "initial_response_id": "01a0947a-30bb-7e01-934c-15db5d656a2e",
+        "initial_run_id": "0.6.0-pilot:text_camel_to_snake:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_camel_to_snake:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_camel_to_snake",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "e0704b1f91288823f8e2cb5eee212b14370b4abded6f171b89e69e132b13400a",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-6860-7e30-ba4c-6b59d65f3a2a",
+        "initial_run_id": "0.6.1-jett-skill:text_collapse_spaces:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "a7e378acc29946c9346fa467924bc1450667958c87df96cb936b60ad2762062f",
+        "initial_passed": false,
+        "initial_response_id": "01a09472-5642-73e2-bb6f-1b303ad3fcd4",
+        "initial_run_id": "0.6.0-pilot:text_collapse_spaces:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_collapse_spaces:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_collapse_spaces",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "d44384595b790bf3d6927c91a30df85e8cf4b7eeae929d347b7f19cfb54e3a25",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-9ad6-70a2-8766-cbccda472ffe",
+        "initial_run_id": "0.6.1-jett-skill:text_common_prefix:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "7296736ac44c73134d72475773a97f1082ca784ceb48d4635b9a891d524e5b89",
+        "initial_passed": false,
+        "initial_response_id": "01a0946e-8363-72d1-b898-b2be557bc1ae",
+        "initial_run_id": "0.6.0-pilot:text_common_prefix:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:text_common_prefix:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "text_common_prefix",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "43ca3693bb4073cb6fae3a99bed88c5273fe6faa02a3ad9619ebcbf279d38f03",
+        "initial_passed": true,
+        "initial_response_id": "01a094be-34d2-7e51-aff5-9ae81fd500de",
+        "initial_run_id": "0.6.1-jett-skill:text_count_overlaps:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "c96adf80879588369ec203fda2e749d4133314c5736f7c7c06cc0ddd764cc106",
+        "initial_passed": false,
+        "initial_response_id": "01a09485-a753-7cd0-b3c7-0283c5154793",
+        "initial_run_id": "0.6.0-pilot:text_count_overlaps:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_count_overlaps:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_count_overlaps",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "0e9b0d76f6f9598cfdf18997e001811c2af48115a53f6d6352ac1f943274a90c",
+        "initial_passed": false,
+        "initial_response_id": "01a094bf-bdce-7c90-ab2d-ade5c2fca68f",
+        "initial_run_id": "0.6.1-jett-skill:text_csv_record_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:text_csv_record_parse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "6a0527c7fdce1247df6eac3b5ecfd38a9bd22b9929c37749c7d52a3b8c85ec97",
+        "initial_passed": false,
+        "initial_response_id": "01a09433-31ff-7f90-ba74-6e06a5a11e51",
+        "initial_run_id": "0.6.0-pilot:text_csv_record_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_csv_record_parse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_csv_record_parse",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "6ebbc48ea032b08298ddf025d1ffbbb52b98b9d19ab175bb09ae3ddc90f999d3",
+        "initial_passed": false,
+        "initial_response_id": "01a094c0-c634-7ea1-b6a0-263a8ad90bf7",
+        "initial_run_id": "0.6.1-jett-skill:text_decimal_canonical:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:text_decimal_canonical:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "9b4a7f93010c4262b4b3b8ef21692aa384a74768b553c4862aae4a8abf32f1c7",
+        "initial_passed": false,
+        "initial_response_id": "01a09481-3852-79a3-a2a8-63a753122f67",
+        "initial_run_id": "0.6.0-pilot:text_decimal_canonical:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_decimal_canonical:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_decimal_canonical",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "2a0b4547bc863a571b0a6b1497db6069f15294def121964cef13537048a5ad42",
+        "initial_passed": true,
+        "initial_response_id": "01a094bb-7835-7d93-ac8a-a207d840d394",
+        "initial_run_id": "0.6.1-jett-skill:text_escape_html:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "ccfb4aefd3e3857571d3d96e98d2b14c9126e91b1dc667d76596c5eb2a71fe27",
+        "initial_passed": false,
+        "initial_response_id": "01a09481-febf-7e43-ae24-0d997e9e4974",
+        "initial_run_id": "0.6.0-pilot:text_escape_html:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_escape_html:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_escape_html",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "49251ea8b6c9b36007c85a1f3bc6fb0be77da7ba6216d378ebdf9efea4c855d3",
+        "initial_passed": false,
+        "initial_response_id": "01a094b9-a322-7593-a4e8-7bae0ba6a3fd",
+        "initial_run_id": "0.6.1-jett-skill:text_escape_json_string:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "test_failure",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:text_escape_json_string:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "b558f6310cb635c8db896c1b27e6b56d4ac2c048fed3f22a174e32569a26ff10",
+        "initial_passed": false,
+        "initial_response_id": "01a0947f-9da5-7642-b3ce-3164e5b03ee8",
+        "initial_run_id": "0.6.0-pilot:text_escape_json_string:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_escape_json_string:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_escape_json_string",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "4cbef58c53f6bf60b0cf7e9d54ee4dae3843495cc00ee4451364047995aaff09",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-bfa2-7210-8cb6-0d7d88c0b487",
+        "initial_run_id": "0.6.1-jett-skill:text_extension_split:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "034e0c960bcdce55b2af9a8857cdcd859abd00e6ff35da70e1842bd58a6ecd43",
+        "initial_passed": false,
+        "initial_response_id": "01a0947c-21ac-7593-b040-4cbc031de28d",
+        "initial_run_id": "0.6.0-pilot:text_extension_split:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_extension_split:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "task_id": "text_extension_split",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "ad516f5ea1367261f9e1cb79e332dc783a8502525dfcd7cc382ce2d6ce5c6cad",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-090c-7d82-ac82-3beb829d4dbe",
+        "initial_run_id": "0.6.1-jett-skill:text_glob_match:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "27c78b2b01b61b2d4a544c730421b32cde53875756a0ba5a855433f178a5a28a",
+        "initial_passed": false,
+        "initial_response_id": "01a0946d-be65-7181-8378-f6c74a8d6fbc",
+        "initial_run_id": "0.6.0-pilot:text_glob_match:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:text_glob_match:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "text_glob_match",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "de9f2ae6253bfa5f7ff200a7e727a473dc11566b3b7747742591c36c339c9c4e",
+        "initial_passed": false,
+        "initial_response_id": "01a094ba-cece-7b72-b239-ed99f6fb89ef",
+        "initial_run_id": "0.6.1-jett-skill:text_hex_decode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:text_hex_decode:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "d042edbed4ab2fddc5310c925682b0cd24fc09e0d7d7f90f05cde29d5955e9b7",
+        "initial_passed": false,
+        "initial_response_id": "01a09436-0514-7271-babe-efd22a643b7d",
+        "initial_run_id": "0.6.0-pilot:text_hex_decode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_hex_decode:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_hex_decode",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "3ab3fa0caae72009fd88fdfa30a849b4845949fb732f0c6277008a5e63d45193",
+        "initial_passed": false,
+        "initial_response_id": "01a094bc-6a7a-7633-b603-c32c3fb10338",
+        "initial_run_id": "0.6.1-jett-skill:text_ipv4_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:text_ipv4_parse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "289032b7467a5eaf7d16d6adc14faae0480d5f699af48d8f208eb9e7aa57e50c",
+        "initial_passed": false,
+        "initial_response_id": "01a09478-ead6-7030-b2c9-4581a5d6ef55",
+        "initial_run_id": "0.6.0-pilot:text_ipv4_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.0-pilot:text_ipv4_parse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "task_id": "text_ipv4_parse",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "364e9e40903c60281eb6255df18827471030226f6a0f89085b30ca50a19a9989",
+        "initial_passed": true,
+        "initial_response_id": "01a094b9-a343-75a3-a62a-947a6e2fc77f",
+        "initial_run_id": "0.6.1-jett-skill:text_key_value_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "2670ecb618122c3eb1a70e246d3262f0a1c40376778cf9bd848dd6f985772584",
+        "initial_passed": false,
+        "initial_response_id": "01a09483-5da5-7fe2-83e8-55874712cf1f",
+        "initial_run_id": "0.6.0-pilot:text_key_value_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_key_value_parse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "task_id": "text_key_value_parse",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "3d6292d5eaef746c95a35d1b644857a8dda6c2923d572fcb8e8a67617d796dd5",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-5eec-74f2-99a8-d0c958c7706e",
+        "initial_run_id": "0.6.1-jett-skill:text_longest_word:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "fe08bc917b1473ffe8ae461cf5e217899a8acd866f69f95e0f6ae0eccff02f25",
+        "initial_passed": false,
+        "initial_response_id": "01a09471-c60e-78e2-bc58-7b73a06499a7",
+        "initial_run_id": "0.6.0-pilot:text_longest_word:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_longest_word:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_longest_word",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "2c01ed1e0250e1dcf90706fe5fcedbac8e970cbb178c58d183e4bb88fac7e9c4",
+        "initial_passed": true,
+        "initial_response_id": "01a094ba-e955-7e91-9a78-dd31fa8248bd",
+        "initial_run_id": "0.6.1-jett-skill:text_palindrome_filter:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "af984de60946d4936f4e9c2234c9c43ef1a4bce483502708a1baefb4dbc93e91",
+        "initial_passed": false,
+        "initial_response_id": "01a0943d-5271-7d21-ada8-375fdf9f7784",
+        "initial_run_id": "0.6.0-pilot:text_palindrome_filter:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_palindrome_filter:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_palindrome_filter",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "604c8739d9ea7dce13dd445a38f1268fd0483ecb2d9a955ee753f788a949104f",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-ccba-7a30-901f-b38e0da01482",
+        "initial_run_id": "0.6.1-jett-skill:text_path_normalize:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "23d51f006f3418bb33f8c8d20a691746948311cfc2540d6c2aab39c8146f291f",
+        "initial_passed": false,
+        "initial_response_id": "01a09480-cdd6-7700-9de6-abab249c72f7",
+        "initial_run_id": "0.6.0-pilot:text_path_normalize:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_path_normalize:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_path_normalize",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "5e1f0fba36435ace6b20ea67d1184b4b77e3c61a3dfce01a68376951dbe7506e",
+        "initial_passed": false,
+        "initial_response_id": "01a094c3-15e6-7010-8ded-ab3a040105bc",
+        "initial_run_id": "0.6.1-jett-skill:text_percent_decode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:text_percent_decode:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "c0159905b37d3f90f5e94335059c4b110505f4890f99b09866ca1a2f0be36a85",
+        "initial_passed": false,
+        "initial_response_id": "01a0943d-bd68-7153-82d8-d4860e0de2d3",
+        "initial_run_id": "0.6.0-pilot:text_percent_decode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_percent_decode:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_percent_decode",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "37fc39cbd8523b03174488aff576fa25ea2fc367a3bbb761a904d456479aa07c",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-6132-7331-9ce4-55aef11c5d4f",
+        "initial_run_id": "0.6.1-jett-skill:text_reverse_words:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "c21f68aee07f9afc741acc315bc971c88cb3c266f4c241ac9829579b8a117607",
+        "initial_passed": false,
+        "initial_response_id": "01a09463-9b68-76e2-a4f8-e35c65c4cde1",
+        "initial_run_id": "0.6.0-pilot:text_reverse_words:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_reverse_words:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_reverse_words",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "0161107263e54a91e02a10bee2fdd79e7989cf34bce921a1f887247a1c4a8826",
+        "initial_passed": false,
+        "initial_response_id": "01a094bb-634b-7601-b6ec-f8d2b5440c1f",
+        "initial_run_id": "0.6.1-jett-skill:text_rle_decode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:text_rle_decode:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "158541fecdfb7f3d7df779becb7af9d290e7e04ba7682e97c7a162801e18fbbd",
+        "initial_passed": false,
+        "initial_response_id": "01a0942c-9ab4-72c1-87da-8cf84f676aad",
+        "initial_run_id": "0.6.0-pilot:text_rle_decode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_rle_decode:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_rle_decode",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "7317d7dbf299c532d8dcdd67d8483de2e2d2780580e6042c0e6da8fc30f044cf",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-0042-7a40-a765-165294ae97f3",
+        "initial_run_id": "0.6.1-jett-skill:text_rle_encode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "dd932f0d90ba01744e59ee0362e8391bf976b6957bc5b00b3247b38e59204871",
+        "initial_passed": false,
+        "initial_response_id": "01a0943b-15ca-7b83-b23a-cebc9a88bd51",
+        "initial_run_id": "0.6.0-pilot:text_rle_encode:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_rle_encode:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_rle_encode",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "e898368d39394eafada1d4cac02d893cf08cc1de4398f9f5e46a676b66803e7e",
+        "initial_passed": true,
+        "initial_response_id": "01a094bf-0bad-7831-be92-0e898f1cef30",
+        "initial_run_id": "0.6.1-jett-skill:text_strip_line_comments:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "c03890c0bda0dfab9b1d938306f4d377cef3c0e673d611cf93dee5ea8a88207b",
+        "initial_passed": false,
+        "initial_response_id": "01a09471-3485-7ab3-ae19-d18c7082a2d1",
+        "initial_run_id": "0.6.0-pilot:text_strip_line_comments:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_strip_line_comments:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_strip_line_comments",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": false,
+        "initial_generation_sha256": "b697c75844753d93e6cb2d6dc5ac5595d495a56195856a054498733e6c1ae158",
+        "initial_passed": false,
+        "initial_response_id": "01a094be-06da-75b2-ae45-f4c34866011f",
+        "initial_run_id": "0.6.1-jett-skill:text_time_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.1-jett-skill:text_time_parse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "df577dfbd17de57ada5461b4a6872f98f89828d6bc53529c0c3742346a649d0c",
+        "initial_passed": false,
+        "initial_response_id": "01a09486-ec60-7351-9926-fafbe59bb50d",
+        "initial_run_id": "0.6.0-pilot:text_time_parse:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_time_parse:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "test_failure"
+      },
+      "task_id": "text_time_parse",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "5ccaa97516f95eb7307fc01a2912c9c4abc99f849398f87ed41ab1e2707410a3",
+        "initial_passed": true,
+        "initial_response_id": "01a094c1-27ca-7e21-8160-1d32f77f185a",
+        "initial_run_id": "0.6.1-jett-skill:text_title_words:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "79f70eca3a41df13492a795d25f8f47e93d899665b0f662599be532ecac81b9d",
+        "initial_passed": false,
+        "initial_response_id": "01a09468-669c-7ba1-ac31-1fb38f516604",
+        "initial_run_id": "0.6.0-pilot:text_title_words:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_title_words:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_title_words",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "a60be95bffd04c425b6cc5437dfd438a7beece81e331cfa429ab0d682a4381d9",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-3ba8-7a70-b1ef-e9fb1224b2b6",
+        "initial_run_id": "0.6.1-jett-skill:text_unescape_backslash:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "5167e9d2e7542fe54d36d7081e666aa517f86b33fd2b53aca449857d86ddc73a",
+        "initial_passed": false,
+        "initial_response_id": "01a09478-f245-77e1-b78f-59fc259197ab",
+        "initial_run_id": "0.6.0-pilot:text_unescape_backslash:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_unescape_backslash:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_unescape_backslash",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "195b7b81763f9a17956049246f056583cb0813718e26e3c08c0b361146b848be",
+        "initial_passed": true,
+        "initial_response_id": "01a094bc-ff1b-74a2-8440-65773353a31e",
+        "initial_run_id": "0.6.1-jett-skill:text_version_compare:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "667d370e974d7aa70833b040d3af33cca24de6dc1ae28a027d3fc1a74ba31579",
+        "initial_passed": true,
+        "initial_response_id": "01a0942f-a1ba-72b1-aee9-808481747fd1",
+        "initial_run_id": "0.6.0-pilot:text_version_compare:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "text_version_compare",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "d5e5dbfe9573e2a6544e928ddc399d27b377150fef7eb07ccae4e37b64539a83",
+        "initial_passed": true,
+        "initial_response_id": "01a094c2-ca2f-70d3-a01b-e38912752c4e",
+        "initial_run_id": "0.6.1-jett-skill:text_word_initials:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "e1b78e22b888daf12529ca6d292fd0d25f4689a7287d2690ae54483ba50f1311",
+        "initial_passed": false,
+        "initial_response_id": "01a09460-53db-7e83-8c99-1f899c7a4513",
+        "initial_run_id": "0.6.0-pilot:text_word_initials:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_word_initials:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_word_initials",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "309dd36fe0ebfe4369f46b21791a7f7ba47a9b393f6e9ba32d9020fc0444a6ea",
+        "initial_passed": true,
+        "initial_response_id": "01a094c0-88f5-7840-9980-dd75c250c45f",
+        "initial_run_id": "0.6.1-jett-skill:text_wrap_words:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "before": {
+        "final_passed": false,
+        "initial_generation_sha256": "15c2d087cf736231054a7efcfb9535788ea79f5d473f4952d362121082087b84",
+        "initial_passed": false,
+        "initial_response_id": "01a0942b-a280-77a0-b776-dfb5a8646a06",
+        "initial_run_id": "0.6.0-pilot:text_wrap_words:1.0.0:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": false,
+        "repair_run_id": "0.6.0-pilot:text_wrap_words:1.0.0:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "compile_error"
+      },
+      "task_id": "text_wrap_words",
+      "task_version": "1.0.0"
+    },
+    {
+      "after": {
+        "final_passed": true,
+        "initial_generation_sha256": "a1dc09ef658f15ea8323f7080186856a05eba082f50e132228633fad080d1588",
+        "initial_passed": false,
+        "initial_response_id": "01a094bc-2805-7c31-8caf-e8b750c278af",
+        "initial_run_id": "0.6.1-jett-skill:triangle_kind:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "compile_error",
+        "repair_passed": true,
+        "repair_run_id": "0.6.1-jett-skill:triangle_kind:1.0.1:jett:skill_assisted:medium:01:repair01",
+        "repair_status": "passed"
+      },
+      "before": {
+        "final_passed": true,
+        "initial_generation_sha256": "d62f10f8bbbc45d232c8ca0305676c1fa5e8be2ca1181b8475892cf194fcb222",
+        "initial_passed": true,
+        "initial_response_id": "01a09475-3a5c-7ed0-a51a-ec52557ceba0",
+        "initial_run_id": "0.6.0-pilot:triangle_kind:1.0.1:jett:skill_assisted:medium:01",
+        "initial_status": "passed",
+        "repair_passed": null,
+        "repair_run_id": null,
+        "repair_status": null
+      },
+      "task_id": "triangle_kind",
+      "task_version": "1.0.1"
+    }
+  ]
+}

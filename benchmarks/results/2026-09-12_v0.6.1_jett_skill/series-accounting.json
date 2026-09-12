@@ -1,0 +1,61 @@
+{
+  "campaigns": [
+    {
+      "accounting_sha256": "0f128cbbd95ab3b9a91dbf28c7b3152267e27034fc1163e941a739622b855984",
+      "campaign": "v0.6.0-four-cell",
+      "completed_responses": 1234
+    },
+    {
+      "accounting_sha256": "b2f078b138e1c5902362fa9410a9372c6d541f266ac6f0d0d6d6585527e57574",
+      "campaign": "v0.6.1-jett-skill",
+      "completed_responses": 129
+    }
+  ],
+  "completed_response_usage": {
+    "cached_input_tokens": 15816192,
+    "cached_input_tokens_known_rows": 1363,
+    "code_bytes": 1159306,
+    "code_chars": 1159306,
+    "input_tokens": 18561421,
+    "input_tokens_known_rows": 1363,
+    "latency_ms": 18545664.58809888,
+    "latency_ms_known_rows": 1363,
+    "output_tokens": 749901,
+    "output_tokens_known_rows": 1363,
+    "reasoning_tokens": 448057,
+    "reasoning_tokens_known_rows": 1363,
+    "responses": 1363
+  },
+  "distinct_run_and_response_ids_verified": true,
+  "exclusions": [
+    "earlier calibration campaigns",
+    "benchmark authoring, reference checks, and orchestration usage"
+  ],
+  "metric_notes": [
+    "cached input is included in input",
+    "reasoning tokens are included in output",
+    "latency sums model-call time, not parallel wall time",
+    "code sizes include all extracted candidates, including failures"
+  ],
+  "schema_version": 1,
+  "scope": "known consumption across these two campaigns only; no pooled performance score",
+  "total_campaign_consumption": {
+    "cached_input_tokens": null,
+    "complete": false,
+    "input_tokens": null,
+    "latency_ms": null,
+    "output_tokens": null,
+    "reasoning_tokens": null
+  },
+  "unknown_original_attempts": {
+    "count": 3,
+    "run_ids": [
+      "0.6.0-pilot:score_lines:1.0.0:python:zero_shot:medium:01",
+      "0.6.0-pilot:score_lines:1.0.0:rust:skill_assisted:medium:01",
+      "0.6.0-pilot:text_ipv4_parse:1.0.0:python:skill_assisted:medium:01"
+    ],
+    "server_completion": "unknown",
+    "tool_calls": null,
+    "usage": null
+  }
+}

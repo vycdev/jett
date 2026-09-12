@@ -76,5 +76,14 @@ It preserves all 1,000 initial responses and 234 failed-only repairs, with
 766/1,000 initial and 845/1,000 final passes. Jett's original skill treatment
 passed 33/100 initially and 66/100 after repair. The independent audit, all
 20 metric cells, and complete raw evidence are published together; consumption
-for the three lost original calls remains unknown. The separately versioned
-full-100-task Jett skill follow-up is still pending.
+for the three lost original calls remains unknown.
+
+The completed full-100-task Jett skill follow-up is in
+[`2026-09-12_v0.6.1_jett_skill/`](2026-09-12_v0.6.1_jett_skill/README.md).
+It passed 71/100 one-shot and 87/100 after repair, compared with 33/100 and
+66/100 for the original skill. Paired gains/regressions were 43/5 one-shot
+and 26/5 after repair. It preserves all 129 responses, a fresh 500-reference
+gate, exact frozen inputs, full metrics, and row-level comparisons. The two
+campaigns are reported separately; their combined consumption ledger counts
+1,363 saved responses once while retaining unknown overhead for the three
+interrupted originals.
