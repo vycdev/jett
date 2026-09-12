@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,13 @@ class CampaignTests(unittest.TestCase):
                 "input_tokens": 100, "cached_input_tokens": 30, "output_tokens": 20,
                 "reasoning_tokens": 10, "source_bytes": 3, "extracted_source": "é\n",
                 "latency_ms": 2.0, **fields}
+
+    def attach_trace(self, directory: Path, stage: str, row: dict) -> dict:
+        events = directory / f"events-{stage}"
+        events.mkdir(parents=True, exist_ok=True)
+        trace = events / (bench.sha256_text(row["run_id"]) + ".jsonl")
+        trace.write_text('{"type":"turn.completed"}\n', encoding="utf-8", newline="\n")
+        return {**row, "raw_event_log": trace.name, "raw_event_log_sha256": campaign.digest(trace)}
 
     def test_duplicate_rows_cannot_silently_change_scores(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -31,6 +39,38 @@ class CampaignTests(unittest.TestCase):
             plans[0]["prompt_sha256"] = "edited"
             with self.assertRaisesRegex(bench.BenchmarkError, "frozen plan"):
                 campaign.remaining_rows(plans, path, None)
+
+    def test_generation_refuses_unjournaled_attempts_before_any_new_call(self) -> None:
+        for status in ("started", "completed", "timeout", "backend_error", "launch_error"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as name:
+                root = Path(name)
+                events = root / "events-initial"
+                events.mkdir()
+                campaign.write_json(events / "prior.attempt.json", {
+                    "run_id": "b", "prompt_sha256": "b", "status": status,
+                })
+                with patch.object(campaign, "verify_snapshot", return_value={}), \
+                        patch.object(campaign, "stage_plan", return_value=[self.row("a"), self.row("b")]), \
+                        patch.object(bench, "codex_backend_info") as backend, \
+                        patch.object(bench, "call_codex_subscription") as call:
+                    # b is beyond this invocation's limit; it must still stop a.
+                    with self.assertRaisesRegex(bench.BenchmarkError, "automatic retry refused"):
+                        campaign.generate(root, "initial", 1, 1)
+                    backend.assert_not_called()
+                    call.assert_not_called()
+                self.assertFalse((root / "initial-raw.jsonl").exists())
+
+    def test_journaled_attempt_does_not_prevent_continuing_other_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            events = root / "events-initial"
+            events.mkdir()
+            campaign.write_json(events / "prior.attempt.json", {"run_id": "a", "status": "completed"})
+            path = root / "initial-raw.jsonl"
+            bench.write_jsonl(path, [self.row("a")])
+            remaining = campaign.remaining_rows([self.row("a"), self.row("b")], path, None)
+            campaign.require_unattempted(remaining, events)
+            self.assertEqual([row["run_id"] for row in remaining], ["b"])
 
     def test_bounded_dispatch_stops_on_backend_error_and_journals_success(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -159,7 +199,7 @@ class CampaignTests(unittest.TestCase):
     def test_report_shows_cached_tokens_and_model_latency(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            initial = self.row("a", status="passed", passed=True, latency_ms=2500.0)
+            initial = self.attach_trace(root, "initial", self.row("a", status="passed", passed=True, latency_ms=2500.0))
             bench.write_jsonl(root / "initial-plan.jsonl", [initial])
             bench.write_jsonl(root / "initial-raw.jsonl", [initial])
             bench.write_jsonl(root / "initial-graded.jsonl", [
@@ -173,6 +213,79 @@ class CampaignTests(unittest.TestCase):
             self.assertIn("Cached input", report)
             self.assertIn("Latency (s)", report)
             self.assertIn("| 100 | 30 | 20 | 10 | 2.5 | 2 | 3 |", report)
+
+    def test_report_rejects_missing_changed_or_unbound_raw_traces(self) -> None:
+        for defect in ("missing", "changed", "metadata"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as name:
+                root = Path(name)
+                initial = self.attach_trace(root, "initial", self.row("a", status="passed", passed=True))
+                trace = root / "events-initial" / initial["raw_event_log"]
+                if defect == "missing":
+                    trace.unlink()
+                elif defect == "changed":
+                    trace.write_text('{"type":"different"}\n', encoding="utf-8", newline="\n")
+                else:
+                    del initial["raw_event_log_sha256"]
+                bench.write_jsonl(root / "initial-plan.jsonl", [initial])
+                bench.write_jsonl(root / "initial-raw.jsonl", [initial])
+                bench.write_jsonl(root / "initial-graded.jsonl", [
+                    {**initial, "generation_sha256": campaign.row_digest(initial)},
+                ])
+                with patch.object(campaign, "verify_snapshot", return_value={}):
+                    with self.assertRaisesRegex(bench.BenchmarkError, "raw event evidence"):
+                        campaign.report(root)
+                self.assertFalse((root / "REPORT.md").exists())
+                self.assertFalse((root / "summary.json").exists())
+
+    def test_event_evidence_is_required_for_repairs_and_cannot_escape_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            repair = self.attach_trace(root, "repair", self.row("a:repair01"))
+            campaign.verify_event_evidence(root, "repair", [repair])
+            with self.assertRaisesRegex(bench.BenchmarkError, "missing"):
+                campaign.verify_event_evidence(root, "initial", [repair])
+            repair["raw_event_log"] = "../events-repair/" + repair["raw_event_log"]
+            with self.assertRaisesRegex(bench.BenchmarkError, "stage-local"):
+                campaign.verify_event_evidence(root, "initial", [repair])
+
+    def test_snapshot_excludes_python_caches_like_docker_context(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            benchmarks = root / "benchmarks"
+            task = benchmarks / "tasks" / "sample"
+            cache = task / "__pycache__"
+            cache.mkdir(parents=True)
+            (cache / "baseline.cpython.pyc").write_bytes(b"cache")
+            (task / "baseline.pyc").write_bytes(b"legacy cache")
+            (task / "baseline.py").write_text("source", encoding="utf-8")
+            (root / "Cargo.toml").write_text("manifest", encoding="utf-8")
+            (benchmarks / "sandbox").mkdir()
+            (benchmarks / "sandbox/Dockerfile").write_text("image", encoding="utf-8")
+            with patch.object(bench, "ROOT", root), patch.object(bench, "BENCHMARKS", benchmarks), \
+                    patch.object(bench, "SKILL_ROOT", root / "skills"):
+                paths = campaign.snapshot_inputs()
+            self.assertIn("benchmarks/tasks/sample/baseline.py", paths)
+            self.assertEqual(len(paths), 3)
+
+    def test_isolated_grader_receives_frozen_config_not_image_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            config = {"grader_timeout_seconds": 17, "benchmark_version": "frozen"}
+            campaign.write_json(root / "config.json", config)
+            row = self.row("a", status="generated")
+
+            def execute(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                self.assertIn("/results/config.json", command)
+                self.assertLess(command.index("--config"), command.index("grade-results"))
+                mount = command[command.index("--mount") + 1]
+                work = Path(mount.removeprefix("type=bind,source=").removesuffix(",target=/results"))
+                self.assertEqual(bench.read_json(work / "config.json"), config)
+                bench.write_jsonl(work / "output.jsonl", [{**row, "status": "passed", "passed": True}])
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.object(campaign.subprocess, "run", side_effect=execute):
+                assessed = campaign.docker_grade(row, "frozen-image", root)
+            self.assertTrue(assessed["passed"])
 
 
 if __name__ == "__main__":

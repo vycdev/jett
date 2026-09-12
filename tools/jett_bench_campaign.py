@@ -49,7 +49,9 @@ def snapshot_inputs() -> dict[str, str]:
     paths.update((bench.ROOT / "crates").rglob("Cargo.toml"))
     paths.update((bench.ROOT / "stdlib").rglob("*.jett"))
     for directory in (bench.BENCHMARKS / "tasks", bench.SKILL_ROOT, bench.BENCHMARKS / "references"):
-        paths.update(path for path in directory.rglob("*") if path.is_file())
+        paths.update(path for path in directory.rglob("*")
+                     if path.is_file() and "__pycache__" not in path.parts
+                     and path.suffix not in {".pyc", ".pyo"})
     paths.update((bench.ROOT / "tools").glob("jett_bench*.py"))
     paths.update([bench.ROOT / "Cargo.toml", bench.BENCHMARKS / "sandbox" / "Dockerfile"])
     lockfile = bench.ROOT / "Cargo.lock"
@@ -248,6 +250,35 @@ def remaining_rows(plans: list[Row], output: Path, limit: int | None) -> list[Ro
     return [row for row in plans if row["run_id"] not in ids][:limit]
 
 
+def require_unattempted(rows: list[Row], event_directory: Path) -> None:
+    """Do not silently resample a call whose result was never journaled."""
+    pending_ids = {row["run_id"] for row in rows}
+    for path in sorted(event_directory.glob("*.attempt.json")):
+        attempt = bench.read_json(path)
+        if attempt.get("run_id") in pending_ids:
+            raise bench.BenchmarkError(
+                f"prior generation attempt has no journaled result for {attempt['run_id']}: {path}; "
+                "inspect and recover the existing evidence before resuming; automatic retry refused"
+            )
+
+
+def verify_event_evidence(directory: Path, stage: str, rows: list[Row]) -> None:
+    """Require the retained event trace bound to every generated response."""
+    event_directory = (directory / f"events-{stage}").resolve()
+    for row in rows:
+        filename = row.get("raw_event_log")
+        expected_hash = row.get("raw_event_log_sha256")
+        if not isinstance(filename, str) or not filename or not isinstance(expected_hash, str):
+            raise bench.BenchmarkError(f"raw event evidence metadata missing for {row['run_id']}")
+        path = (event_directory / filename).resolve()
+        if path.parent != event_directory or Path(filename).name != filename:
+            raise bench.BenchmarkError(f"raw event evidence path is not a stage-local file: {filename}")
+        if not path.is_file():
+            raise bench.BenchmarkError(f"raw event evidence missing for {row['run_id']}: {path}")
+        if digest(path) != expected_hash:
+            raise bench.BenchmarkError(f"raw event evidence changed for {row['run_id']}: {path}")
+
+
 def stage_plan(directory: Path, stage: str) -> list[Row]:
     initial = read_rows(directory / "initial-plan.jsonl")
     if stage == "initial":
@@ -267,6 +298,9 @@ def generate(directory: Path, stage: str, jobs: int, limit: int | None) -> None:
     plans = stage_plan(directory, stage)
     output_path = directory / f"{stage}-raw.jsonl"
     remaining = remaining_rows(plans, output_path, limit)
+    # Check the entire unfinished stage, even when --limit selects an earlier
+    # clean row. A prior call requires evidence recovery before further sampling.
+    require_unattempted(remaining_rows(plans, output_path, None), directory / f"events-{stage}")
     if not remaining:
         print("generation complete; no remaining prompts", flush=True)
         return
@@ -291,13 +325,14 @@ def docker_grade(row: Row, image: str, directory: Path) -> Row:
     with tempfile.TemporaryDirectory(prefix="jett-grade-", dir=directory) as name:
         work = Path(name)
         bench.write_jsonl(work / "input.jsonl", [row])
+        write_json(work / "config.json", bench.read_json(directory / "config.json"))
         container = f"jett-bench-{uuid.uuid4().hex}"
         command = [
             "docker", "run", "--rm", "--name", container, "--network", "none",
             "--memory", "2g", "--cpus", "2", "--pids-limit", "256",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--mount", f"type=bind,source={work.resolve()},target=/results",
-            image, "grade-results", "/results/input.jsonl", "--output",
+            image, "--config", "/results/config.json", "grade-results", "/results/input.jsonl", "--output",
             "/results/output.jsonl", "--allow-unsafe-local",
         ]
         try:
@@ -391,6 +426,7 @@ def report(directory: Path) -> None:
     for stage, graded in (("initial", initial), ("repair", repairs)):
         raw = read_rows(directory / f"{stage}-raw.jsonl")
         require_coverage(raw, stage_plan(directory, stage), f"completed {stage} generation")
+        verify_event_evidence(directory, stage, raw)
         raw_by_id = {row["run_id"]: row for row in raw}
         for row in graded:
             if row.get("generation_sha256") != row_digest(raw_by_id[row["run_id"]]):

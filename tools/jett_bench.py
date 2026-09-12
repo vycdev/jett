@@ -547,11 +547,13 @@ def grade_source(
         work = Path(name)
         candidate = work / adapter["candidate"]
         hidden_source = (task_directory / adapter["hidden"]).read_text(encoding="utf-8")
-        if adapter["grade_mode"] == "append":
+        jett_append = language == "jett" and adapter["grade_mode"] == "append"
+        if adapter["grade_mode"] == "append" and not jett_append:
             candidate.write_text(source.rstrip() + "\n" + hidden_source, encoding="utf-8", newline="\n")
         else:
             candidate.write_text(source, encoding="utf-8", newline="\n")
-            shutil.copy2(task_directory / adapter["hidden"], work / adapter["hidden"])
+            if not jett_append:
+                shutil.copy2(task_directory / adapter["hidden"], work / adapter["hidden"])
         for support_file in adapter.get("support_files", []):
             shutil.copy2(task_directory / support_file, work / support_file)
 
@@ -568,6 +570,11 @@ def grade_source(
         logs = []
         compile_succeeded: bool | None = None
         for index, template in enumerate(adapter["commands"]):
+            if jett_append and index == len(adapter["commands"]) - 1:
+                # Pure verify blocks can execute at comptime. Keep them out of
+                # the source-only build so a wrong answer is not a syntax error.
+                candidate.write_text(source.rstrip() + "\n" + hidden_source,
+                                     encoding="utf-8", newline="\n")
             command = [replacements.get(part, part) for part in template]
             process_environment = safe_process_environment()
             if command[0] == "go":
@@ -632,12 +639,20 @@ def grade_source(
             })
             if completed.returncode != 0:
                 is_compile = index < len(adapter["commands"]) - 1
+                diagnostic = completed.stderr or completed.stdout or ""
+                if jett_append and not is_compile:
+                    # Interface mismatches discovered by the tests are still
+                    # compile failures; E9000 verify assertions are test failures.
+                    errors = re.findall(r"error\[E(\d+)\]:\s*([^\n]*)", diagnostic)
+                    if errors:
+                        is_compile = not all(code == "9000" and message.startswith("comptime verify failed")
+                                             for code, message in errors)
                 return {
                     "status": "compile_error" if is_compile else "test_failure",
                     "passed": False,
                     "compile_succeeded": False if is_compile else compile_succeeded,
                     "grader_runtime_ms": (time.perf_counter() - started) * 1000,
-                    "diagnostic": (completed.stderr or completed.stdout or "")[-8000:],
+                    "diagnostic": diagnostic[-8000:],
                     "command_logs": logs,
                 }
             if index < len(adapter["commands"]) - 1:
@@ -821,7 +836,7 @@ def repair_envelope(
 
 
 PRIVATE_DIAGNOSTIC_FILE = re.compile(
-    r"(?i)(?:^|[\\/])(?:hidden(?:_test)?|grader)(?:\.[a-z0-9]+)?(?:$|[:\\/])"
+    r"(?i)(?<![A-Za-z0-9_.])(?:hidden(?:_test)?|grader)(?:\.[a-z0-9]+)?(?=$|[:(\\/])"
 )
 
 
