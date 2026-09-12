@@ -66,6 +66,10 @@ Future independent tasks and repeated samples are needed for broad rankings.
   were 766; 79 repairs passed, producing 845/1,000 final passes. The original
   Jett skill treatment passed 33/100 initially and 66/100 after repair.
   The separate full-100-task skill-revision follow-up is still required.
+- The v0.6.1 follow-up skill revision is ready for its fresh baseline gate:
+  only the Jett skill entrypoint/reference change among frozen source inputs.
+  Its separate configuration is `benchmarks/config/jett_skill_v0.6.1.json`.
+  No follow-up scores are available yet.
 
 ## Run checkpoint (2026-09-12)
 
@@ -332,3 +336,38 @@ Do not combine both revisions with the generic `aggregate` command: its grouping
 dimensions do not distinguish benchmark versions or skill hashes. Publish each
 campaign summary separately, then compare matching task outcomes explicitly,
 including gains, regressions, and unchanged outcomes for both prompt budgets.
+
+## Jett skill revision v0.6.1 (2026-09-12)
+
+The original complete publication was committed and pushed as `7c88011` before
+editing the skill. The original v0.5.4 guide remains recoverable byte for byte
+from its frozen input archive and pinned image.
+
+A bounded review of public Jett skill-assisted diagnostics identified these
+overlapping categories: string syntax/API gaps in 22 initially failed candidates
+and 18 failed repairs; ownership gaps in 23 and eight; complexity in nine and
+four; and nonzero-proof gaps in five initial candidates. These are lower bounds:
+12 normalized compiler messages and five private-test failure texts were not
+used for category attribution. Thirteen initial string-addition failures became
+invented `string.concat` calls in repair. None of this predicts the new score.
+
+The revision teaches canonical interpolation and public string signatures,
+explicit borrowing iteration, local equality-based nonzero proofs, result
+construction, and earlier per-function complexity budgeting. All advice was
+checked against implemented public documentation and stdlib signatures. It
+contains no task algorithm, identifier, fixture, hidden expectation, or tailored
+repair recipe. Independent review found no actionable accuracy or scope issues.
+
+Validation: the skill validator passed; all five exact fenced Jett anchors
+built with zero diagnostics and passed formatter checks. Four neutral `verify`
+blocks additionally passed for repeated borrowed access, guarded division and
+result handling, interpolation/literal braces, grapheme access, and documented
+case/split/join signatures. These trusted examples are not benchmark candidates
+and required no additional evaluated-model calls.
+
+The separate version is `0.6.1-jett-skill`, subset `jett-v0.6.1`. Its configuration
+preserves every original setting except version/subset identity. Preparation
+must select exactly 100 Jett skill-assisted cells; the original five-language
+configuration remains intact for the fresh 500-reference gate. The comparison
+will change guidance length as well as content, and remains development-set
+informed rather than a held-out experiment.

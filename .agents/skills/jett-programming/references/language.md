@@ -18,9 +18,9 @@ namespace sample
 struct Coordinate:
     row: int64
     column: int64
-function count_positive(values: list[int64]) returns int64:
+function count_positive(view values: list[int64]) returns int64:
     mutable int64 count = 0
-    for value in values:
+    for value in view values:
         if value > 0:
             count = count + 1
     return count
@@ -32,7 +32,17 @@ function shift(point: Coordinate, row_delta: int64) returns Coordinate:
 
 Use `if` / `else if` / `else`, `for item in items:`, and `while condition:`. Equality operators are `==` and `!=`; boolean operators are `and`, `or`, and `not`; remainder is `modulo`. A newline ends an ordinary expression: keep each function call and constructor argument list on one physical line. When a call would be too long, bind typed intermediate values first instead of wrapping its arguments across lines.
 
-Functions have a cyclomatic-complexity maximum of 10 and bounded nesting, statements, and parameters. Nested matches and every `and` or `or` condition add decision points, so a short-looking function can still exceed the limit. Extract small typed helpers before writing a full branch matrix, declare them before the caller, and keep each function below the limit.
+Functions have a cyclomatic-complexity maximum of 10, nesting depth at most 4, and at most 100 statements, plus bounded parameters. Nested matches and every `and` or `or` condition add decision points, so a short-looking function can still exceed the limit. Extract small typed helpers before writing a full branch matrix, declare them before the caller, and keep each function below the limit.
+
+Integer arithmetic wraps at the checked primitive width. Integer `/` and `modulo` require a locally proven nonzero divisor: a nonzero refinement, a nonzero literal or immutable binding, or an explicit equality guard. An inequality such as `divisor > 0` is not a substitute for the recognized `divisor != 0` proof. Keep the operation inside that guarded branch; reassignment can invalidate the proof. Arithmetic itself does not return a handled error.
+
+```jett
+namespace arithmetic_sample
+function checked_divide(numerator: int64, divisor: int64) returns result[int64, string]:
+    if divisor != 0:
+        return ok(numerator / divisor)
+    return fail("zero divisor")
+```
 
 ## Closed data and failures
 
@@ -53,7 +63,7 @@ function lookup_label(state: Lookup) returns string:
 
 `result[T, E]`, `optional[T]`, and user enums have distinct handling:
 
-- A result is unwrapped only with `handle error:`; the handler ends in `return` or `default`.
+- A result is constructed as `ok(value)` or `fail(error_value)`, not `err(...)` or qualified variants. It is unwrapped only with `handle error:`; the handler ends in `return` or `default`.
 - An optional is constructed as `some(value)` or `none` and unwrapped only with bare `handle:`; the handler ends in `return` or `default`.
 - A user enum is coarsened with exhaustive `match`.
 
@@ -68,6 +78,8 @@ Numbers, `bool`, `nothing`, and immutable `string` are implicitly copyable. `byt
 - Collection-transforming operations consume a collection and return its replacement.
 - `mutable` permits local rebinding; it does not create a mutable reference.
 - Closures capture only implicitly copyable values.
+
+`for item in items:` consumes the collection. Use `for item in view items:` when reading a view parameter or when the collection is needed again. Move-only elements in that loop are views too: inspect or pass them with `view`, and use `clone item` only when an owned copy is needed. Do not consume or rebind the borrowed collection while iterating it.
 
 Lists are the only sequence type. Construct collections with standard-library constructors, not `[]` or `{}` literals. Collection operations are namespace-qualified generic calls, not methods or indexing. Observers borrow with `view`; transformations consume the collection and must be assigned back.
 
@@ -101,6 +113,33 @@ function collection_forms() returns int64:
 Use `list.get` rather than `values[index]`, `set.contains` rather than a method call, `map.has` (or its `map.contains_key` alias) for map membership, and `map.get_or` rather than `map[key]`. There is no `map.contains`. Query the compiler for the exact signature when uncertain.
 
 Parse decimal integers with `int64.from_string(text) handle error:` and render them with `string.from_int64(value)`.
+
+## Strings
+
+Build strings with interpolation: `"{left}{right}"`, not `left + right` or `string.concat`. Every ordinary quoted string supports `{expression}`; no prefix is needed. Interpolated values must implement `Displayable`. Use `{{` and `}}` for literal braces.
+
+String positions count Unicode grapheme clusters, not bytes. A character is a `string`, not a `char` primitive or integer code point. Common implemented signatures are:
+
+- `string.char_count(text) returns int64`
+- `string.chars(text) returns list[string]`
+- `string.char_at(text, index) returns optional[string]`
+- `string.slice(text, start, end) returns string` (end-exclusive)
+- `string.index_of(text, needle) returns optional[int64]`
+- `string.lower(text) returns string` and `string.upper(text) returns string`
+- `string.split(text, delimiter) returns list[string]`
+- `string.join(parts, separator) returns string` (consumes `parts`)
+
+Unwrap `char_at` and `index_of` with bare `handle:`. Iterate a string's characters through `string.chars`, not by treating the string as a list.
+
+```jett
+namespace text_sample
+function label(name: string, count: int64) returns string:
+    return "{name}: {count}"
+function first_character(text: string) returns string:
+    string character = string.char_at(text, 0) handle:
+        default ""
+    return character
+```
 
 ## Effects and modules
 
