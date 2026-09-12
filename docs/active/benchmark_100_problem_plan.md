@@ -96,3 +96,60 @@ experimental configuration field during `login status`; it made no model calls.
 The newer CLI confirms ChatGPT login. User configuration and credentials were
 not edited or copied, and each evaluated call still ignores user configuration
 and rules. Every raw row records the actual CLI version and subscription backend.
+
+## In-flight verification (2026-09-12)
+
+The original generator remains live; do not restart it while its process or
+execution handle is confirmed active. Incremental staging has completed 271
+initial assessments. This is a checkpoint, not a completed language comparison.
+
+- A read-only audit compared all 254 responses present at that audit's snapshot
+  with their retained event traces. Every input, cached-input, output, and
+  reasoning token count matched; every event hash matched, and each trace had
+  exactly one completed turn. All rows used `codex_subscription` and CLI
+  `0.153.4`. Cache-write input tokens were zero in all those traces; this extra
+  field remains in the raw events rather than the result table.
+- The focused campaign, attempt-preservation, and grading suites passed all
+  29 tests: `python -m unittest tools.tests.test_jett_bench_campaign
+  tools.tests.test_jett_bench_attempts tools.tests.test_jett_bench_grading -q`.
+- A two-task contract spot-check found no reason to discard or regrade results.
+  Several `data_ledger_audit` submissions incorrectly include the starting
+  balance in a minimum explicitly defined over balances after entries. A
+  contract-based arithmetic check reproduced all 28 shared expected reports.
+  Several `text_percent_decode` submissions add an empty-input rejection not
+  specified by its malformed/range rejection rules. Its unused `Empty` variant
+  is a wording-clarity caveat to disclose, not an established contradiction or
+  cross-language grader difference. Preserve the frozen task and its scores;
+  consider clearer wording in a later task edition, outside this comparison.
+
+## Skill follow-up execution constraints
+
+Complete and publish the original report before editing any frozen input.
+Keep its immutable image: the current-checkout reporter correctly refuses to
+report an old campaign after a skill changes. The frozen reporter inside the
+old image can reproduce that campaign's report from its retained evidence.
+
+For the follow-up, use a new benchmark version, subset, configuration, baseline
+directory, campaign directory, and image. Keep all five languages in the
+configuration; select only Jett and its skill context at preparation time:
+
+```text
+python tools/jett_bench.py --config NEW_CONFIG validate
+python tools/jett_bench_campaign.py verify-baselines NEW_BASELINES --config NEW_CONFIG --jobs 3
+python tools/jett_bench_campaign.py prepare NEW_CAMPAIGN --config NEW_CONFIG --baselines NEW_BASELINES --expected-tasks 100 --language jett --track skill_assisted
+python tools/jett_bench_campaign.py generate NEW_CAMPAIGN --jobs 3 --confirm-subscription-usage
+python tools/jett_bench_campaign.py grade NEW_CAMPAIGN --image NEW_IMAGE --jobs 3
+python tools/jett_bench_campaign.py generate NEW_CAMPAIGN --stage repair --jobs 3 --confirm-subscription-usage
+python tools/jett_bench_campaign.py grade NEW_CAMPAIGN --stage repair --image NEW_IMAGE --jobs 3
+python tools/jett_bench_campaign.py report NEW_CAMPAIGN
+```
+
+Replace the uppercase path/image placeholders; use the task-local CLI selection
+above for generation. A skill-only change still requires a fresh 500-baseline
+gate and image because their full input manifests include skills. Keep compiler,
+task, grader, and toolchain behavior equivalent across the skill comparison.
+
+Do not combine both revisions with the generic `aggregate` command: its grouping
+dimensions do not distinguish benchmark versions or skill hashes. Publish each
+campaign summary separately, then compare matching task outcomes explicitly,
+including gains, regressions, and unchanged outcomes for both prompt budgets.
