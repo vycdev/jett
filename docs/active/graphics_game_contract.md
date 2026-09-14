@@ -71,7 +71,12 @@ repeat suppression, but do not replace native macOS input testing.
 
 The backend continues pumping window messages while idle and retains the current
 scene. Callbacks run synchronously on the interpreter's thread. A slow callback
-delays input and drawing. This first API has no animation tick, frame-clock
+delays input and drawing. On macOS, native graphics runs on the process main
+thread as required by AppKit: the driver keeps graphics-enabled native runs on
+its caller thread instead of spawning and joining an interpreter worker. Library
+callers must use the main thread; the host returns a failure before window
+creation if they do not. Scripted graphics and non-graphics runs retain the
+ordinary worker-thread path. This first API has no animation tick, frame-clock
 promise, audio, mouse input, texture loading, asynchronous callbacks, or native
 executable output. Nested sessions are rejected.
 

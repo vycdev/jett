@@ -3151,6 +3151,12 @@ pub fn run_file_capture_output_with_graphics_test_events(
 }
 
 fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
+    if runtime_requires_caller_thread(path, &options, cfg!(target_os = "macos")) {
+        // AppKit must create and pump windows on the process's main thread.
+        // In particular, do not block that thread joining a graphics worker:
+        // minifb synchronously dispatches window setup back to the main thread.
+        return run_file_inner(path, options);
+    }
     let thread_path = path.to_path_buf();
     let fallback_path = thread_path.clone();
     let fallback_options = options.clone();
@@ -3165,6 +3171,21 @@ fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, 
         },
         Err(_) => run_file_inner(&fallback_path, fallback_options),
     }
+}
+
+fn runtime_requires_caller_thread(path: &Path, options: &RunOptions, macos: bool) -> bool {
+    if !macos || options.graphics_test_events.is_some() {
+        return false;
+    }
+    let Ok(source) = fs::read_to_string(path) else {
+        return false;
+    };
+    let parsed = parse(&source, FileId::new(0));
+    find_main_function(&parsed.module).is_some_and(|(_, main)| {
+        main.params
+            .iter()
+            .any(|param| type_expr_name(&param.ty) == "Graphics")
+    })
 }
 
 fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
@@ -4156,6 +4177,27 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("{name}_{nanos}"))
+    }
+
+    #[test]
+    fn native_macos_graphics_stays_on_the_caller_thread() {
+        let graphics = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/run_pass/graphics_scripted.jett");
+        let ordinary = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/run_pass/captured_local_function_name.jett");
+        let mut options = RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: None,
+            graphics_test_events: None,
+        };
+        assert!(runtime_requires_caller_thread(&graphics, &options, true));
+        assert!(!runtime_requires_caller_thread(&graphics, &options, false));
+        assert!(!runtime_requires_caller_thread(&ordinary, &options, true));
+        options.graphics_test_events = Some(vec![GraphicsTestEvent::Close]);
+        assert!(!runtime_requires_caller_thread(&graphics, &options, true));
     }
 
     #[test]

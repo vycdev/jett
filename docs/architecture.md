@@ -1405,6 +1405,12 @@ focus flag in the exactly pinned minifb 0.28.0 backend before reconciling held k
 the adapter must be rechecked when that dependency changes. Focus/repeat unit tests
 exercise both backend conventions without requiring a native window.
 
+Native macOS graphics keeps interpretation on the driver's caller thread, which
+must be the process main thread for AppKit. A worker-thread window request from
+a library caller returns a host failure before entering AppKit. The CLI therefore
+does not block the main thread joining a worker that needs synchronous main-thread
+window setup. Scripted providers and non-graphics programs keep the usual worker.
+
 The interpreter shares immutable registered function definitions through `Arc`,
 borrows arguments while probing higher-order builtins, and clones only the
 selected value when reading a nested struct field. Non-generic calls skip

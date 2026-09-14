@@ -323,6 +323,7 @@ impl InputCallback for InputReceiver {
 impl Session {
     pub fn new(config: Config) -> Result<Self, String> {
         validate_config(&config)?;
+        require_window_thread()?;
         let (width, height) = dimensions(config.width, config.height)?;
         let mut window = Window::new(
             &config.title,
@@ -388,6 +389,22 @@ impl Session {
     }
 }
 
+fn require_window_thread() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn pthread_main_np() -> std::os::raw::c_int;
+        }
+        // This system query has no arguments or preconditions. Reject library
+        // callers on worker threads before entering AppKit, which can otherwise
+        // throw an Objective-C exception or wait forever for the main thread.
+        if unsafe { pthread_main_np() } == 0 {
+            return Err("graphics.run: macOS windows require the main thread".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn portable_key(key: minifb::Key) -> Option<Key> {
     Some(match key {
         minifb::Key::Up => Key::Up,
@@ -451,6 +468,25 @@ mod tests {
                 height: 1
             })
             .is_err()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn graphics_rejects_worker_thread_windows_before_host_creation() {
+        let error = std::thread::spawn(|| {
+            Session::new(Config {
+                title: "must not open".into(),
+                width: 1,
+                height: 1,
+            })
+            .err()
+        })
+        .join()
+        .expect("worker should return without entering AppKit");
+        assert_eq!(
+            error.as_deref(),
+            Some("graphics.run: macOS windows require the main thread")
         );
     }
 

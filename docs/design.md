@@ -7348,6 +7348,10 @@ diagnostic, client snapshot, and staged migration policy is recorded in the
 
 ### Synchronous 2D Graphics
 
+Native macOS windows and their synchronous callbacks execute on the process main
+thread. Embedding callers must invoke native graphics there; an off-main-thread
+window request returns a host failure without entering AppKit.
+
 The interpreter supports `graphics.run[State]` for a synchronous native window
 session. `main` requests a `Graphics` capability, and the public source-owned
 wrapper borrows it with `view`. Pure update and render functions receive only
