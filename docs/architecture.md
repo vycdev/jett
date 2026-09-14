@@ -1387,6 +1387,10 @@ named function values preserve their resolved declaration, and inline function
 values preserve their lexical namespace, so calls from the stdlib graphics loop
 resolve application helpers in the defining module.
 
+The callback audit includes implicit `Equatable.equals` dispatch from struct
+`==` and `!=` expressions. It selects the method using the operand type in the
+current checked generic instantiation, without auditing unrelated instantiations.
+
 Bare generic templates are rejected as function values before interpretation;
 they have no checked concrete signature or instantiation identity. A concrete
 wrapper uses the existing generic call checker. See the

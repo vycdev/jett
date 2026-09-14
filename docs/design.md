@@ -7367,8 +7367,10 @@ signatures are rejected while ordinary function types still erase that metadata.
 State must recursively contain concrete data; function values, capabilities,
 resources, actors, and interfaces cannot cross this callback boundary, including
 through aliases or fields. Purity checks follow callback helpers and nested
-functions as well as the callback's own declaration. These gates apply equally
-to direct calls and pipeline steps, with explicit or inferred generic arguments.
+functions as well as the callback's own declaration, including the concrete
+`Equatable.equals` method implicitly invoked by struct equality and inequality.
+These gates apply equally to direct calls and pipeline steps, with explicit or
+inferred generic arguments.
 Legal `mutual` declaration ordering cannot change the callback effect boundary.
 The API is unavailable in comptime/verify/property evaluation. Escape and the
 OS close action end the session; supported key presses drive deterministic state

@@ -39,7 +39,10 @@ resources, actors, and interfaces are rejected recursively, including behind
 aliases. This prevents state from carrying a closure with hidden authority
 across the pure callback boundary while function types still erase effects.
 The scoped callback audit also follows named helpers and nested inline
-functions to reject hidden effects in the callback call graph.
+functions to reject hidden effects in the callback call graph. Struct equality
+and inequality implicitly call `Equatable.equals`, so the audit also follows
+that concrete implementation, including equality inside a generic helper. An
+unrelated instantiation of the same helper does not enter the callback graph.
 
 ## Source API
 

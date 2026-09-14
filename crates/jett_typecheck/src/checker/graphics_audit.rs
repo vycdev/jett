@@ -216,7 +216,10 @@ impl TypeChecker<'_> {
                 }
                 self.audit_graphics_block(body, true);
             }
-            Expr::Binary(left, _, right, _) => {
+            Expr::Binary(left, operator, right, _) => {
+                if matches!(operator, BinOp::Eq | BinOp::NotEq) {
+                    self.audit_graphics_equality(left);
+                }
                 self.audit_graphics_expr(left, inline);
                 self.audit_graphics_expr(right, inline);
             }
@@ -283,6 +286,36 @@ impl TypeChecker<'_> {
         }
     }
 
+    fn audit_graphics_equality(&mut self, operand: &Expr) {
+        let Some(mut owner) = self.graphics_audit_type(operand.span()) else {
+            return;
+        };
+        // Equality on a runtime struct calls Equatable.equals even though the
+        // source contains no Call node. Use this concrete instantiation's
+        // operand type, not the last type recorded for the generic source span.
+        while let Type::Secret(inner) | Type::Refinement { base: inner, .. } =
+            self.interner.resolve(owner)
+        {
+            owner = *inner;
+        }
+        if !matches!(self.interner.resolve(owner), Type::Struct(_)) {
+            return;
+        }
+        let Some(&interface) = self.named_types.get("Equatable") else {
+            return;
+        };
+        if let Some(&index) =
+            self.interface_method_definitions
+                .get(&(interface, owner, "equals".to_string()))
+            && let Some(function) = self
+                .graphics_method_definitions
+                .get(&self.method_definitions[index].source_span)
+                .cloned()
+        {
+            self.audit_graphics_function(&function, None);
+        }
+    }
+
     fn audit_graphics_call(&mut self, callee: &Expr, span: Span, inline: bool) {
         if inline
             && let Some(name) = self.resolved_expr_name(callee)
@@ -296,7 +329,7 @@ impl TypeChecker<'_> {
         }
         if let Some(ty) = self.graphics_audit_type(callee.span())
             && let Type::Function { params, .. } = self.interner.resolve(ty)
-            && params.iter().any(|ty| *ty == TypeInterner::ERROR)
+            && params.contains(&TypeInterner::ERROR)
         {
             self.sink.emit(errors::graphics_contract(
                 "callbacks cannot call function values with opaque capability parameters",

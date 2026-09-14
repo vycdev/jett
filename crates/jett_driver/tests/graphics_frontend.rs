@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use jett_diagnostics::Severity;
-use jett_driver::{build_file, test_file};
+use jett_driver::{build_file, build_source, test_file};
 
 fn fixture(kind: &str, name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -50,6 +50,7 @@ fn graphics_frontend_policy_failures() {
         ("graphics_mutual_method_effect.jett", vec![500]),
         ("graphics_generic_method_effect.jett", vec![500]),
         ("graphics_inline_method_effect.jett", vec![500]),
+        ("graphics_equality_effect.jett", vec![500]),
     ] {
         let outcome = build_file(&fixture("compile_fail", name));
         let mut codes = outcome
@@ -60,6 +61,53 @@ fn graphics_frontend_policy_failures() {
             .collect::<Vec<_>>();
         codes.sort_unstable();
         assert_eq!(codes, expected, "{name}: {:?}", outcome.diagnostics);
+    }
+}
+
+#[test]
+fn graphics_equality_operators_audit_implicit_methods_in_concrete_instantiations() {
+    let fixture = include_str!("../../../tests/compile_fail/graphics_equality_effect.jett");
+    for operator in ["==", "!="] {
+        for generic in [false, true] {
+            let comparison = format!("left {operator} right");
+            let source = if generic {
+                fixture
+                    .replace(
+                        "function update(",
+                        &format!("function compare[T](view left: T, view right: T) returns bool:\n    return {comparison}\nfunction update("),
+                    )
+                    .replace("if left == right:", "if compare[Number](view left, view right):")
+            } else {
+                fixture.replace("left == right", &comparison)
+            };
+            let outcome = build_source(&source, "graphics-equality-effect.jett");
+            let codes = outcome
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == Severity::Error)
+                .map(|diagnostic| diagnostic.code.code())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                codes,
+                vec![500],
+                "{operator}, generic={generic}: {:?}",
+                outcome.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+fn graphics_equality_audit_does_not_follow_unrelated_generic_instantiations() {
+    let fixture =
+        include_str!("../../../tests/compile_pass/graphics_equality_generic_isolation.jett");
+    for operator in ["==", "!="] {
+        let source = fixture.replace(
+            "return left == right",
+            &format!("return left {operator} right"),
+        );
+        let outcome = build_source(&source, "graphics-equality-isolation.jett");
+        assert!(!outcome.has_errors, "{operator}: {:?}", outcome.diagnostics);
     }
 }
 
