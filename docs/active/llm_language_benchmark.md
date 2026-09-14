@@ -2,11 +2,14 @@
 
 Status: active
 
-Current work: the 100-problem four-cell development campaign is defined in
-`benchmark_100_problem_plan.md` and `benchmarks/protocol_v0.6.0.md`. It uses
-subscription-only Luna medium, 1,000 initial responses, one repair per failure,
-and a full Jett skill-revision follow-up. Historical sections below describe
-earlier pilot matrices and are not completion evidence for this campaign.
+Completed milestone: the 100-problem four-cell development campaign and full
+Jett skill follow-up are preserved in
+`../completed/benchmark_100_problem_campaign.md` and `benchmarks/results/`.
+Subscription-only Luna medium produced 1,000 original initial responses plus
+234 repairs, then 100 revised-skill Jett responses plus 29 repairs. Jett's skill
+scores improved from 33/100 to 71/100 initially and from 66/100 to 87/100 after
+repair. The broader independent/multi-sample study below remains separate
+future work. Historical pilot matrices are not the completed campaign's protocol.
 
 ## Goal
 

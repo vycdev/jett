@@ -1,4 +1,8 @@
-# 100-problem benchmark expansion
+# 100-problem benchmark campaign
+
+Status: completed on 2026-09-12. Both the original four-cell campaign and the
+separate full-task Jett skill follow-up are verified and preserved. Historical
+checkpoints below describe the execution sequence, not outstanding work.
 
 The user goal is to build the benchmark to 100 distinct problems, execute it,
 and improve results through a general Jett programming skill. Earlier agreement
@@ -47,7 +51,7 @@ evidence. Repeated evaluation on this suite is not an untouched held-out
 estimate; one observation per cell and a rolling model alias limit claims.
 Future independent tasks and repeated samples are needed for broad rankings.
 
-## Current work
+## Completed work
 
 - The 100-task catalog is committed. Its 90 additions contain 1,621 distinct
   shared fixtures, with independent oracles or hand-written expected values.
@@ -60,15 +64,19 @@ Future independent tasks and repeated samples are needed for broad rankings.
 - The campaign runner freezes inputs, journals completed rows, resumes missing
   work, stops new dispatch on infrastructure failure, and produces complete
   four-cell reports only when all expected rows and repair pairings exist.
-- The v0.6.0 four-cell campaign has 1,000 frozen initial prompts. Generation
-  initially stopped with 365 saved responses and three interrupted calls
-  without saved answers; all 365 saved responses are graded. The first six pipeline-check
-  responses (five passes, one test failure) remain in the campaign unchanged.
-  The user approved repeating only those three prompts with explicit disclosure;
-  all three replacements are now saved and graded, and initial generation has
-  resumed. The original interrupted receipts and all saved responses remain
-  unchanged. Remaining generation, paired repair, reporting, and the skill-revision
-  follow-up remain unfinished; no partial sample is a final language ranking.
+- The v0.6.0 four-cell campaign is complete and published in
+  `benchmarks/results/2026-09-12_v0.6.0_four_cell/`: all 1,000 initial responses
+  and exactly 234 failed-only repairs have terminal grades. Initial passes
+  were 766; 79 repairs passed, producing 845/1,000 final passes. The original
+  Jett skill treatment passed 33/100 initially and 66/100 after repair.
+- The v0.6.1 follow-up is complete and preserved in
+  `benchmarks/results/2026-09-12_v0.6.1_jett_skill/`: 100 initial responses
+  passed 71 tasks, and 16 of 29 repairs passed, producing 87/100 final passes.
+  Its fresh 500-reference gate passed with unchanged toolchains. Only the Jett
+  skill entrypoint/reference changed among the 1,470 frozen source inputs.
+- Both complete audits, all original and follow-up metrics, paired gains and
+  regressions, raw events/attempts/responses/grades, and exact source archives
+  are retained. No required execution or reporting phase remains open.
 
 ## Run checkpoint (2026-09-12)
 
@@ -78,7 +86,7 @@ All paths below are relative to the repository and contain generated evidence:
 - `target/jett-bench/v0.6.0-container-baselines/`: all original container rows,
   `isolated-recheck/recheck.jsonl`, and combined `verification.json`.
 - `target/jett-bench/v0.6.0-four-cell/`: authoritative frozen campaign, raw
-  responses, event traces, and initial grading journal.
+  responses, event traces, both grading journals, and complete report.
 - `target/jett-bench/v0.6.0-four-cell-staging/`: a separate copy of the exact
   frozen plan/config/image, used to grade completed initial responses while
   generation holds the authoritative campaign lock. Refresh its raw-response
@@ -117,7 +125,7 @@ The frozen source revision is `bc6f96a`. The grading image is
 `sha256:5cd341ed3f4062c4c56ab6d267111041aa375c2e39ae20db1770d2b46ee02e80`
 (local tag `jett-bench:0.6.0`); all 1,470 frozen input files matched the image.
 Their exact bytes, including the Git-ignored `Cargo.lock`, are also preserved
-in `benchmarks/results/2026-09-12_v0.6.0_reference_validation/frozen-inputs.zip`.
+in `benchmarks/results/2026-09-12_v0.6.0_frozen_inputs/frozen-inputs.zip`.
 Every archived entry was verified against the campaign's input hash manifest.
 
 Use the already installed Codex CLI **0.153.4** through task-local PATH
@@ -228,6 +236,82 @@ generator has stopped. A supervisor restart resumes saved grading. The unchanged
 generation guard still refuses an unjournaled model attempt; do not remove that
 evidence or authorize another repetition implicitly.
 
+## Final publication audit
+
+After both campaign stages, grading, and reporting have finished, run the
+separate read-only audit before publication:
+
+```text
+python tools/bench_campaign_audit.py target/jett-bench/v0.6.0-four-cell
+```
+
+Save successful JSON output outside the audited campaign directory. The audit
+rejects an active lock and changing evidence, verifies the complete task matrix
+and failed-only repair pairs, and checks completed grades, image identity,
+raw-to-grade fields, strict retained event metrics, response IDs, attempt
+coverage, and exact recovery approvals. It never calls models or graders and
+does not modify the evidence. It also supports the separate 100-row Jett skill
+follow-up by deriving its expected matrix from that campaign's manifest.
+
+The JSON includes all four cells and accounting over unique saved initial and
+repair responses. Do not sum all four-cell usage rows: repair-budget cells
+already include the initial calls. The legacy aggregate rollups describe
+initial responses only and are not complete campaign consumption.
+
+Publish the frozen report and summary unchanged, alongside the audit JSON,
+an explanatory README, and hash-verified raw evidence. For this recovered
+campaign, the three authorized replacement responses count once; their three
+lost predecessors retain unknown token use, latency, tool use, and server
+completion. Complete campaign consumption is therefore unavailable, not the
+sum of saved-response usage. Missing optional response metrics remain null;
+extraction failures retain response usage but have no measured source size.
+
+## Initial-stage completion (2026-09-12)
+
+By the 07:33:25 UTC checkpoint, initial generator 61200 was terminal and the
+supervisor had merged 994 missing grades into the six-row canonical journal.
+All 1,000 initial grades matched staging exactly. Repair generator 81820 was
+confirmed live under supervisor 101848, using the unchanged failed-only repair
+planner for exactly 234 responses. No initially passing response receives a
+repair prompt.
+
+A read-only initial-stage audit verified the full matrix, every response and
+grade, raw/event metrics, response IDs, image identity, exact attempt coverage,
+the three recovery approvals, and all 1,470 frozen input hashes. It found 766
+passes and 234 failures. This does not certify the still-running repair stage.
+
+A separate historical comparison checked all 741 canonical files in the
+published interrupted checkpoint. Immutable files still match byte for byte;
+the 365-row raw journal and six-row grading journal remain exact prefixes of
+their completed initial-stage counterparts. The checkpoint archive's SHA-256
+still matches its published value. No earlier candidate or assessment was
+replaced or selected again.
+
+## Original campaign publication (2026-09-12)
+
+By 07:57 UTC, the supervisor and both repair processes were terminal, no campaign
+lock remained, and the frozen report was complete. The separate read-only audit
+passed all 1,234 retained responses, all 20 metric cells, exact failed-only repair
+pairing, and all preserved recovery links. Independent recomputation matched
+every summary cell and report row, including usage, code size, and latency.
+
+The immutable publication is `benchmarks/results/2026-09-12_v0.6.0_four_cell/`.
+It preserves the original report and summary bytes, independent accounting, and
+a 2,492-entry archive verified against its full SHA-256 manifest. The archive
+contains the canonical campaign plus deterministically reconstructed repair
+plans. Companion frozen-input and baseline archives remain separate and unchanged.
+
+Unique retained usage is 16,566,404 input tokens (including 14,347,008 cached),
+640,383 output tokens (including 377,465 reasoning), 16,012.357 seconds of summed
+call latency, and 993,944 generated source characters/UTF-8 bytes. These totals
+exclude unknowable overhead from the three interrupted original calls, and are
+not complete campaign consumption. All three approved replacements count once.
+
+The independent repair-feedback review found no hidden source or fixture leakage
+in the 234 actual plans. Its diagnostic-location and source-excerpt checks are
+bounded evidence for this campaign, not proof that the heuristic sanitizer can
+handle every future compiler diagnostic. No candidate or score was discarded.
+
 ## Skill follow-up execution constraints
 
 Complete and publish the original report before editing any frozen input.
@@ -259,3 +343,91 @@ Do not combine both revisions with the generic `aggregate` command: its grouping
 dimensions do not distinguish benchmark versions or skill hashes. Publish each
 campaign summary separately, then compare matching task outcomes explicitly,
 including gains, regressions, and unchanged outcomes for both prompt budgets.
+
+## Jett skill revision v0.6.1 (2026-09-12)
+
+The original complete publication was committed and pushed as `7c88011` before
+editing the skill. The original v0.5.4 guide remains recoverable byte for byte
+from its frozen input archive and pinned image.
+
+A bounded review of public Jett skill-assisted diagnostics identified these
+overlapping categories: string syntax/API gaps in 22 initially failed candidates
+and 18 failed repairs; ownership gaps in 23 and eight; complexity in nine and
+four; and nonzero-proof gaps in five initial candidates. These are lower bounds:
+12 normalized compiler messages and five private-test failure texts were not
+used for category attribution. Thirteen initial string-addition failures became
+invented `string.concat` calls in repair. None of this predicts the new score.
+
+The revision teaches canonical interpolation and public string signatures,
+explicit borrowing iteration, local equality-based nonzero proofs, result
+construction, and earlier per-function complexity budgeting. All advice was
+checked against implemented public documentation and stdlib signatures. It
+contains no task algorithm, identifier, fixture, hidden expectation, or tailored
+repair recipe. Independent review found no actionable accuracy or scope issues.
+
+Validation: the skill validator passed; all five exact fenced Jett anchors
+built with zero diagnostics and passed formatter checks. Four neutral `verify`
+blocks additionally passed for repeated borrowed access, guarded division and
+result handling, interpolation/literal braces, grapheme access, and documented
+case/split/join signatures. These trusted examples are not benchmark candidates
+and required no additional evaluated-model calls.
+
+The separate version is `0.6.1-jett-skill`, subset `jett-v0.6.1`. Its configuration
+preserves every original setting except version/subset identity. Preparation
+must select exactly 100 Jett skill-assisted cells; the original five-language
+configuration remains intact for the fresh 500-reference gate. The comparison
+will change guidance length as well as content, and remains development-set
+informed rather than a held-out experiment.
+
+## Follow-up completion and paired comparison (2026-09-12)
+
+The fresh reference gate passed all 500 task/language pairs with the same seven
+host toolchain records as the original. The new grading image inherits all 12
+original layers and adds exactly two skill-file COPY layers; its compiler binary
+hash is unchanged. Its full 1,470-file snapshot matches the follow-up manifest.
+Both original and follow-up images remain available locally. They are identified
+by local content IDs, not public registry download URLs.
+
+The frozen follow-up source is `9e3690e14ce70c454eb1bd2d1ce5386bb30c15e9`.
+Its image is
+`sha256:ee84de2c6178dabe8532b57402d6d9c271991d71caf3cb40e9c2bbad03c1e4ae`.
+All 100 prompt prefixes outside the hashed skill suffix, system instructions,
+task/adapter/starter identities, and model settings match the original Jett
+skill treatment. The skill bundle grew from 8,723 to 11,245 bytes.
+
+The complete follow-up audit passed all 129 saved responses, exactly 29
+failed-only repairs, event-derived usage, zero tool calls, exact attempt
+coverage, and all frozen hashes. There were no interrupted or replacement
+calls in this follow-up. Independent recomputation matched both reports and
+every paired outcome category:
+
+| Budget | Original skill | Revised skill | Gains | Regressions | Unchanged pass | Unchanged fail |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| One-shot | 33/100 | 71/100 | 43 | 5 | 28 | 24 |
+| After repair | 66/100 | 87/100 | 26 | 5 | 61 | 8 |
+
+Follow-up usage was 1,995,017 input tokens (1,469,184 cached), 109,518 output
+tokens (70,592 reasoning), 2,533.308 seconds of summed call latency, and 165,362
+generated source characters/UTF-8 bytes. The original Jett skill treatment used
+2,493,187 input tokens and 190,698 source characters with repairs included.
+Neither Jett cohort contains an interrupted original attempt.
+
+The immutable follow-up directory contains the unchanged reporter output,
+independent accounting, full paired task lists, and a 298-entry checked evidence
+archive, plus the complete 1,470-entry source archive. Supporting evidence includes
+the fresh reference gate, operator logs, image verification, neutral skill checks,
+and the exact host-side audit helpers. All original canonical evidence still
+matches its published audit inventory byte for byte.
+
+Across the original campaign and follow-up, 1,363 unique saved responses used
+18,561,421 known input tokens (15,816,192 cached), 749,901 output tokens (448,057
+reasoning), and 1,159,306 source characters/UTF-8 bytes. The original three
+interrupted Rust/Python calls still have unknown overhead; complete series
+consumption is unavailable. Series accounting combines consumption only, never
+performance scores across revisions, and excludes earlier calibrations and
+benchmark-development/orchestration usage.
+
+The general guidance revision improved observed development-suite results, not
+held-out generalization. All regressions remain in the report. Any future guide
+revision, task clarification, independent test set, or multi-sample study is
+separate work requiring a new versioned experiment.

@@ -77,7 +77,8 @@ The isolated runner recipe and required no-network/resource controls are in
 For the 100-problem expansion, `tools/jett_bench_campaign.py` adds a frozen,
 resumable four-cell campaign. It uses both `zero_shot` and `skill_assisted`
 contexts with every configured language; onboarding sheets remain a separate
-track. See `docs/active/benchmark_100_problem_plan.md` for the full goal.
+track. See `docs/completed/benchmark_100_problem_campaign.md` for the completed
+100-problem campaign and its full-task Jett skill follow-up.
 
 ```text
 python tools/jett_bench_campaign.py verify-baselines target/jett-bench/baseline-gate --jobs 3
@@ -117,6 +118,12 @@ The current expansion is specified by `protocol_v0.6.0.md` and
 all skills remain general language references. The Python
 adapter adds pinned Pyright strict checking; all five typed-task adapters perform a
 static-check phase before hidden runtime tests.
+
+The completed original run and separately versioned v0.6.1 Jett skill follow-up
+are linked from [`results/README.md`](results/README.md). The revised Jett guide
+passed 71/100 one-shot and 87/100 after repair, compared with 33/100 and 66/100
+for the original guide. Complete raw evidence, usage, code size, and paired
+regressions are retained; these remain development-suite observations.
 Task-specific forbidden patterns are a narrow preflight against type erasure
 and catch-all branches, and a rejection is recorded as `policy_error`.
 

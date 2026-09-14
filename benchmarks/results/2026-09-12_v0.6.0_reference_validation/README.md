@@ -31,15 +31,3 @@ Grading image: `sha256:5cd341ed3f4062c4c56ab6d267111041aa375c2e39ae20db1770d2b46
 original container row, the isolated recheck, and the combined verification
 receipt. The archive preserves byte-exact files independently of Git newline
 conversion. It contains no model responses or account credentials.
-
-`frozen-inputs.zip` contains all 1,470 exact files named by the baseline and
-campaign input manifests under `inputs/`, including the Git-ignored
-`Cargo.lock`. It preserves the compiler, stdlib, tasks, references, language
-skills, grading helpers, and sandbox definition independently of later edits
-or checkout newline conversion. Every archived file's SHA-256 was checked
-against the frozen manifest, and the current input snapshot was rechecked
-before and after archiving. This supplements the source revision; it does not
-replace the pinned grading image or claim that the model campaign is complete.
-
-Frozen-input archive SHA-256:
-`c894472df5bf71090c8bc3f617689ccd8f4d2a1aa502479306e14b25188f2af8`.

@@ -58,3 +58,32 @@ The controlled v0.5.3 Jett 2x2 comparison is in
 one-shot and 1/10 after repair. Skill-assisted passed 9/10 one-shot and 9/10
 after repair. Its sole repair used reserved word `result` as an identifier,
 producing the v0.5.4 lexical clarification.
+
+The 100-problem v0.6.0 reference checks are in
+`2026-09-12_v0.6.0_reference_validation/`, with all 500 task/language cells
+validated locally and in containers. Its exact 1,470 source inputs, including
+the ignored Cargo lockfile, are preserved separately in
+`2026-09-12_v0.6.0_frozen_inputs/`.
+
+The immutable `2026-09-12_v0.6.0_interrupted_checkpoint/` preserves the original
+365 saved responses and three interrupted attempts without recoverable answers.
+The user subsequently approved repeating those exact three prompts once, with
+disclosure and unchanged original evidence. The checkpoint is not a final ranking.
+
+The complete 100-problem four-cell campaign is in
+[`2026-09-12_v0.6.0_four_cell/`](2026-09-12_v0.6.0_four_cell/README.md).
+It preserves all 1,000 initial responses and 234 failed-only repairs, with
+766/1,000 initial and 845/1,000 final passes. Jett's original skill treatment
+passed 33/100 initially and 66/100 after repair. The independent audit, all
+20 metric cells, and complete raw evidence are published together; consumption
+for the three lost original calls remains unknown.
+
+The completed full-100-task Jett skill follow-up is in
+[`2026-09-12_v0.6.1_jett_skill/`](2026-09-12_v0.6.1_jett_skill/README.md).
+It passed 71/100 one-shot and 87/100 after repair, compared with 33/100 and
+66/100 for the original skill. Paired gains/regressions were 43/5 one-shot
+and 26/5 after repair. It preserves all 129 responses, a fresh 500-reference
+gate, exact frozen inputs, full metrics, and row-level comparisons. The two
+campaigns are reported separately; their combined consumption ledger counts
+1,363 saved responses once while retaining unknown overhead for the three
+interrupted originals.
