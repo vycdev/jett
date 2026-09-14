@@ -5,7 +5,7 @@
 //! pure functions.
 //!
 //! The capability types are:
-//!   Stdout, Stderr, Stdin, Filesystem, Network, Clock, Random, Process, Environment, Log
+//!   Stdout, Stderr, Stdin, Filesystem, Network, Clock, Random, Process, Environment, Log, Graphics
 
 use jett_parser::ast::TypeExpr;
 
@@ -21,6 +21,7 @@ const CAPABILITY_TYPES: &[&str] = &[
     "Process",
     "Environment",
     "Log",
+    "Graphics",
 ];
 
 /// Returns `true` if `name` is one of the built-in capability types.
@@ -50,6 +51,7 @@ mod tests {
         assert!(is_capability_type("Filesystem"));
         assert!(is_capability_type("Environment"));
         assert!(is_capability_type("Log"));
+        assert!(is_capability_type("Graphics"));
         assert!(!is_capability_type("int64"));
         assert!(!is_capability_type("string"));
         assert!(!is_capability_type("User"));

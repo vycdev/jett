@@ -1,0 +1,8 @@
+# ERROR: E0313 x2
+# ERROR: E0303
+namespace app
+function direct_value() returns function() returns nothing:
+    return graphics.__run
+function aliased_kernel(view display: Graphics) returns result[nothing, string]:
+    use graphics as g
+    return g.__run[int64](view display)

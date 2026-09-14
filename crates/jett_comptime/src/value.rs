@@ -66,11 +66,14 @@ pub enum Value {
     Map(Vec<(Value, Value)>),
     /// A set of unique values: `set(1, 2, 3)`.
     Set(Vec<Value>),
+    /// A named function reference retaining its canonical declaration identity.
+    NamedFunction(String),
     /// A captured inline function expression (closure).
     Function {
         params: Vec<Param>,
         body: Block,
         captures: HashMap<String, Value>,
+        namespace: Option<String>,
     },
 }
 
@@ -144,6 +147,7 @@ impl PartialEq for Value {
             (Value::Map(a), Value::Map(b)) => a == b,
             (Value::Set(a), Value::Set(b)) => a == b,
             // Functions are never considered equal.
+            (Value::NamedFunction(_), Value::NamedFunction(_)) => false,
             (Value::Function { .. }, Value::Function { .. }) => false,
             _ => false,
         }
@@ -252,6 +256,7 @@ impl fmt::Display for Value {
                 }
                 Ok(())
             }
+            Value::NamedFunction(name) => write!(f, "function({name})"),
             Value::Function { params, .. } => {
                 write!(f, "function(")?;
                 for (i, p) in params.iter().enumerate() {

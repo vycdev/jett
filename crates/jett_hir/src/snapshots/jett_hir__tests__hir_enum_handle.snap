@@ -19,7 +19,7 @@ Program {
             },
             source_definition: Some(
                 DefId(
-                    51,
+                    52,
                 ),
             ),
             params: [
@@ -162,7 +162,7 @@ Program {
             },
             source_definition: Some(
                 DefId(
-                    52,
+                    53,
                 ),
             ),
             params: [],

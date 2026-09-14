@@ -1,0 +1,24 @@
+namespace helpers
+export function identity[T](value: T) returns T:
+    return value
+namespace app
+function concrete(value: int64) returns int64:
+    use helpers
+    return helpers.identity[int64](value)
+function apply(callback: function(int64) returns int64, value: int64) returns int64:
+    return callback(value)
+function named_wrapper() returns int64:
+    return apply(concrete, 42)
+function inline_wrapper() returns int64:
+    return apply(function(value: int64) returns int64: return concrete(value), 43)
+function ordinary_generic_calls() returns int64:
+    use helpers
+    int64 explicit = helpers.identity[int64](7)
+    int64 inferred = helpers.identity(8)
+    int64 piped = 9 into helpers.identity[int64]()
+    int64 piped_inferred = 10 into helpers.identity()
+    return explicit + inferred + piped + piped_inferred
+verify concrete_function_values:
+    assert named_wrapper() == 42
+    assert inline_wrapper() == 43
+    assert ordinary_generic_calls() == 34

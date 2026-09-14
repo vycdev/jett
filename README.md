@@ -62,6 +62,10 @@ Jett is experimental, but the compiler front half is substantial.
 - `jett build` currently validates and type-checks programs. Native LLVM code generation is planned but not implemented yet.
 - `jett run` executes programs through the tree-walking interpreter.
 - `jett test` runs `verify` and `property` blocks.
+- `graphics.run` can open a native 2D window through an explicit `Graphics`
+  capability, with pure Jett state-update/render callbacks, rectangles, bitmap
+  text, and keyboard input. The initial session API and its current limits are
+  documented in the [graphics contract](docs/active/graphics_game_contract.md).
 - The standard library is partly Rust-backed and partly written in `.jett`; JSON uses trusted `.jett` bodies behind compiler-owned policy gates, while random and wall-clock effects use source-owned APIs with runtime-injected capabilities.
 - `json.parse[T]` is the lenient compatibility parser, while `json.parse_exact[T]` rejects unknown object fields for closed contracts such as config files, protocols, and tests.
 - Raw JSON uses the sole canonical `json.JsonTree` spelling. The former bare and namespaced `JsonValue` aliases are no longer supported.

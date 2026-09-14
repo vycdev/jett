@@ -1,0 +1,18 @@
+# ERROR: E0372 x3
+namespace app
+function update(state: int64, key: graphics.Key) returns int64:
+    return state
+function consume_render(state: int64) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function render(view state: int64) returns graphics.Scene:
+    return consume_render(state)
+function impure_update(state: int64, view display: Graphics) returns int64:
+    return state
+function wrong_render(view display: Graphics, config: graphics.Config) returns result[nothing, string]:
+    return graphics.run[int64](view display, config, 0, update, consume_render)
+function wrong_effect(view display: Graphics, config: graphics.Config) returns result[nothing, string]:
+    return graphics.run[int64](view display, config, 0, impure_update, render)
+function callback_variable(view display: Graphics, config: graphics.Config) returns result[nothing, string]:
+    function(int64, graphics.Key) returns int64 callback = update
+    return graphics.run[int64](view display, config, 0, callback, render)

@@ -140,6 +140,7 @@ impl Resolver {
             "Random",
             "Process",
             "Environment",
+            "Graphics",
             // Common built-in functions/values
             "true",
             "false",

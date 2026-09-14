@@ -1,0 +1,31 @@
+namespace app
+function effect(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "unrelated effect")
+    return 0
+interface Evaluator:
+    function evaluate(view self: Evaluator) returns int64
+struct Effectful:
+    value: int64
+struct Pure:
+    value: int64
+implement Evaluator for Effectful:
+    function evaluate(view self: Effectful) returns int64:
+        function() returns int64 perform = function() returns int64: return effect("fake stdout")
+        return perform()
+implement Evaluator for Pure:
+    function evaluate(view self: Pure) returns int64:
+        return self.value
+function evaluate[T](view value: T) returns int64:
+    return Evaluator.evaluate(view value)
+function update(state: int64, key: graphics.Key) returns int64:
+    Pure pure = Pure(value: state)
+    return evaluate[Pure](view pure)
+function unrelated() returns int64:
+    Effectful effectful = Effectful(value: 0)
+    return evaluate[Effectful](view effectful)
+function render(view state: int64) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function main(display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "Callback review", width: 32, height: 32)
+    return graphics.run[int64](view display, config, 0, update, render)

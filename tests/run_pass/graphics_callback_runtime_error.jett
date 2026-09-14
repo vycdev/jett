@@ -1,0 +1,13 @@
+namespace app
+function update(state: int64, key: graphics.Key) returns int64:
+    string oversized = string.repeat("overflow", 9223372036854775807)
+    return state
+function render(view state: int64) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function main(display: Graphics, stdout: Stdout) returns nothing:
+    graphics.Config config = graphics.Config(title: "Callback failure", width: 32, height: 32)
+    graphics.run[int64](view display, config, 0, update, render) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    Stdout.write(view stdout, "runtime failure was lost\n")

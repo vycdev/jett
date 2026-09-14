@@ -1,0 +1,22 @@
+# ERROR: E0373 x5
+namespace helpers
+export function identity[T](value: T) returns T:
+    return value
+namespace app
+function constant[T](value: T) returns int64:
+    return 7
+function apply(callback: function(int64) returns int64) returns int64:
+    return callback(3)
+function unqualified() returns int64:
+    return apply(constant)
+function qualified() returns int64:
+    use helpers
+    return apply(helpers.identity)
+function aliased() returns int64:
+    use helpers as h
+    return apply(h.identity)
+function stored() returns int64:
+    function(int64) returns int64 callback = constant
+    return callback(3)
+function returned() returns function(int64) returns int64:
+    return constant

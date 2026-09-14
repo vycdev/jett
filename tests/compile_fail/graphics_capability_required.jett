@@ -1,0 +1,5 @@
+# ERROR: E0500
+# ERROR: E0303
+namespace app
+function no_ambient_window() returns result[nothing, string]:
+    return graphics.run[int64]()

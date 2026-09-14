@@ -931,6 +931,22 @@ pub fn test_mock_outside_property(name: &str, span: Span) -> Diagnostic {
 
 // Diagnostic codes E0800-E0899 are reserved for function complexity limits.
 
+/// E0372: The initial graphics API requires provable authority and callback modes.
+pub fn graphics_contract(reason: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(372, format!("graphics.run: {reason}"), span)
+}
+
+/// E0373: A generic template needs a concrete call before it can be a function value.
+pub fn unspecialized_generic_function_value(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        373,
+        format!(
+            "generic function `{name}` cannot be used as an unspecialized function value; pass a concrete named wrapper or inline function that calls it"
+        ),
+        span,
+    )
+}
+
 /// E0800: Function body exceeds the statement count limit.
 pub fn function_statement_limit(
     function_name: &str,

@@ -1,0 +1,5 @@
+# ERROR: E0313
+# ERROR: E0303
+namespace app
+function cannot_call_kernel(view display: Graphics) returns result[nothing, string]:
+    return graphics.__run[int64](view display)

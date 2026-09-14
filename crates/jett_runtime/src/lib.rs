@@ -1,5 +1,7 @@
 //! Backend-neutral runtime services for Jett execution contexts.
 
+pub mod graphics;
+
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};

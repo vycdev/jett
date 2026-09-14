@@ -1,0 +1,11 @@
+namespace app
+function sample() returns int64:
+    return 1
+function describe[T](value: T) returns string:
+    return type.name[T]()
+function make() returns function() returns string:
+    int64 sample = 7
+    return function() returns string: return describe(sample)
+function main(stdout: Stdout) returns nothing:
+    function() returns string callback = make()
+    Stdout.write(view stdout, callback())

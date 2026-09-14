@@ -1,0 +1,33 @@
+namespace app
+function effect(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "unrelated effect")
+    return 0
+struct Effectful:
+    value: int64
+struct Pure:
+    value: int64
+implement Equatable for Effectful:
+    function equals(view self: Effectful, view other: Effectful) returns bool:
+        function() returns int64 perform = function() returns int64: return effect("fake stdout")
+        return perform() == 0
+implement Equatable for Pure:
+    function equals(view self: Pure, view other: Pure) returns bool:
+        return self.value == other.value
+function compare[T](view left: T, view right: T) returns bool:
+    return left == right
+function update(state: int64, key: graphics.Key) returns int64:
+    Pure left = Pure(value: state)
+    Pure right = Pure(value: state)
+    if compare[Pure](view left, view right):
+        return state + 1
+    return state
+function unrelated() returns bool:
+    Effectful left = Effectful(value: 0)
+    Effectful right = Effectful(value: 0)
+    return compare[Effectful](view left, view right)
+function render(view state: int64) returns graphics.Scene:
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function main(display: Graphics) returns result[nothing, string]:
+    graphics.Config config = graphics.Config(title: "Callback review", width: 32, height: 32)
+    return graphics.run[int64](view display, config, 0, update, render)
