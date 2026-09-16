@@ -85,9 +85,9 @@ verify slice_clamp_test:
 function roundtrip_test() returns string:
     string original = "Jett language"
     bytes b = bytes.from_string(original)
-    string result = bytes.to_string(b) handle error:
+    string decoded_text = bytes.to_string(b) handle error:
         default "failed"
-    return result
+    return decoded_text
 verify roundtrip_test:
     assert roundtrip_test() == "Jett language"
 # --- hex conversion ---
@@ -126,8 +126,8 @@ verify from_hex_odd_message:
 function concat_empty_test() returns int64:
     bytes empty = bytes.new()
     bytes data = bytes.from_string("abc")
-    bytes result = bytes.concat(empty, data)
-    return bytes.length(result)
+    bytes combined = bytes.concat(empty, data)
+    return bytes.length(combined)
 verify concat_empty_test:
     assert concat_empty_test() == 3
 # --- ownership contract ---

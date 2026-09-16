@@ -1643,7 +1643,7 @@ impl<'src> Parser<'src> {
         let start = self.peek_token().span;
         let mutable = self.eat(TokenKind::Mutable).is_some();
         let ty = self.parse_type();
-        let name = self.parse_ident();
+        let name = self.parse_binding_name();
         self.expect(TokenKind::Eq);
         let value = self.parse_expr();
         // Check for handle block after the expression
@@ -1725,7 +1725,9 @@ impl<'src> Parser<'src> {
 
         // Now we should see an identifier (or contextual keyword) followed by `=`
         let name_kind = self.peek_nth(lookahead);
-        if (name_kind == TokenKind::Ident || self.is_contextual_ident(name_kind))
+        if (name_kind == TokenKind::Ident
+            || self.is_contextual_ident(name_kind)
+            || self.is_reserved_identifier_at(lookahead))
             && self.peek_nth(lookahead + 1) == TokenKind::Eq
         {
             return true;
@@ -1813,8 +1815,30 @@ impl<'src> Parser<'src> {
         }
         lookahead = self.skip_state_type_qualifiers(lookahead);
         let name_kind = self.peek_nth(lookahead);
-        (name_kind == TokenKind::Ident || self.is_contextual_ident(name_kind))
+        (name_kind == TokenKind::Ident
+            || self.is_contextual_ident(name_kind)
+            || self.is_reserved_identifier_at(lookahead))
             && self.peek_nth(lookahead + 1) == TokenKind::Eq
+    }
+
+    fn is_reserved_identifier_at(&self, lookahead: usize) -> bool {
+        self.tokens
+            .get(self.pos + lookahead)
+            .is_some_and(|token| self.is_reserved_identifier(token))
+    }
+
+    fn is_reserved_identifier(&self, token: &Token) -> bool {
+        if token.kind == TokenKind::Ident || self.is_contextual_ident(token.kind) {
+            return false;
+        }
+
+        let text = self.token_text(token);
+        text.as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
     }
 
     fn skip_dotted_type_path(&self, mut lookahead: usize) -> usize {
@@ -2532,6 +2556,24 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn parse_binding_name(&mut self) -> Ident {
+        let tok = self.peek_token().clone();
+        if !self.is_reserved_identifier(&tok) {
+            return self.parse_ident();
+        }
+
+        let name = self.token_text(&tok).to_string();
+        self.advance();
+        self.error(
+            format!("reserved keyword `{name}` cannot be used as a binding name"),
+            tok.span,
+        );
+        Ident {
+            name: "<error>".to_string(),
+            span: tok.span,
+        }
+    }
+
     /// Keywords that can appear as identifiers in certain contexts
     /// (e.g., parameter names, variable names, use aliases, field names).
     fn is_contextual_ident(&self, kind: TokenKind) -> bool {
@@ -2988,6 +3030,38 @@ function main() returns nothing:
                 other => panic!("expected VarDecl, got {:?}", other),
             },
             other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reserved_keyword_binding_is_one_invalid_declaration() {
+        for reserved in ["result", "optional", "view"] {
+            let src = format!(
+                "function main() returns nothing:\n    int64 {reserved} = 1\n    return nothing\n"
+            );
+            let result = parse_str(&src);
+
+            assert_eq!(
+                result.errors.len(),
+                1,
+                "unexpected diagnostics for `{reserved}`: {:?}",
+                result.errors
+            );
+            assert_eq!(
+                result.errors[0].message,
+                format!("reserved keyword `{reserved}` cannot be used as a binding name")
+            );
+
+            let Item::Function(function) = &result.module.items[0] else {
+                panic!("expected function for `{reserved}`");
+            };
+            assert_eq!(function.body.stmts.len(), 2);
+            let Stmt::VarDecl(declaration) = &function.body.stmts[0] else {
+                panic!("expected invalid declaration to remain one statement for `{reserved}`");
+            };
+            assert_eq!(declaration.name.name, "<error>");
+            assert!(matches!(declaration.value, Expr::IntLiteral(1, _)));
+            assert!(matches!(function.body.stmts[1], Stmt::Return(_)));
         }
     }
 
