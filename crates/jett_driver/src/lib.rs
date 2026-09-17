@@ -24,6 +24,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
+pub mod native;
+
 const RUNTIME_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 struct DiscoveredModules {
@@ -149,6 +151,48 @@ pub struct RunOutput {
     pub stdout: String,
     pub debug_output: Vec<String>,
 }
+
+/// A failed interpreter run together with output produced before the failure.
+///
+/// The message uses the same text returned by the legacy `String`-based run
+/// APIs. Captured stdout and debug lines are retained so another backend can
+/// compare partial observable behavior as well as terminal failure text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunFailure {
+    pub message: String,
+    pub output: RunOutput,
+}
+
+impl RunFailure {
+    fn without_output(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            output: RunOutput {
+                stdout: String::new(),
+                debug_output: Vec::new(),
+            },
+        }
+    }
+
+    fn with_output(message: impl Into<String>, output: RunOutput) -> Self {
+        Self {
+            message: message.into(),
+            output,
+        }
+    }
+
+    fn into_message(self) -> String {
+        self.message
+    }
+}
+
+impl std::fmt::Display for RunFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RunFailure {}
 
 /// A single definition visible through the namespace query surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3270,6 +3314,26 @@ pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
     )
 }
 
+/// Run a file in the reference interpreter and retain partial captured output
+/// when execution fails.
+///
+/// Unlike the legacy run APIs, the error carries stdout and trace/breakpoint
+/// lines produced before the terminal failure. Its display text remains the
+/// exact legacy error string.
+pub fn run_file_capture_outcome(path: &Path) -> Result<RunOutput, RunFailure> {
+    run_file_with_captured_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: None,
+            graphics_test_events: None,
+        },
+    )
+}
+
 /// Run with a backend-neutral scripted Random provider for deterministic tests.
 pub fn run_file_with_random_test_samples(
     path: &Path,
@@ -3403,6 +3467,13 @@ pub fn run_file_capture_output_with_graphics_test_events(
 }
 
 fn run_file_with_options(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
+    run_file_with_captured_options(path, options).map_err(RunFailure::into_message)
+}
+
+fn run_file_with_captured_options(
+    path: &Path,
+    options: RunOptions,
+) -> Result<RunOutput, RunFailure> {
     if runtime_requires_caller_thread(path, &options, cfg!(target_os = "macos")) {
         // AppKit must create and pump windows on the process's main thread.
         // In particular, do not block that thread joining a graphics worker:
@@ -3440,7 +3511,7 @@ fn runtime_requires_caller_thread(path: &Path, options: &RunOptions, macos: bool
     })
 }
 
-fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String> {
+fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFailure> {
     let build = build_file(path);
 
     if build.has_errors {
@@ -3450,24 +3521,27 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .map(|d| format!("{}: {}", d.code, d.message))
             .collect();
-        return Err(format!(
+        return Err(RunFailure::without_output(format!(
             "cannot run — compilation errors:\n{}",
             errors.join("\n")
-        ));
+        )));
     }
 
     // Parse again to get the module for interpretation
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+    let source = fs::read_to_string(path).map_err(|error| {
+        RunFailure::without_output(format!("failed to read {}: {error}", path.display()))
+    })?;
     let file_id = FileId::new(0);
     let parse_result = parse(&source, file_id);
     let module = parse_result.module;
 
     let Some((main_namespace, main_func)) = find_main_function(&module) else {
-        return Err("runtime error: no `main` function found".to_string());
+        return Err(RunFailure::without_output(
+            "runtime error: no `main` function found",
+        ));
     };
 
-    let main_args = default_runtime_args_for_main(main_func)?;
+    let main_args = default_runtime_args_for_main(main_func).map_err(RunFailure::without_output)?;
 
     use jett_comptime::interpreter::Interpreter;
     let mut interp = if options.emit_runtime_debug {
@@ -3483,7 +3557,9 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
         if let Some(samples) = options.random_test_samples.clone() {
             interp.set_random_test_samples(samples);
         } else {
-            interp.initialize_random_provider()?;
+            interp
+                .initialize_random_provider()
+                .map_err(RunFailure::without_output)?;
         }
     }
     if main_func
@@ -3505,11 +3581,11 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
         if let Some(snapshot) = options.environment_test_snapshot.clone() {
             interp
                 .set_environment_test_snapshot(snapshot)
-                .map_err(|error| format!("runtime error: {error}"))?;
+                .map_err(|error| RunFailure::without_output(format!("runtime error: {error}")))?;
         } else {
             interp
                 .initialize_environment_provider()
-                .map_err(|error| format!("runtime error: {error}"))?;
+                .map_err(|error| RunFailure::without_output(format!("runtime error: {error}")))?;
         }
     }
     if main_func
@@ -3552,17 +3628,32 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, String>
 
     // Call main(). Scripted providers are exact expectations: a successful
     // deterministic run must consume every supplied operation sample.
-    match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
-        Ok(_) => {
-            reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())?;
-            reject_unconsumed_test_samples("Clock", interp.clock_test_samples_remaining())?;
-            reject_unconsumed_test_samples("Graphics", interp.graphics_test_events_remaining())?;
-            Ok(RunOutput {
-                stdout: interp.take_stdout_output(),
-                debug_output: interp.take_debug_output(),
-            })
-        }
-        Err(e) => Err(format!("runtime error: {}", e)),
+    let terminal_result =
+        match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
+            Ok(_) => {
+                reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())
+                    .and_then(|()| {
+                        reject_unconsumed_test_samples(
+                            "Clock",
+                            interp.clock_test_samples_remaining(),
+                        )
+                    })
+                    .and_then(|()| {
+                        reject_unconsumed_test_samples(
+                            "Graphics",
+                            interp.graphics_test_events_remaining(),
+                        )
+                    })
+            }
+            Err(error) => Err(format!("runtime error: {error}")),
+        };
+    let output = RunOutput {
+        stdout: interp.take_stdout_output(),
+        debug_output: interp.take_debug_output(),
+    };
+    match terminal_result {
+        Ok(()) => Ok(output),
+        Err(message) => Err(RunFailure::with_output(message, output)),
     }
 }
 

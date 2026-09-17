@@ -146,7 +146,7 @@ fn backend_lowering_handles_reflection_driven_generic_bodies() {
 #[test]
 fn run_pass_backend_lowering_gaps_are_explicit_and_monotonic() {
     let fixtures = run_pass_fixtures();
-    assert_eq!(fixtures.len(), 181, "update the native parity denominator");
+    assert_eq!(fixtures.len(), 182, "update the native parity denominator");
 
     let worker_count = std::thread::available_parallelism()
         .map_or(1, usize::from)

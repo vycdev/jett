@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Obligation {
     Lower,
+    ObjectEmit,
     MainExecute,
     RuntimeContract,
 }
@@ -17,6 +18,7 @@ impl Obligation {
     fn parse(value: &str) -> Result<Self, String> {
         match value {
             "lower" => Ok(Self::Lower),
+            "object_emit" => Ok(Self::ObjectEmit),
             "main_execute" => Ok(Self::MainExecute),
             "runtime_contract" => Ok(Self::RuntimeContract),
             unknown => Err(format!("unknown obligation `{unknown}`")),
@@ -152,18 +154,25 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
     let expected_outcome =
         ExpectedOutcome::parse(required_string(object, "expected_outcome", &context)?)?;
 
+    let classification_obligations = obligations
+        .iter()
+        .copied()
+        .filter(|obligation| *obligation != Obligation::ObjectEmit)
+        .collect::<BTreeSet<_>>();
+    let object_emit_is_valid = !obligations.contains(&Obligation::ObjectEmit)
+        || (category == FixtureCategory::RunPass && obligations.contains(&Obligation::Lower));
     let lower_only = BTreeSet::from([Obligation::Lower]);
     let main_execute = BTreeSet::from([Obligation::Lower, Obligation::MainExecute]);
     let runtime_contract = BTreeSet::from([Obligation::RuntimeContract]);
-    let valid = if obligations == lower_only {
+    let classification_is_valid = if classification_obligations == lower_only {
         category == FixtureCategory::RunPass && expected_outcome == ExpectedOutcome::LowerOnly
-    } else if obligations == main_execute {
+    } else if classification_obligations == main_execute {
         category == FixtureCategory::RunPass
             && matches!(
                 expected_outcome,
                 ExpectedOutcome::Success | ExpectedOutcome::ExpectedFailure
             )
-    } else if obligations == runtime_contract {
+    } else if classification_obligations == runtime_contract {
         category == FixtureCategory::RuntimeFail
             && matches!(
                 expected_outcome,
@@ -172,7 +181,7 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
     } else {
         false
     };
-    if !valid {
+    if !object_emit_is_valid || !classification_is_valid {
         return Err(format!(
             "{context} has an invalid path/obligation/outcome combination"
         ));
@@ -208,6 +217,12 @@ fn parse_manifest(source: &str) -> Result<Manifest, String> {
         }
     }
     Ok(Manifest { fixtures })
+}
+
+fn load_manifest() -> Manifest {
+    let source = fs::read_to_string(workspace_root().join("tests/native_parity.json"))
+        .expect("native parity manifest should be readable");
+    parse_manifest(&source).expect("native parity manifest should be valid")
 }
 
 fn discovered_fixture_paths(kind: &str) -> BTreeSet<String> {
@@ -284,10 +299,7 @@ fn paths_with_outcome(
 
 #[test]
 fn native_parity_manifest_matches_fixture_inventory() {
-    let root = workspace_root();
-    let source = fs::read_to_string(root.join("tests/native_parity.json"))
-        .expect("native parity manifest should be readable");
-    let manifest = parse_manifest(&source).expect("native parity manifest should be valid");
+    let manifest = load_manifest();
 
     let discovered_run_pass = discovered_fixture_paths("run_pass");
     let manifested_lower = manifest_paths_with_obligation(&manifest, Obligation::Lower);
@@ -295,7 +307,22 @@ fn native_parity_manifest_matches_fixture_inventory() {
         manifested_lower, discovered_run_pass,
         "lowering manifest must exactly match tests/run_pass"
     );
-    assert_eq!(manifested_lower.len(), 181, "lowering denominator changed");
+    assert_eq!(manifested_lower.len(), 182, "lowering denominator changed");
+
+    let manifested_object_emit = manifest_paths_with_obligation(&manifest, Obligation::ObjectEmit);
+    let expected_object_emit = BTreeSet::from([
+        "tests/run_pass/native_scalar_entry.jett".to_owned(),
+        "tests/run_pass/simple.jett".to_owned(),
+    ]);
+    assert_eq!(
+        manifested_object_emit, expected_object_emit,
+        "object-emission coverage must name exactly the fixtures proven by the native object gate"
+    );
+    assert_eq!(
+        manifested_object_emit.len(),
+        2,
+        "native object-emission coverage changed"
+    );
 
     let discovered_mains = ast_main_paths(&discovered_run_pass);
     let manifested_mains = manifest_paths_with_obligation(&manifest, Obligation::MainExecute);
@@ -303,7 +330,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
         manifested_mains, discovered_mains,
         "main-execution manifest must exactly match AST-discovered top-level main functions"
     );
-    assert_eq!(manifested_mains.len(), 29, "main denominator changed");
+    assert_eq!(manifested_mains.len(), 30, "main denominator changed");
 
     let discovered_runtime = discovered_fixture_paths("runtime_fail");
     let manifested_runtime = manifest_paths_with_obligation(&manifest, Obligation::RuntimeContract);
@@ -360,8 +387,56 @@ fn native_parity_manifest_matches_fixture_inventory() {
     assert_eq!(manifested_main_failures, expected_main_failures);
     assert_eq!(
         paths_with_outcome(&manifest, Obligation::MainExecute, ExpectedOutcome::Success).len(),
-        28
+        29
     );
+}
+
+#[test]
+fn native_parity_object_emit_obligations_emit_deterministic_host_objects() {
+    const SIMPLE_APP_ADD_SYMBOL: &str =
+        "jett_v0_a9076f8b4f10f051ac43be7e160564e56e68c5278c8dd064137a42f152d4bf4f";
+
+    let root = workspace_root();
+    let manifest = load_manifest();
+    let fixture_paths = manifest_paths_with_obligation(&manifest, Obligation::ObjectEmit);
+    assert!(
+        !fixture_paths.is_empty(),
+        "object-emission coverage must not pass vacuously"
+    );
+
+    for path in fixture_paths {
+        let fixture = root.join(&path);
+        let first = jett_driver::native::emit_host_object_for_file(&fixture)
+            .unwrap_or_else(|error| panic!("failed to emit native object for {path}: {error}"));
+        let second =
+            jett_driver::native::emit_host_object_for_file(&fixture).unwrap_or_else(|error| {
+                panic!("failed to repeat native object emission for {path}: {error}")
+            });
+
+        assert_eq!(first.target(), jett_driver::native::host_target());
+        assert!(!first.bytes().is_empty(), "{path} emitted an empty object");
+        assert_eq!(
+            first.bytes(),
+            second.bytes(),
+            "{path} object bytes are not deterministic"
+        );
+        assert!(
+            !first.symbols().is_empty(),
+            "{path} emitted no reachable symbols"
+        );
+        assert_eq!(
+            first.symbols(),
+            second.symbols(),
+            "{path} object symbols are not deterministic"
+        );
+        if path == "tests/run_pass/simple.jett" {
+            assert_eq!(
+                first.symbols(),
+                [SIMPLE_APP_ADD_SYMBOL],
+                "{path} must emit the stable symbol derived from `app.add`"
+            );
+        }
+    }
 }
 
 #[test]
@@ -394,6 +469,10 @@ fn native_parity_manifest_parser_rejects_malformed_entries() {
         (
             "invalid obligation combination",
             r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["main_execute"],"expected_outcome":"success"}]}"#,
+        ),
+        (
+            "object emission without lowering",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["object_emit"],"expected_outcome":"lower_only"}]}"#,
         ),
         (
             "invalid category",

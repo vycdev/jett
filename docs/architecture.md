@@ -1267,7 +1267,14 @@ LLVM is the compilation bottleneck. Strategies to minimize its impact:
 |---|---|---|
 | Linux | `mold` (~5-10x faster than `lld`) | `lld` (handles LTO) |
 | macOS | `lld` or Apple's linker | `lld` or Apple's linker |
-| Windows | `lld-link` | `lld-link` |
+| Windows | MSVC `link.exe` (initial host path) | MSVC `link.exe` (initial host path) |
+
+The Windows host linker consumes an exact checked program-entry identity and a
+typed launcher-bundle contract (target, runtime ABI, static CRT mode, and
+ordered native libraries). The driver discovers both the MSVC linker and
+Windows SDK, invokes the linker without a shell under a bounded timeout, stages
+all intermediates in a secure directory on the destination volume, and only
+atomically replaces the requested executable after a successful link.
 
 Additional linking optimizations:
 - **Split DWARF** (`-gsplit-dwarf`): Moves debug info into separate `.dwo` files that the linker does not process. Reduces link time by 30-50% for debug builds with large debug info. The debugger reads `.dwo` files directly.

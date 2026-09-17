@@ -15,8 +15,8 @@ The current fixture inventory establishes three separate denominators:
 
 | Obligation | Denominator | Acceptance condition |
 | --- | ---: | --- |
-| Native lowering | 181 | Every `tests/run_pass/*.jett` fixture reaches validated HIR and MIR and is accepted by native object generation. |
-| `main` execution | 29 | Every run-pass fixture that declares `main` links and runs on the supported host with its interpreter-equivalent expected outcome and observable behavior. One scripted graphics fixture intentionally returns a runtime error. |
+| Native lowering | 182 | Every `tests/run_pass/*.jett` fixture reaches validated HIR and MIR and is accepted by native object generation. |
+| `main` execution | 30 | Every run-pass fixture that declares `main` links and runs on the supported host with its interpreter-equivalent expected outcome and observable behavior. One scripted graphics fixture intentionally returns a runtime error. |
 | Runtime contracts | 25 | Every `tests/runtime_fail/*.jett` fixture links and matches its interpreter contract: 17 wrapping-success cases and 8 runtime-failure cases, including failure class, message contract, and cleanup behavior where applicable. |
 
 These numbers are denominators, not a sample or a percentage target. Fixtures
@@ -25,7 +25,7 @@ may leave it only when the corresponding language or runtime feature is
 explicitly marked unimplemented, with the reason recorded in the same change.
 
 Run-pass files without `main`, including verification and property fixtures,
-count toward the 181-fixture lowering obligation. The initial executable
+count toward the 182-fixture lowering obligation. The initial executable
 harness does not execute their `verify` blocks natively, so they do not count
 toward the 29-fixture execution obligation. Passing them through frontend
 verification is not evidence that their bodies executed as native code. A
@@ -129,7 +129,7 @@ and trusted hook. It makes lexical evaluation order and concrete generic
 instantiation explicit. It does not retain an AST fallback that a backend must
 reinterpret.
 
-The 181-fixture lowering denominator first passes through this gate. Any
+The 182-fixture lowering denominator first passes through this gate. Any
 unsupported-HIR error for one of those fixtures is a parity failure, not an
 allowed skip.
 
@@ -240,9 +240,9 @@ the runtime interpreter.
 2. **Checked-program handoff:** publish and validate the closed semantic
    artifact, canonical identities, concrete calls, layouts, and trusted
    intrinsic identities required downstream.
-3. **Complete HIR lowering:** all 181 run-pass fixtures lower to validated HIR
+3. **Complete HIR lowering:** all 182 run-pass fixtures lower to validated HIR
    with no source-form or name-based backend fallback.
-4. **Backend-ready MIR:** those same 181 fixtures lower to validated CFGs with
+4. **Backend-ready MIR:** those same 182 fixtures lower to validated CFGs with
    explicit evaluation, failure, ownership, and cleanup behavior.
 5. **Object and link slice:** Cranelift emits deterministic host objects for a
    scalar/control-flow seed, links them with the versioned runtime, and rejects
@@ -252,7 +252,7 @@ the runtime interpreter.
    fixture. Strings, aggregates, collections, generics, results and optionals,
    reflection and JSON, capabilities and resources, and concurrency/runtime
    services remain on the matrix until their current behavior is covered.
-7. **Successful execution parity:** all 29 `main` fixtures compile, link, and
+7. **Successful execution parity:** all 30 `main` fixtures compile, link, and
    execute natively with interpreter-equivalent stdout, stderr, result, visible
    capability effects, and cleanup behavior.
 8. **Runtime-contract parity:** all 25 runtime-contract fixtures compile and
@@ -295,11 +295,12 @@ The current fixture gates are therefore:
 
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
-| Typed backend lowering | 181 | 181 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 0 | 181 | full-fixture object gate not yet enabled |
-| Successful/expected `main` execution | 0 | 29 | native link-and-run differential gate pending |
+| Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
+| Native object generation | 2 | 182 | manifest-driven production object gate for `simple.jett` and `native_scalar_entry.jett` |
+| Successful/expected `main` execution | 0 | 30 | automated native link-and-run differential gate pending |
 | Runtime contracts | 0 | 25 | native runtime-contract differential gate pending |
 
-These are intentionally conservative counts. Seed scalar object tests exercise
-the backend implementation but do not count as a fixture obligation until the
-corresponding manifest fixture passes through the same production pipeline.
+These are intentionally conservative counts. The two scalar object fixtures
+count because the manifest gate executes the production emission API and checks
+deterministic nonempty artifacts. A manual linked smoke run is not counted as
+execution coverage until the same path is enforced by an automated gate.
