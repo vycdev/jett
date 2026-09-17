@@ -81,8 +81,10 @@ uses dense variant identities, and exhaustive `match` arms bind payload locals
 explicitly rather than preserving source patterns.
 
 Accepted compiler-owned calls become typed intrinsic HIR nodes only after the
-typechecker authorizes them; HIR records canonical identity and evaluation
-order without reapplying trusted-source policy. Inline functions, indirect
+typechecker authorizes them; HIR records a closed `IntrinsicId` and evaluation
+order without reapplying trusted-source policy. That ID is shared by MIR,
+comptime/runtime dispatch, and native codegen, whose exhaustive matches make
+new compiler-owned operations an explicit cross-phase decision. Inline functions, indirect
 calls, bitfields, state machines, and actor operations likewise use explicit
 backend-neutral nodes rather than retaining source AST fragments.
 

@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use jett_common::{FileId, SourceOrigin, Span};
+pub use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{self, Expr, Item, Module, Stmt};
 use jett_resolve::{DefId, DefKind, ResolveResult};
 use jett_typecheck::{
@@ -247,7 +248,7 @@ pub enum ExpressionKind {
         evaluation_order: Vec<usize>,
     },
     Intrinsic {
-        canonical_name: String,
+        intrinsic: IntrinsicId,
         /// Concrete checked generic operands in source order. An intrinsic
         /// with no type operands carries an empty vector.
         type_arguments: Vec<TypeId>,
@@ -1010,6 +1011,7 @@ impl<'a> Lowerer<'a> {
             return_type,
             expression_types,
             generic_calls,
+            intrinsic_ids,
             intrinsic_type_arguments,
             call_argument_orders,
             method_calls,
@@ -1025,6 +1027,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.return_type,
                 instantiation.type_map.clone(),
                 instantiation.generic_calls.clone(),
+                instantiation.intrinsic_ids.clone(),
                 instantiation.intrinsic_type_arguments.clone(),
                 instantiation.call_argument_orders.clone(),
                 instantiation.method_calls.clone(),
@@ -1041,6 +1044,7 @@ impl<'a> Lowerer<'a> {
                 method.return_type,
                 self.check.type_map.clone(),
                 self.check.generic_calls.clone(),
+                self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
@@ -1084,6 +1088,7 @@ impl<'a> Lowerer<'a> {
                 return_type,
                 self.check.type_map.clone(),
                 self.check.generic_calls.clone(),
+                self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
@@ -1109,6 +1114,7 @@ impl<'a> Lowerer<'a> {
             &function_ids,
             expression_types,
             generic_calls,
+            intrinsic_ids,
             intrinsic_type_arguments,
             call_argument_orders,
             method_calls,
@@ -1260,6 +1266,7 @@ impl<'a> Lowerer<'a> {
         let function_ids = self.function_ids.clone();
         let expression_types = self.check.type_map.clone();
         let generic_calls = self.check.generic_calls.clone();
+        let intrinsic_ids = self.check.intrinsic_ids.clone();
         let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
         let call_argument_orders = self.check.call_argument_orders.clone();
         let method_calls = self.check.method_calls.clone();
@@ -1273,6 +1280,7 @@ impl<'a> Lowerer<'a> {
             &function_ids,
             expression_types,
             generic_calls,
+            intrinsic_ids,
             intrinsic_type_arguments,
             call_argument_orders,
             method_calls,
@@ -1415,6 +1423,7 @@ struct BodyLowerer<'lowerer, 'program> {
     function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
     expression_types: HashMap<Span, TypeId>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
@@ -1434,6 +1443,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
         expression_types: HashMap<Span, TypeId>,
         generic_calls: HashMap<Span, CheckedGenericCall>,
+        intrinsic_ids: HashMap<Span, IntrinsicId>,
         intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
         call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
         method_calls: HashMap<Span, CheckedMethodCall>,
@@ -1447,6 +1457,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             function_ids,
             expression_types,
             generic_calls,
+            intrinsic_ids,
             intrinsic_type_arguments,
             call_argument_orders,
             method_calls,
@@ -1841,6 +1852,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let CheckedBodyFacts {
             type_map,
             generic_calls,
+            intrinsic_ids,
             intrinsic_type_arguments,
             call_argument_orders,
             method_calls,
@@ -1852,6 +1864,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
         let saved_expression_types = std::mem::replace(&mut self.expression_types, type_map);
         let saved_generic_calls = std::mem::replace(&mut self.generic_calls, generic_calls);
+        let saved_intrinsic_ids = std::mem::replace(&mut self.intrinsic_ids, intrinsic_ids);
         let saved_intrinsic_type_arguments =
             std::mem::replace(&mut self.intrinsic_type_arguments, intrinsic_type_arguments);
         let saved_call_argument_orders =
@@ -1876,6 +1889,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.local_ids = saved_local_ids;
         self.expression_types = saved_expression_types;
         self.generic_calls = saved_generic_calls;
+        self.intrinsic_ids = saved_intrinsic_ids;
         self.intrinsic_type_arguments = saved_intrinsic_type_arguments;
         self.call_argument_orders = saved_call_argument_orders;
         self.method_calls = saved_method_calls;
@@ -2136,7 +2150,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expr::Call(callee, args, span) => (callee.as_ref(), args.as_slice(), *span),
             _ => (inner, &[][..], inner.span()),
         };
-        let actor_type = self.canonical_call_name(callee)?;
+        let actor_type = self.dotted_expression_name(callee)?;
         let (args, evaluation_order) = self.lower_arguments_in_parameter_order(args, call_span)?;
         Some(ExpressionKind::ActorSpawn {
             actor_type,
@@ -2297,7 +2311,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             })
         } else {
             Some(ExpressionKind::Intrinsic {
-                canonical_name: self.canonical_call_name(callee)?,
+                intrinsic: self.checked_intrinsic_id(call_span)?,
                 type_arguments: self
                     .checked_intrinsic_type_arguments(call_span, has_explicit_type_arguments)?,
                 args: lowered_args,
@@ -2323,6 +2337,33 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         } else {
             Some(Vec::new())
         }
+    }
+
+    fn checked_intrinsic_id(&mut self, span: Span) -> Option<IntrinsicId> {
+        self.intrinsic_ids.get(&span).copied().or_else(|| {
+            self.parent.error(
+                span,
+                "checked compiler intrinsic has no closed intrinsic identity",
+            );
+            None
+        })
+    }
+
+    fn dotted_expression_name(&mut self, expression: &Expr) -> Option<String> {
+        fn dotted(expression: &Expr) -> Option<String> {
+            match expression {
+                Expr::Ident(ident) => Some(ident.name.clone()),
+                Expr::FieldAccess(base, field, _) => {
+                    Some(format!("{}.{}", dotted(base)?, field.name))
+                }
+                _ => None,
+            }
+        }
+        dotted(expression).or_else(|| {
+            self.parent
+                .error(expression.span(), "expression has no canonical dotted name");
+            None
+        })
     }
 
     fn lower_enum_construct(
@@ -2422,40 +2463,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 specialization: generic.specialization.clone(),
             },
         );
-        self.function_ids.contains_key(&key) || !self.is_trusted_stdlib_intrinsic(definition)
+        self.function_ids.contains_key(&key) || !self.is_trusted_stdlib_intrinsic(definition, span)
     }
 
-    fn is_trusted_stdlib_intrinsic(&self, definition: DefId) -> bool {
+    fn is_trusted_stdlib_intrinsic(&self, definition: DefId, span: Span) -> bool {
         let info = self.parent.resolve.scope_table.def(definition);
         self.parent.origins.get(&info.span.file) == Some(&SourceOrigin::Stdlib)
-            && matches!(
-                info.name.as_str(),
-                "json.parse" | "json.parse_exact" | "json.serialize" | "json.serialize_public"
-            )
-    }
-
-    fn canonical_call_name(&mut self, callee: &Expr) -> Option<String> {
-        fn dotted(expression: &Expr) -> Option<String> {
-            match expression {
-                Expr::Ident(ident) => Some(ident.name.clone()),
-                Expr::FieldAccess(base, field, _) => {
-                    Some(format!("{}.{}", dotted(base)?, field.name))
-                }
-                _ => None,
-            }
-        }
-        if let Some(definition) = self.resolved_definition(callee)
-            && self.is_trusted_stdlib_intrinsic(definition)
-        {
-            return Some(self.parent.resolve.scope_table.def(definition).name.clone());
-        }
-        dotted(callee).or_else(|| {
-            self.parent.error(
-                callee.span(),
-                "checked intrinsic has no canonical call name",
-            );
-            None
-        })
+            && self.intrinsic_ids.contains_key(&span)
     }
 
     fn lower_bitfield_construct(
@@ -2774,7 +2788,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         } else {
             let has_explicit_type_arguments = Self::has_explicit_type_arguments(&step.function);
             ExpressionKind::Intrinsic {
-                canonical_name: self.canonical_call_name(callee)?,
+                intrinsic: self.checked_intrinsic_id(step.span)?,
                 type_arguments: self
                     .checked_intrinsic_type_arguments(step.span, has_explicit_type_arguments)?,
                 args,
@@ -4043,19 +4057,67 @@ function absolute(value: int64) returns int64:
 "#;
         let program = lower_source(source);
         let StatementKind::Return(Some(Expression {
-            kind:
-                ExpressionKind::Intrinsic {
-                    canonical_name,
-                    args,
-                    ..
-                },
+            kind: ExpressionKind::Intrinsic {
+                intrinsic, args, ..
+            },
             ..
         })) = &program.functions[0].body.statements[0].kind
         else {
             panic!("expected compiler intrinsic");
         };
-        assert_eq!(canonical_name, "math.abs");
+        assert_eq!(*intrinsic, IntrinsicId::MathAbs);
         assert_eq!(args.len(), 1);
+    }
+
+    #[test]
+    fn direct_user_functions_remain_distinct_from_intrinsics() {
+        let program = lower_source(
+            r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function main() returns int64:
+    return identity(7)
+"#,
+        );
+        let main = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .expect("main should lower");
+        assert!(matches!(
+            main.body.statements[0].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::Call { .. },
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn lowering_rejects_an_intrinsic_without_a_checked_closed_identity() {
+        let source = r#"namespace app
+function absolute(value: int64) returns int64:
+    return math.abs(value)
+"#;
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(source, file);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let mut checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert_eq!(
+            checked.intrinsic_ids.values().copied().collect::<Vec<_>>(),
+            [IntrinsicId::MathAbs]
+        );
+        checked.intrinsic_ids.clear();
+        let origins = HashMap::from([(file, SourceOrigin::Project)]);
+
+        let errors = lower(&parsed.module, &resolved, &checked, &origins)
+            .expect_err("unclassified intrinsic must not enter HIR");
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| { error.message.contains("has no closed intrinsic identity") })
+        );
     }
 
     #[test]
@@ -4076,7 +4138,7 @@ function main() returns string:
         let StatementKind::Return(Some(Expression {
             kind:
                 ExpressionKind::Intrinsic {
-                    canonical_name,
+                    intrinsic,
                     type_arguments,
                     ..
                 },
@@ -4085,7 +4147,7 @@ function main() returns string:
         else {
             panic!("expected reflected compiler intrinsic");
         };
-        assert_eq!(canonical_name, "type.name");
+        assert_eq!(*intrinsic, IntrinsicId::TypeName);
         assert_eq!(type_arguments, describe.identity.type_arguments.as_slice());
     }
 
@@ -4135,7 +4197,7 @@ function main() returns int64:
         let StatementKind::Return(Some(Expression {
             kind:
                 ExpressionKind::Intrinsic {
-                    canonical_name,
+                    intrinsic,
                     type_arguments,
                     ..
                 },
@@ -4144,7 +4206,7 @@ function main() returns int64:
         else {
             panic!("expected stdlib kernel intrinsic");
         };
-        assert_eq!(canonical_name, "list.__length");
+        assert_eq!(*intrinsic, IntrinsicId::ListLength);
         assert_eq!(type_arguments, length.identity.type_arguments.as_slice());
     }
 
@@ -4248,7 +4310,7 @@ function main() returns string:
                     Expression {
                         kind:
                             ExpressionKind::Intrinsic {
-                                canonical_name,
+                                intrinsic,
                                 type_arguments,
                                 ..
                             },
@@ -4259,7 +4321,7 @@ function main() returns string:
             else {
                 panic!("expected specialized reflected body");
             };
-            assert_eq!(canonical_name, "type.name");
+            assert_eq!(*intrinsic, IntrinsicId::TypeName);
             assert_eq!(type_arguments, &[arm.bound_type]);
         }
     }

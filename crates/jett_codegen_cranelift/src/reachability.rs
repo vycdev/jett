@@ -252,7 +252,13 @@ fn collect_expression_references(
         | ExpressionKind::Cancel(value)
         | ExpressionKind::View(value)
         | ExpressionKind::Clone(value) => collect_expression_references(value, references),
-        ExpressionKind::Intrinsic { args, .. } | ExpressionKind::ActorSpawn { args, .. } => {
+        ExpressionKind::Intrinsic {
+            intrinsic: _,
+            type_arguments: _,
+            args,
+            evaluation_order: _,
+        }
+        | ExpressionKind::ActorSpawn { args, .. } => {
             for argument in args {
                 collect_expression_references(argument, references);
             }

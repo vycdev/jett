@@ -1453,7 +1453,7 @@ function first(left: int64, right: int64) returns int64:
         };
         let bound_type = arms[0].bound_type;
         type_info.kind = hir::ExpressionKind::Intrinsic {
-            canonical_name: "type.name".to_string(),
+            intrinsic: hir::IntrinsicId::TypeName,
             type_arguments: vec![bound_type],
             args: Vec::new(),
             evaluation_order: vec![0],

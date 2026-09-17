@@ -605,7 +605,7 @@ mod tests {
     use super::*;
     use crate::{
         Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,
-        FunctionIdentity, Program, Statement,
+        FunctionIdentity, IntrinsicId, Program, Statement,
     };
 
     fn test_span() -> Span {
@@ -724,7 +724,7 @@ mod tests {
         let statement = Statement {
             kind: StatementKind::Expression(Expression {
                 kind: ExpressionKind::Intrinsic {
-                    canonical_name: "type.name".to_string(),
+                    intrinsic: IntrinsicId::TypeName,
                     type_arguments: vec![nested_error],
                     args: Vec::new(),
                     evaluation_order: Vec::new(),

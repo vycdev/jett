@@ -173,9 +173,14 @@ rather than rely on Rust layout or symbol compatibility.
   tag values, and calling convention. Backend and runtime use one canonical
   definition of those layouts.
 
-The compiler maintains one typed intrinsic registry shared by the interpreter
-mapping, HIR/MIR lowering, and runtime ABI adapters. This prevents duplicated
-string dispatch and preserves trusted operation identity through codegen.
+The compiler maintains one typed intrinsic registry shared by type checking,
+the interpreter mapping, HIR/MIR lowering, and runtime ABI adapters. The
+closed `IntrinsicId` set is the sole acceptance boundary for compiler-owned
+call spellings. Checked call sites carry that ID into HIR and MIR; downstream
+dispatchers match it exhaustively so adding an intrinsic requires an explicit
+decision in every execution path. Source names remain only diagnostic and
+symbol metadata. This prevents duplicated string dispatch and preserves
+trusted operation identity through codegen.
 
 ## Artifacts, Linking, and Packaging
 
@@ -268,7 +273,7 @@ lowering alone never changes an execution row to complete.
 | Lists, maps, and sets | covered | pending | pending |
 | Results, optionals, and `handle` control flow | covered, but handler bodies still require explicit MIR CFG extraction | pending | pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
-| Compiler intrinsics and reflection | covered with checked operands; closed intrinsic IDs pending | pending | pending |
+| Compiler intrinsics and reflection | covered with checked operands and closed `IntrinsicId` identities | pending | pending |
 | Capabilities and runtime resources | nominal checked types covered | pending | pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |

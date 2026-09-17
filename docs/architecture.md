@@ -808,8 +808,11 @@ loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
 and fields carry explicit checked types plus dense field/state IDs. Remaining
-compiler-owned calls carry canonical intrinsic identity, typed arguments, and
-lexical evaluation order after type checking has authorized them. Inline
+compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
+lexical evaluation order after type checking has authorized them. The shared
+registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,
+comptime/runtime dispatch, and native codegen consume the checked ID and use
+exhaustive matches rather than rediscovering policy from names. Inline
 functions and indirect calls retain explicit parameter/local identity;
 comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
 carry typed operands and message identity. Actor receive handlers are

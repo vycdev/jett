@@ -725,8 +725,9 @@ impl Translator<'_, '_> {
             | ExpressionKind::View(value)
             | ExpressionKind::Clone(value) => self.expression(value),
             ExpressionKind::String(_) => Err(self.unsupported(expression.span, "string literal")),
-            ExpressionKind::Intrinsic { .. } => {
-                Err(self.unsupported(expression.span, "runtime intrinsic"))
+            ExpressionKind::Intrinsic { intrinsic, .. } => {
+                let construct = format!("runtime intrinsic `{}`", intrinsic.canonical_name());
+                Err(self.unsupported(expression.span, &construct))
             }
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(expression.span, "indirect call"))

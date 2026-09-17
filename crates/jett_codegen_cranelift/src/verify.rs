@@ -483,9 +483,11 @@ impl Verifier<'_> {
             ExpressionKind::String(_) => {
                 Err(self.unsupported(function, expression.span, "string literal"))
             }
-            ExpressionKind::Intrinsic { .. } => {
-                Err(self.unsupported(function, expression.span, "runtime intrinsic"))
-            }
+            ExpressionKind::Intrinsic { intrinsic, .. } => Err(self.unsupported(
+                function,
+                expression.span,
+                format!("runtime intrinsic `{}`", intrinsic.canonical_name()),
+            )),
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(function, expression.span, "indirect call"))
             }

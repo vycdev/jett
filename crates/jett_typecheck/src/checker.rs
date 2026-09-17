@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use jett_common::{FileId, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
+use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{
     self, BinOp, Block, Expr, FunctionDef, Item, Module, Stmt, StringPart, TypeExpr, UnaryOp,
     VerifyBlock,
@@ -44,6 +45,8 @@ pub struct CheckedGenericFunctionInstantiation {
     pub type_map: HashMap<Span, TypeId>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Closed compiler operation selected for each accepted intrinsic call.
+    pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     /// Concrete type operands for accepted compiler-owned generic calls.
     ///
     /// These operands are not recoverable from the runtime arguments or result
@@ -102,6 +105,7 @@ pub enum CheckedComptimeTypeSelection {
 pub struct CheckedBodyFacts {
     pub type_map: HashMap<Span, TypeId>,
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     pub method_calls: HashMap<Span, CheckedMethodCall>,
@@ -188,6 +192,8 @@ pub struct CheckResult {
     pub definition_types: HashMap<DefId, TypeId>,
     /// Generic calls made outside generic function bodies, keyed by call span.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Closed compiler operation selected for each accepted intrinsic call.
+    pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     /// Concrete type operands for compiler-owned generic calls outside generic
     /// function bodies, keyed by call span.
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -249,6 +255,7 @@ pub fn check_with_options(
         type_map: checker.type_map,
         definition_types: checker.type_env,
         generic_calls: checker.generic_calls,
+        intrinsic_ids: checker.intrinsic_ids,
         intrinsic_type_arguments: checker.intrinsic_type_arguments,
         call_argument_orders: checker.call_argument_orders,
         method_definitions: checker.method_definitions,
@@ -339,6 +346,7 @@ struct ActiveGenericInstantiation {
     manifest_index: usize,
     type_map: HashMap<Span, TypeId>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
@@ -494,6 +502,8 @@ struct TypeChecker<'a> {
     generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
     /// Concrete generic calls made outside a generic function body.
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Closed compiler operations selected outside generic function bodies.
+    intrinsic_ids: HashMap<Span, IntrinsicId>,
     /// Concrete type operands for compiler-owned generic calls outside a
     /// generic function body.
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -595,6 +605,7 @@ impl<'a> TypeChecker<'a> {
             generic_instantiation_indices: HashMap::new(),
             generic_function_instantiations: Vec::new(),
             generic_calls: HashMap::new(),
+            intrinsic_ids: HashMap::new(),
             intrinsic_type_arguments: HashMap::new(),
             call_argument_orders: HashMap::new(),
             method_definitions: Vec::new(),
@@ -2942,6 +2953,20 @@ impl<'a> TypeChecker<'a> {
     fn resolved_expr_name(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident(ident) => Some(self.resolved_symbol_name(&ident.name, ident.span)),
+            Expr::FieldAccess(base, field, _)
+                if matches!(field.name.as_str(), "to_bytes" | "from_bytes") =>
+            {
+                let resolved_owner =
+                    self.resolve
+                        .resolutions
+                        .get(&expr.span())
+                        .and_then(|definition| {
+                            let info = self.resolve.scope_table.def(*definition);
+                            (info.kind == DefKind::Bitfield).then(|| info.name.clone())
+                        });
+                let owner = resolved_owner.or_else(|| self.expanded_dotted_expr_name(base))?;
+                Some(format!("{owner}.{}", field.name,))
+            }
             Expr::FieldAccess(_, _, _) => self.expanded_dotted_expr_name(expr),
             _ => None,
         }
@@ -2954,160 +2979,163 @@ impl<'a> TypeChecker<'a> {
         span: Span,
     ) -> Option<(Vec<TypeId>, TypeId)> {
         let name = self.resolved_expr_name(callee)?;
+        // This is the sole acceptance boundary for compiler-provided call
+        // signatures. A new string arm cannot become a builtin until it has a
+        // shared closed identity.
+        let intrinsic = IntrinsicId::from_callable_name(&name)?;
         let private_stdlib_kernel = matches!(
-            name.as_str(),
-            "list.__new"
-                | "list.__append"
-                | "list.__length"
-                | "list.__get_clone"
-                | "list.__sort"
-                | "list.__insert_at"
-                | "list.__remove_at"
-                | "list.__swap"
-                | "list.__sort_by_index"
-                | "list.__is_sorted"
-                | "list.__sum"
-                | "list.__sort_by"
-                | "list.__group_by"
-                | "math.__abs"
-                | "math.__min"
-                | "math.__max"
-                | "math.__sqrt"
-                | "math.__pow"
-                | "math.__floor"
-                | "math.__ceil"
-                | "math.__round"
-                | "math.__clamp"
-                | "math.__log"
-                | "math.__log2"
-                | "math.__log10"
-                | "math.__average"
-                | "math.__median"
-                | "math.__pi"
-                | "math.__e"
-                | "math.__sin"
-                | "math.__cos"
-                | "math.__tan"
-                | "math.__mod"
-                | "math.__gcd"
-                | "math.__lcm"
-                | "math.__factorial"
-                | "string.__from_int64"
-                | "string.__from_uint64"
-                | "string.__from_float64"
-                | "string.__from_bool"
-                | "string.__char_count"
-                | "string.__chars"
-                | "string.__slice"
-                | "string.__index_of"
-                | "string.__count"
-                | "string.__trim"
-                | "string.__trim_start"
-                | "string.__trim_end"
-                | "string.__upper"
-                | "string.__lower"
-                | "string.__replace"
-                | "string.__split"
-                | "string.__join"
-                | "string.__repeat"
-                | "string.__slugify"
-                | "string.__words"
-                | "string.__lines"
-                | "string.__to_upper_first"
-                | "string.__to_lower_first"
-                | "string.__is_numeric"
-                | "string.__is_alpha"
-                | "map.__new"
-                | "map.__length"
-                | "map.__has"
-                | "map.__get"
-                | "map.__insert"
-                | "map.__remove"
-                | "map.__from_lists"
-                | "set.__new"
-                | "set.__add"
-                | "set.__remove"
-                | "set.__contains"
-                | "set.__length"
-                | "bytes.__new"
-                | "bytes.__length"
-                | "bytes.__slice"
-                | "bytes.__concat"
-                | "bytes.__from_string"
-                | "bytes.__to_string"
-                | "bytes.__get"
-                | "bytes.__to_hex"
-                | "bytes.__from_hex"
-                | "encoding.__base64_encode"
-                | "encoding.__base64_decode"
-                | "encoding.__hex_decode"
-                | "encoding.__url_encode"
-                | "encoding.__url_decode"
-                | "encoding.__form_encode"
-                | "encoding.__form_decode"
-                | "crypto.__sha256"
-                | "crypto.__sha512"
-                | "crypto.__md5"
-                | "crypto.__hmac_sha256"
-                | "csv.__parse"
-                | "csv.__stringify"
-                | "csv.__parse_with_header"
-                | "random.__bounded"
-                | "random.__unit_float64"
-                | "random.__bool"
-                | "Clock.__now"
-                | "Environment.__get"
-                | "Environment.__args"
-                | "test.mock.__random"
-                | "test.mock.__clock"
-                | "test.mock.__environment"
-                | "log.__emit"
-                | "graphics.__run"
+            intrinsic,
+            IntrinsicId::ListNew
+                | IntrinsicId::ListAppend
+                | IntrinsicId::ListLength
+                | IntrinsicId::ListGetClone
+                | IntrinsicId::ListSort
+                | IntrinsicId::ListInsertAt
+                | IntrinsicId::ListRemoveAt
+                | IntrinsicId::ListSwap
+                | IntrinsicId::ListSortByIndex
+                | IntrinsicId::ListIsSorted
+                | IntrinsicId::ListSum
+                | IntrinsicId::ListSortBy
+                | IntrinsicId::ListGroupBy
+                | IntrinsicId::MathKernelAbs
+                | IntrinsicId::MathKernelMin
+                | IntrinsicId::MathKernelMax
+                | IntrinsicId::MathSqrt
+                | IntrinsicId::MathPow
+                | IntrinsicId::MathFloor
+                | IntrinsicId::MathCeil
+                | IntrinsicId::MathRound
+                | IntrinsicId::MathClamp
+                | IntrinsicId::MathLog
+                | IntrinsicId::MathLog2
+                | IntrinsicId::MathLog10
+                | IntrinsicId::MathAverage
+                | IntrinsicId::MathMedian
+                | IntrinsicId::MathPi
+                | IntrinsicId::MathE
+                | IntrinsicId::MathSin
+                | IntrinsicId::MathCos
+                | IntrinsicId::MathTan
+                | IntrinsicId::MathMod
+                | IntrinsicId::MathGcd
+                | IntrinsicId::MathLcm
+                | IntrinsicId::MathFactorial
+                | IntrinsicId::StringFromInt64
+                | IntrinsicId::StringFromUint64
+                | IntrinsicId::StringFromFloat64
+                | IntrinsicId::StringFromBool
+                | IntrinsicId::StringCharCount
+                | IntrinsicId::StringChars
+                | IntrinsicId::StringSlice
+                | IntrinsicId::StringIndexOf
+                | IntrinsicId::StringCount
+                | IntrinsicId::StringTrim
+                | IntrinsicId::StringTrimStart
+                | IntrinsicId::StringTrimEnd
+                | IntrinsicId::StringUpper
+                | IntrinsicId::StringLower
+                | IntrinsicId::StringReplace
+                | IntrinsicId::StringSplit
+                | IntrinsicId::StringJoin
+                | IntrinsicId::StringRepeat
+                | IntrinsicId::StringSlugify
+                | IntrinsicId::StringWords
+                | IntrinsicId::StringLines
+                | IntrinsicId::StringToUpperFirst
+                | IntrinsicId::StringToLowerFirst
+                | IntrinsicId::StringIsNumeric
+                | IntrinsicId::StringIsAlpha
+                | IntrinsicId::MapNew
+                | IntrinsicId::MapLength
+                | IntrinsicId::MapHas
+                | IntrinsicId::MapGet
+                | IntrinsicId::MapInsert
+                | IntrinsicId::MapRemove
+                | IntrinsicId::MapFromLists
+                | IntrinsicId::SetNew
+                | IntrinsicId::SetAdd
+                | IntrinsicId::SetRemove
+                | IntrinsicId::SetContains
+                | IntrinsicId::SetLength
+                | IntrinsicId::BytesNew
+                | IntrinsicId::BytesLength
+                | IntrinsicId::BytesSlice
+                | IntrinsicId::BytesConcat
+                | IntrinsicId::BytesFromString
+                | IntrinsicId::BytesToString
+                | IntrinsicId::BytesGet
+                | IntrinsicId::BytesToHex
+                | IntrinsicId::BytesFromHex
+                | IntrinsicId::EncodingBase64Encode
+                | IntrinsicId::EncodingBase64Decode
+                | IntrinsicId::EncodingHexDecode
+                | IntrinsicId::EncodingUrlEncode
+                | IntrinsicId::EncodingUrlDecode
+                | IntrinsicId::EncodingFormEncode
+                | IntrinsicId::EncodingFormDecode
+                | IntrinsicId::CryptoSha256
+                | IntrinsicId::CryptoSha512
+                | IntrinsicId::CryptoMd5
+                | IntrinsicId::CryptoHmacSha256
+                | IntrinsicId::CsvParse
+                | IntrinsicId::CsvStringify
+                | IntrinsicId::CsvParseWithHeader
+                | IntrinsicId::RandomBounded
+                | IntrinsicId::RandomUnitFloat64
+                | IntrinsicId::RandomBool
+                | IntrinsicId::ClockNow
+                | IntrinsicId::EnvironmentGet
+                | IntrinsicId::EnvironmentArgs
+                | IntrinsicId::TestMockRandom
+                | IntrinsicId::TestMockClock
+                | IntrinsicId::TestMockEnvironment
+                | IntrinsicId::LogEmit
+                | IntrinsicId::GraphicsRun
         );
         if private_stdlib_kernel && !span.file.is_stdlib() {
             self.sink
                 .emit(errors::not_callable("private stdlib kernel", span));
         }
-        if let Some((type_name, method_name)) = name.rsplit_once('.') {
-            if let Some(&type_id) = self.named_types.get(type_name) {
-                if matches!(self.interner.resolve(type_id), Type::Bitfield(_)) {
-                    match method_name {
-                        "to_bytes" => {
-                            if !type_args.is_empty() {
-                                self.sink.emit(errors::unknown_type(
-                                    &format!(
-                                        "{name} (expected 0 type arguments, got {})",
-                                        type_args.len()
-                                    ),
-                                    span,
-                                ));
-                            }
-                            return Some((vec![type_id], TypeInterner::BYTES));
-                        }
-                        "from_bytes" => {
-                            if !type_args.is_empty() {
-                                self.sink.emit(errors::unknown_type(
-                                    &format!(
-                                        "{name} (expected 0 type arguments, got {})",
-                                        type_args.len()
-                                    ),
-                                    span,
-                                ));
-                            }
-                            return Some((
-                                vec![TypeInterner::BYTES],
-                                self.interner
-                                    .intern(Type::Result(type_id, TypeInterner::STRING)),
-                            ));
-                        }
-                        _ => {}
+        if let Some((type_name, _)) = name.rsplit_once('.')
+            && let Some(&type_id) = self.named_types.get(type_name)
+            && matches!(self.interner.resolve(type_id), Type::Bitfield(_))
+        {
+            match intrinsic {
+                IntrinsicId::BitfieldToBytes => {
+                    if !type_args.is_empty() {
+                        self.sink.emit(errors::unknown_type(
+                            &format!(
+                                "{name} (expected 0 type arguments, got {})",
+                                type_args.len()
+                            ),
+                            span,
+                        ));
                     }
+                    return Some((vec![type_id], TypeInterner::BYTES));
                 }
+                IntrinsicId::BitfieldFromBytes => {
+                    if !type_args.is_empty() {
+                        self.sink.emit(errors::unknown_type(
+                            &format!(
+                                "{name} (expected 0 type arguments, got {})",
+                                type_args.len()
+                            ),
+                            span,
+                        ));
+                    }
+                    return Some((
+                        vec![TypeInterner::BYTES],
+                        self.interner
+                            .intern(Type::Result(type_id, TypeInterner::STRING)),
+                    ));
+                }
+                _ => {}
             }
         }
 
-        match name.as_str() {
-            "int64.from_float64" => {
+        match intrinsic {
+            IntrinsicId::Int64FromFloat64 => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::FLOAT64],
@@ -3115,7 +3143,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
                 ))
             }
-            "int64.from_string" => {
+            IntrinsicId::Int64FromString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -3123,7 +3151,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::INT64, TypeInterner::STRING)),
                 ))
             }
-            "uint64.from_string" => {
+            IntrinsicId::Uint64FromString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -3131,7 +3159,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::UINT64, TypeInterner::STRING)),
                 ))
             }
-            "float64.from_string" => {
+            IntrinsicId::Float64FromString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -3139,35 +3167,35 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
                 ))
             }
-            "string.__from_int64" => self.no_type_args_signature(
+            IntrinsicId::StringFromInt64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::INT64],
                 TypeInterner::STRING,
             ),
-            "string.__from_uint64" => self.no_type_args_signature(
+            IntrinsicId::StringFromUint64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::UINT64],
                 TypeInterner::STRING,
             ),
-            "string.__from_float64" => self.no_type_args_signature(
+            IntrinsicId::StringFromFloat64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::FLOAT64],
                 TypeInterner::STRING,
             ),
-            "string.__from_bool" => self.no_type_args_signature(
+            IntrinsicId::StringFromBool => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BOOL],
                 TypeInterner::STRING,
             ),
-            "float64.from_int64" => {
+            IntrinsicId::Float64FromInt64 => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::INT64],
@@ -3175,21 +3203,22 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
                 ))
             }
-            "string.__char_count" => self.no_type_args_signature(
+            IntrinsicId::StringCharCount => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::INT64,
             ),
-            "string.__trim" | "string.__upper" | "string.__lower" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "string.__replace" => self.no_type_args_signature(
+            IntrinsicId::StringTrim | IntrinsicId::StringUpper | IntrinsicId::StringLower => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
+            IntrinsicId::StringReplace => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3200,17 +3229,17 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::STRING,
             ),
-            "string.__split" => {
+            IntrinsicId::StringSplit => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING, TypeInterner::STRING], list_ty))
             }
-            "string.__join" => {
+            IntrinsicId::StringJoin => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![list_ty, TypeInterner::STRING], TypeInterner::STRING))
             }
-            "Filesystem.read_file" => {
+            IntrinsicId::FilesystemReadFile => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::FILESYSTEM, TypeInterner::STRING],
@@ -3218,7 +3247,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
                 ))
             }
-            "Filesystem.write_file" => {
+            IntrinsicId::FilesystemWriteFile => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![
@@ -3230,14 +3259,14 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::NOTHING, TypeInterner::STRING)),
                 ))
             }
-            "Stdout.write" => self.no_type_args_signature(
+            IntrinsicId::StdoutWrite => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STDOUT, TypeInterner::STRING],
                 TypeInterner::NOTHING,
             ),
-            "json.parse" | "json.parse_exact" => {
+            IntrinsicId::JsonParse | IntrinsicId::JsonParseExact => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3252,7 +3281,7 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(value_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
-            "json.serialize" | "json.serialize_public" => {
+            IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3264,7 +3293,7 @@ impl<'a> TypeChecker<'a> {
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 Some((vec![value_ty], TypeInterner::STRING))
             }
-            "type.name" | "type.kind" => {
+            IntrinsicId::TypeName | IntrinsicId::TypeKind => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3275,7 +3304,7 @@ impl<'a> TypeChecker<'a> {
                 let _ = self.resolve_type_expr(&type_args[0]);
                 Some((vec![], TypeInterner::STRING))
             }
-            "type.kind_tag" => {
+            IntrinsicId::TypeKindTag => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3292,7 +3321,7 @@ impl<'a> TypeChecker<'a> {
                         .unwrap_or(TypeInterner::ERROR),
                 ))
             }
-            "type.primitive_tag" => {
+            IntrinsicId::TypePrimitiveTag => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3308,7 +3337,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::Optional(primitive_ty))))
             }
-            "type.has_secret" => {
+            IntrinsicId::TypeHasSecret => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3319,7 +3348,7 @@ impl<'a> TypeChecker<'a> {
                 let _ = self.resolve_type_expr(&type_args[0]);
                 Some((vec![], TypeInterner::BOOL))
             }
-            "type.info" => {
+            IntrinsicId::TypeInfo => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3335,7 +3364,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], type_info_ty))
             }
-            "type.arg" => {
+            IntrinsicId::TypeArg => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3354,7 +3383,7 @@ impl<'a> TypeChecker<'a> {
             // Reflected construction deliberately exposes one explicit builder
             // lifecycle. Keep construct_start/put/finish canonical instead of
             // adding a parallel hidden-builder block or callback spelling.
-            "type.construct_start" => {
+            IntrinsicId::TypeConstructStart => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3377,7 +3406,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 Some((vec![], TypeInterner::TYPE_CONSTRUCTION))
             }
-            "type.construct_variant_start" => {
+            IntrinsicId::TypeConstructVariantStart => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3408,7 +3437,7 @@ impl<'a> TypeChecker<'a> {
                     )),
                 ))
             }
-            "type.construct_machine_start" => {
+            IntrinsicId::TypeConstructMachineStart => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3442,7 +3471,7 @@ impl<'a> TypeChecker<'a> {
                     )),
                 ))
             }
-            "type.construct_put" => {
+            IntrinsicId::TypeConstructPut => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3494,7 +3523,7 @@ impl<'a> TypeChecker<'a> {
                     )),
                 ))
             }
-            "type.construct_finish" => {
+            IntrinsicId::TypeConstructFinish => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3525,7 +3554,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(target_ty, TypeInterner::STRING)),
                 ))
             }
-            "type.fields" => {
+            IntrinsicId::TypeFields => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3541,7 +3570,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_field_ty))))
             }
-            "type.bitfield_layout" => {
+            IntrinsicId::TypeBitfieldLayout => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3557,7 +3586,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], type_bitfield_ty))
             }
-            "type.bitfield_fields" => {
+            IntrinsicId::TypeBitfieldFields => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3576,7 +3605,7 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_bitfield_field_ty)),
                 ))
             }
-            "type.machine_layout" => {
+            IntrinsicId::TypeMachineLayout => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3592,7 +3621,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], type_machine_ty))
             }
-            "type.machine_states" => {
+            IntrinsicId::TypeMachineStates => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3611,7 +3640,7 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_machine_state_ty)),
                 ))
             }
-            "type.machine_transitions" => {
+            IntrinsicId::TypeMachineTransitions => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3630,7 +3659,7 @@ impl<'a> TypeChecker<'a> {
                     self.interner.intern(Type::List(type_machine_transition_ty)),
                 ))
             }
-            "type.machine_state_value" => {
+            IntrinsicId::TypeMachineStateValue => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3647,7 +3676,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty], type_machine_state_ty))
             }
-            "type.variants" => {
+            IntrinsicId::TypeVariants => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3663,7 +3692,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![], self.interner.intern(Type::List(type_variant_ty))))
             }
-            "type.variant_value" => {
+            IntrinsicId::TypeVariantValue => {
                 if type_args.len() != 1 {
                     self.sink.emit(errors::unknown_type(
                         &format!("{name} (expected 1 type argument, got {})", type_args.len()),
@@ -3680,7 +3709,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty], type_variant_ty))
             }
-            "type.field_value" => {
+            IntrinsicId::TypeFieldValue => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3701,7 +3730,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty, type_field_ty], return_ty))
             }
-            "type.machine_field_value" => {
+            IntrinsicId::TypeMachineFieldValue => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3722,7 +3751,7 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty, type_field_ty], return_ty))
             }
-            "type.variant_field_value" => {
+            IntrinsicId::TypeVariantFieldValue => {
                 if type_args.len() != 2 {
                     self.sink.emit(errors::unknown_type(
                         &format!(
@@ -3743,27 +3772,27 @@ impl<'a> TypeChecker<'a> {
                     .unwrap_or(TypeInterner::ERROR);
                 Some((vec![value_ty, type_field_ty], return_ty))
             }
-            "secret.redact" => {
+            IntrinsicId::SecretRedact => {
                 self.expect_no_type_args(&name, type_args, span);
                 let secret_ty = self.interner.intern(Type::Secret(TypeInterner::ERROR));
                 Some((vec![secret_ty], TypeInterner::STRING))
             }
-            "secret.compare" => {
+            IntrinsicId::SecretCompare => {
                 self.expect_no_type_args(&name, type_args, span);
                 let secret_ty = self.interner.intern(Type::Secret(TypeInterner::ERROR));
                 Some((vec![secret_ty, secret_ty], TypeInterner::BOOL))
             }
-            "bytes.__new" => {
+            IntrinsicId::BytesNew => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::BYTES)
             }
-            "bytes.__length" => self.no_type_args_signature(
+            IntrinsicId::BytesLength => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::INT64,
             ),
-            "bytes.__slice" => self.no_type_args_signature(
+            IntrinsicId::BytesSlice => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3774,21 +3803,21 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::BYTES,
             ),
-            "bytes.__concat" => self.no_type_args_signature(
+            IntrinsicId::BytesConcat => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES, TypeInterner::BYTES],
                 TypeInterner::BYTES,
             ),
-            "bytes.__from_string" => self.no_type_args_signature(
+            IntrinsicId::BytesFromString => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::BYTES,
             ),
-            "bytes.__to_string" => {
+            IntrinsicId::BytesToString => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::BYTES],
@@ -3796,21 +3825,21 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
                 ))
             }
-            "bytes.__get" => {
+            IntrinsicId::BytesGet => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::BYTES, TypeInterner::INT64],
                     self.interner.intern(Type::Optional(TypeInterner::INT64)),
                 ))
             }
-            "bytes.__to_hex" => self.no_type_args_signature(
+            IntrinsicId::BytesToHex => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::STRING,
             ),
-            "bytes.__from_hex" => {
+            IntrinsicId::BytesFromHex => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -3818,30 +3847,30 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::BYTES, TypeInterner::STRING)),
                 ))
             }
-            "list.__new" => {
+            IntrinsicId::ListNew => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 Some((vec![], self.interner.intern(Type::List(inner))))
             }
-            "list.__append" => {
+            IntrinsicId::ListAppend => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, inner], list_ty))
             }
-            "list.__length" => {
+            IntrinsicId::ListLength => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 Some((
                     vec![self.interner.intern(Type::List(inner))],
                     TypeInterner::INT64,
                 ))
             }
-            "list.__get_clone" => {
+            IntrinsicId::ListGetClone => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 Some((
                     vec![self.interner.intern(Type::List(inner)), TypeInterner::INT64],
                     self.interner.intern(Type::Optional(inner)),
                 ))
             }
-            "list.__sort" => {
+            IntrinsicId::ListSort => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
                     self.sink.emit(errors::type_mismatch(
@@ -3853,17 +3882,17 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], list_ty))
             }
-            "list.__insert_at" => {
+            IntrinsicId::ListInsertAt => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, TypeInterner::INT64, inner], list_ty))
             }
-            "list.__remove_at" => {
+            IntrinsicId::ListRemoveAt => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty, TypeInterner::INT64], list_ty))
             }
-            "list.__swap" => {
+            IntrinsicId::ListSwap => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((
@@ -3871,7 +3900,7 @@ impl<'a> TypeChecker<'a> {
                     list_ty,
                 ))
             }
-            "list.__sort_by_index" => {
+            IntrinsicId::ListSortByIndex => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
                     self.sink.emit(errors::type_mismatch(
@@ -3884,7 +3913,7 @@ impl<'a> TypeChecker<'a> {
                 let rows_ty = self.interner.intern(Type::List(row_ty));
                 Some((vec![rows_ty, TypeInterner::INT64], rows_ty))
             }
-            "list.__is_sorted" => {
+            IntrinsicId::ListIsSorted => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR && !self.is_orderable_list_element(inner) {
                     self.sink.emit(errors::type_mismatch(
@@ -3896,13 +3925,13 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::BOOL))
             }
-            "list.__sum" => {
+            IntrinsicId::ListSum => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], inner))
             }
             // Private math kernels
-            "math.__abs" => {
+            IntrinsicId::MathKernelAbs => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR
                     && !matches!(inner, TypeInterner::INT64 | TypeInterner::FLOAT64)
@@ -3915,7 +3944,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 Some((vec![inner], inner))
             }
-            "math.__min" | "math.__max" => {
+            IntrinsicId::MathKernelMin | IntrinsicId::MathKernelMax => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 if inner != TypeInterner::ERROR
                     && !matches!(inner, TypeInterner::INT64 | TypeInterner::FLOAT64)
@@ -3928,7 +3957,24 @@ impl<'a> TypeChecker<'a> {
                 }
                 Some((vec![inner, inner], inner))
             }
-            "math.__sqrt" | "math.__log" | "math.__log2" | "math.__log10" => self
+            IntrinsicId::MathSqrt
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathLog10 => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::FLOAT64],
+                TypeInterner::FLOAT64,
+            ),
+            IntrinsicId::MathPow => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
+                TypeInterner::FLOAT64,
+            ),
+            IntrinsicId::MathFloor | IntrinsicId::MathCeil | IntrinsicId::MathRound => self
                 .no_type_args_signature(
                     &name,
                     type_args,
@@ -3936,21 +3982,7 @@ impl<'a> TypeChecker<'a> {
                     vec![TypeInterner::FLOAT64],
                     TypeInterner::FLOAT64,
                 ),
-            "math.__pow" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::FLOAT64, TypeInterner::FLOAT64],
-                TypeInterner::FLOAT64,
-            ),
-            "math.__floor" | "math.__ceil" | "math.__round" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::FLOAT64],
-                TypeInterner::FLOAT64,
-            ),
-            "math.__clamp" => self.no_type_args_signature(
+            IntrinsicId::MathClamp => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -3961,7 +3993,7 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::FLOAT64,
             ),
-            "math.__average" | "math.__median" => {
+            IntrinsicId::MathAverage | IntrinsicId::MathMedian => {
                 let inner = match type_args.len() {
                     0 => TypeInterner::FLOAT64,
                     1 => {
@@ -3988,24 +4020,26 @@ impl<'a> TypeChecker<'a> {
                 let list_ty = self.interner.intern(Type::List(inner));
                 Some((vec![list_ty], TypeInterner::FLOAT64))
             }
-            "math.__pi" | "math.__e" => {
+            IntrinsicId::MathPi | IntrinsicId::MathE => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::FLOAT64)
             }
-            "math.__sin" | "math.__cos" | "math.__tan" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::FLOAT64],
-                TypeInterner::FLOAT64,
-            ),
-            "math.__mod" | "math.__gcd" | "math.__lcm" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::INT64, TypeInterner::INT64],
-                TypeInterner::INT64,
-            ),
-            "math.__factorial" => self.no_type_args_signature(
+            IntrinsicId::MathSin | IntrinsicId::MathCos | IntrinsicId::MathTan => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::FLOAT64],
+                    TypeInterner::FLOAT64,
+                ),
+            IntrinsicId::MathMod | IntrinsicId::MathGcd | IntrinsicId::MathLcm => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::INT64, TypeInterner::INT64],
+                    TypeInterner::INT64,
+                ),
+            IntrinsicId::MathFactorial => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -4013,21 +4047,22 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::INT64,
             ),
             // string extras
-            "string.__trim_start" | "string.__trim_end" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
+            IntrinsicId::StringTrimStart | IntrinsicId::StringTrimEnd => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
             // Private string segmentation kernels return list[string].
-            "string.__chars" | "string.__words" | "string.__lines" => {
+            IntrinsicId::StringChars | IntrinsicId::StringWords | IntrinsicId::StringLines => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_str = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], list_str))
             }
             // Private graphics kernel; public data and signature are source-owned.
-            "graphics.__run" => {
+            IntrinsicId::GraphicsRun => {
                 let state = self.optional_type_arg(&name, type_args, span);
                 let config = *self.named_types.get("graphics.Config")?;
                 let key = *self.named_types.get("graphics.Key")?;
@@ -4043,7 +4078,7 @@ impl<'a> TypeChecker<'a> {
                 ))
             }
             // Private random kernels; public signatures live in stdlib/random.jett.
-            "random.__bounded" => self.no_type_args_signature(
+            IntrinsicId::RandomBounded => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -4054,28 +4089,28 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::INT64,
             ),
-            "random.__unit_float64" => self.no_type_args_signature(
+            IntrinsicId::RandomUnitFloat64 => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::RANDOM],
                 TypeInterner::FLOAT64,
             ),
-            "random.__bool" => self.no_type_args_signature(
+            IntrinsicId::RandomBool => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::RANDOM],
                 TypeInterner::BOOL,
             ),
-            "string.__repeat" => self.no_type_args_signature(
+            IntrinsicId::StringRepeat => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING, TypeInterner::INT64],
                 TypeInterner::STRING,
             ),
-            "string.__slice" => self.no_type_args_signature(
+            IntrinsicId::StringSlice => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
@@ -4086,77 +4121,77 @@ impl<'a> TypeChecker<'a> {
                 ],
                 TypeInterner::STRING,
             ),
-            "string.__slugify" => self.no_type_args_signature(
+            IntrinsicId::StringSlugify => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING],
                 TypeInterner::STRING,
             ),
-            "map.__new" => {
+            IntrinsicId::MapNew => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![], map_ty))
             }
-            "map.__length" => {
+            IntrinsicId::MapLength => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty], TypeInterner::INT64))
             }
-            "map.__has" => {
+            IntrinsicId::MapHas => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], TypeInterner::BOOL))
             }
-            "map.__get" => {
+            IntrinsicId::MapGet => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], self.interner.intern(Type::Optional(v))))
             }
-            "map.__insert" => {
+            IntrinsicId::MapInsert => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k, v], map_ty))
             }
-            "map.__remove" => {
+            IntrinsicId::MapRemove => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![map_ty, k], map_ty))
             }
-            "map.__from_lists" => {
+            IntrinsicId::MapFromLists => {
                 let (k, v) = self.map_type_args(&name, type_args, span);
                 let keys_ty = self.interner.intern(Type::List(k));
                 let values_ty = self.interner.intern(Type::List(v));
                 let map_ty = self.interner.intern(Type::Map(k, v));
                 Some((vec![keys_ty, values_ty], map_ty))
             }
-            "set.__new" => {
+            IntrinsicId::SetNew => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 Some((vec![], self.interner.intern(Type::Set(inner))))
             }
-            "set.__add" | "set.__remove" => {
+            IntrinsicId::SetAdd | IntrinsicId::SetRemove => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty, inner], set_ty))
             }
-            "set.__contains" => {
+            IntrinsicId::SetContains => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty, inner], TypeInterner::BOOL))
             }
-            "set.__length" => {
+            IntrinsicId::SetLength => {
                 let inner = self.set_type_arg(&name, type_args, span);
                 let set_ty = self.interner.intern(Type::Set(inner));
                 Some((vec![set_ty], TypeInterner::INT64))
             }
 
-            "list.__sort_by" => {
+            IntrinsicId::ListSortBy => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 let key_fn_ty = self.function_type(vec![inner], TypeInterner::INT64);
                 Some((vec![list_ty, key_fn_ty], list_ty))
             }
-            "list.__group_by" => {
+            IntrinsicId::ListGroupBy => {
                 let inner = self.optional_type_arg(&name, type_args, span);
                 let list_ty = self.interner.intern(Type::List(inner));
                 let group_map_ty = self
@@ -4165,45 +4200,47 @@ impl<'a> TypeChecker<'a> {
                 let key_fn_ty = self.function_type(vec![inner], TypeInterner::STRING);
                 Some((vec![list_ty, key_fn_ty], group_map_ty))
             }
-            "uuid.new" => {
+            IntrinsicId::UuidNew => {
                 self.no_type_args_signature(&name, type_args, span, vec![], TypeInterner::STRING)
             }
             // char-level string operations
-            "string.__index_of" => {
+            IntrinsicId::StringIndexOf => {
                 self.expect_no_type_args(&name, type_args, span);
                 let opt_int = self.interner.intern(Type::Optional(TypeInterner::INT64));
                 Some((vec![TypeInterner::STRING, TypeInterner::STRING], opt_int))
             }
-            "string.__count" => self.no_type_args_signature(
+            IntrinsicId::StringCount => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::STRING, TypeInterner::STRING],
                 TypeInterner::INT64,
             ),
-            "string.__to_upper_first" | "string.__to_lower_first" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "string.__is_numeric" | "string.__is_alpha" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::BOOL,
-            ),
+            IntrinsicId::StringToUpperFirst | IntrinsicId::StringToLowerFirst => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
+            IntrinsicId::StringIsNumeric | IntrinsicId::StringIsAlpha => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::BOOL,
+                ),
             // Private encoding kernels; public signatures live in stdlib/encoding.jett.
-            "encoding.__base64_encode" => self.no_type_args_signature(
+            IntrinsicId::EncodingBase64Encode => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::BYTES],
                 TypeInterner::STRING,
             ),
-            "encoding.__base64_decode" | "encoding.__hex_decode" => {
+            IntrinsicId::EncodingBase64Decode | IntrinsicId::EncodingHexDecode => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -4211,14 +4248,15 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::BYTES, TypeInterner::STRING)),
                 ))
             }
-            "encoding.__url_encode" | "encoding.__form_encode" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::STRING],
-                TypeInterner::STRING,
-            ),
-            "encoding.__url_decode" | "encoding.__form_decode" => {
+            IntrinsicId::EncodingUrlEncode | IntrinsicId::EncodingFormEncode => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::STRING],
+                    TypeInterner::STRING,
+                ),
+            IntrinsicId::EncodingUrlDecode | IntrinsicId::EncodingFormDecode => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![TypeInterner::STRING],
@@ -4227,26 +4265,27 @@ impl<'a> TypeChecker<'a> {
                 ))
             }
             // Private crypto kernels; public signatures live in stdlib/crypto.jett.
-            "crypto.__sha256" | "crypto.__sha512" | "crypto.__md5" => self.no_type_args_signature(
-                &name,
-                type_args,
-                span,
-                vec![TypeInterner::BYTES],
-                TypeInterner::BYTES,
-            ),
-            "crypto.__hmac_sha256" => {
+            IntrinsicId::CryptoSha256 | IntrinsicId::CryptoSha512 | IntrinsicId::CryptoMd5 => self
+                .no_type_args_signature(
+                    &name,
+                    type_args,
+                    span,
+                    vec![TypeInterner::BYTES],
+                    TypeInterner::BYTES,
+                ),
+            IntrinsicId::CryptoHmacSha256 => {
                 self.expect_no_type_args(&name, type_args, span);
                 let secret_bytes = self.interner.intern(Type::Secret(TypeInterner::BYTES));
                 Some((vec![secret_bytes, TypeInterner::BYTES], secret_bytes))
             }
-            "Clock.__now" => self.no_type_args_signature(
+            IntrinsicId::ClockNow => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
                 vec![TypeInterner::CLOCK],
                 TypeInterner::INT64,
             ),
-            "Environment.__get" => {
+            IntrinsicId::EnvironmentGet => {
                 self.expect_no_type_args(&name, type_args, span);
                 let optional_string = self.interner.intern(Type::Optional(TypeInterner::STRING));
                 let result = self
@@ -4257,31 +4296,31 @@ impl<'a> TypeChecker<'a> {
                     result,
                 ))
             }
-            "Environment.__args" => {
+            IntrinsicId::EnvironmentArgs => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 Some((vec![TypeInterner::ENVIRONMENT], list_string))
             }
-            "test.mock.__random" => {
+            IntrinsicId::TestMockRandom => {
                 self.expect_no_type_args(&name, type_args, span);
                 let step = *self.named_types.get("test.mock.RandomStep")?;
                 let steps = self.interner.intern(Type::List(step));
                 Some((vec![steps], TypeInterner::RANDOM))
             }
-            "test.mock.__clock" => {
+            IntrinsicId::TestMockClock => {
                 self.expect_no_type_args(&name, type_args, span);
                 let step = *self.named_types.get("test.mock.ClockStep")?;
                 let steps = self.interner.intern(Type::List(step));
                 Some((vec![steps], TypeInterner::CLOCK))
             }
-            "test.mock.__environment" => {
+            IntrinsicId::TestMockEnvironment => {
                 self.expect_no_type_args(&name, type_args, span);
                 let arguments = self.interner.intern(Type::List(TypeInterner::STRING));
                 let entry = *self.named_types.get("test.mock.EnvironmentEntry")?;
                 let entries = self.interner.intern(Type::List(entry));
                 Some((vec![arguments, entries], TypeInterner::ENVIRONMENT))
             }
-            "log.__emit" => {
+            IntrinsicId::LogEmit => {
                 self.expect_no_type_args(&name, type_args, span);
                 let event = *self.named_types.get("log.Event")?;
                 let error = *self.named_types.get("log.Error")?;
@@ -4291,7 +4330,7 @@ impl<'a> TypeChecker<'a> {
                 Some((vec![TypeInterner::LOG, event], result))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
-            "csv.__parse" => {
+            IntrinsicId::CsvParse => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(list_string));
@@ -4300,13 +4339,13 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(rows_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
-            "csv.__stringify" => {
+            IntrinsicId::CsvStringify => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
                 let rows_ty = self.interner.intern(Type::List(list_string));
                 Some((vec![rows_ty], TypeInterner::STRING))
             }
-            "csv.__parse_with_header" => {
+            IntrinsicId::CsvParseWithHeader => {
                 self.expect_no_type_args(&name, type_args, span);
                 let row_ty = self
                     .interner
@@ -4317,7 +4356,16 @@ impl<'a> TypeChecker<'a> {
                     .intern(Type::Result(rows_ty, TypeInterner::STRING));
                 Some((vec![TypeInterner::STRING], result_ty))
             }
-            _ => None,
+            // These signatures are resolved by dedicated paths before this
+            // central compiler-builtin table.
+            IntrinsicId::BitfieldFromBytes
+            | IntrinsicId::BitfieldToBytes
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMin
+            | IntrinsicId::Print
+            | IntrinsicId::Println
+            | IntrinsicId::Range => None,
         }
     }
 
@@ -5817,6 +5865,7 @@ impl<'a> TypeChecker<'a> {
                         return_type,
                         type_map: HashMap::new(),
                         generic_calls: HashMap::new(),
+                        intrinsic_ids: HashMap::new(),
                         intrinsic_type_arguments: HashMap::new(),
                         call_argument_orders: HashMap::new(),
                         method_calls: HashMap::new(),
@@ -5851,6 +5900,7 @@ impl<'a> TypeChecker<'a> {
                     manifest_index,
                     type_map: HashMap::new(),
                     generic_calls: HashMap::new(),
+                    intrinsic_ids: HashMap::new(),
                     intrinsic_type_arguments: HashMap::new(),
                     call_argument_orders: HashMap::new(),
                     method_calls: HashMap::new(),
@@ -5874,6 +5924,7 @@ impl<'a> TypeChecker<'a> {
                 let entry = &mut self.generic_function_instantiations[active.manifest_index];
                 entry.type_map.extend(active.type_map);
                 entry.generic_calls.extend(active.generic_calls);
+                entry.intrinsic_ids.extend(active.intrinsic_ids);
                 entry
                     .intrinsic_type_arguments
                     .extend(active.intrinsic_type_arguments);
@@ -5950,6 +6001,21 @@ impl<'a> TypeChecker<'a> {
             active.generic_calls.insert(span, call);
         } else {
             self.generic_calls.insert(span, call);
+        }
+    }
+
+    fn record_intrinsic_id(&mut self, span: Span, name: &str) {
+        let Some(intrinsic) = IntrinsicId::from_callable_name(name) else {
+            self.sink.emit(errors::not_callable(
+                &format!("unclassified compiler intrinsic `{name}`"),
+                span,
+            ));
+            return;
+        };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.intrinsic_ids.insert(span, intrinsic);
+        } else {
+            self.intrinsic_ids.insert(span, intrinsic);
         }
     }
 
@@ -6037,6 +6103,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             Self::clear_facts_in_span(&mut active.type_map, owner);
             Self::clear_facts_in_span(&mut active.generic_calls, owner);
+            Self::clear_facts_in_span(&mut active.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_type_arguments, owner);
             Self::clear_facts_in_span(&mut active.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut active.method_calls, owner);
@@ -6046,6 +6113,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.comptime_type_bindings, owner);
         } else {
             Self::clear_facts_in_span(&mut self.generic_calls, owner);
+            Self::clear_facts_in_span(&mut self.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_type_arguments, owner);
             Self::clear_facts_in_span(&mut self.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut self.method_calls, owner);
@@ -6060,6 +6128,7 @@ impl<'a> TypeChecker<'a> {
             return CheckedBodyFacts {
                 type_map: Self::facts_in_span(&active.type_map, owner),
                 generic_calls: Self::facts_in_span(&active.generic_calls, owner),
+                intrinsic_ids: Self::facts_in_span(&active.intrinsic_ids, owner),
                 intrinsic_type_arguments: Self::facts_in_span(
                     &active.intrinsic_type_arguments,
                     owner,
@@ -6078,6 +6147,7 @@ impl<'a> TypeChecker<'a> {
         CheckedBodyFacts {
             type_map: Self::facts_in_span(&self.type_map, owner),
             generic_calls: Self::facts_in_span(&self.generic_calls, owner),
+            intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
             intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
             call_argument_orders: Self::facts_in_span(&self.call_argument_orders, owner),
             method_calls: Self::facts_in_span(&self.method_calls, owner),
@@ -9183,9 +9253,12 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        if let Some(builtin_name) = callee_name.as_deref() {
-            match builtin_name {
-                "math.abs" => {
+        if let Some(builtin_name) = callee_name.as_deref()
+            && let Some(intrinsic) = IntrinsicId::from_callable_name(builtin_name)
+        {
+            match intrinsic {
+                IntrinsicId::MathAbs => {
+                    self.record_intrinsic_id(step.span, builtin_name);
                     return self.check_math_abs_pipeline_step(
                         builtin_name,
                         current_ty,
@@ -9194,7 +9267,8 @@ impl<'a> TypeChecker<'a> {
                         step.span,
                     );
                 }
-                "math.min" | "math.max" => {
+                IntrinsicId::MathMin | IntrinsicId::MathMax => {
+                    self.record_intrinsic_id(step.span, builtin_name);
                     return self.check_math_min_max_pipeline_step(
                         builtin_name,
                         current_ty,
@@ -9210,6 +9284,9 @@ impl<'a> TypeChecker<'a> {
         let diagnostic_count = self.sink.diagnostics().len();
         let builtin_signature = self.builtin_signature(function, type_args, step.span);
         if builtin_signature.is_some() && self.sink.diagnostics().len() == diagnostic_count {
+            if let Some(name) = callee_name.as_deref() {
+                self.record_intrinsic_id(step.span, name);
+            }
             self.record_intrinsic_type_arguments(step.span, type_args);
         }
         if builtin_signature.is_none() && type_args.is_empty() {
@@ -10670,6 +10747,9 @@ impl<'a> TypeChecker<'a> {
         let diagnostic_count = self.sink.diagnostics().len();
         let builtin_signature = self.builtin_signature(callee, type_args, span);
         if builtin_signature.is_some() && self.sink.diagnostics().len() == diagnostic_count {
+            if let Some(name) = callee_name.as_deref() {
+                self.record_intrinsic_id(span, name);
+            }
             self.record_intrinsic_type_arguments(span, type_args);
         }
 
@@ -10764,18 +10844,24 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        if let Some(builtin_name) = callee_name.as_deref() {
-            match builtin_name {
-                "range" => {
+        if let Some(builtin_name) = callee_name.as_deref()
+            && let Some(intrinsic) = IntrinsicId::from_callable_name(builtin_name)
+        {
+            match intrinsic {
+                IntrinsicId::Range => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_range_builtin_call(builtin_name, type_args, args, span);
                 }
-                "print" | "println" => {
+                IntrinsicId::Print | IntrinsicId::Println => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_print_builtin_call(builtin_name, type_args, args, span);
                 }
-                "math.abs" => {
+                IntrinsicId::MathAbs => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_math_abs_call_policy(builtin_name, type_args, args, span);
                 }
-                "math.min" | "math.max" => {
+                IntrinsicId::MathMin | IntrinsicId::MathMax => {
+                    self.record_intrinsic_id(span, builtin_name);
                     return self.check_math_min_max_call_policy(
                         builtin_name,
                         type_args,
@@ -11384,9 +11470,18 @@ impl<'a> TypeChecker<'a> {
         let Expr::FieldAccess(base, field, _) = callee else {
             return None;
         };
-        let base_name = Self::extract_dotted_name(base)?;
-        let base_name = self.resolved_or_expanded_name(&base_name, base.span());
-        let owner_type = self.named_types.get(&base_name).copied()?;
+        let resolved_owner = self
+            .resolve
+            .resolutions
+            .get(&callee.span())
+            .and_then(|definition| {
+                let name = &self.resolve.scope_table.def(*definition).name;
+                self.named_types.get(name).copied()
+            });
+        let owner_type = resolved_owner.or_else(|| {
+            let base_name = self.expanded_dotted_expr_name(base)?;
+            self.named_types.get(&base_name).copied()
+        })?;
         let signature = match self.interner.resolve(owner_type) {
             Type::Interface(iid) => self
                 .interner
@@ -13900,6 +13995,63 @@ mod tests {
     }
 
     #[test]
+    fn checked_builtin_calls_record_one_closed_intrinsic_identity() {
+        let source = r#"function intrinsic_calls(value: int64) returns int64:
+    println("audit")
+    for item in range(0):
+        println("{item}")
+    return value into math.abs
+
+function reflected_name[T]() returns string:
+    return type.name[T]()
+
+function main() returns string:
+    return reflected_name[int64]()
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+
+        let recorded = result
+            .intrinsic_ids
+            .values()
+            .chain(
+                result
+                    .generic_function_instantiations
+                    .iter()
+                    .flat_map(|instantiation| instantiation.intrinsic_ids.values()),
+            )
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            recorded,
+            HashSet::from([
+                IntrinsicId::MathAbs,
+                IntrinsicId::Println,
+                IntrinsicId::Range,
+                IntrinsicId::TypeName,
+            ])
+        );
+        for intrinsic in recorded {
+            assert_eq!(
+                IntrinsicId::from_canonical_name(intrinsic.canonical_name()),
+                Some(intrinsic)
+            );
+            assert_eq!(
+                IntrinsicId::ALL
+                    .iter()
+                    .filter(|candidate| candidate.canonical_name() == intrinsic.canonical_name())
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn compiler_reflection_enum_variants_have_concrete_expression_types() {
         let source = r#"function matches(kind: TypeKind, primitive: TypePrimitive) returns bool:
     return kind == TypeKind.alias_type and primitive == TypePrimitive.int8_type
@@ -16240,6 +16392,41 @@ function main() returns string:
     }
 
     #[test]
+    fn namespaced_interface_alias_call_records_concrete_method_target() {
+        let result = check_source_result(
+            "\
+namespace contracts
+export interface Named:
+    function name(view self: contracts.Named) returns string
+namespace models
+export struct User:
+    name: string
+implement contracts.Named for models.User:
+    function name(view self: models.User) returns string:
+        return self.name
+namespace app
+function describe() returns string:
+    use contracts as c
+    use models as m
+    m.User user = m.User(name: \"Ada\")
+    return c.Named.name(view user)
+",
+        );
+
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+        assert_eq!(
+            result.method_calls.len(),
+            1,
+            "the alias-qualified interface call must retain its concrete implementation target"
+        );
+    }
+
+    #[test]
     fn implement_block_missing_method_reports_error() {
         let errors = check_source_errors(
             "\
@@ -17106,6 +17293,41 @@ function main() returns int64:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn namespaced_bitfield_alias_calls_record_closed_intrinsic_identities() {
+        let result = check_source_result(
+            "\
+namespace packet
+export bitfield Header:
+    version: 8 bits
+namespace app
+function roundtrip() returns int64:
+    use packet as p
+    p.Header header = p.Header(version: 4)
+    bytes raw = p.Header.to_bytes(header)
+    p.Header decoded = p.Header.from_bytes(raw) handle error:
+        return 0
+    return decoded.version
+",
+        );
+
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+        let intrinsic_ids = result
+            .intrinsic_ids
+            .values()
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            intrinsic_ids,
+            HashSet::from([IntrinsicId::BitfieldFromBytes, IntrinsicId::BitfieldToBytes,])
+        );
     }
 
     #[test]

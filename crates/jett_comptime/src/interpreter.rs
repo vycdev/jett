@@ -7,6 +7,7 @@ use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
 use jett_common::{FileId, Span, is_json_raw_facade, json_public_bridge_spec};
+use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{
     ActorDef, BinOp, BitfieldDef, BitfieldFieldKind, Block, CallArg, EnumDef, Expr, FunctionDef,
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Param, Pattern, PipelineStep,
@@ -115,6 +116,294 @@ macro_rules! require_args {
         if let Some(err) = check_args($name, $expected, $args) {
             return Some(err);
         }
+    };
+}
+
+// Closed decline sets for the specialized intrinsic dispatchers. These are
+// deliberately exhaustive: extending IntrinsicId must update each dispatcher.
+macro_rules! non_type_arg_intrinsics {
+    () => {
+        IntrinsicId::BitfieldFromBytes
+            | IntrinsicId::BitfieldToBytes
+            | IntrinsicId::BytesConcat
+            | IntrinsicId::BytesFromHex
+            | IntrinsicId::BytesFromString
+            | IntrinsicId::BytesGet
+            | IntrinsicId::BytesLength
+            | IntrinsicId::BytesNew
+            | IntrinsicId::BytesSlice
+            | IntrinsicId::BytesToHex
+            | IntrinsicId::BytesToString
+            | IntrinsicId::ClockNow
+            | IntrinsicId::CryptoHmacSha256
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CsvParse
+            | IntrinsicId::CsvParseWithHeader
+            | IntrinsicId::CsvStringify
+            | IntrinsicId::EncodingBase64Decode
+            | IntrinsicId::EncodingBase64Encode
+            | IntrinsicId::EncodingFormDecode
+            | IntrinsicId::EncodingFormEncode
+            | IntrinsicId::EncodingHexDecode
+            | IntrinsicId::EncodingUrlDecode
+            | IntrinsicId::EncodingUrlEncode
+            | IntrinsicId::EnvironmentArgs
+            | IntrinsicId::EnvironmentGet
+            | IntrinsicId::FilesystemReadFile
+            | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::Float64FromInt64
+            | IntrinsicId::Float64FromString
+            | IntrinsicId::GraphicsRun
+            | IntrinsicId::Int64FromFloat64
+            | IntrinsicId::Int64FromString
+            | IntrinsicId::ListAppend
+            | IntrinsicId::ListGetClone
+            | IntrinsicId::ListGroupBy
+            | IntrinsicId::ListInsertAt
+            | IntrinsicId::ListIsSorted
+            | IntrinsicId::ListLength
+            | IntrinsicId::ListNew
+            | IntrinsicId::ListRemoveAt
+            | IntrinsicId::ListSort
+            | IntrinsicId::ListSortBy
+            | IntrinsicId::ListSortByIndex
+            | IntrinsicId::ListSum
+            | IntrinsicId::ListSwap
+            | IntrinsicId::LogEmit
+            | IntrinsicId::MapFromLists
+            | IntrinsicId::MapGet
+            | IntrinsicId::MapHas
+            | IntrinsicId::MapInsert
+            | IntrinsicId::MapLength
+            | IntrinsicId::MapNew
+            | IntrinsicId::MapRemove
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathAverage
+            | IntrinsicId::MathCeil
+            | IntrinsicId::MathClamp
+            | IntrinsicId::MathCos
+            | IntrinsicId::MathE
+            | IntrinsicId::MathFactorial
+            | IntrinsicId::MathFloor
+            | IntrinsicId::MathGcd
+            | IntrinsicId::MathKernelAbs
+            | IntrinsicId::MathKernelMax
+            | IntrinsicId::MathKernelMin
+            | IntrinsicId::MathLcm
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog10
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMedian
+            | IntrinsicId::MathMin
+            | IntrinsicId::MathMod
+            | IntrinsicId::MathPi
+            | IntrinsicId::MathPow
+            | IntrinsicId::MathRound
+            | IntrinsicId::MathSin
+            | IntrinsicId::MathSqrt
+            | IntrinsicId::MathTan
+            | IntrinsicId::Print
+            | IntrinsicId::Println
+            | IntrinsicId::RandomBool
+            | IntrinsicId::RandomBounded
+            | IntrinsicId::RandomUnitFloat64
+            | IntrinsicId::Range
+            | IntrinsicId::SecretCompare
+            | IntrinsicId::SecretRedact
+            | IntrinsicId::SetAdd
+            | IntrinsicId::SetContains
+            | IntrinsicId::SetLength
+            | IntrinsicId::SetNew
+            | IntrinsicId::SetRemove
+            | IntrinsicId::StdoutWrite
+            | IntrinsicId::StringCharCount
+            | IntrinsicId::StringChars
+            | IntrinsicId::StringCount
+            | IntrinsicId::StringFromBool
+            | IntrinsicId::StringFromFloat64
+            | IntrinsicId::StringFromInt64
+            | IntrinsicId::StringFromUint64
+            | IntrinsicId::StringIndexOf
+            | IntrinsicId::StringIsAlpha
+            | IntrinsicId::StringIsNumeric
+            | IntrinsicId::StringJoin
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringLower
+            | IntrinsicId::StringRepeat
+            | IntrinsicId::StringReplace
+            | IntrinsicId::StringSlice
+            | IntrinsicId::StringSlugify
+            | IntrinsicId::StringSplit
+            | IntrinsicId::StringToLowerFirst
+            | IntrinsicId::StringToUpperFirst
+            | IntrinsicId::StringTrim
+            | IntrinsicId::StringTrimEnd
+            | IntrinsicId::StringTrimStart
+            | IntrinsicId::StringUpper
+            | IntrinsicId::StringWords
+            | IntrinsicId::TestMockClock
+            | IntrinsicId::TestMockEnvironment
+            | IntrinsicId::TestMockRandom
+            | IntrinsicId::Uint64FromString
+            | IntrinsicId::UuidNew
+    };
+}
+
+macro_rules! non_higher_order_intrinsics {
+    () => {
+        IntrinsicId::BitfieldFromBytes
+            | IntrinsicId::BitfieldToBytes
+            | IntrinsicId::BytesConcat
+            | IntrinsicId::BytesFromHex
+            | IntrinsicId::BytesFromString
+            | IntrinsicId::BytesGet
+            | IntrinsicId::BytesLength
+            | IntrinsicId::BytesNew
+            | IntrinsicId::BytesSlice
+            | IntrinsicId::BytesToHex
+            | IntrinsicId::BytesToString
+            | IntrinsicId::ClockNow
+            | IntrinsicId::CryptoHmacSha256
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CsvParse
+            | IntrinsicId::CsvParseWithHeader
+            | IntrinsicId::CsvStringify
+            | IntrinsicId::EncodingBase64Decode
+            | IntrinsicId::EncodingBase64Encode
+            | IntrinsicId::EncodingFormDecode
+            | IntrinsicId::EncodingFormEncode
+            | IntrinsicId::EncodingHexDecode
+            | IntrinsicId::EncodingUrlDecode
+            | IntrinsicId::EncodingUrlEncode
+            | IntrinsicId::EnvironmentArgs
+            | IntrinsicId::EnvironmentGet
+            | IntrinsicId::FilesystemReadFile
+            | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::Float64FromInt64
+            | IntrinsicId::Float64FromString
+            | IntrinsicId::Int64FromFloat64
+            | IntrinsicId::Int64FromString
+            | IntrinsicId::JsonParse
+            | IntrinsicId::JsonParseExact
+            | IntrinsicId::JsonSerialize
+            | IntrinsicId::JsonSerializePublic
+            | IntrinsicId::ListAppend
+            | IntrinsicId::ListGetClone
+            | IntrinsicId::ListInsertAt
+            | IntrinsicId::ListIsSorted
+            | IntrinsicId::ListLength
+            | IntrinsicId::ListNew
+            | IntrinsicId::ListRemoveAt
+            | IntrinsicId::ListSort
+            | IntrinsicId::ListSortByIndex
+            | IntrinsicId::ListSwap
+            | IntrinsicId::LogEmit
+            | IntrinsicId::MapFromLists
+            | IntrinsicId::MapGet
+            | IntrinsicId::MapHas
+            | IntrinsicId::MapInsert
+            | IntrinsicId::MapLength
+            | IntrinsicId::MapNew
+            | IntrinsicId::MapRemove
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathAverage
+            | IntrinsicId::MathCeil
+            | IntrinsicId::MathClamp
+            | IntrinsicId::MathCos
+            | IntrinsicId::MathE
+            | IntrinsicId::MathFactorial
+            | IntrinsicId::MathFloor
+            | IntrinsicId::MathGcd
+            | IntrinsicId::MathKernelAbs
+            | IntrinsicId::MathKernelMax
+            | IntrinsicId::MathKernelMin
+            | IntrinsicId::MathLcm
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog10
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMedian
+            | IntrinsicId::MathMin
+            | IntrinsicId::MathMod
+            | IntrinsicId::MathPi
+            | IntrinsicId::MathPow
+            | IntrinsicId::MathRound
+            | IntrinsicId::MathSin
+            | IntrinsicId::MathSqrt
+            | IntrinsicId::MathTan
+            | IntrinsicId::Print
+            | IntrinsicId::Println
+            | IntrinsicId::RandomBool
+            | IntrinsicId::RandomBounded
+            | IntrinsicId::RandomUnitFloat64
+            | IntrinsicId::Range
+            | IntrinsicId::SecretCompare
+            | IntrinsicId::SecretRedact
+            | IntrinsicId::SetAdd
+            | IntrinsicId::SetContains
+            | IntrinsicId::SetLength
+            | IntrinsicId::SetNew
+            | IntrinsicId::SetRemove
+            | IntrinsicId::StdoutWrite
+            | IntrinsicId::StringCharCount
+            | IntrinsicId::StringChars
+            | IntrinsicId::StringCount
+            | IntrinsicId::StringFromBool
+            | IntrinsicId::StringFromFloat64
+            | IntrinsicId::StringFromInt64
+            | IntrinsicId::StringFromUint64
+            | IntrinsicId::StringIndexOf
+            | IntrinsicId::StringIsAlpha
+            | IntrinsicId::StringIsNumeric
+            | IntrinsicId::StringJoin
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringLower
+            | IntrinsicId::StringRepeat
+            | IntrinsicId::StringReplace
+            | IntrinsicId::StringSlice
+            | IntrinsicId::StringSlugify
+            | IntrinsicId::StringSplit
+            | IntrinsicId::StringToLowerFirst
+            | IntrinsicId::StringToUpperFirst
+            | IntrinsicId::StringTrim
+            | IntrinsicId::StringTrimEnd
+            | IntrinsicId::StringTrimStart
+            | IntrinsicId::StringUpper
+            | IntrinsicId::StringWords
+            | IntrinsicId::TestMockClock
+            | IntrinsicId::TestMockEnvironment
+            | IntrinsicId::TestMockRandom
+            | IntrinsicId::TypeArg
+            | IntrinsicId::TypeBitfieldFields
+            | IntrinsicId::TypeBitfieldLayout
+            | IntrinsicId::TypeConstructFinish
+            | IntrinsicId::TypeConstructMachineStart
+            | IntrinsicId::TypeConstructPut
+            | IntrinsicId::TypeConstructStart
+            | IntrinsicId::TypeConstructVariantStart
+            | IntrinsicId::TypeFieldValue
+            | IntrinsicId::TypeFields
+            | IntrinsicId::TypeHasSecret
+            | IntrinsicId::TypeInfo
+            | IntrinsicId::TypeKind
+            | IntrinsicId::TypeKindTag
+            | IntrinsicId::TypeMachineFieldValue
+            | IntrinsicId::TypeMachineLayout
+            | IntrinsicId::TypeMachineStateValue
+            | IntrinsicId::TypeMachineStates
+            | IntrinsicId::TypeMachineTransitions
+            | IntrinsicId::TypeName
+            | IntrinsicId::TypePrimitiveTag
+            | IntrinsicId::TypeVariantFieldValue
+            | IntrinsicId::TypeVariantValue
+            | IntrinsicId::TypeVariants
+            | IntrinsicId::Uint64FromString
+            | IntrinsicId::UuidNew
     };
 }
 
@@ -3291,13 +3580,18 @@ impl Interpreter {
         }
     }
 
-    fn call_bitfield_builtin(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
-        let (source_bitfield_name, method_name) = name.rsplit_once('.')?;
+    fn call_bitfield_builtin(
+        &self,
+        intrinsic: IntrinsicId,
+        name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        let (source_bitfield_name, _) = name.rsplit_once('.')?;
         let bitfield_name = self.registry_name(&self.bitfields, source_bitfield_name)?;
 
-        match method_name {
-            "to_bytes" => Some(self.bitfield_to_bytes(&bitfield_name, args)),
-            "from_bytes" => Some(self.bitfield_from_bytes(&bitfield_name, args)),
+        match intrinsic {
+            IntrinsicId::BitfieldToBytes => Some(self.bitfield_to_bytes(&bitfield_name, args)),
+            IntrinsicId::BitfieldFromBytes => Some(self.bitfield_from_bytes(&bitfield_name, args)),
             _ => None,
         }
     }
@@ -3849,49 +4143,37 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: &[Value],
     ) -> Option<Result<Value, String>> {
-        let is_typed_builtin = matches!(
-            name,
-            "type.name"
-                | "type.kind"
-                | "type.kind_tag"
-                | "type.primitive_tag"
-                | "type.has_secret"
-                | "type.info"
-                | "type.arg"
-                | "type.fields"
-                | "type.bitfield_layout"
-                | "type.bitfield_fields"
-                | "type.machine_layout"
-                | "type.machine_states"
-                | "type.machine_transitions"
-                | "type.machine_state_value"
-                | "type.variants"
-                | "type.variant_value"
-                | "type.field_value"
-                | "type.machine_field_value"
-                | "type.variant_field_value"
-                | "type.construct_start"
-                | "type.construct_variant_start"
-                | "type.construct_machine_start"
-                | "type.construct_put"
-                | "type.construct_finish"
-                | "json.parse"
-                | "json.parse_exact"
-                | "json.serialize"
-                | "json.serialize_public"
-        );
-        if !is_typed_builtin {
-            return None;
-        }
-        let expected_type_arg_count = if matches!(
-            name,
-            "type.field_value" | "type.machine_field_value" | "type.variant_field_value"
-        ) {
-            2
-        } else if matches!(name, "type.construct_put") {
-            2
-        } else {
-            1
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        let expected_type_arg_count = match intrinsic {
+            IntrinsicId::TypeFieldValue
+            | IntrinsicId::TypeMachineFieldValue
+            | IntrinsicId::TypeVariantFieldValue
+            | IntrinsicId::TypeConstructPut => 2,
+            IntrinsicId::TypeName
+            | IntrinsicId::TypeKind
+            | IntrinsicId::TypeKindTag
+            | IntrinsicId::TypePrimitiveTag
+            | IntrinsicId::TypeHasSecret
+            | IntrinsicId::TypeInfo
+            | IntrinsicId::TypeArg
+            | IntrinsicId::TypeFields
+            | IntrinsicId::TypeBitfieldLayout
+            | IntrinsicId::TypeBitfieldFields
+            | IntrinsicId::TypeMachineLayout
+            | IntrinsicId::TypeMachineStates
+            | IntrinsicId::TypeMachineTransitions
+            | IntrinsicId::TypeMachineStateValue
+            | IntrinsicId::TypeVariants
+            | IntrinsicId::TypeVariantValue
+            | IntrinsicId::TypeConstructStart
+            | IntrinsicId::TypeConstructVariantStart
+            | IntrinsicId::TypeConstructMachineStart
+            | IntrinsicId::TypeConstructFinish
+            | IntrinsicId::JsonParse
+            | IntrinsicId::JsonParseExact
+            | IntrinsicId::JsonSerialize
+            | IntrinsicId::JsonSerializePublic => 1,
+            non_type_arg_intrinsics!() => return None,
         };
         if type_args.len() != expected_type_arg_count {
             return Some(Err(format!(
@@ -3904,8 +4186,8 @@ impl Interpreter {
         if let Some(error) = self.missing_checked_type_info_error(&ty) {
             return Some(Err(error));
         }
-        Some(match name {
-            "type.name" => {
+        Some(match intrinsic {
+            IntrinsicId::TypeName => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3915,7 +4197,7 @@ impl Interpreter {
                         .unwrap_or_else(|| type_expr_display(&ty)),
                 ))
             }
-            "type.kind" => {
+            IntrinsicId::TypeKind => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3925,7 +4207,7 @@ impl Interpreter {
                         .to_string(),
                 ))
             }
-            "type.kind_tag" => {
+            IntrinsicId::TypeKindTag => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3934,7 +4216,7 @@ impl Interpreter {
                     .unwrap_or_else(|| self.type_expr_kind(&ty));
                 Ok(Self::type_kind_tag_value(kind))
             }
-            "type.primitive_tag" => {
+            IntrinsicId::TypePrimitiveTag => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3943,7 +4225,7 @@ impl Interpreter {
                     .map(|info| Self::primitive_tag_value(info.primitive_tag.as_deref()))
                     .unwrap_or_else(|| self.type_primitive_tag_value(&ty)))
             }
-            "type.has_secret" => {
+            IntrinsicId::TypeHasSecret => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3952,7 +4234,7 @@ impl Interpreter {
                         .unwrap_or_else(|| self.type_expr_has_secret(&ty)),
                 ))
             }
-            "type.info" => {
+            IntrinsicId::TypeInfo => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3960,7 +4242,7 @@ impl Interpreter {
                     .checked_type_info_value(&ty)
                     .unwrap_or_else(|| self.type_info_value(&ty)))
             }
-            "type.arg" => {
+            IntrinsicId::TypeArg => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
@@ -3985,7 +4267,7 @@ impl Interpreter {
                 };
                 Ok(self.type_info_value(arg_ty))
             }
-            "type.construct_start" => {
+            IntrinsicId::TypeConstructStart => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -3996,32 +4278,32 @@ impl Interpreter {
                     fields: Vec::new(),
                 })
             }
-            "type.construct_variant_start" => {
+            IntrinsicId::TypeConstructVariantStart => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_construct_variant_start(&ty, &args[0])
             }
-            "type.construct_machine_start" => {
+            IntrinsicId::TypeConstructMachineStart => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_construct_machine_start(&ty, &args[0])
             }
-            "type.construct_put" => {
+            IntrinsicId::TypeConstructPut => {
                 if let Some(err) = check_args(name, 3, args) {
                     return Some(err);
                 }
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_construct_put(&ty, &expected_field_ty, &args[0], &args[1], &args[2])
             }
-            "type.construct_finish" => {
+            IntrinsicId::TypeConstructFinish => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_construct_finish(&ty, &args[0])
             }
-            "type.fields" => {
+            IntrinsicId::TypeFields => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4044,7 +4326,7 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.bitfield_layout" => {
+            IntrinsicId::TypeBitfieldLayout => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4059,7 +4341,7 @@ impl Interpreter {
                 }
                 Ok(self.type_bitfield_value(self.type_expr_bitfield(&ty)))
             }
-            "type.bitfield_fields" => {
+            IntrinsicId::TypeBitfieldFields => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4080,7 +4362,7 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.machine_layout" => {
+            IntrinsicId::TypeMachineLayout => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4095,7 +4377,7 @@ impl Interpreter {
                 }
                 Ok(self.type_machine_value(&type_expr_name(&ty), self.type_expr_machine(&ty)))
             }
-            "type.machine_states" => {
+            IntrinsicId::TypeMachineStates => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4119,7 +4401,7 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.machine_transitions" => {
+            IntrinsicId::TypeMachineTransitions => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4143,13 +4425,13 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.machine_state_value" => {
+            IntrinsicId::TypeMachineStateValue => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_machine_state_value(&args[0], &ty)
             }
-            "type.variants" => {
+            IntrinsicId::TypeVariants => {
                 if let Some(err) = check_args(name, 0, args) {
                     return Some(err);
                 }
@@ -4172,44 +4454,44 @@ impl Interpreter {
                         .collect(),
                 ))
             }
-            "type.variant_value" => {
+            IntrinsicId::TypeVariantValue => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.reflected_variant_value(&args[0], &ty)
             }
-            "type.field_value" => {
+            IntrinsicId::TypeFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_field_value(&args[0], &ty, &args[1], &expected_field_ty)
             }
-            "type.machine_field_value" => {
+            IntrinsicId::TypeMachineFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_machine_field_value(&args[0], &ty, &args[1], &expected_field_ty)
             }
-            "type.variant_field_value" => {
+            IntrinsicId::TypeVariantFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
                 let expected_field_ty = self.substitute_type_expr(&type_args[1]);
                 self.reflected_variant_field_value(&args[0], &ty, &args[1], &expected_field_ty)
             }
-            "json.parse" | "json.parse_exact" => {
+            IntrinsicId::JsonParse | IntrinsicId::JsonParseExact => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
                 self.call_trusted_json_public_bridge(name, type_args, args)
             }
-            "json.serialize" | "json.serialize_public" => {
+            IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic => {
                 if let Some(err) = check_args(name, 1, args) {
                     return Some(err);
                 }
-                if name == "json.serialize"
+                if intrinsic == IntrinsicId::JsonSerialize
                     && self
                         .checked_type_has_secret(&ty)
                         .unwrap_or_else(|| self.type_expr_has_secret(&ty))
@@ -4221,7 +4503,7 @@ impl Interpreter {
                 }
                 self.call_trusted_json_public_bridge(name, type_args, args)
             }
-            _ => return None,
+            non_type_arg_intrinsics!() => return None,
         })
     }
 
@@ -8370,17 +8652,21 @@ impl Interpreter {
     }
 
     fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
-        if let Some(result) = self.call_bitfield_builtin(name, args) {
-            return Some(result);
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        if matches!(
+            intrinsic,
+            IntrinsicId::BitfieldFromBytes | IntrinsicId::BitfieldToBytes
+        ) {
+            return self.call_bitfield_builtin(intrinsic, name, args);
         }
 
-        match name {
+        match intrinsic {
             // =================================================================
             // COMPILER PRIMITIVES
             // =================================================================
 
             // -- I/O (capability-simulated) -----------------------------------
-            "Stdout.write" => {
+            IntrinsicId::StdoutWrite => {
                 // Stdout.write(stdout, message) — ignore capability, print message
                 if args.len() < 2 {
                     return Some(Err(format!(
@@ -8394,12 +8680,12 @@ impl Interpreter {
             }
 
             // -- Secret-safe operations --------------------------------------
-            "secret.redact" => {
+            IntrinsicId::SecretRedact => {
                 require_args!(name, 1, args);
                 Some(Ok(Value::String("***".to_string())))
             }
 
-            "secret.compare" => {
+            IntrinsicId::SecretCompare => {
                 require_args!(name, 2, args);
                 let equal = match (&args[0], &args[1]) {
                     (Value::String(lhs), Value::String(rhs)) => {
@@ -8418,7 +8704,7 @@ impl Interpreter {
             }
 
             // -- Random operations (stdlib/random.jett) -----------------------
-            "random.__bounded" if self.current_function_trusted_stdlib => {
+            IntrinsicId::RandomBounded if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::Nothing, Value::Int64(lower), Value::Int64(upper)) => {
@@ -8441,7 +8727,7 @@ impl Interpreter {
                 }
             }
 
-            "random.__unit_float64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::RandomUnitFloat64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 if !matches!(args[0], Value::Nothing) {
                     return Some(Err(format!("{name} expects Random")));
@@ -8452,7 +8738,7 @@ impl Interpreter {
                 }
             }
 
-            "random.__bool" if self.current_function_trusted_stdlib => {
+            IntrinsicId::RandomBool if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 if !matches!(args[0], Value::Nothing) {
                     return Some(Err(format!("{name} expects Random")));
@@ -8464,7 +8750,7 @@ impl Interpreter {
             }
 
             // -- Private string kernels (stdlib/string.jett) ------------------
-            "string.__char_count" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringCharCount if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Int64(string_grapheme_count(s) as i64))),
@@ -8472,7 +8758,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__trim" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringTrim if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.trim().to_string()))),
@@ -8480,7 +8766,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__upper" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringUpper if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.to_uppercase()))),
@@ -8488,7 +8774,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__lower" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringLower if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.to_lowercase()))),
@@ -8496,7 +8782,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__replace" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringReplace if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
@@ -8507,7 +8793,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__split" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringSplit if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::String(delim)) => {
@@ -8521,7 +8807,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__join" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringJoin if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::String(sep)) => {
@@ -8541,7 +8827,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__slice" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringSlice if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::String(s), Value::Int64(start), Value::Int64(end)) => {
@@ -8558,7 +8844,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__repeat" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringRepeat if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(s), Value::Int64(n)) => {
@@ -8569,14 +8855,14 @@ impl Interpreter {
             }
 
             // -- Type conversions (stdlib/string.jett, stdlib/int64.jett) -----
-            "string.__from_int64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromInt64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => Some(Ok(Value::String(n.to_string()))),
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "string.__from_uint64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromUint64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Uint64(n) => Some(Ok(Value::String(n.to_string()))),
@@ -8585,7 +8871,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__slugify" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringSlugify if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -8605,7 +8891,7 @@ impl Interpreter {
             }
 
             // -- int64 / float64 conversions ----------------------------------
-            "int64.from_float64" => {
+            IntrinsicId::Int64FromFloat64 => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n)
@@ -8623,7 +8909,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a float64 argument"))),
                 }
             }
-            "int64.from_string" => {
+            IntrinsicId::Int64FromString => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match s.parse::<i64>() {
@@ -8635,7 +8921,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
-            "uint64.from_string" => {
+            IntrinsicId::Uint64FromString => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match s.parse::<u64>() {
@@ -8649,7 +8935,7 @@ impl Interpreter {
             }
 
             // -- float64 conversions ------------------------------------------
-            "float64.from_int64" => {
+            IntrinsicId::Float64FromInt64 => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => {
@@ -8666,7 +8952,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "float64.from_string" => {
+            IntrinsicId::Float64FromString => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match s.parse::<f64>() {
@@ -8680,14 +8966,14 @@ impl Interpreter {
             }
 
             // -- Additional string conversions --------------------------------
-            "string.__from_float64" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromFloat64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::String(format!("{n}")))),
                     _ => Some(Err(format!("{name} expects a float64 argument"))),
                 }
             }
-            "string.__from_bool" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringFromBool if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bool(b) => Some(Ok(Value::String(format!("{b}")))),
@@ -8696,24 +8982,24 @@ impl Interpreter {
             }
 
             // -- print (debugging helper) -------------------------------------
-            "print" => {
+            IntrinsicId::Print => {
                 let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
                 self.write_stdout(&output.join(" "));
                 Some(Ok(Value::Nothing))
             }
-            "println" => {
+            IntrinsicId::Println => {
                 let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
                 self.write_stdout_line(&output.join(" "));
                 Some(Ok(Value::Nothing))
             }
 
             // -- Private list kernels (stdlib/list.jett) ----------------------
-            "list.__new" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListNew if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::List(vec![])))
             }
 
-            "list.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) => Some(Ok(Value::Int64(items.len() as i64))),
@@ -8721,7 +9007,7 @@ impl Interpreter {
                 }
             }
 
-            "list.__append" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListAppend if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::List(items) => {
@@ -8733,7 +9019,7 @@ impl Interpreter {
                 }
             }
 
-            "list.__get_clone" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListGetClone if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
@@ -8750,7 +9036,7 @@ impl Interpreter {
                 }
             }
 
-            "list.__sort" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSort if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) => {
@@ -8772,15 +9058,17 @@ impl Interpreter {
             }
 
             // -- Private map kernels (stdlib/map.jett) ------------------------
-            "map.__new" if self.current_function_trusted_stdlib => Some(Ok(Value::Map(Vec::new()))),
-            "map.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapNew if self.current_function_trusted_stdlib => {
+                Some(Ok(Value::Map(Vec::new())))
+            }
+            IntrinsicId::MapLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Map(entries) => Some(Ok(Value::Int64(entries.len() as i64))),
                     _ => Some(Err(format!("{name} expects a map argument"))),
                 }
             }
-            "map.__has" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapHas if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::Map(entries) => {
@@ -8790,7 +9078,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__get" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::Map(entries) => {
@@ -8806,7 +9094,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__insert" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapInsert if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match args[0].clone() {
                     Value::Map(mut entries) => {
@@ -8822,7 +9110,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__remove" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapRemove if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Map(mut entries) => {
@@ -8832,7 +9120,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
                 }
             }
-            "map.__from_lists" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MapFromLists if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(keys), Value::List(values)) => {
@@ -8853,8 +9141,10 @@ impl Interpreter {
             }
 
             // -- Private set kernels (stdlib/set.jett) ------------------------
-            "set.__new" if self.current_function_trusted_stdlib => Some(Ok(Value::Set(Vec::new()))),
-            "set.__add" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetNew if self.current_function_trusted_stdlib => {
+                Some(Ok(Value::Set(Vec::new())))
+            }
+            IntrinsicId::SetAdd if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Set(mut items) => {
@@ -8867,7 +9157,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.__remove" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetRemove if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Set(mut items) => {
@@ -8877,14 +9167,14 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.__contains" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetContains if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match &args[0] {
                     Value::Set(items) => Some(Ok(Value::Bool(items.contains(&args[1])))),
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
-            "set.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::SetLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Set(items) => Some(Ok(Value::Int64(items.len() as i64))),
@@ -8892,7 +9182,7 @@ impl Interpreter {
                 }
             }
 
-            "list.__sort_by_index" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSortByIndex if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(idx)) => {
@@ -8926,7 +9216,7 @@ impl Interpreter {
                 }
             }
 
-            "list.__is_sorted" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListIsSorted if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) => {
@@ -8945,7 +9235,7 @@ impl Interpreter {
             }
 
             // -- Private math kernels (stdlib/math.jett) ----------------------
-            "math.__abs" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathKernelAbs if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => Some(Ok(Value::Int64(n.wrapping_abs()))),
@@ -8954,7 +9244,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__min" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathKernelMin if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.min(b)))),
@@ -8965,7 +9255,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__max" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathKernelMax if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.max(b)))),
@@ -8976,7 +9266,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__sqrt" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathSqrt if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sqrt()))),
@@ -8985,7 +9275,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__pow" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathPow if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Float64(base), Value::Float64(exp)) => {
@@ -9007,7 +9297,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__floor" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathFloor if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.floor()))),
@@ -9016,7 +9306,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__ceil" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathCeil if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ceil()))),
@@ -9025,7 +9315,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__round" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathRound if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.round()))),
@@ -9034,7 +9324,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__clamp" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathClamp if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::Int64(v), Value::Int64(lo), Value::Int64(hi)) => {
@@ -9057,7 +9347,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__log" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLog if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ln()))),
@@ -9066,7 +9356,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__log2" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLog2 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log2()))),
@@ -9075,7 +9365,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__log10" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLog10 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log10()))),
@@ -9084,7 +9374,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__average" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathAverage if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
@@ -9106,7 +9396,7 @@ impl Interpreter {
                 }
             }
 
-            "math.__median" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathMedian if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(items) if !items.is_empty() => {
@@ -9140,15 +9430,15 @@ impl Interpreter {
             }
 
             // -- Math constants and extras -----------------------------------------
-            "math.__pi" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathPi if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Float64(std::f64::consts::PI)))
             }
-            "math.__e" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathE if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Float64(std::f64::consts::E)))
             }
-            "math.__sin" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathSin if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sin()))),
@@ -9156,7 +9446,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.__cos" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathCos if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.cos()))),
@@ -9164,7 +9454,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.__tan" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathTan if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.tan()))),
@@ -9172,7 +9462,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
                 }
             }
-            "math.__mod" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathMod if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
@@ -9185,7 +9475,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.__gcd" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathGcd if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
@@ -9200,7 +9490,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.__lcm" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathLcm if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Int64(a), Value::Int64(b)) => {
@@ -9222,7 +9512,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two int64 arguments"))),
                 }
             }
-            "math.__factorial" if self.current_function_trusted_stdlib => {
+            IntrinsicId::MathFactorial if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Int64(n) => {
@@ -9241,7 +9531,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
-            "list.__insert_at" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListInsertAt if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
@@ -9261,7 +9551,7 @@ impl Interpreter {
                     ))),
                 }
             }
-            "list.__remove_at" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListRemoveAt if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::List(items), Value::Int64(index)) => {
@@ -9279,7 +9569,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a list and an int64 index"))),
                 }
             }
-            "list.__swap" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSwap if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::List(items), Value::Int64(i), Value::Int64(j)) => {
@@ -9300,7 +9590,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__trim_start" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringTrimStart if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.trim_start().to_string()))),
@@ -9308,7 +9598,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__trim_end" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringTrimEnd if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(s.trim_end().to_string()))),
@@ -9317,7 +9607,7 @@ impl Interpreter {
             }
 
             // Private string segmentation kernels yield list[string].
-            "string.__chars" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringChars if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -9331,7 +9621,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__words" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringWords if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -9345,7 +9635,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__lines" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringLines if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -9375,7 +9665,7 @@ impl Interpreter {
             }
 
             // -- UUID operations (stdlib/uuid.jett) ---------------------------
-            "uuid.new" => {
+            IntrinsicId::UuidNew => {
                 require_args!(name, 0, args);
                 // Generate a UUID v4 using rand
                 let mut rng = rand::thread_rng();
@@ -9409,7 +9699,7 @@ impl Interpreter {
                 Some(Ok(Value::String(uuid)))
             }
 
-            "string.__index_of" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringIndexOf if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(haystack), Value::String(needle)) => {
@@ -9424,7 +9714,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
-            "string.__count" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringCount if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::String(haystack), Value::String(needle)) => {
@@ -9434,7 +9724,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects two string arguments"))),
                 }
             }
-            "string.__to_upper_first" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringToUpperFirst if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -9455,7 +9745,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
             }
-            "string.__to_lower_first" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringToLowerFirst if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => {
@@ -9477,7 +9767,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__is_numeric" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringIsNumeric if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Bool(
@@ -9487,7 +9777,7 @@ impl Interpreter {
                 }
             }
 
-            "string.__is_alpha" if self.current_function_trusted_stdlib => {
+            IntrinsicId::StringIsAlpha if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Bool(
@@ -9498,7 +9788,7 @@ impl Interpreter {
             }
 
             // -- Encoding operations (stdlib/encoding.jett) -------------------
-            "encoding.__base64_encode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingBase64Encode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(bytes) => {
@@ -9509,7 +9799,7 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__base64_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingBase64Decode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match base64_decode(s) {
@@ -9522,7 +9812,7 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__hex_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingHexDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match encoding_hex_decode(s) {
@@ -9535,7 +9825,7 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__url_encode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingUrlEncode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(percent_encode(s, false)))),
@@ -9543,7 +9833,7 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__url_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingUrlDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(percent_decode(s, false)
@@ -9555,7 +9845,7 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__form_encode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingFormEncode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::String(percent_encode(s, true)))),
@@ -9563,7 +9853,7 @@ impl Interpreter {
                 }
             }
 
-            "encoding.__form_decode" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EncodingFormDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(percent_decode(s, true)
@@ -9576,7 +9866,7 @@ impl Interpreter {
             }
 
             // -- Crypto operations (stdlib/crypto.jett) -----------------------
-            "crypto.__sha256" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoSha256 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha256_digest(bytes)))),
@@ -9584,7 +9874,7 @@ impl Interpreter {
                 }
             }
 
-            "crypto.__sha512" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoSha512 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha512_digest(bytes)))),
@@ -9592,7 +9882,7 @@ impl Interpreter {
                 }
             }
 
-            "crypto.__md5" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoMd5 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(md5_digest(bytes)))),
@@ -9600,7 +9890,7 @@ impl Interpreter {
                 }
             }
 
-            "crypto.__hmac_sha256" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CryptoHmacSha256 if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Bytes(key), Value::Bytes(message)) => {
@@ -9611,7 +9901,7 @@ impl Interpreter {
             }
 
             // -- Wall-clock operation (stdlib/time.jett) ----------------------
-            "Clock.__now" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ClockNow if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 if !matches!(args[0], Value::Nothing) {
                     return Some(Err(format!("{name} expects Clock")));
@@ -9623,7 +9913,7 @@ impl Interpreter {
             }
 
             // -- Launch environment operations (stdlib/environment.jett) -------
-            "Environment.__get" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EnvironmentGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
                 {
@@ -9643,7 +9933,7 @@ impl Interpreter {
                     Err(error) => Value::ResultFail(Box::new(Value::String(error))),
                 }))
             }
-            "Environment.__args" if self.current_function_trusted_stdlib => {
+            IntrinsicId::EnvironmentArgs if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
                 {
@@ -9663,7 +9953,7 @@ impl Interpreter {
             }
 
             // -- CSV operations (stdlib/csv.jett) --------------------------
-            "csv.__parse" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CsvParse if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match parse_csv_records(s) {
@@ -9682,7 +9972,7 @@ impl Interpreter {
                 }
             }
 
-            "csv.__stringify" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CsvStringify if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::List(rows) => {
@@ -9710,7 +10000,7 @@ impl Interpreter {
                 }
             }
 
-            "csv.__parse_with_header" if self.current_function_trusted_stdlib => {
+            IntrinsicId::CsvParseWithHeader if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => match parse_csv_records(s) {
@@ -9767,7 +10057,7 @@ impl Interpreter {
             }
 
             // -- Range generation ---------------------------------------------------
-            "range" => {
+            IntrinsicId::Range => {
                 match args.len() {
                     // range(end) — 0 to end exclusive
                     1 => match &args[0] {
@@ -9795,12 +10085,12 @@ impl Interpreter {
             }
 
             // -- Bytes operations (stdlib/bytes.jett) ---------------------------
-            "bytes.__new" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesNew if self.current_function_trusted_stdlib => {
                 require_args!(name, 0, args);
                 Some(Ok(Value::Bytes(Vec::new())))
             }
 
-            "bytes.__length" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(b) => Some(Ok(Value::Int64(b.len() as i64))),
@@ -9808,7 +10098,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__slice" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesSlice if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
                 match (&args[0], &args[1], &args[2]) {
                     (Value::Bytes(b), Value::Int64(start), Value::Int64(end)) => {
@@ -9824,7 +10114,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__concat" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesConcat if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Bytes(a), Value::Bytes(b)) => {
@@ -9836,7 +10126,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__from_string" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesFromString if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(s) => Some(Ok(Value::Bytes(s.as_bytes().to_vec()))),
@@ -9844,7 +10134,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__to_string" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesToString if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(b) => match String::from_utf8(b.clone()) {
@@ -9857,7 +10147,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__to_hex" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesToHex if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::Bytes(b) => {
@@ -9868,7 +10158,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__from_hex" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesFromHex if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
                 match &args[0] {
                     Value::String(raw) => match Self::parse_hex_bytes(
@@ -9883,7 +10173,7 @@ impl Interpreter {
                 }
             }
 
-            "bytes.__get" if self.current_function_trusted_stdlib => {
+            IntrinsicId::BytesGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
                 match (&args[0], &args[1]) {
                     (Value::Bytes(b), Value::Int64(index)) => {
@@ -9904,8 +10194,155 @@ impl Interpreter {
                 }
             }
 
-            // Not a built-in
-            _ => None,
+            // Private stdlib kernels are intentionally unavailable to direct
+            // project calls. Keep this list explicit so a new intrinsic must
+            // choose a comptime dispatch path.
+            IntrinsicId::BytesConcat
+            | IntrinsicId::BytesFromHex
+            | IntrinsicId::BytesFromString
+            | IntrinsicId::BytesGet
+            | IntrinsicId::BytesLength
+            | IntrinsicId::BytesNew
+            | IntrinsicId::BytesSlice
+            | IntrinsicId::BytesToHex
+            | IntrinsicId::BytesToString
+            | IntrinsicId::ClockNow
+            | IntrinsicId::CryptoHmacSha256
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CsvParse
+            | IntrinsicId::CsvParseWithHeader
+            | IntrinsicId::CsvStringify
+            | IntrinsicId::EncodingBase64Decode
+            | IntrinsicId::EncodingBase64Encode
+            | IntrinsicId::EncodingFormDecode
+            | IntrinsicId::EncodingFormEncode
+            | IntrinsicId::EncodingHexDecode
+            | IntrinsicId::EncodingUrlDecode
+            | IntrinsicId::EncodingUrlEncode
+            | IntrinsicId::EnvironmentArgs
+            | IntrinsicId::EnvironmentGet
+            | IntrinsicId::ListAppend
+            | IntrinsicId::ListGetClone
+            | IntrinsicId::ListInsertAt
+            | IntrinsicId::ListIsSorted
+            | IntrinsicId::ListLength
+            | IntrinsicId::ListNew
+            | IntrinsicId::ListRemoveAt
+            | IntrinsicId::ListSort
+            | IntrinsicId::ListSortByIndex
+            | IntrinsicId::ListSwap
+            | IntrinsicId::MapFromLists
+            | IntrinsicId::MapGet
+            | IntrinsicId::MapHas
+            | IntrinsicId::MapInsert
+            | IntrinsicId::MapLength
+            | IntrinsicId::MapNew
+            | IntrinsicId::MapRemove
+            | IntrinsicId::MathAverage
+            | IntrinsicId::MathCeil
+            | IntrinsicId::MathClamp
+            | IntrinsicId::MathCos
+            | IntrinsicId::MathE
+            | IntrinsicId::MathFactorial
+            | IntrinsicId::MathFloor
+            | IntrinsicId::MathGcd
+            | IntrinsicId::MathKernelAbs
+            | IntrinsicId::MathKernelMax
+            | IntrinsicId::MathKernelMin
+            | IntrinsicId::MathLcm
+            | IntrinsicId::MathLog
+            | IntrinsicId::MathLog10
+            | IntrinsicId::MathLog2
+            | IntrinsicId::MathMedian
+            | IntrinsicId::MathMod
+            | IntrinsicId::MathPi
+            | IntrinsicId::MathPow
+            | IntrinsicId::MathRound
+            | IntrinsicId::MathSin
+            | IntrinsicId::MathSqrt
+            | IntrinsicId::MathTan
+            | IntrinsicId::RandomBool
+            | IntrinsicId::RandomBounded
+            | IntrinsicId::RandomUnitFloat64
+            | IntrinsicId::SetAdd
+            | IntrinsicId::SetContains
+            | IntrinsicId::SetLength
+            | IntrinsicId::SetNew
+            | IntrinsicId::SetRemove
+            | IntrinsicId::StringCharCount
+            | IntrinsicId::StringChars
+            | IntrinsicId::StringCount
+            | IntrinsicId::StringFromBool
+            | IntrinsicId::StringFromFloat64
+            | IntrinsicId::StringFromInt64
+            | IntrinsicId::StringFromUint64
+            | IntrinsicId::StringIndexOf
+            | IntrinsicId::StringIsAlpha
+            | IntrinsicId::StringIsNumeric
+            | IntrinsicId::StringJoin
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringLower
+            | IntrinsicId::StringRepeat
+            | IntrinsicId::StringReplace
+            | IntrinsicId::StringSlice
+            | IntrinsicId::StringSlugify
+            | IntrinsicId::StringSplit
+            | IntrinsicId::StringToLowerFirst
+            | IntrinsicId::StringToUpperFirst
+            | IntrinsicId::StringTrim
+            | IntrinsicId::StringTrimEnd
+            | IntrinsicId::StringTrimStart
+            | IntrinsicId::StringUpper
+            | IntrinsicId::StringWords => None,
+
+            // Routed before this ordinary dispatcher.
+            IntrinsicId::BitfieldFromBytes | IntrinsicId::BitfieldToBytes => None,
+            IntrinsicId::GraphicsRun
+            | IntrinsicId::ListGroupBy
+            | IntrinsicId::ListSortBy
+            | IntrinsicId::ListSum => None,
+            IntrinsicId::JsonParse
+            | IntrinsicId::JsonParseExact
+            | IntrinsicId::JsonSerialize
+            | IntrinsicId::JsonSerializePublic
+            | IntrinsicId::TypeArg
+            | IntrinsicId::TypeBitfieldFields
+            | IntrinsicId::TypeBitfieldLayout
+            | IntrinsicId::TypeConstructFinish
+            | IntrinsicId::TypeConstructMachineStart
+            | IntrinsicId::TypeConstructPut
+            | IntrinsicId::TypeConstructStart
+            | IntrinsicId::TypeConstructVariantStart
+            | IntrinsicId::TypeFieldValue
+            | IntrinsicId::TypeFields
+            | IntrinsicId::TypeHasSecret
+            | IntrinsicId::TypeInfo
+            | IntrinsicId::TypeKind
+            | IntrinsicId::TypeKindTag
+            | IntrinsicId::TypeMachineFieldValue
+            | IntrinsicId::TypeMachineLayout
+            | IntrinsicId::TypeMachineStateValue
+            | IntrinsicId::TypeMachineStates
+            | IntrinsicId::TypeMachineTransitions
+            | IntrinsicId::TypeName
+            | IntrinsicId::TypePrimitiveTag
+            | IntrinsicId::TypeVariantFieldValue
+            | IntrinsicId::TypeVariantValue
+            | IntrinsicId::TypeVariants => None,
+
+            // These are implemented by source wrappers or require runtime-only
+            // capabilities, so the ordinary comptime dispatcher declines them.
+            IntrinsicId::FilesystemReadFile
+            | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::LogEmit
+            | IntrinsicId::MathAbs
+            | IntrinsicId::MathMax
+            | IntrinsicId::MathMin
+            | IntrinsicId::TestMockClock
+            | IntrinsicId::TestMockEnvironment
+            | IntrinsicId::TestMockRandom => None,
         }
     }
 
@@ -10102,11 +10539,12 @@ impl Interpreter {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, String>> {
-        match name {
-            "graphics.__run" if self.current_function_trusted_stdlib => {
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        match intrinsic {
+            IntrinsicId::GraphicsRun if self.current_function_trusted_stdlib => {
                 Some(self.run_graphics_builtin(args.to_vec()))
             }
-            "list.__sort_by" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSortBy if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
                     return Some(Err(format!(
                         "list.__sort_by expects 2 arguments, got {}",
@@ -10134,7 +10572,7 @@ impl Interpreter {
                 keyed.sort_by_key(|(k, _)| *k);
                 Some(Ok(Value::List(keyed.into_iter().map(|(_, v)| v).collect())))
             }
-            "list.__sum" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListSum if self.current_function_trusted_stdlib => {
                 if args.len() != 1 {
                     return Some(Err(format!(
                         "{name} expects 1 argument, got {}",
@@ -10178,7 +10616,7 @@ impl Interpreter {
                     _ => Some(Err(format!("{name}: argument must be a list"))),
                 }
             }
-            "list.__group_by" if self.current_function_trusted_stdlib => {
+            IntrinsicId::ListGroupBy if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
                     return Some(Err(format!(
                         "{name} expects 2 arguments, got {}",
@@ -10207,7 +10645,13 @@ impl Interpreter {
                 Some(Ok(Value::Map(groups)))
             }
 
-            _ => None,
+            // The four guarded variants fall through here for untrusted
+            // callers; every other intrinsic is intentionally declined.
+            IntrinsicId::GraphicsRun
+            | IntrinsicId::ListGroupBy
+            | IntrinsicId::ListSortBy
+            | IntrinsicId::ListSum => None,
+            non_higher_order_intrinsics!() => None,
         }
     }
 
