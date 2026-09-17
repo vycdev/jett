@@ -14,6 +14,7 @@ members = [
     "crates/jett_hir",
     "crates/jett_mir",
     "crates/jett_codegen_cranelift",
+    "crates/jett_native_launcher",
     "crates/jett_comptime",
     "crates/jett_fmt",
     "crates/jett_query",
@@ -45,6 +46,7 @@ jett_typecheck = { path = "crates/jett_typecheck" }
 jett_hir = { path = "crates/jett_hir" }
 jett_mir = { path = "crates/jett_mir" }
 jett_codegen_cranelift = { path = "crates/jett_codegen_cranelift" }
+jett_native_launcher = { path = "crates/jett_native_launcher" }
 jett_comptime = { path = "crates/jett_comptime" }
 jett_fmt = { path = "crates/jett_fmt" }
 jett_query = { path = "crates/jett_query" }
