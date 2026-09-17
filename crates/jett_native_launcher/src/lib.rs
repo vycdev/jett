@@ -28,7 +28,7 @@ pub const JETT_LAUNCHER_EXIT_SUCCESS: c_int = 0;
 pub const JETT_LAUNCHER_EXIT_CREATE_FAILURE: c_int = 70;
 /// The generated Jett entry point returned a failure status.
 pub const JETT_LAUNCHER_EXIT_ENTRY_FAILURE: c_int = 71;
-/// Runtime context destruction failed after a successful entry call.
+/// Runtime context destruction failed after the context was created.
 pub const JETT_LAUNCHER_EXIT_DESTROY_FAILURE: c_int = 72;
 /// A recoverable unwind was caught inside the launcher.
 pub const JETT_LAUNCHER_EXIT_PANIC: c_int = 73;
@@ -167,9 +167,10 @@ where
         DestroyOutcome::Completed(call) if call.status == JettRuntimeStatusV1::OK => {}
         DestroyOutcome::Completed(call) => {
             write_runtime_failure(stderr, b"runtime context destruction", call);
-            if exit == JETT_LAUNCHER_EXIT_SUCCESS {
-                exit = JETT_LAUNCHER_EXIT_DESTROY_FAILURE;
-            }
+            // A cleanup failure means the runtime could not uphold its
+            // exactly-once resource contract. Treat it as the terminal
+            // infrastructure outcome even when the Jett entry failed first.
+            exit = JETT_LAUNCHER_EXIT_DESTROY_FAILURE;
         }
         DestroyOutcome::Panicked => {
             write_bytes(stderr, DESTROY_PANIC_MESSAGE);
@@ -390,6 +391,24 @@ mod tests {
         assert_eq!(
             stderr,
             b"jett launcher: runtime context destruction failed (status 3): test destroy failure\n"
+        );
+    }
+
+    #[test]
+    fn destruction_failure_overrides_an_entry_failure() {
+        let mut runtime = TrackingRuntime {
+            destroy_failure: true,
+            ..TrackingRuntime::default()
+        };
+        let mut stderr = Vec::new();
+
+        let exit = launch_with(&mut runtime, |_| 19, &mut stderr);
+
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_DESTROY_FAILURE);
+        assert_eq!(runtime.destroy_calls, 1);
+        assert_eq!(
+            stderr,
+            b"jett launcher: program entry failed (status 19)\njett launcher: runtime context destruction failed (status 3): test destroy failure\n"
         );
     }
 

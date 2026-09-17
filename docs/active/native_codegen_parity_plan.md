@@ -173,7 +173,9 @@ rather than rely on Rust layout or symbol compatibility.
   to the checked program entry without reconstructing or inspecting it.
 - Panics and Rust unwinding may not cross the ABI. Runtime operations translate
   failure to the stable status and error-value contract; native cleanup paths
-  remain responsible for owned Jett values.
+  remain responsible for owned Jett values. If entry execution and final
+  runtime-context destruction both fail, the cleanup/infrastructure failure is
+  the terminal process outcome, while diagnostics retain both failures.
 - Host layout tests pin every shared record's size, alignment, field offsets,
   tag values, and calling convention. Backend and runtime use one canonical
   definition of those layouts.
