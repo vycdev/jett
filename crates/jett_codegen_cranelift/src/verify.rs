@@ -1,0 +1,699 @@
+use std::collections::HashSet;
+
+use jett_common::Span;
+use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
+use jett_mir::{Function, Program, Statement, StatementKind, Terminator, TerminatorKind};
+use jett_types::{Type, TypeId, TypeInterner};
+
+use crate::reachability::reachable_function_ids;
+use crate::{CodegenError, symbol_name};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScalarKind {
+    SignedInteger(u16),
+    UnsignedInteger(u16),
+    Float(u16),
+    Bool,
+    Nothing,
+}
+
+impl ScalarKind {
+    pub(crate) fn is_integer(self) -> bool {
+        matches!(self, Self::SignedInteger(_) | Self::UnsignedInteger(_))
+    }
+
+    fn is_numeric(self) -> bool {
+        self.is_integer() || matches!(self, Self::Float(_))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedFunction {
+    pub(crate) mir_id: FunctionId,
+    pub(crate) symbol: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedProgram {
+    functions: Vec<VerifiedFunction>,
+    by_mir_index: Vec<Option<usize>>,
+}
+
+impl VerifiedProgram {
+    pub(crate) fn functions(&self) -> &[VerifiedFunction] {
+        &self.functions
+    }
+
+    pub(crate) fn get(&self, id: FunctionId) -> Option<&VerifiedFunction> {
+        let index = usize::try_from(id.index()).ok()?;
+        let verified_index = self.by_mir_index.get(index).copied().flatten()?;
+        self.functions
+            .get(verified_index)
+            .filter(|function| function.mir_id == id)
+    }
+}
+
+pub(crate) fn verify_program(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<VerifiedProgram, CodegenError> {
+    jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+
+    let reachable = reachable_function_ids(program)?;
+    let mut functions = Vec::with_capacity(reachable.len());
+    let mut by_mir_index = vec![None; program.functions.len()];
+    let mut unique_symbols = HashSet::with_capacity(reachable.len());
+    for function_id in reachable {
+        let (function_index, function) = function_by_id(program, function_id)?;
+        let symbol = symbol_name(&function.identity, types)?;
+        if !unique_symbols.insert(symbol.clone()) {
+            return Err(CodegenError::DuplicateSymbol(symbol));
+        }
+        let verified_index = functions.len();
+        by_mir_index[function_index] = Some(verified_index);
+        functions.push(VerifiedFunction {
+            mir_id: function_id,
+            symbol,
+        });
+    }
+
+    let verified = VerifiedProgram {
+        functions,
+        by_mir_index,
+    };
+
+    let verifier = Verifier {
+        program,
+        types,
+        verified: &verified,
+    };
+    for verified_function in verified.functions() {
+        let (_, function) = function_by_id(program, verified_function.mir_id)?;
+        verifier.function(function)?;
+    }
+    Ok(verified)
+}
+
+fn function_by_id(program: &Program, id: FunctionId) -> Result<(usize, &Function), CodegenError> {
+    let index = usize::try_from(id.index()).map_err(|_| {
+        CodegenError::Backend("reached MIR function index does not fit this host".to_string())
+    })?;
+    let function = program
+        .functions
+        .get(index)
+        .filter(|function| function.id == id)
+        .ok_or_else(|| {
+            CodegenError::Backend(
+                "verified reachable function is absent from the original MIR table".to_string(),
+            )
+        })?;
+    Ok((index, function))
+}
+
+pub(crate) fn scalar_kind(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: impl Into<String>,
+) -> Result<ScalarKind, CodegenError> {
+    let context = context.into();
+    let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
+    if ty.index() >= type_count {
+        return Err(CodegenError::UnsupportedType {
+            type_name: format!("<invalid type {}>", ty.index()),
+            context,
+        });
+    }
+    let kind = match types.resolve(ty) {
+        Type::Int8 => ScalarKind::SignedInteger(8),
+        Type::Int16 => ScalarKind::SignedInteger(16),
+        Type::Int32 => ScalarKind::SignedInteger(32),
+        Type::Int64 => ScalarKind::SignedInteger(64),
+        Type::Uint8 => ScalarKind::UnsignedInteger(8),
+        Type::Uint16 => ScalarKind::UnsignedInteger(16),
+        Type::Uint32 => ScalarKind::UnsignedInteger(32),
+        Type::Uint64 => ScalarKind::UnsignedInteger(64),
+        Type::Float32 => ScalarKind::Float(32),
+        Type::Float64 => ScalarKind::Float(64),
+        Type::Bool => ScalarKind::Bool,
+        Type::Nothing => ScalarKind::Nothing,
+        unsupported => {
+            return Err(CodegenError::UnsupportedType {
+                type_name: types.type_name(ty),
+                context: format!("{context} ({unsupported:?})"),
+            });
+        }
+    };
+    Ok(kind)
+}
+
+struct Verifier<'a> {
+    program: &'a Program,
+    types: &'a TypeInterner,
+    verified: &'a VerifiedProgram,
+}
+
+impl Verifier<'_> {
+    fn function(&self, function: &Function) -> Result<(), CodegenError> {
+        self.reject_entry_predecessors(function)?;
+
+        let name = self.function_name(function);
+        for param in &function.params {
+            scalar_kind(
+                self.types,
+                param.ty,
+                format!("parameter `{}` of `{name}`", param.name),
+            )?;
+        }
+        scalar_kind(
+            self.types,
+            function.return_type,
+            format!("return type of `{name}`"),
+        )?;
+        for local in &function.locals {
+            scalar_kind(
+                self.types,
+                local.ty,
+                format!("local `{}` of `{name}`", local.name),
+            )?;
+        }
+        for block in &function.blocks {
+            for statement in &block.statements {
+                self.statement(function, statement)?;
+            }
+            self.terminator(function, &block.terminator)?;
+        }
+        Ok(())
+    }
+
+    fn reject_entry_predecessors(&self, function: &Function) -> Result<(), CodegenError> {
+        for block in &function.blocks {
+            let targets_entry = match &block.terminator.kind {
+                TerminatorKind::Goto(target) => *target == function.entry,
+                TerminatorKind::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => *then_block == function.entry || *else_block == function.entry,
+                TerminatorKind::Switch {
+                    variants,
+                    otherwise,
+                    ..
+                } => {
+                    variants
+                        .iter()
+                        .any(|(_, target, _)| *target == function.entry)
+                        || otherwise.is_some_and(|target| target == function.entry)
+                }
+                TerminatorKind::ForEach { body, exit, .. } => {
+                    *body == function.entry || *exit == function.entry
+                }
+                TerminatorKind::ReflectedTypeDispatch {
+                    arms, otherwise, ..
+                } => {
+                    arms.iter().any(|arm| arm.target == function.entry)
+                        || *otherwise == function.entry
+                }
+                TerminatorKind::Return(_)
+                | TerminatorKind::Respond(_)
+                | TerminatorKind::Unreachable => false,
+            };
+            if targets_entry {
+                return Err(self.contract_error(
+                    function,
+                    block.terminator.span,
+                    format!(
+                        "control-flow edge from block {} targets ABI entry block {}",
+                        block.id.index(),
+                        function.entry.index()
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn statement(&self, function: &Function, statement: &Statement) -> Result<(), CodegenError> {
+        match &statement.kind {
+            StatementKind::Let { local, value } => {
+                let local = function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "let target is absent from the local table",
+                    )
+                })?;
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    local.ty,
+                    value.ty,
+                    "let initializer type does not match its local",
+                )
+            }
+            StatementKind::Assign { target, value } => {
+                let ExpressionKind::Local(local_id) = target.kind else {
+                    return Err(self.unsupported(
+                        function,
+                        statement.span,
+                        "assignment target other than a local",
+                    ));
+                };
+                let local = function.local(local_id).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "assignment target is absent from the local table",
+                    )
+                })?;
+                if !local.mutable {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "assignment targets an immutable local",
+                    ));
+                }
+                self.expression(function, target)?;
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    local.ty,
+                    value.ty,
+                    "assigned value type does not match its local",
+                )
+            }
+            StatementKind::Evaluate(value) => self.expression(function, value),
+            StatementKind::HandleDefault(_) => {
+                Err(self.unsupported(function, statement.span, "handle default"))
+            }
+            StatementKind::Assert { .. } => {
+                Err(self.unsupported(function, statement.span, "assert"))
+            }
+            StatementKind::Trace(_) => Err(self.unsupported(function, statement.span, "trace")),
+            StatementKind::Breakpoint(_) => {
+                Err(self.unsupported(function, statement.span, "breakpoint"))
+            }
+        }
+    }
+
+    fn terminator(&self, function: &Function, terminator: &Terminator) -> Result<(), CodegenError> {
+        match &terminator.kind {
+            TerminatorKind::Return(value) => match value {
+                Some(value) => {
+                    self.expression(function, value)?;
+                    self.require_same_type(
+                        function,
+                        terminator.span,
+                        function.return_type,
+                        value.ty,
+                        "returned value does not match the function return type",
+                    )
+                }
+                None => {
+                    if scalar_kind(self.types, function.return_type, "return without a value")?
+                        == ScalarKind::Nothing
+                    {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "non-nothing function returns without a value",
+                        ))
+                    }
+                }
+            },
+            TerminatorKind::Goto(_) | TerminatorKind::Unreachable => Ok(()),
+            TerminatorKind::Branch { condition, .. } => {
+                self.expression(function, condition)?;
+                if scalar_kind(self.types, condition.ty, "branch condition")? == ScalarKind::Bool {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "branch condition is not bool",
+                    ))
+                }
+            }
+            TerminatorKind::Respond(_) => {
+                Err(self.unsupported(function, terminator.span, "actor response"))
+            }
+            TerminatorKind::Switch { .. } => {
+                Err(self.unsupported(function, terminator.span, "variant switch"))
+            }
+            TerminatorKind::ForEach { .. } => {
+                Err(self.unsupported(function, terminator.span, "for-each loop"))
+            }
+            TerminatorKind::ReflectedTypeDispatch { .. } => {
+                Err(self.unsupported(function, terminator.span, "reflected type dispatch"))
+            }
+        }
+    }
+
+    fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
+        let kind = scalar_kind(
+            self.types,
+            expression.ty,
+            format!("expression in `{}`", self.function_name(function)),
+        )?;
+        match &expression.kind {
+            ExpressionKind::Int(value) => self.integer_literal(function, expression, *value, kind),
+            ExpressionKind::Float(_) => {
+                if matches!(kind, ScalarKind::Float(_)) {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "float literal"))
+                }
+            }
+            ExpressionKind::Bool(_) => {
+                if kind == ScalarKind::Bool {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "bool literal"))
+                }
+            }
+            ExpressionKind::Nothing => {
+                if kind == ScalarKind::Nothing {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "nothing literal"))
+                }
+            }
+            ExpressionKind::Local(local) => {
+                let local = function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        expression.span,
+                        "expression local is absent from the local table",
+                    )
+                })?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    local.ty,
+                    expression.ty,
+                    "local expression type does not match local metadata",
+                )
+            }
+            ExpressionKind::FunctionRef(_) => {
+                Err(self.unsupported(function, expression.span, "function value"))
+            }
+            ExpressionKind::Unary { op, value } => {
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    expression.ty,
+                    value.ty,
+                    "unary operand and result types differ",
+                )?;
+                let supported = match op {
+                    UnaryOp::Not => kind == ScalarKind::Bool,
+                    UnaryOp::Negate => {
+                        matches!(kind, ScalarKind::SignedInteger(_) | ScalarKind::Float(_))
+                    }
+                };
+                if supported {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "unary operation"))
+                }
+            }
+            ExpressionKind::Binary { left, op, right } => {
+                self.binary(function, expression, left, *op, right)
+            }
+            ExpressionKind::Call {
+                function: callee,
+                args,
+                ..
+            } => {
+                let callee_index = usize::try_from(callee.index()).map_err(|_| {
+                    self.contract_error(
+                        function,
+                        expression.span,
+                        "direct call target index does not fit this host",
+                    )
+                })?;
+                let Some(callee) = self.program.functions.get(callee_index) else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "direct call target is absent from the function table",
+                    ));
+                };
+                if args.len() != callee.params.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "direct call argument count does not match its signature",
+                    ));
+                }
+                for (argument, parameter) in args.iter().zip(&callee.params) {
+                    self.expression(function, argument)?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        parameter.ty,
+                        argument.ty,
+                        "direct call argument type does not match its parameter",
+                    )?;
+                }
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    callee.return_type,
+                    expression.ty,
+                    "direct call result type does not match its signature",
+                )
+            }
+            ExpressionKind::Comptime(value)
+            | ExpressionKind::View(value)
+            | ExpressionKind::Clone(value) => {
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    value.ty,
+                    expression.ty,
+                    "scalar wrapper changes its value type",
+                )
+            }
+            ExpressionKind::String(_) => {
+                Err(self.unsupported(function, expression.span, "string literal"))
+            }
+            ExpressionKind::Intrinsic { .. } => {
+                Err(self.unsupported(function, expression.span, "runtime intrinsic"))
+            }
+            ExpressionKind::IndirectCall { .. } => {
+                Err(self.unsupported(function, expression.span, "indirect call"))
+            }
+            ExpressionKind::StructConstruct { .. } => {
+                Err(self.unsupported(function, expression.span, "struct construction"))
+            }
+            ExpressionKind::BitfieldConstruct { .. } => {
+                Err(self.unsupported(function, expression.span, "bitfield construction"))
+            }
+            ExpressionKind::MachineConstruct { .. } => {
+                Err(self.unsupported(function, expression.span, "machine construction"))
+            }
+            ExpressionKind::MachineTransition { .. } => {
+                Err(self.unsupported(function, expression.span, "machine transition"))
+            }
+            ExpressionKind::ListConstruct { .. } => {
+                Err(self.unsupported(function, expression.span, "list construction"))
+            }
+            ExpressionKind::MapConstruct { .. } => {
+                Err(self.unsupported(function, expression.span, "map construction"))
+            }
+            ExpressionKind::ResultOk(_) | ExpressionKind::ResultFail(_) => {
+                Err(self.unsupported(function, expression.span, "result construction"))
+            }
+            ExpressionKind::OptionalSome(_) | ExpressionKind::OptionalNone => {
+                Err(self.unsupported(function, expression.span, "optional construction"))
+            }
+            ExpressionKind::Handle { .. } => {
+                Err(self.unsupported(function, expression.span, "failure handler"))
+            }
+            ExpressionKind::EnumConstruct { .. } => {
+                Err(self.unsupported(function, expression.span, "enum construction"))
+            }
+            ExpressionKind::StringInterpolation(_) => {
+                Err(self.unsupported(function, expression.span, "string interpolation"))
+            }
+            ExpressionKind::Declassify(_) | ExpressionKind::Coarsen(_) => {
+                Err(self.unsupported(function, expression.span, "secret operation"))
+            }
+            ExpressionKind::StateIs { .. } => {
+                Err(self.unsupported(function, expression.span, "machine state test"))
+            }
+            ExpressionKind::Run(_) | ExpressionKind::Join(_) | ExpressionKind::Cancel(_) => {
+                Err(self.unsupported(function, expression.span, "task operation"))
+            }
+            ExpressionKind::InlineFunction { .. } => {
+                Err(self.unsupported(function, expression.span, "inline function"))
+            }
+            ExpressionKind::ActorSpawn { .. } | ExpressionKind::ActorMessage { .. } => {
+                Err(self.unsupported(function, expression.span, "actor operation"))
+            }
+            ExpressionKind::Field { .. } => {
+                Err(self.unsupported(function, expression.span, "field access"))
+            }
+        }
+    }
+
+    fn integer_literal(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        value: i128,
+        kind: ScalarKind,
+    ) -> Result<(), CodegenError> {
+        let in_range = match kind {
+            ScalarKind::SignedInteger(bits) => {
+                let magnitude = 1_i128 << (bits - 1);
+                (-magnitude..magnitude).contains(&value)
+            }
+            ScalarKind::UnsignedInteger(bits) => {
+                let limit = 1_i128 << bits;
+                (0..limit).contains(&value)
+            }
+            _ => false,
+        };
+        if in_range {
+            Ok(())
+        } else {
+            Err(self.expression_kind_error(function, expression, "integer literal"))
+        }
+    }
+
+    fn binary(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        left: &Expression,
+        op: BinaryOp,
+        right: &Expression,
+    ) -> Result<(), CodegenError> {
+        self.expression(function, left)?;
+        self.expression(function, right)?;
+        self.require_same_type(
+            function,
+            expression.span,
+            left.ty,
+            right.ty,
+            "binary operand types differ",
+        )?;
+        let operand = scalar_kind(self.types, left.ty, "binary operand")?;
+        let result = scalar_kind(self.types, expression.ty, "binary result")?;
+        if matches!(op, BinaryOp::Divide | BinaryOp::Modulo)
+            && operand.is_integer()
+            && integer_expression_is_statically_zero(right)
+        {
+            return Err(self.contract_error(
+                function,
+                right.span,
+                "integer division or modulo has a statically zero divisor",
+            ));
+        }
+        let supported = match op {
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
+                operand.is_numeric() && result == operand
+            }
+            BinaryOp::Modulo => operand.is_integer() && result == operand,
+            BinaryOp::Equal | BinaryOp::NotEqual => {
+                operand != ScalarKind::Nothing && result == ScalarKind::Bool
+            }
+            BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {
+                operand.is_numeric() && result == ScalarKind::Bool
+            }
+            BinaryOp::And | BinaryOp::Or => {
+                operand == ScalarKind::Bool && result == ScalarKind::Bool
+            }
+        };
+        if supported {
+            Ok(())
+        } else {
+            Err(self.expression_kind_error(function, expression, "binary operation"))
+        }
+    }
+
+    fn require_same_type(
+        &self,
+        function: &Function,
+        span: Span,
+        expected: TypeId,
+        actual: TypeId,
+        message: &str,
+    ) -> Result<(), CodegenError> {
+        if expected == actual {
+            Ok(())
+        } else {
+            Err(self.contract_error(function, span, message))
+        }
+    }
+
+    fn expression_kind_error(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        construct: &str,
+    ) -> CodegenError {
+        self.contract_error(
+            function,
+            expression.span,
+            format!(
+                "{construct} is inconsistent with checked type `{}`",
+                self.types.type_name(expression.ty)
+            ),
+        )
+    }
+
+    fn function_name(&self, function: &Function) -> &str {
+        self.verified
+            .get(function.id)
+            .map(|function| function.symbol.as_str())
+            .unwrap_or("<invalid-function>")
+    }
+
+    fn contract_error(
+        &self,
+        function: &Function,
+        span: Span,
+        message: impl Into<String>,
+    ) -> CodegenError {
+        CodegenError::InvalidMirContract {
+            function: self.function_name(function).to_string(),
+            span,
+            message: message.into(),
+        }
+    }
+
+    fn unsupported(
+        &self,
+        function: &Function,
+        span: Span,
+        construct: impl Into<String>,
+    ) -> CodegenError {
+        CodegenError::UnsupportedMir {
+            function: self.function_name(function).to_string(),
+            span,
+            construct: construct.into(),
+        }
+    }
+}
+
+fn integer_expression_is_statically_zero(expression: &Expression) -> bool {
+    match &expression.kind {
+        ExpressionKind::Int(0) => true,
+        ExpressionKind::Unary {
+            op: UnaryOp::Negate,
+            value,
+        }
+        | ExpressionKind::Comptime(value)
+        | ExpressionKind::View(value)
+        | ExpressionKind::Clone(value) => integer_expression_is_statically_zero(value),
+        _ => false,
+    }
+}
