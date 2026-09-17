@@ -70,6 +70,10 @@ pub struct BuildResult {
 pub struct BackendLoweringResult {
     pub hir: jett_hir::Program,
     pub mir: jett_mir::Program,
+    /// Exact checked HIR/MIR identity of the primary source file's `main`
+    /// function. Backend consumers must use this identity rather than
+    /// rediscovering an entry point from source or symbol names.
+    pub program_entry: Option<jett_hir::FunctionId>,
     pub interner: jett_types::TypeInterner,
     pub source_origins: HashMap<FileId, SourceOrigin>,
     pub reflection_metadata: Arc<ReflectionMetadata>,
@@ -2637,6 +2641,7 @@ pub fn lower_file_for_backend_with_options(
     // compilations.
     let entry_file = FileId::new(0);
     let mut parse_result = parse_source_with_query(&source, &file_path);
+    let source_program_entry = find_main_function(&parse_result.module).map(|(_, main)| main.span);
     let mut diagnostics = parse_result.errors.clone();
     if has_error_diagnostics(&diagnostics) {
         return Err(build_failure(diagnostics, None, None, None));
@@ -2701,12 +2706,14 @@ pub fn lower_file_for_backend_with_options(
         &source_origins,
     )
     .map_err(BackendLoweringError::Hir)?;
+    let program_entry = lowered_program_entry(&hir, source_program_entry)?;
     let mir = jett_mir::lower(&hir).map_err(BackendLoweringError::Mir)?;
     jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;
 
     Ok(BackendLoweringResult {
         hir,
         mir,
+        program_entry,
         interner: check_result.interner,
         source_origins,
         reflection_metadata,
@@ -3015,6 +3022,34 @@ fn find_main_function(module: &Module) -> Option<(Option<String>, &FunctionDef)>
     }
 
     None
+}
+
+fn lowered_program_entry(
+    hir: &jett_hir::Program,
+    source_entry: Option<Span>,
+) -> Result<Option<jett_hir::FunctionId>, BackendLoweringError> {
+    let Some(source_entry) = source_entry else {
+        return Ok(None);
+    };
+    let mut matches = hir
+        .functions
+        .iter()
+        .filter(|function| function.span == source_entry);
+    let Some(entry) = matches.next() else {
+        return Err(BackendLoweringError::Hir(vec![jett_hir::LowerError {
+            span: source_entry,
+            message: "primary source program entry has no checked HIR function identity"
+                .to_string(),
+        }]));
+    };
+    if matches.next().is_some() {
+        return Err(BackendLoweringError::Hir(vec![jett_hir::LowerError {
+            span: source_entry,
+            message: "primary source program entry has multiple checked HIR function identities"
+                .to_string(),
+        }]));
+    }
+    Ok(Some(entry.id))
 }
 
 fn prepend_support_modules(module: &mut Module, support_modules: Vec<Module>) {

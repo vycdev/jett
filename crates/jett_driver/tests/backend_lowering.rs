@@ -47,6 +47,37 @@ fn backend_lowering_retains_explicit_project_and_stdlib_origins() {
     );
     assert!(!lowered.hir.functions.is_empty());
     assert_eq!(lowered.hir.functions.len(), lowered.mir.functions.len());
+    assert_eq!(
+        lowered.program_entry, None,
+        "a verification-only source must not invent a native program entry"
+    );
+}
+
+#[test]
+fn backend_lowering_publishes_the_exact_primary_program_entry() {
+    let fixture = fixture_dir().join("breakpoint_basic.jett");
+    let lowered = lower_file_for_backend(&fixture).expect("main fixture should lower");
+    let entry = lowered
+        .program_entry
+        .expect("the primary source main must have a checked function identity");
+
+    let hir_entry = lowered
+        .hir
+        .functions
+        .iter()
+        .find(|function| function.id == entry)
+        .expect("program entry must name one HIR function");
+    let mir_entry = lowered
+        .mir
+        .functions
+        .iter()
+        .find(|function| function.id == entry)
+        .expect("program entry must name the corresponding MIR function");
+
+    assert_eq!(hir_entry.identity.declaration.name, "main");
+    assert_eq!(hir_entry.identity.declaration.origin, SourceOrigin::Project);
+    assert_eq!(hir_entry.identity, mir_entry.identity);
+    assert_eq!(hir_entry.span, mir_entry.span);
 }
 
 #[test]

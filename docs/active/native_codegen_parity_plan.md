@@ -191,6 +191,11 @@ checked program -> validated HIR -> validated MIR -> host object
                 -> host linker + versioned runtime -> executable
 ```
 
+The driver carries the primary source file's checked `main` as an exact
+`FunctionId` in its backend-lowering result. Object emission and native test
+harnesses consume that identity directly; they never rediscover the entry by
+scanning source names or native symbols.
+
 The implementation must provide all of the following before the pipeline is a
 supported `jett build` result:
 
