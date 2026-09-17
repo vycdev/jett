@@ -31,6 +31,7 @@ struct DiscoveredModules {
     diagnostics: Vec<Diagnostic>,
     files: HashMap<FileId, PathBuf>,
     sources: HashMap<FileId, String>,
+    origins: HashMap<FileId, SourceOrigin>,
 }
 
 impl DiscoveredModules {
@@ -39,6 +40,7 @@ impl DiscoveredModules {
         self.diagnostics.extend(other.diagnostics);
         self.files.extend(other.files);
         self.sources.extend(other.sources);
+        self.origins.extend(other.origins);
     }
 }
 
@@ -57,6 +59,78 @@ pub struct BuildResult {
     /// Values baked by explicit `comptime` expressions.
     pub explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
 }
+
+/// Backend-neutral programs and checked data produced for a valid source file.
+///
+/// This staging result owns the type interner whose session-local IDs appear in
+/// HIR and MIR. Source origins are supplied explicitly during lowering and are
+/// retained so later backend stages never need to infer authority from numeric
+/// file IDs.
+#[derive(Debug)]
+pub struct BackendLoweringResult {
+    pub hir: jett_hir::Program,
+    pub mir: jett_mir::Program,
+    pub interner: jett_types::TypeInterner,
+    pub source_origins: HashMap<FileId, SourceOrigin>,
+    pub reflection_metadata: Arc<ReflectionMetadata>,
+    pub checked_expression_types: Arc<HashMap<Span, String>>,
+    pub explicit_comptime_values: Arc<HashMap<Span, Value>>,
+}
+
+/// Failure while validating or lowering a file for a backend.
+pub enum BackendLoweringError {
+    /// The frontend or compile-time validation pipeline rejected the source.
+    Build(BuildResult),
+    /// Typed AST to HIR lowering failed.
+    Hir(Vec<jett_hir::LowerError>),
+    /// HIR to MIR lowering failed.
+    Mir(Vec<jett_mir::LowerError>),
+    /// MIR structural validation failed.
+    MirValidation(Vec<jett_mir::ValidationError>),
+}
+
+impl std::fmt::Display for BackendLoweringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Build(result) => {
+                f.write_str("build failed before backend lowering")?;
+                for message in error_messages_from_diagnostics(&result.diagnostics) {
+                    write!(f, "\n{message}")?;
+                }
+                Ok(())
+            }
+            Self::Hir(errors) => {
+                f.write_str("HIR lowering failed")?;
+                for error in errors {
+                    write!(f, "\n{:?}: {}", error.span, error.message)?;
+                }
+                Ok(())
+            }
+            Self::Mir(errors) => {
+                f.write_str("MIR lowering failed")?;
+                for error in errors {
+                    write!(f, "\n{:?}: {}", error.span, error.message)?;
+                }
+                Ok(())
+            }
+            Self::MirValidation(errors) => {
+                f.write_str("MIR validation failed")?;
+                for error in errors {
+                    write!(f, "\n{:?}: {}", error.span, error.message)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for BackendLoweringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::error::Error for BackendLoweringError {}
 
 /// Mode-specific options for a build.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2511,6 +2585,136 @@ pub fn build_file_with_options(path: &Path, options: BuildOptions) -> BuildResul
     build_file_inner(path, true, options)
 }
 
+/// Validate a file through the existing build pipeline, then lower its checked
+/// program into backend-neutral HIR and MIR.
+///
+/// This is a read-only staging entry point. It does not emit an artifact or
+/// alter the interpreter-backed build and run paths.
+pub fn lower_file_for_backend(path: &Path) -> Result<BackendLoweringResult, BackendLoweringError> {
+    lower_file_for_backend_with_options(path, BuildOptions::default())
+}
+
+/// Lower a valid file with mode-specific build policy.
+pub fn lower_file_for_backend_with_options(
+    path: &Path,
+    options: BuildOptions,
+) -> Result<BackendLoweringResult, BackendLoweringError> {
+    let file_path = path.display().to_string();
+    let source = fs::read_to_string(path).map_err(|error| {
+        BackendLoweringError::Build(BuildResult {
+            diagnostics: vec![Diagnostic::error(
+                0,
+                format!("failed to read {}: {error}", path.display()),
+                Span::new(FileId::new(0), 0, 0),
+            )],
+            has_errors: true,
+            source: String::new(),
+            file_path: file_path.clone(),
+            reflection_metadata: None,
+            checked_expression_types: None,
+            explicit_comptime_values: None,
+        })
+    })?;
+    let build_failure =
+        |diagnostics: Vec<Diagnostic>,
+         reflection_metadata: Option<Arc<ReflectionMetadata>>,
+         checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+         explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>| {
+            BackendLoweringError::Build(BuildResult {
+                diagnostics,
+                has_errors: true,
+                source: source.clone(),
+                file_path: file_path.clone(),
+                reflection_metadata,
+                checked_expression_types,
+                explicit_comptime_values,
+            })
+        };
+
+    // Keep one coherent compiler session for all backend facts. Re-running a
+    // successful user-facing build would allocate new DefId and TypeId values
+    // and would make cross-phase identity depend on two coincidentally equal
+    // compilations.
+    let entry_file = FileId::new(0);
+    let mut parse_result = parse_source_with_query(&source, &file_path);
+    let mut diagnostics = parse_result.errors.clone();
+    if has_error_diagnostics(&diagnostics) {
+        return Err(build_failure(diagnostics, None, None, None));
+    }
+
+    let mut support_modules = discover_stdlib_modules_with_diagnostics();
+    support_modules.extend(discover_project_modules_with_diagnostics(path));
+    diagnostics.extend(support_modules.diagnostics);
+    if has_error_diagnostics(&diagnostics) {
+        return Err(build_failure(diagnostics, None, None, None));
+    }
+
+    let mut source_origins = HashMap::from([(entry_file, SourceOrigin::Project)]);
+    source_origins.extend(support_modules.origins);
+    prepend_support_modules(&mut parse_result.module, support_modules.modules);
+
+    let resolve_result = resolve(&parse_result.module);
+    diagnostics.extend(resolve_result.diagnostics.clone());
+    if has_error_diagnostics(&diagnostics) {
+        return Err(build_failure(diagnostics, None, None, None));
+    }
+
+    let check_result = check_with_options(
+        &parse_result.module,
+        &resolve_result,
+        CheckOptions {
+            release: options.release,
+        },
+    );
+    diagnostics.extend(check_result.diagnostics.clone());
+    if has_error_diagnostics(&diagnostics) {
+        return Err(build_failure(diagnostics, None, None, None));
+    }
+
+    let reflection_metadata = check_result.reflection_metadata.clone();
+    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
+        &parse_result.module,
+        reflection_metadata.clone(),
+        checked_expression_types.clone(),
+    );
+    diagnostics.extend(comptime_diagnostics);
+    diagnostics.extend(run_verify_blocks_with_metadata_and_expression_types(
+        &parse_result.module,
+        reflection_metadata.clone(),
+        checked_expression_types.clone(),
+    ));
+    let explicit_comptime_values = Arc::new(explicit_comptime_values);
+    if has_error_diagnostics(&diagnostics) {
+        return Err(build_failure(
+            diagnostics,
+            Some(reflection_metadata),
+            Some(checked_expression_types),
+            Some(explicit_comptime_values),
+        ));
+    }
+
+    let hir = jett_hir::lower(
+        &parse_result.module,
+        &resolve_result,
+        &check_result,
+        &source_origins,
+    )
+    .map_err(BackendLoweringError::Hir)?;
+    let mir = jett_mir::lower(&hir).map_err(BackendLoweringError::Mir)?;
+    jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;
+
+    Ok(BackendLoweringResult {
+        hir,
+        mir,
+        interner: check_result.interner,
+        source_origins,
+        reflection_metadata,
+        checked_expression_types,
+        explicit_comptime_values,
+    })
+}
+
 fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -> BuildResult {
     let file_path_str = path.display().to_string();
 
@@ -2832,7 +3036,13 @@ fn discover_stdlib_modules() -> Vec<Module> {
 }
 
 fn discover_stdlib_modules_with_diagnostics() -> DiscoveredModules {
-    discover_modules_in_dir(&stdlib_root(), None, STDLIB_FILE_ID_START, "stdlib")
+    discover_modules_in_dir(
+        &stdlib_root(),
+        None,
+        STDLIB_FILE_ID_START,
+        "stdlib",
+        SourceOrigin::Stdlib,
+    )
 }
 
 fn stdlib_root() -> PathBuf {
@@ -2857,9 +3067,10 @@ fn discover_project_modules_with_diagnostics(entry_path: &Path) -> DiscoveredMod
             diagnostics: Vec::new(),
             files: HashMap::new(),
             sources: HashMap::new(),
+            origins: HashMap::new(),
         };
     };
-    discover_modules_in_dir(&root, canon.as_deref(), 1, "project")
+    discover_modules_in_dir(&root, canon.as_deref(), 1, "project", SourceOrigin::Project)
 }
 
 fn discover_query_project_modules_with_diagnostics(start_dir: &Path) -> DiscoveredModules {
@@ -2869,9 +3080,10 @@ fn discover_query_project_modules_with_diagnostics(start_dir: &Path) -> Discover
             diagnostics: Vec::new(),
             files: HashMap::new(),
             sources: HashMap::new(),
+            origins: HashMap::new(),
         };
     };
-    discover_modules_in_dir(&root, None, 1, "project")
+    discover_modules_in_dir(&root, None, 1, "project", SourceOrigin::Project)
 }
 
 fn discover_modules_in_dir(
@@ -2879,6 +3091,7 @@ fn discover_modules_in_dir(
     skip_canon: Option<&Path>,
     start_file_id: u32,
     module_kind: &str,
+    origin: SourceOrigin,
 ) -> DiscoveredModules {
     let mut files = Vec::new();
     if let Err(err) = collect_jett_files(root, &mut files) {
@@ -2894,6 +3107,7 @@ fn discover_modules_in_dir(
             )],
             files: HashMap::new(),
             sources: HashMap::new(),
+            origins: HashMap::new(),
         };
     }
     if module_kind == "stdlib" {
@@ -2916,6 +3130,7 @@ fn discover_modules_in_dir(
     let mut diagnostics = Vec::new();
     let mut module_files = HashMap::new();
     let mut module_sources = HashMap::new();
+    let mut module_origins = HashMap::new();
     for (idx, file_path) in files.iter().enumerate() {
         // Skip the entry file when parsing project siblings.
         let should_skip = skip_canon
@@ -2944,6 +3159,7 @@ fn discover_modules_in_dir(
             .unwrap_or_else(|_| file_path.clone());
         module_files.insert(file_id, display_path);
         module_sources.insert(file_id, source.clone());
+        module_origins.insert(file_id, origin.clone());
         let parsed = parse(&source, file_id);
         if has_error_diagnostics(&parsed.errors) {
             for mut diagnostic in parsed.errors {
@@ -2965,6 +3181,7 @@ fn discover_modules_in_dir(
         diagnostics,
         files: module_files,
         sources: module_sources,
+        origins: module_origins,
     }
 }
 
@@ -4244,7 +4461,13 @@ mod tests {
         fs::write(&broken, "namespace broken\nfunction nope(\n")
             .expect("broken support fixture should be written");
 
-        let discovered = discover_modules_in_dir(&root, None, STDLIB_FILE_ID_START, "stdlib");
+        let discovered = discover_modules_in_dir(
+            &root,
+            None,
+            STDLIB_FILE_ID_START,
+            "stdlib",
+            SourceOrigin::Stdlib,
+        );
         let errors = error_messages_from_diagnostics(&discovered.diagnostics);
 
         fs::remove_dir_all(&root).expect("temp support dir should be removed");

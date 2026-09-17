@@ -1,5 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
+assertion_line: 3199
 expression: program
 ---
 Program {
@@ -16,6 +17,13 @@ Program {
                     kind: Function,
                 },
                 type_arguments: [],
+                specialization: CheckedGenericSpecialization {
+                    type_argument_kinds: [],
+                    type_info_kinds: [],
+                    type_info_primitives: [],
+                    type_kind_values: [],
+                    type_primitive_values: [],
+                },
             },
             source_definition: Some(
                 DefId(
@@ -43,7 +51,7 @@ Program {
                 },
             ],
             return_type: TypeId(
-                36,
+                48,
             ),
             locals: [
                 Local {
@@ -74,7 +82,7 @@ Program {
                                         Expression {
                                             kind: EnumConstruct {
                                                 enum_type: TypeId(
-                                                    35,
+                                                    47,
                                                 ),
                                                 variant: VariantId(
                                                     0,
@@ -98,7 +106,7 @@ Program {
                                                 ],
                                             },
                                             ty: TypeId(
-                                                35,
+                                                47,
                                             ),
                                             span: Span {
                                                 file: FileId(
@@ -110,7 +118,7 @@ Program {
                                         },
                                     ),
                                     ty: TypeId(
-                                        36,
+                                        48,
                                     ),
                                     span: Span {
                                         file: FileId(
@@ -159,6 +167,13 @@ Program {
                     kind: Function,
                 },
                 type_arguments: [],
+                specialization: CheckedGenericSpecialization {
+                    type_argument_kinds: [],
+                    type_info_kinds: [],
+                    type_info_primitives: [],
+                    type_kind_values: [],
+                    type_primitive_values: [],
+                },
             },
             source_definition: Some(
                 DefId(
@@ -176,7 +191,7 @@ Program {
                     ),
                     name: "value",
                     ty: TypeId(
-                        35,
+                        47,
                     ),
                     mutable: false,
                     span: Span {
@@ -258,7 +273,7 @@ Program {
                                             ],
                                         },
                                         ty: TypeId(
-                                            36,
+                                            48,
                                         ),
                                         span: Span {
                                             file: FileId(
@@ -281,7 +296,7 @@ Program {
                                                     Expression {
                                                         kind: EnumConstruct {
                                                             enum_type: TypeId(
-                                                                35,
+                                                                47,
                                                             ),
                                                             variant: VariantId(
                                                                 1,
@@ -289,7 +304,7 @@ Program {
                                                             payloads: [],
                                                         },
                                                         ty: TypeId(
-                                                            35,
+                                                            47,
                                                         ),
                                                         span: Span {
                                                             file: FileId(
@@ -319,7 +334,7 @@ Program {
                                     },
                                 },
                                 ty: TypeId(
-                                    35,
+                                    47,
                                 ),
                                 span: Span {
                                     file: FileId(
@@ -347,7 +362,7 @@ Program {
                                     ),
                                 ),
                                 ty: TypeId(
-                                    35,
+                                    47,
                                 ),
                                 span: Span {
                                     file: FileId(

@@ -1,0 +1,288 @@
+# Native Code Generation Parity Plan
+
+Status: accepted implementation strategy; checked-program, HIR, and MIR
+prerequisite work is in progress.
+
+This plan defines when Jett may claim native-code parity with the current
+interpreter-backed language. It fixes the initial backend, the prerequisite IR
+contracts, and measurable acceptance gates. Native execution must implement
+accepted Jett semantics; it may not become a second source-language policy
+layer or silently delegate runtime behavior to the interpreter.
+
+## Scope and Baseline
+
+The current fixture inventory establishes three separate denominators:
+
+| Obligation | Denominator | Acceptance condition |
+| --- | ---: | --- |
+| Native lowering | 181 | Every `tests/run_pass/*.jett` fixture reaches validated HIR and MIR and is accepted by native object generation. |
+| `main` execution | 29 | Every run-pass fixture that declares `main` links and runs on the supported host with its interpreter-equivalent expected outcome and observable behavior. One scripted graphics fixture intentionally returns a runtime error. |
+| Runtime contracts | 25 | Every `tests/runtime_fail/*.jett` fixture links and matches its interpreter contract: 17 wrapping-success cases and 8 runtime-failure cases, including failure class, message contract, and cleanup behavior where applicable. |
+
+These numbers are denominators, not a sample or a percentage target. Fixtures
+added before parity is declared extend the applicable denominator. A fixture
+may leave it only when the corresponding language or runtime feature is
+explicitly marked unimplemented, with the reason recorded in the same change.
+
+Run-pass files without `main`, including verification and property fixtures,
+count toward the 181-fixture lowering obligation. The initial executable
+harness does not execute their `verify` blocks natively, so they do not count
+toward the 29-fixture execution obligation. Passing them through frontend
+verification is not evidence that their bodies executed as native code. A
+future native verification harness may add a separate execution denominator.
+
+Compile-fail fixtures remain frontend contracts. Native work must not change
+their diagnostics, but rejected programs do not enter a backend denominator.
+Required comptime evaluation remains a compile-time operation; a generated
+program may not fall back to the interpreter for runtime semantics.
+
+The only language or runtime feature exclusions are features that the current
+project records explicitly as unimplemented. Implemented portions of partial
+features remain in scope, even when finishing their native representation is
+difficult. Host-only output, optimization level, and debug-information quality
+are backend staging limits rather than semantic feature exclusions.
+
+## Backend Strategy
+
+The first production path is a host ahead-of-time object backend using
+Cranelift. The Cranelift crates are pinned exactly to `0.132.3`, whose Rust
+version requirement is compatible with the repository's current Rust
+`1.93.1` toolchain:
+
+```toml
+cranelift-codegen = { version = "=0.132.3", default-features = false, features = ["std", "unwind", "x86", "arm64"] }
+cranelift-frontend = { version = "=0.132.3", default-features = false, features = ["std"] }
+cranelift-module = { version = "=0.132.3", default-features = false, features = ["std"] }
+cranelift-object = { version = "=0.132.3", default-features = false }
+target-lexicon = "=0.13.3"
+```
+
+The selected feature set covers the first x86-64 host and the intended AArch64
+host follow-up without enabling unrelated ISA backends. The implementation
+change will record the same exact versions and features in `Cargo.toml`; this
+plan does not itself add dependencies.
+
+Cranelift produces a target object, not an in-memory-only JIT result. Jett then
+links that object with a target-matched Jett runtime and the host system
+libraries to produce the executable. This keeps ordinary builds independent of
+an installed LLVM development package and gives the first backend a bounded,
+portable Rust dependency surface.
+
+LLVM remains the later optimizing backend. It must consume the same validated
+MIR, layouts, intrinsic identities, runtime ABI, and conformance suite rather
+than reimplementing language decisions. LLVM is not on the critical path for
+the first full-parity claim. Adding it later must not weaken the Cranelift
+denominators or make backend selection observable in program semantics.
+
+A C transpiler may be useful as a diagnostic oracle, but it is not the accepted
+production path. Direct instruction and object emission is also out of scope;
+Jett will not independently implement instruction selection, register
+allocation, unwind metadata, and each platform ABI.
+
+## Host-Only First Slice
+
+The first slice supports only the compiler host target, initially
+`x86_64-pc-windows-msvc`. An omitted target selects that host. An explicit
+target is accepted only when it is exactly the supported host target.
+
+Any other target must produce an explicit unsupported-target diagnostic before
+object emission or linking. Jett must never ignore `--target`, substitute host
+layouts for a requested target, or emit an object that the selected linker
+cannot consume. Target validation covers the Cranelift ISA, pointer width,
+data layout, calling convention, object format, runtime library, linker, and
+host SDK. Cross-compilation is added only after all of those inputs are
+target-specific and tested.
+
+## Required Compiler Handoff
+
+Native code generation begins only after the checked-program, HIR, and MIR
+gates below pass. A backend adapter may reject a genuinely unsupported target;
+it may not recover missing semantic facts by inspecting source spellings or
+re-running frontend policy.
+
+### Checked-program gate
+
+The driver must publish one coherent checked-program artifact that keeps the
+facts needed by every downstream phase together. At minimum it carries:
+
+- explicit `SourceOrigin` and canonical declaration and function identities;
+- deterministic concrete generic and method call targets;
+- function parameters, locals, checked expression and definition types, and
+  the type interner or a closed canonical type table;
+- aggregate, enum, machine, bitfield, recursive-value, and resource layout
+  inputs;
+- trusted-stdlib and compiler-intrinsic identities as checked identities, not
+  source-name tests; and
+- reflection, capability, and required comptime results used by runtime
+  lowering.
+
+Session-local IDs may join facts inside one checked program. Persistent
+artifacts and symbols use canonical identities and structural types, never raw
+`FileId`, `DefId`, or `TypeId` indices. The gate fails on an unresolved call,
+missing type, missing origin, or ambiguous trusted operation.
+
+### HIR identity gate
+
+Validated HIR must represent every accepted runtime construct and preserve the
+checked identity of every direct call, method, intrinsic, resource operation,
+and trusted hook. It makes lexical evaluation order and concrete generic
+instantiation explicit. It does not retain an AST fallback that a backend must
+reinterpret.
+
+The 181-fixture lowering denominator first passes through this gate. Any
+unsupported-HIR error for one of those fixtures is a parity failure, not an
+allowed skip.
+
+### MIR control-flow and ownership gate
+
+Validated MIR is the sole semantic input to native code generation. Before it
+is backend-ready, it must make all branches, loops, handlers, failure paths,
+calls, and returns explicit basic-block control flow. Operands and locals have
+complete types and layouts, and each runtime operation has a typed intrinsic or
+function identity.
+
+Definitive ownership dataflow and drop elaboration also belong here. The MIR
+validator must prove moves, copies, and views follow the checked value category
+and that every owned value and resource is cleaned up exactly once on normal,
+early-return, handled-failure, and runtime-failure edges. Code generation is
+blocked when an ownership state, cleanup edge, or layout remains implicit.
+
+## Versioned Native Runtime ABI
+
+The native runtime is packaged behind a versioned C ABI. It is an internal
+compiler/runtime contract, but version mismatches must fail deterministically
+rather than rely on Rust layout or symbol compatibility.
+
+- Exported runtime symbols carry an ABI version namespace or are accompanied by
+  a required ABI-version symbol. Objects and runtime libraries record the same
+  version.
+- The boundary uses fixed-width integers, C-compatible records, pointers with
+  explicit lengths, opaque handles, status codes, and out parameters.
+- Rust `String`, `Vec`, `Result`, trait objects, closures, `Any`, enum layout,
+  and other Rust-ABI values never cross the boundary.
+- Ownership is explicit for every pointer and handle: borrowed inputs have a
+  bounded lifetime, transferred inputs identify the new owner, and created
+  values have one matching retain, release, or drop contract.
+- Runtime context is passed explicitly for capabilities, allocation, resource
+  registries, scheduling, diagnostics, and other per-program state. Native
+  code must not acquire undeclared ambient authority.
+- Panics and Rust unwinding may not cross the ABI. Runtime operations translate
+  failure to the stable status and error-value contract; native cleanup paths
+  remain responsible for owned Jett values.
+- Host layout tests pin every shared record's size, alignment, field offsets,
+  tag values, and calling convention. Backend and runtime use one canonical
+  definition of those layouts.
+
+The compiler maintains one typed intrinsic registry shared by the interpreter
+mapping, HIR/MIR lowering, and runtime ABI adapters. This prevents duplicated
+string dispatch and preserves trusted operation identity through codegen.
+
+## Artifacts, Linking, and Packaging
+
+The host AOT pipeline is:
+
+```text
+checked program -> validated HIR -> validated MIR -> host object
+                -> host linker + versioned runtime -> executable
+```
+
+The implementation must provide all of the following before the pipeline is a
+supported `jett build` result:
+
+- deterministic native symbol mangling from canonical function identities;
+- a host object with the correct target triple, object format, relocations,
+  unwind information, and profile settings;
+- a small entry shim that initializes runtime context, passes process inputs
+  through declared capabilities, invokes Jett `main`, renders failures, and
+  performs final cleanup;
+- a target- and profile-matched runtime static library, its ABI metadata, and
+  all required host system-library declarations;
+- explicit linker discovery or configuration, safe argument construction,
+  host SDK validation, and actionable diagnostics that identify a missing
+  linker, SDK, runtime archive, or system library;
+- an artifact layout that separates target and profile outputs, publishes only
+  successful final files, and removes incomplete temporary products; and
+- redistribution notices and runtime artifacts needed to run the executable on
+  a clean supported host without the compiler source tree.
+
+On the initial Windows host, the linker contract must be tested with the
+documented MSVC-compatible linker and Windows SDK/UCRT inputs. Finding Clang or
+LLVM utilities on one developer machine is not sufficient packaging. Clean-host
+CI must exercise compiler build, object emission, runtime archive selection,
+linking, and execution.
+
+## Staged Acceptance Gates
+
+Progress is monotonic: a later gate includes all preceding checks, and a
+backend feature is not complete while its fixture is skipped or delegated to
+the runtime interpreter.
+
+1. **Baseline and harness:** freeze the three denominators, classify every
+   fixture by required constructs and runtime hooks, and add differential
+   harness support without changing current interpreter expectations.
+2. **Checked-program handoff:** publish and validate the closed semantic
+   artifact, canonical identities, concrete calls, layouts, and trusted
+   intrinsic identities required downstream.
+3. **Complete HIR lowering:** all 181 run-pass fixtures lower to validated HIR
+   with no source-form or name-based backend fallback.
+4. **Backend-ready MIR:** those same 181 fixtures lower to validated CFGs with
+   explicit evaluation, failure, ownership, and cleanup behavior.
+5. **Object and link slice:** Cranelift emits deterministic host objects for a
+   scalar/control-flow seed, links them with the versioned runtime, and rejects
+   unsupported targets and missing toolchain inputs explicitly.
+6. **Runtime surface expansion:** add typed ABI operations and layouts by
+   feature family while continuously re-running every already-supported
+   fixture. Strings, aggregates, collections, generics, results and optionals,
+   reflection and JSON, capabilities and resources, and concurrency/runtime
+   services remain on the matrix until their current behavior is covered.
+7. **Successful execution parity:** all 29 `main` fixtures compile, link, and
+   execute natively with interpreter-equivalent stdout, stderr, result, visible
+   capability effects, and cleanup behavior.
+8. **Runtime-contract parity:** all 25 runtime-contract fixtures compile and
+   link. The 17 wrapping-success cases return their accepted values; the 8
+   failure cases fail through the native runtime with the accepted message
+   contract and release every live owned value and resource exactly once.
+9. **Full parity release gate:** all three denominators are complete with no
+   skips other than explicitly unimplemented features; the full Cargo suite and
+   clean-host native suite pass; artifacts run without the source tree; and the
+   stable design, architecture, and progress documents are updated to describe
+   the proven implementation.
+
+The parity report must publish counts as `passed / denominator` for each of the
+three obligations. A single percentage would hide the difference between code
+that merely lowers, code that executes successfully, and code that preserves
+failure semantics.
+
+## Current Coverage Matrix
+
+`tests/native_parity.json` is the machine-checked fixture inventory. The table
+below records implementation coverage; a row is complete only when its native
+object, linked execution, and differential behavior gates all pass. Typed
+lowering alone never changes an execution row to complete.
+
+| Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
+| --- | --- | --- | --- |
+| Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
+| Strings and bytes | covered | pending | pending |
+| Structs, enums, bitfields, machines, and refinements | covered | pending | pending |
+| Lists, maps, and sets | covered | pending | pending |
+| Results, optionals, and `handle` control flow | covered, but handler bodies still require explicit MIR CFG extraction | pending | pending |
+| Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
+| Compiler intrinsics and reflection | covered with checked operands; closed intrinsic IDs pending | pending | pending |
+| Capabilities and runtime resources | nominal checked types covered | pending | pending |
+| Actors and structured concurrency | covered | pending | pending |
+| JSON and trusted stdlib hooks | covered | pending | pending |
+| Trace, breakpoint, assert, and failure reporting | covered | pending | pending |
+
+The current fixture gates are therefore:
+
+| Obligation | Passing | Denominator | Evidence |
+| --- | ---: | ---: | --- |
+| Typed backend lowering | 181 | 181 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
+| Native object generation | 0 | 181 | full-fixture object gate not yet enabled |
+| Successful/expected `main` execution | 0 | 29 | native link-and-run differential gate pending |
+| Runtime contracts | 0 | 25 | native runtime-contract differential gate pending |
+
+These are intentionally conservative counts. Seed scalar object tests exercise
+the backend implementation but do not count as a fixture obligation until the
+corresponding manifest fixture passes through the same production pipeline.

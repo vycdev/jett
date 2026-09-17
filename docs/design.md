@@ -59,7 +59,10 @@ semantic AST, resolver facts, and typechecker facts. HIR does not reinterpret
 source spellings: it carries resolved declaration targets, checked types,
 explicit ownership operations, capabilities, trusted source origin, and source
 provenance. Generic function identity is the canonical declaration plus its
-concrete type arguments.
+concrete type arguments and the checker-owned reflection-visible
+specialization facts. The latter keep source aliases and passed reflection
+facts distinct when canonical type interning intentionally gives them the same
+`TypeId`.
 
 Named call arguments reach HIR only as a checked permutation into canonical
 parameter order. Struct construction likewise carries canonical field order

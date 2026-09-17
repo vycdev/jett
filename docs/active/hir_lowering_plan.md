@@ -18,13 +18,17 @@ stored in an in-memory HIR program, but canonical declaration identity is:
 
 ```text
 DeclarationId = SourceOrigin + CanonicalNamespace + CanonicalName + DeclarationKind
-FunctionIdentity = DeclarationId + ConcreteTypeArguments
+FunctionIdentity = DeclarationId + ConcreteTypeArguments + CheckedSpecializationFacts
 ```
 
 The current in-memory `FunctionIdentity` uses concrete `TypeId` arguments and
-is stable only inside one checked program. Persistent caches, linkage names,
-and serialized HIR must replace raw `TypeId` values with canonical structural
-type identities; they may not persist interner indices.
+checker-owned reflection-visible specialization facts; it is stable only
+inside one checked program. The specialization facts distinguish bodies such
+as an alias and its underlying type even when their concrete `TypeId`
+arguments are equal. Persistent caches, linkage names, and serialized HIR must
+replace raw `TypeId` values with canonical structural type identities and
+encode the specialization discriminator deterministically; they may not
+persist interner indices.
 
 `SourceOrigin` is supplied explicitly for every source file. HIR never infers
 authority from `FileId`, path spelling, namespace spelling, or a reserved
@@ -58,13 +62,17 @@ redefine HIR language policy.
 
 The next typechecker handoff is an ordered checked-instantiation manifest. Each
 entry identifies the generic declaration by session-local `DefId`, lists
-canonical concrete `TypeId` arguments, resolved parameter and return types,
-and preserves per-instantiation expression-type facts for body lowering.
+canonical concrete `TypeId` arguments, checker-owned reflection-visible
+specialization facts, and resolved parameter and return types. It also
+preserves per-instantiation expression types and compile-time control-flow
+selections for body lowering.
 
-The canonical HIR identity is declaration plus concrete type arguments only.
-Call-site reflection facts can authorize conservative checking but do not
-create alternate function identities. Facts derived directly from a concrete
-type may specialize HIR; arbitrary caller values remain runtime values.
+Canonical HIR identity includes the declaration, concrete type arguments, and
+the checked specialization facts whenever source-visible kind or propagated
+reflection facts select a different concrete body. This prevents an alias and
+its underlying type, or two calls with different checked reflection facts,
+from merging after type interning. Arbitrary unknown or runtime values remain
+runtime values and never enter function identity.
 
 Discovery begins at non-generic roots and accepted explicit or inferred
 generic calls. It is deterministic, deduplicates repeated instantiations, and

@@ -8,25 +8,11 @@
 //!   Stdout, Stderr, Stdin, Filesystem, Network, Clock, Random, Process, Environment, Log, Graphics
 
 use jett_parser::ast::TypeExpr;
-
-/// The set of built-in capability type names.
-const CAPABILITY_TYPES: &[&str] = &[
-    "Stdout",
-    "Stderr",
-    "Stdin",
-    "Filesystem",
-    "Network",
-    "Clock",
-    "Random",
-    "Process",
-    "Environment",
-    "Log",
-    "Graphics",
-];
+use jett_types::CapabilityKind;
 
 /// Returns `true` if `name` is one of the built-in capability types.
 pub fn is_capability_type(name: &str) -> bool {
-    CAPABILITY_TYPES.contains(&name)
+    CapabilityKind::from_name(name).is_some()
 }
 
 /// Returns `true` if the given [`TypeExpr`] refers to a capability type.

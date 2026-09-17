@@ -16,6 +16,13 @@ Program {
                     kind: Function,
                 },
                 type_arguments: [],
+                specialization: CheckedGenericSpecialization {
+                    type_argument_kinds: [],
+                    type_info_kinds: [],
+                    type_info_primitives: [],
+                    type_kind_values: [],
+                    type_primitive_values: [],
+                },
             },
             source_definition: Some(
                 DefId(
@@ -192,6 +199,13 @@ Program {
                     kind: Function,
                 },
                 type_arguments: [],
+                specialization: CheckedGenericSpecialization {
+                    type_argument_kinds: [],
+                    type_info_kinds: [],
+                    type_info_primitives: [],
+                    type_kind_values: [],
+                    type_primitive_values: [],
+                },
             },
             source_definition: Some(
                 DefId(

@@ -4,7 +4,7 @@ use crate::defs::{
     ActorDef, ActorId, BitfieldDef, BitfieldId, EnumDef, EnumId, InterfaceDef, InterfaceId,
     MachineDef, MachineId, StructDef, StructId,
 };
-use crate::types::{Type, TypeId};
+use crate::types::{CapabilityKind, Type, TypeId};
 
 /// Type interner that deduplicates types and provides stable [`TypeId`] handles.
 ///
@@ -49,37 +49,77 @@ impl TypeInterner {
     pub const NOTHING: TypeId = TypeId(13);
     pub const ERROR: TypeId = TypeId(14);
     pub const TYPE_CONSTRUCTION: TypeId = TypeId(15);
+    pub const NEVER: TypeId = TypeId(16);
+    pub const STDOUT: TypeId = TypeId(17);
+    pub const STDERR: TypeId = TypeId(18);
+    pub const STDIN: TypeId = TypeId(19);
+    pub const FILESYSTEM: TypeId = TypeId(20);
+    pub const NETWORK: TypeId = TypeId(21);
+    pub const CLOCK: TypeId = TypeId(22);
+    pub const RANDOM: TypeId = TypeId(23);
+    pub const PROCESS: TypeId = TypeId(24);
+    pub const ENVIRONMENT: TypeId = TypeId(25);
+    pub const LOG: TypeId = TypeId(26);
+    pub const GRAPHICS: TypeId = TypeId(27);
+
+    pub const fn capability(kind: CapabilityKind) -> TypeId {
+        match kind {
+            CapabilityKind::Stdout => Self::STDOUT,
+            CapabilityKind::Stderr => Self::STDERR,
+            CapabilityKind::Stdin => Self::STDIN,
+            CapabilityKind::Filesystem => Self::FILESYSTEM,
+            CapabilityKind::Network => Self::NETWORK,
+            CapabilityKind::Clock => Self::CLOCK,
+            CapabilityKind::Random => Self::RANDOM,
+            CapabilityKind::Process => Self::PROCESS,
+            CapabilityKind::Environment => Self::ENVIRONMENT,
+            CapabilityKind::Log => Self::LOG,
+            CapabilityKind::Graphics => Self::GRAPHICS,
+        }
+    }
 }
 
 impl TypeInterner {
-    /// Creates a new interner with all primitive types pre-registered.
+    /// Creates a new interner with all compiler-known leaf types pre-registered.
     pub fn new() -> Self {
-        let primitives = vec![
-            Type::Int8,             // 0
-            Type::Int16,            // 1
-            Type::Int32,            // 2
-            Type::Int64,            // 3
-            Type::Uint8,            // 4
-            Type::Uint16,           // 5
-            Type::Uint32,           // 6
-            Type::Uint64,           // 7
-            Type::Float32,          // 8
-            Type::Float64,          // 9
-            Type::String,           // 10
-            Type::Bool,             // 11
-            Type::Bytes,            // 12
-            Type::Nothing,          // 13
-            Type::Error,            // 14
-            Type::TypeConstruction, // 15
+        let builtins = vec![
+            Type::Int8,                                    // 0
+            Type::Int16,                                   // 1
+            Type::Int32,                                   // 2
+            Type::Int64,                                   // 3
+            Type::Uint8,                                   // 4
+            Type::Uint16,                                  // 5
+            Type::Uint32,                                  // 6
+            Type::Uint64,                                  // 7
+            Type::Float32,                                 // 8
+            Type::Float64,                                 // 9
+            Type::String,                                  // 10
+            Type::Bool,                                    // 11
+            Type::Bytes,                                   // 12
+            Type::Nothing,                                 // 13
+            Type::Error,                                   // 14
+            Type::TypeConstruction,                        // 15
+            Type::Never,                                   // 16
+            Type::Capability(CapabilityKind::Stdout),      // 17
+            Type::Capability(CapabilityKind::Stderr),      // 18
+            Type::Capability(CapabilityKind::Stdin),       // 19
+            Type::Capability(CapabilityKind::Filesystem),  // 20
+            Type::Capability(CapabilityKind::Network),     // 21
+            Type::Capability(CapabilityKind::Clock),       // 22
+            Type::Capability(CapabilityKind::Random),      // 23
+            Type::Capability(CapabilityKind::Process),     // 24
+            Type::Capability(CapabilityKind::Environment), // 25
+            Type::Capability(CapabilityKind::Log),         // 26
+            Type::Capability(CapabilityKind::Graphics),    // 27
         ];
 
-        let mut map = HashMap::with_capacity(primitives.len());
-        for (i, ty) in primitives.iter().enumerate() {
+        let mut map = HashMap::with_capacity(builtins.len());
+        for (i, ty) in builtins.iter().enumerate() {
             map.insert(ty.clone(), TypeId(i as u32));
         }
 
         Self {
-            types: primitives,
+            types: builtins,
             map,
             structs: Vec::new(),
             bitfields: Vec::new(),
@@ -244,6 +284,8 @@ impl TypeInterner {
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
             Type::TypeConstruction => "TypeConstruction".to_string(),
+            Type::Never => "<never>".to_string(),
+            Type::Capability(kind) => kind.name().to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -328,6 +370,23 @@ mod tests {
             *interner.resolve(TypeInterner::TYPE_CONSTRUCTION),
             Type::TypeConstruction
         );
+        assert_eq!(TypeInterner::NEVER.index(), 16);
+        assert_eq!(*interner.resolve(TypeInterner::NEVER), Type::Never);
+    }
+
+    #[test]
+    fn capability_type_ids_are_stable_and_distinct() {
+        let interner = TypeInterner::new();
+        let ids = CapabilityKind::ALL.map(TypeInterner::capability);
+
+        assert_eq!(
+            ids.map(TypeId::index),
+            [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+        );
+        for (kind, id) in CapabilityKind::ALL.into_iter().zip(ids) {
+            assert_eq!(*interner.resolve(id), Type::Capability(kind));
+            assert_eq!(interner.type_name(id), kind.name());
+        }
     }
 
     // -- Basic interning ------------------------------------------------------
@@ -622,9 +681,9 @@ mod tests {
     #[test]
     fn interner_len_includes_primitives() {
         let interner = TypeInterner::new();
-        // 16 built-in leaves: int8..uint64 (8) + float32/64 (2) +
-        // string, bool, bytes, nothing, error, TypeConstruction (6)
-        assert_eq!(interner.len(), 16);
+        // 16 existing built-in leaves, the internal bottom type, and the
+        // closed set of 11 nominal capabilities.
+        assert_eq!(interner.len(), 28);
     }
 
     #[test]

@@ -16,4 +16,4 @@ pub use reflection::{
     ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,
     ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
-pub use types::{Type, TypeId};
+pub use types::{CapabilityKind, Type, TypeId};

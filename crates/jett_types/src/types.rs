@@ -1,5 +1,73 @@
 use crate::defs::{ActorId, BitfieldId, EnumId, InterfaceId, MachineId, MachineStateId, StructId};
 
+/// One compiler-known capability type.
+///
+/// Capabilities are a closed nominal set: equal names identify equal authority,
+/// while different variants must never unify merely because both are opaque.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CapabilityKind {
+    Stdout,
+    Stderr,
+    Stdin,
+    Filesystem,
+    Network,
+    Clock,
+    Random,
+    Process,
+    Environment,
+    Log,
+    Graphics,
+}
+
+impl CapabilityKind {
+    pub const ALL: [Self; 11] = [
+        Self::Stdout,
+        Self::Stderr,
+        Self::Stdin,
+        Self::Filesystem,
+        Self::Network,
+        Self::Clock,
+        Self::Random,
+        Self::Process,
+        Self::Environment,
+        Self::Log,
+        Self::Graphics,
+    ];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "Stdout",
+            Self::Stderr => "Stderr",
+            Self::Stdin => "Stdin",
+            Self::Filesystem => "Filesystem",
+            Self::Network => "Network",
+            Self::Clock => "Clock",
+            Self::Random => "Random",
+            Self::Process => "Process",
+            Self::Environment => "Environment",
+            Self::Log => "Log",
+            Self::Graphics => "Graphics",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Stdout" => Some(Self::Stdout),
+            "Stderr" => Some(Self::Stderr),
+            "Stdin" => Some(Self::Stdin),
+            "Filesystem" => Some(Self::Filesystem),
+            "Network" => Some(Self::Network),
+            "Clock" => Some(Self::Clock),
+            "Random" => Some(Self::Random),
+            "Process" => Some(Self::Process),
+            "Environment" => Some(Self::Environment),
+            "Log" => Some(Self::Log),
+            "Graphics" => Some(Self::Graphics),
+            _ => None,
+        }
+    }
+}
+
 /// A unique handle to an interned type. Cheap to copy and compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(pub(crate) u32);
@@ -38,6 +106,10 @@ pub enum Type {
     Bytes,
     Nothing,
     TypeConstruction,
+    /// Compiler-internal uninhabited bottom type.
+    Never,
+    /// An opaque runtime-provided authority with nominal identity.
+    Capability(CapabilityKind),
 
     // -- Generic built-in types ----------------------------------------------
     /// `list[T]`

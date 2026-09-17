@@ -29,6 +29,7 @@ impl TypeChecker<'_> {
             }
             match self.interner.resolve(ty) {
                 Type::Error
+                | Type::Capability(_)
                 | Type::TypeConstruction
                 | Type::Function { .. }
                 | Type::Resource(_)
@@ -86,7 +87,8 @@ impl TypeChecker<'_> {
                 | Type::String
                 | Type::Bool
                 | Type::Bytes
-                | Type::Nothing => {}
+                | Type::Nothing
+                | Type::Never => {}
             }
         }
         false
@@ -183,7 +185,9 @@ impl TypeChecker<'_> {
             Expr::Ident(_) | Expr::FieldAccess(_, _, _) => {
                 self.audit_graphics_reference(expr, None);
                 if inline
-                    && self.graphics_audit_type(expr.span()) == Some(TypeInterner::ERROR)
+                    && self.graphics_audit_type(expr.span()).is_some_and(|ty| {
+                        matches!(self.interner.resolve(ty), Type::Capability(_) | Type::Error)
+                    })
                     && !self.graphics_rejected_capture_spans.contains(&expr.span())
                 {
                     self.sink.emit(errors::graphics_contract(
@@ -329,7 +333,12 @@ impl TypeChecker<'_> {
         }
         if let Some(ty) = self.graphics_audit_type(callee.span())
             && let Type::Function { params, .. } = self.interner.resolve(ty)
-            && params.contains(&TypeInterner::ERROR)
+            && params.iter().any(|param| {
+                matches!(
+                    self.interner.resolve(*param),
+                    Type::Capability(_) | Type::Error
+                )
+            })
         {
             self.sink.emit(errors::graphics_contract(
                 "callbacks cannot call function values with opaque capability parameters",
@@ -391,7 +400,8 @@ impl TypeChecker<'_> {
                     .enumerate()
                     .filter_map(|(index, instantiation)| {
                         (instantiation.definition == call.definition
-                            && instantiation.concrete_args == call.concrete_args)
+                            && instantiation.concrete_args == call.concrete_args
+                            && instantiation.specialization == call.specialization)
                             .then_some(index)
                     })
                     .collect::<Vec<_>>();

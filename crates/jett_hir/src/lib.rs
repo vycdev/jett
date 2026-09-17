@@ -4,16 +4,22 @@
 //! structured control flow. Unsupported source constructs fail explicitly;
 //! they never survive as embedded AST nodes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use jett_common::{FileId, SourceOrigin, Span};
 use jett_parser::ast::{self, Expr, Item, Module, Stmt};
 use jett_resolve::{DefId, DefKind, ResolveResult};
 use jett_typecheck::{
-    CheckResult, CheckedCallArgumentOrder, CheckedGenericCall, CheckedGenericFunctionInstantiation,
-    CheckedMethodCall, CheckedMethodDefinition, CheckedStructConstruction,
+    CheckResult, CheckedBodyFacts, CheckedCallArgumentOrder, CheckedComptimeTypeBinding,
+    CheckedComptimeTypeSelection, CheckedGenericCall, CheckedGenericFunctionInstantiation,
+    CheckedGenericSpecialization, CheckedMethodCall, CheckedMethodDefinition,
+    CheckedStaticSelection, CheckedStructConstruction,
 };
 use jett_types::{Type, TypeId};
+
+mod type_validation;
+
+pub use type_validation::validate_backend_types;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(u32);
@@ -77,14 +83,16 @@ pub enum DeclarationKind {
     ActorHandler,
 }
 
-/// One concrete in-memory function identity. Type arguments are empty for an
-/// ordinary function and form part of identity after monomorphization. Raw
-/// `TypeId`s are session-local; persistent artifacts must encode their
-/// canonical structural type identities instead.
+/// One concrete in-memory function identity. Type arguments and checked
+/// reflection-visible specialization facts form identity after
+/// monomorphization. Both are empty for an ordinary function. Raw `TypeId`s
+/// are session-local; persistent artifacts must encode their canonical
+/// structural type identities and this specialization discriminator instead.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionIdentity {
     pub declaration: DeclarationId,
     pub type_arguments: Vec<TypeId>,
+    pub specialization: CheckedGenericSpecialization,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,6 +193,25 @@ pub enum StatementKind {
     Breakpoint(Option<Expression>),
     Respond(Expression),
     Scope(Block),
+    /// Execute the checker-specialized body whose concrete bound type matches
+    /// the runtime `TypeInfo` value produced by a trusted reflection loop.
+    ///
+    /// This is compiler-owned control flow. Source cannot construct it, and a
+    /// backend must compare canonical reflected type identity rather than
+    /// executing every arm for every loop element.
+    ReflectedTypeDispatch {
+        type_info: Expression,
+        arms: Vec<ReflectedTypeArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReflectedTypeArm {
+    /// Canonical position exported by the checker. It is retained for stable
+    /// diagnostics and for backends that can dispatch on loop ordinals.
+    pub iteration_index: usize,
+    pub bound_type: TypeId,
+    pub body: Block,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,6 +229,8 @@ pub enum ExpressionKind {
     Bool(bool),
     Nothing,
     Local(LocalId),
+    /// A checked, concrete source function used as a first-class value.
+    FunctionRef(FunctionId),
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
@@ -219,6 +248,9 @@ pub enum ExpressionKind {
     },
     Intrinsic {
         canonical_name: String,
+        /// Concrete checked generic operands in source order. An intrinsic
+        /// with no type operands carries an empty vector.
+        type_arguments: Vec<TypeId>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
     },
@@ -535,12 +567,36 @@ impl Validator<'_> {
             }
             StatementKind::Respond(value) => self.expression(value),
             StatementKind::Scope(block) => self.block(block),
+            StatementKind::ReflectedTypeDispatch { type_info, arms } => {
+                self.expression(type_info);
+                let mut iteration_indexes = std::collections::HashSet::new();
+                for arm in arms {
+                    if !iteration_indexes.insert(arm.iteration_index) {
+                        self.error(
+                            statement.span,
+                            "reflected type dispatch contains a duplicate iteration index",
+                        );
+                    }
+                    self.block(&arm.body);
+                }
+                if arms.is_empty() {
+                    self.error(statement.span, "reflected type dispatch has no arms");
+                }
+            }
         }
     }
 
     fn expression(&mut self, expression: &Expression) {
         match &expression.kind {
             ExpressionKind::Local(local) => self.check_local(*local, expression.span),
+            ExpressionKind::FunctionRef(function) => {
+                if function.index() as usize >= self.program.functions.len() {
+                    self.error(
+                        expression.span,
+                        "function value references an unknown HIR function",
+                    );
+                }
+            }
             ExpressionKind::Binary { left, right, .. } => {
                 self.expression(left);
                 self.expression(right);
@@ -736,6 +792,7 @@ enum FunctionKey {
     Definition {
         definition: DefId,
         concrete_args: Vec<TypeId>,
+        specialization: CheckedGenericSpecialization,
     },
     Method {
         source_span: Span,
@@ -798,6 +855,15 @@ impl<'a> Lowerer<'a> {
                     })
                     .collect::<Vec<_>>()
             })?;
+            validate_backend_types(&program, &self.check.interner).map_err(|errors| {
+                errors
+                    .into_iter()
+                    .map(|error| LowerError {
+                        span: error.span,
+                        message: error.message,
+                    })
+                    .collect::<Vec<_>>()
+            })?;
             Ok(program)
         } else {
             Err(self.errors)
@@ -812,7 +878,13 @@ impl<'a> Lowerer<'a> {
                     let Some(definition) =
                         self.definition_at(function.name.span, DefKind::Function)
                     else {
-                        self.error(function.name.span, "function has no resolved definition");
+                        self.error(
+                            function.name.span,
+                            format!(
+                                "function `{}` has no resolved definition",
+                                function.name.name
+                            ),
+                        );
                         continue;
                     };
                     let id = FunctionId(self.functions.len() as u32);
@@ -820,6 +892,7 @@ impl<'a> Lowerer<'a> {
                         FunctionKey::Definition {
                             definition,
                             concrete_args: Vec::new(),
+                            specialization: CheckedGenericSpecialization::default(),
                         },
                         id,
                     );
@@ -856,6 +929,7 @@ impl<'a> Lowerer<'a> {
                 FunctionKey::Definition {
                     definition: instantiation.definition,
                     concrete_args: instantiation.concrete_args.clone(),
+                    specialization: instantiation.specialization.clone(),
                 },
                 id,
             );
@@ -936,22 +1010,30 @@ impl<'a> Lowerer<'a> {
             return_type,
             expression_types,
             generic_calls,
+            intrinsic_type_arguments,
             call_argument_orders,
             method_calls,
             struct_constructions,
             pipeline_step_call_types,
+            static_selections,
+            comptime_type_bindings,
             concrete_args,
+            specialization,
         ) = if let Some(instantiation) = &source.instantiation {
             (
                 instantiation.parameter_types.clone(),
                 instantiation.return_type,
                 instantiation.type_map.clone(),
                 instantiation.generic_calls.clone(),
+                instantiation.intrinsic_type_arguments.clone(),
                 instantiation.call_argument_orders.clone(),
                 instantiation.method_calls.clone(),
                 instantiation.struct_constructions.clone(),
                 instantiation.pipeline_step_call_types.clone(),
+                instantiation.static_selections.clone(),
+                instantiation.comptime_type_bindings.clone(),
                 instantiation.concrete_args.clone(),
+                instantiation.specialization.clone(),
             )
         } else if let Some(method) = &source.method {
             (
@@ -959,11 +1041,15 @@ impl<'a> Lowerer<'a> {
                 method.return_type,
                 self.check.type_map.clone(),
                 self.check.generic_calls.clone(),
+                self.check.intrinsic_type_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
+                HashMap::new(),
+                facts_in_span(&self.check.comptime_type_bindings, source.function.span),
                 Vec::new(),
+                CheckedGenericSpecialization::default(),
             )
         } else {
             let Some(definition) = source.definition else {
@@ -998,11 +1084,15 @@ impl<'a> Lowerer<'a> {
                 return_type,
                 self.check.type_map.clone(),
                 self.check.generic_calls.clone(),
+                self.check.intrinsic_type_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
+                HashMap::new(),
+                facts_in_span(&self.check.comptime_type_bindings, source.function.span),
                 Vec::new(),
+                CheckedGenericSpecialization::default(),
             )
         };
         if parameter_types.len() != source.function.params.len() {
@@ -1017,12 +1107,15 @@ impl<'a> Lowerer<'a> {
         let mut body_lowerer = BodyLowerer::new(
             self,
             &function_ids,
-            &expression_types,
-            &generic_calls,
-            &call_argument_orders,
-            &method_calls,
-            &struct_constructions,
-            &pipeline_step_call_types,
+            expression_types,
+            generic_calls,
+            intrinsic_type_arguments,
+            call_argument_orders,
+            method_calls,
+            struct_constructions,
+            pipeline_step_call_types,
+            static_selections,
+            comptime_type_bindings,
         );
         let mut params = Vec::with_capacity(source.function.params.len());
         for (param, ty) in source.function.params.iter().zip(parameter_types) {
@@ -1056,6 +1149,8 @@ impl<'a> Lowerer<'a> {
             });
         }
         let body = body_lowerer.lower_block(&source.function.body);
+        body_lowerer.reject_unconsumed_static_selections();
+        body_lowerer.reject_unconsumed_comptime_type_bindings();
         let locals = body_lowerer.locals;
         let (namespace, name, kind) = if let Some(method) = &source.method {
             if let Some(interface) = &method.interface_name {
@@ -1102,6 +1197,7 @@ impl<'a> Lowerer<'a> {
                     kind,
                 },
                 type_arguments: concrete_args,
+                specialization,
             },
             source_definition: source.definition,
             params,
@@ -1164,19 +1260,26 @@ impl<'a> Lowerer<'a> {
         let function_ids = self.function_ids.clone();
         let expression_types = self.check.type_map.clone();
         let generic_calls = self.check.generic_calls.clone();
+        let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
         let call_argument_orders = self.check.call_argument_orders.clone();
         let method_calls = self.check.method_calls.clone();
         let struct_constructions = self.check.struct_constructions.clone();
         let pipeline_step_call_types = self.check.pipeline_step_call_types.clone();
+        let static_selections = HashMap::new();
+        let comptime_type_bindings =
+            facts_in_span(&self.check.comptime_type_bindings, source.handler.span);
         let mut body_lowerer = BodyLowerer::new(
             self,
             &function_ids,
-            &expression_types,
-            &generic_calls,
-            &call_argument_orders,
-            &method_calls,
-            &struct_constructions,
-            &pipeline_step_call_types,
+            expression_types,
+            generic_calls,
+            intrinsic_type_arguments,
+            call_argument_orders,
+            method_calls,
+            struct_constructions,
+            pipeline_step_call_types,
+            static_selections,
+            comptime_type_bindings,
         );
 
         for (param, (_, ty)) in source
@@ -1257,6 +1360,8 @@ impl<'a> Lowerer<'a> {
             });
         }
         let body = body_lowerer.lower_block(&source.handler.body);
+        body_lowerer.reject_unconsumed_static_selections();
+        body_lowerer.reject_unconsumed_comptime_type_bindings();
         let locals = body_lowerer.locals;
         let actor_def = self.resolve.scope_table.def(source.actor_definition);
 
@@ -1270,6 +1375,7 @@ impl<'a> Lowerer<'a> {
                     kind: DeclarationKind::ActorHandler,
                 },
                 type_arguments: Vec::new(),
+                specialization: CheckedGenericSpecialization::default(),
             },
             source_definition: None,
             params,
@@ -1282,11 +1388,18 @@ impl<'a> Lowerer<'a> {
 
     fn definition_at(&self, span: Span, kind: DefKind) -> Option<DefId> {
         self.resolve
-            .scope_table
-            .definitions
-            .iter()
-            .find(|definition| definition.span == span && definition.kind == kind)
-            .map(|definition| definition.id)
+            .resolutions
+            .get(&span)
+            .copied()
+            .filter(|definition| self.resolve.scope_table.def(*definition).kind == kind)
+            .or_else(|| {
+                self.resolve
+                    .scope_table
+                    .definitions
+                    .iter()
+                    .find(|definition| definition.span == span && definition.kind == kind)
+                    .map(|definition| definition.id)
+            })
     }
 
     fn error(&mut self, span: Span, message: impl Into<String>) {
@@ -1300,12 +1413,17 @@ impl<'a> Lowerer<'a> {
 struct BodyLowerer<'lowerer, 'program> {
     parent: &'lowerer mut Lowerer<'program>,
     function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
-    expression_types: &'lowerer HashMap<Span, TypeId>,
-    generic_calls: &'lowerer HashMap<Span, CheckedGenericCall>,
-    call_argument_orders: &'lowerer HashMap<Span, CheckedCallArgumentOrder>,
-    method_calls: &'lowerer HashMap<Span, CheckedMethodCall>,
-    struct_constructions: &'lowerer HashMap<Span, CheckedStructConstruction>,
-    pipeline_step_call_types: &'lowerer HashMap<Span, TypeId>,
+    expression_types: HashMap<Span, TypeId>,
+    generic_calls: HashMap<Span, CheckedGenericCall>,
+    intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+    method_calls: HashMap<Span, CheckedMethodCall>,
+    struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    pipeline_step_call_types: HashMap<Span, TypeId>,
+    static_selections: HashMap<Span, CheckedStaticSelection>,
+    comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+    consumed_static_selections: HashSet<Span>,
+    consumed_comptime_type_bindings: HashSet<Span>,
     local_ids: HashMap<DefId, LocalId>,
     locals: Vec<Local>,
 }
@@ -1314,24 +1432,70 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     fn new(
         parent: &'lowerer mut Lowerer<'program>,
         function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
-        expression_types: &'lowerer HashMap<Span, TypeId>,
-        generic_calls: &'lowerer HashMap<Span, CheckedGenericCall>,
-        call_argument_orders: &'lowerer HashMap<Span, CheckedCallArgumentOrder>,
-        method_calls: &'lowerer HashMap<Span, CheckedMethodCall>,
-        struct_constructions: &'lowerer HashMap<Span, CheckedStructConstruction>,
-        pipeline_step_call_types: &'lowerer HashMap<Span, TypeId>,
+        expression_types: HashMap<Span, TypeId>,
+        generic_calls: HashMap<Span, CheckedGenericCall>,
+        intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+        call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+        method_calls: HashMap<Span, CheckedMethodCall>,
+        struct_constructions: HashMap<Span, CheckedStructConstruction>,
+        pipeline_step_call_types: HashMap<Span, TypeId>,
+        static_selections: HashMap<Span, CheckedStaticSelection>,
+        comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     ) -> Self {
         Self {
             parent,
             function_ids,
             expression_types,
             generic_calls,
+            intrinsic_type_arguments,
             call_argument_orders,
             method_calls,
             struct_constructions,
             pipeline_step_call_types,
+            static_selections,
+            comptime_type_bindings,
+            consumed_static_selections: HashSet::new(),
+            consumed_comptime_type_bindings: HashSet::new(),
             local_ids: HashMap::new(),
             locals: Vec::new(),
+        }
+    }
+
+    fn static_selection(&mut self, span: Span) -> Option<CheckedStaticSelection> {
+        let selection = self.static_selections.get(&span).copied()?;
+        self.consumed_static_selections.insert(span);
+        Some(selection)
+    }
+
+    fn reject_unconsumed_static_selections(&mut self) {
+        let mut spans = self
+            .static_selections
+            .keys()
+            .copied()
+            .filter(|span| !self.consumed_static_selections.contains(span))
+            .collect::<Vec<_>>();
+        spans.sort_by_key(|span| (span.file.index(), span.start, span.end));
+        for span in spans {
+            self.parent.error(
+                span,
+                "checked static selection does not match a lowered statement",
+            );
+        }
+    }
+
+    fn reject_unconsumed_comptime_type_bindings(&mut self) {
+        let mut spans = self
+            .comptime_type_bindings
+            .keys()
+            .copied()
+            .filter(|span| !self.consumed_comptime_type_bindings.contains(span))
+            .collect::<Vec<_>>();
+        spans.sort_by_key(|span| (span.file.index(), span.start, span.end));
+        for span in spans {
+            self.parent.error(
+                span,
+                "checked comptime type binding does not match a lowered statement",
+            );
         }
     }
 
@@ -1415,18 +1579,70 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 (kind, expr.span)
             }
             Stmt::If(branch) => {
-                let condition = self.lower_expression(&branch.condition)?;
-                let then_block = self.lower_block(&branch.then_block);
-                let else_block =
-                    self.lower_else_chain(&branch.else_ifs, branch.else_block.as_ref());
-                (
-                    StatementKind::If {
-                        condition,
-                        then_block,
-                        else_block,
-                    },
-                    branch.span,
-                )
+                if let Some(selection) = self.static_selection(branch.span) {
+                    let selected = match selection {
+                        CheckedStaticSelection::IfThen => Some(&branch.then_block),
+                        CheckedStaticSelection::IfElseIf(index) => {
+                            match branch.else_ifs.get(index) {
+                                Some((_, block)) => Some(block),
+                                None => {
+                                    self.parent.error(
+                                        branch.span,
+                                        "checked static else-if selection is out of range",
+                                    );
+                                    return None;
+                                }
+                            }
+                        }
+                        CheckedStaticSelection::IfElse => match branch.else_block.as_ref() {
+                            Some(block) => Some(block),
+                            None => {
+                                self.parent.error(
+                                    branch.span,
+                                    "checked static else selection has no source branch",
+                                );
+                                return None;
+                            }
+                        },
+                        CheckedStaticSelection::IfNoBranch => {
+                            if branch.else_block.is_some() {
+                                self.parent.error(
+                                    branch.span,
+                                    "checked static no-branch selection disagrees with source else",
+                                );
+                                return None;
+                            }
+                            None
+                        }
+                        CheckedStaticSelection::MatchArm(_) => {
+                            self.parent.error(
+                                branch.span,
+                                "checked static match selection attached to an if statement",
+                            );
+                            return None;
+                        }
+                    };
+                    let Some(selected) = selected else {
+                        return None;
+                    };
+                    (
+                        StatementKind::Scope(self.lower_block(selected)),
+                        branch.span,
+                    )
+                } else {
+                    let condition = self.lower_expression(&branch.condition)?;
+                    let then_block = self.lower_block(&branch.then_block);
+                    let else_block =
+                        self.lower_else_chain(&branch.else_ifs, branch.else_block.as_ref());
+                    (
+                        StatementKind::If {
+                            condition,
+                            then_block,
+                            else_block,
+                        },
+                        branch.span,
+                    )
+                }
             }
             Stmt::While(loop_stmt) => (
                 StatementKind::While {
@@ -1452,7 +1668,38 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     loop_stmt.span,
                 )
             }
-            Stmt::Match(match_stmt) => (self.lower_match(match_stmt)?, match_stmt.span),
+            Stmt::Match(match_stmt) => {
+                if let Some(selection) = self.static_selection(match_stmt.span) {
+                    let CheckedStaticSelection::MatchArm(index) = selection else {
+                        self.parent.error(
+                            match_stmt.span,
+                            "checked static if selection attached to a match statement",
+                        );
+                        return None;
+                    };
+                    let Some(arm) = match_stmt.arms.get(index) else {
+                        self.parent.error(
+                            match_stmt.span,
+                            "checked static match-arm selection is out of range",
+                        );
+                        return None;
+                    };
+                    if matches!(&arm.pattern, ast::Pattern::Variant(_, bindings) if !bindings.is_empty())
+                    {
+                        self.parent.error(
+                            arm.span,
+                            "checked static match arm unexpectedly binds runtime payloads",
+                        );
+                        return None;
+                    }
+                    (
+                        StatementKind::Scope(self.lower_block(&arm.body)),
+                        match_stmt.span,
+                    )
+                } else {
+                    (self.lower_match(match_stmt)?, match_stmt.span)
+                }
+            }
             Stmt::Break(span) => (StatementKind::Break, *span),
             Stmt::Continue(span) => (StatementKind::Continue, *span),
             Stmt::Assert(assertion) => (
@@ -1487,13 +1734,158 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 StatementKind::Respond(self.lower_expression(&response.value)?),
                 response.span,
             ),
-            Stmt::ComptimeTypeBind(binding) => (
-                StatementKind::Scope(self.lower_block(&binding.body)),
-                binding.span,
-            ),
+            Stmt::ComptimeTypeBind(binding) => {
+                (self.lower_comptime_type_bind(binding)?, binding.span)
+            }
             Stmt::Use(_) => return None,
         };
         Some(Statement { kind, span })
+    }
+
+    fn lower_comptime_type_bind(
+        &mut self,
+        binding: &ast::ComptimeTypeBindStmt,
+    ) -> Option<StatementKind> {
+        let Some(bindings) = self.comptime_type_bindings.get(&binding.span).cloned() else {
+            self.parent.error(
+                binding.span,
+                "comptime type statement has no checked concrete binding",
+            );
+            return None;
+        };
+        self.consumed_comptime_type_bindings.insert(binding.span);
+        // The checker retains the last recursively checked expansion in its
+        // legacy flat maps for the interpreter. Those descendant entries are
+        // owned by `CheckedBodyFacts` and are validated while lowering each
+        // specialized body, not as siblings in the enclosing function.
+        self.consumed_comptime_type_bindings.extend(
+            self.comptime_type_bindings.keys().copied().filter(|span| {
+                span.file == binding.body.span.file
+                    && span.start >= binding.body.span.start
+                    && span.end <= binding.body.span.end
+            }),
+        );
+
+        if bindings.len() == 1
+            && bindings[0].selection == CheckedComptimeTypeSelection::Unconditional
+        {
+            let checked = bindings
+                .into_iter()
+                .next()
+                .expect("single checked binding exists");
+            return Some(StatementKind::Scope(
+                self.lower_block_with_checked_facts(&binding.body, checked.body),
+            ));
+        }
+
+        if bindings.is_empty()
+            || bindings.iter().any(|checked| {
+                !matches!(
+                    checked.selection,
+                    CheckedComptimeTypeSelection::ReflectedIteration(_)
+                )
+            })
+        {
+            self.parent.error(
+                binding.span,
+                "checked comptime type binding has inconsistent selection semantics",
+            );
+            return None;
+        }
+
+        // The initializer is a trusted `TypeInfo` value belonging to the
+        // current reflection-loop element. It is evaluated once, then used to
+        // select the one checker-specialized body with matching canonical
+        // reflected type identity.
+        let type_info = self.lower_expression(&binding.value)?;
+        let is_type_info = match self.parent.check.interner.resolve(type_info.ty) {
+            Type::Struct(id) => self.parent.check.interner.resolve_struct(*id).name == "TypeInfo",
+            _ => false,
+        };
+        if !is_type_info {
+            self.parent.error(
+                binding.value.span(),
+                "reflected comptime type dispatch selector is not TypeInfo",
+            );
+            return None;
+        }
+        let mut arms = Vec::with_capacity(bindings.len());
+        let mut bound_types = HashSet::new();
+        for checked in bindings {
+            let CheckedComptimeTypeSelection::ReflectedIteration(iteration_index) =
+                checked.selection
+            else {
+                unreachable!("selection kind checked above");
+            };
+            // Several reflected elements may have the same concrete type.
+            // Their source body is specialized by bound type, so one arm is
+            // canonical and is selected independently for every matching
+            // runtime element.
+            if !bound_types.insert(checked.bound_type) {
+                continue;
+            }
+            arms.push(ReflectedTypeArm {
+                iteration_index,
+                bound_type: checked.bound_type,
+                body: self.lower_block_with_checked_facts(&binding.body, checked.body),
+            });
+        }
+        Some(StatementKind::ReflectedTypeDispatch { type_info, arms })
+    }
+
+    fn lower_block_with_checked_facts(
+        &mut self,
+        block: &ast::Block,
+        facts: CheckedBodyFacts,
+    ) -> Block {
+        let CheckedBodyFacts {
+            type_map,
+            generic_calls,
+            intrinsic_type_arguments,
+            call_argument_orders,
+            method_calls,
+            struct_constructions,
+            pipeline_step_call_types,
+            static_selections,
+            comptime_type_bindings,
+        } = facts;
+
+        let saved_expression_types = std::mem::replace(&mut self.expression_types, type_map);
+        let saved_generic_calls = std::mem::replace(&mut self.generic_calls, generic_calls);
+        let saved_intrinsic_type_arguments =
+            std::mem::replace(&mut self.intrinsic_type_arguments, intrinsic_type_arguments);
+        let saved_call_argument_orders =
+            std::mem::replace(&mut self.call_argument_orders, call_argument_orders);
+        let saved_method_calls = std::mem::replace(&mut self.method_calls, method_calls);
+        let saved_struct_constructions =
+            std::mem::replace(&mut self.struct_constructions, struct_constructions);
+        let saved_pipeline_step_call_types =
+            std::mem::replace(&mut self.pipeline_step_call_types, pipeline_step_call_types);
+        let saved_static_selections =
+            std::mem::replace(&mut self.static_selections, static_selections);
+        let saved_comptime_type_bindings =
+            std::mem::replace(&mut self.comptime_type_bindings, comptime_type_bindings);
+        let saved_consumed_static = std::mem::take(&mut self.consumed_static_selections);
+        let saved_consumed_comptime = std::mem::take(&mut self.consumed_comptime_type_bindings);
+        let saved_local_ids = self.local_ids.clone();
+
+        let lowered = self.lower_block(block);
+        self.reject_unconsumed_static_selections();
+        self.reject_unconsumed_comptime_type_bindings();
+
+        self.local_ids = saved_local_ids;
+        self.expression_types = saved_expression_types;
+        self.generic_calls = saved_generic_calls;
+        self.intrinsic_type_arguments = saved_intrinsic_type_arguments;
+        self.call_argument_orders = saved_call_argument_orders;
+        self.method_calls = saved_method_calls;
+        self.struct_constructions = saved_struct_constructions;
+        self.pipeline_step_call_types = saved_pipeline_step_call_types;
+        self.static_selections = saved_static_selections;
+        self.comptime_type_bindings = saved_comptime_type_bindings;
+        self.consumed_static_selections = saved_consumed_static;
+        self.consumed_comptime_type_bindings = saved_consumed_comptime;
+        lowered
     }
 
     fn allocate_declared_local(&mut self, name: &ast::Ident, mutable: bool) -> Option<LocalId> {
@@ -1550,33 +1942,55 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         .error(ident.span, "identifier has no resolved definition");
                     return None;
                 };
-                let Some(local) = self.local_ids.get(&definition).copied() else {
+                if let Some(local) = self.local_ids.get(&definition).copied() {
+                    ExpressionKind::Local(local)
+                } else if self.parent.resolve.scope_table.def(definition).kind == DefKind::Function
+                {
+                    ExpressionKind::FunctionRef(self.resolve_function_value_target(expression)?)
+                } else {
                     self.parent.error(
                         span,
-                        "identifier is not a local value in the initial HIR subset",
+                        "identifier is neither a local nor a checked concrete function value",
                     );
                     return None;
-                };
-                ExpressionKind::Local(local)
+                }
             }
             Expr::Binary(left, op, right, _) => ExpressionKind::Binary {
                 left: Box::new(self.lower_expression(left)?),
                 op: lower_binary_op(*op),
                 right: Box::new(self.lower_expression(right)?),
             },
+            Expr::Unary(ast::UnaryOp::Neg, value, _) => match value.as_ref() {
+                Expr::IntLiteral(value, _) => {
+                    let Some(value) = value.checked_neg() else {
+                        self.parent
+                            .error(span, "negated integer literal exceeds the HIR value range");
+                        return None;
+                    };
+                    ExpressionKind::Int(value)
+                }
+                Expr::FloatLiteral(value, _) => ExpressionKind::Float(-value),
+                _ => ExpressionKind::Unary {
+                    op: UnaryOp::Negate,
+                    value: Box::new(self.lower_expression(value)?),
+                },
+            },
             Expr::Unary(op, value, _) => ExpressionKind::Unary {
                 op: lower_unary_op(*op),
                 value: Box::new(self.lower_expression(value)?),
             },
             Expr::FieldAccess(base, field, _) => {
-                if self.enum_variant_index(ty, field).is_some() {
+                if self.resolved_expression_kind(expression) == Some(DefKind::Function) {
+                    ExpressionKind::FunctionRef(self.resolve_function_value_target(expression)?)
+                } else if self.enum_variant_index(ty, field).is_some() {
                     self.lower_enum_construct(ty, field, &[], span)?
                 } else {
                     self.lower_field(base, field)?
                 }
             }
-            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
-                self.lower_call(callee, args, span)?
+            Expr::Call(callee, args, _) => self.lower_call(callee, args, span, false)?,
+            Expr::GenericCall(callee, type_args, args, _) => {
+                self.lower_call(callee, args, span, !type_args.is_empty())?
             }
             Expr::ListConstruct(elements, _) => ExpressionKind::ListConstruct {
                 elements: elements
@@ -1817,6 +2231,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         callee: &Expr,
         args: &[ast::CallArg],
         call_span: Span,
+        has_explicit_type_arguments: bool,
     ) -> Option<ExpressionKind> {
         let enum_variant = match callee {
             Expr::EnumVariant(_, variant, _) => Some(variant),
@@ -1838,23 +2253,20 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             })?;
             return self.lower_enum_construct(ty, variant, args, call_span);
         }
-        if let Expr::Ident(name) = callee
-            && self.resolved_kind(name) == Some(DefKind::Bitfield)
-        {
+        if self.is_declaration_reference(callee, DefKind::Bitfield) {
             return self.lower_bitfield_construct(args, call_span);
-        }
-        if let Expr::Ident(name) = callee
-            && self.resolved_kind(name) == Some(DefKind::Machine)
-        {
-            return self.lower_machine_construct(args, call_span);
         }
         if let Expr::FieldAccess(base, member, _) = callee
             && member.name == "transition"
-            && matches!(base.as_ref(), Expr::Ident(name) if self.resolved_kind(name) == Some(DefKind::Machine))
+            && (self.resolved_expression_kind(base) == Some(DefKind::Machine)
+                || self.resolved_expression_kind(callee) == Some(DefKind::Machine))
         {
             return self.lower_machine_transition(args, call_span);
         }
-        if let Some(construction) = self.struct_constructions.get(&call_span) {
+        if self.is_declaration_reference(callee, DefKind::Machine) {
+            return self.lower_machine_construct(args, call_span);
+        }
+        if let Some(construction) = self.struct_constructions.get(&call_span).cloned() {
             let (fields, evaluation_order) =
                 self.lower_arguments_in_parameter_order(args, call_span)?;
             return Some(ExpressionKind::StructConstruct {
@@ -1868,9 +2280,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let (lowered_args, evaluation_order) =
             self.lower_arguments_in_parameter_order(args, call_span)?;
         if matches!(
-            callee,
-            Expr::Ident(ident)
-                if matches!(self.resolved_kind(ident), Some(DefKind::Variable | DefKind::Param))
+            self.resolved_expression_kind(callee),
+            Some(DefKind::Variable | DefKind::Param)
         ) {
             return Some(ExpressionKind::IndirectCall {
                 callee: Box::new(self.lower_expression(callee)?),
@@ -1887,9 +2298,30 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         } else {
             Some(ExpressionKind::Intrinsic {
                 canonical_name: self.canonical_call_name(callee)?,
+                type_arguments: self
+                    .checked_intrinsic_type_arguments(call_span, has_explicit_type_arguments)?,
                 args: lowered_args,
                 evaluation_order,
             })
+        }
+    }
+
+    fn checked_intrinsic_type_arguments(
+        &mut self,
+        span: Span,
+        required: bool,
+    ) -> Option<Vec<TypeId>> {
+        if let Some(arguments) = self.intrinsic_type_arguments.get(&span) {
+            return Some(arguments.clone());
+        }
+        if required {
+            self.parent.error(
+                span,
+                "generic compiler intrinsic has no checked concrete type operands",
+            );
+            None
+        } else {
+            Some(Vec::new())
         }
     }
 
@@ -1929,22 +2361,77 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             .position(|candidate| candidate.name == variant.name)
     }
 
-    fn resolved_kind(&self, ident: &ast::Ident) -> Option<DefKind> {
+    fn resolved_definition(&self, expression: &Expr) -> Option<DefId> {
         self.parent
             .resolve
             .resolutions
-            .get(&ident.span)
-            .map(|definition| self.parent.resolve.scope_table.def(*definition).kind)
+            .get(&expression.span())
+            .copied()
+    }
+
+    fn resolved_expression_kind(&self, expression: &Expr) -> Option<DefKind> {
+        self.resolved_definition(expression)
+            .map(|definition| self.parent.resolve.scope_table.def(definition).kind)
+    }
+
+    fn is_declaration_reference(&self, expression: &Expr, kind: DefKind) -> bool {
+        let Some(definition) = self.resolved_definition(expression) else {
+            return false;
+        };
+        let info = self.parent.resolve.scope_table.def(definition);
+        if info.kind != kind {
+            return false;
+        }
+        match expression {
+            Expr::Ident(_) => true,
+            Expr::FieldAccess(_, member, _) => info
+                .name
+                .rsplit('.')
+                .next()
+                .is_some_and(|name| name == member.name),
+            _ => false,
+        }
     }
 
     fn is_source_call(&self, callee: &Expr, span: Span) -> bool {
         if self.method_calls.contains_key(&span) {
             return true;
         }
-        let Expr::Ident(ident) = callee else {
+        let Some(definition) = self.resolved_definition(callee) else {
             return false;
         };
-        self.resolved_kind(ident) == Some(DefKind::Function)
+        if self.parent.resolve.scope_table.def(definition).kind != DefKind::Function {
+            return false;
+        }
+        if self
+            .generic_calls
+            .get(&span)
+            .is_some_and(|generic| generic.definition != definition)
+        {
+            return true;
+        }
+        let key = self.generic_calls.get(&span).map_or_else(
+            || FunctionKey::Definition {
+                definition,
+                concrete_args: Vec::new(),
+                specialization: CheckedGenericSpecialization::default(),
+            },
+            |generic| FunctionKey::Definition {
+                definition,
+                concrete_args: generic.concrete_args.clone(),
+                specialization: generic.specialization.clone(),
+            },
+        );
+        self.function_ids.contains_key(&key) || !self.is_trusted_stdlib_intrinsic(definition)
+    }
+
+    fn is_trusted_stdlib_intrinsic(&self, definition: DefId) -> bool {
+        let info = self.parent.resolve.scope_table.def(definition);
+        self.parent.origins.get(&info.span.file) == Some(&SourceOrigin::Stdlib)
+            && matches!(
+                info.name.as_str(),
+                "json.parse" | "json.parse_exact" | "json.serialize" | "json.serialize_public"
+            )
     }
 
     fn canonical_call_name(&mut self, callee: &Expr) -> Option<String> {
@@ -1956,6 +2443,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 }
                 _ => None,
             }
+        }
+        if let Some(definition) = self.resolved_definition(callee)
+            && self.is_trusted_stdlib_intrinsic(definition)
+        {
+            return Some(self.parent.resolve.scope_table.def(definition).name.clone());
         }
         dotted(callee).or_else(|| {
             self.parent.error(
@@ -2143,6 +2635,28 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         Some(StatementKind::Match { scrutinee, arms })
     }
 
+    fn resolve_function_value_target(&mut self, expression: &Expr) -> Option<FunctionId> {
+        let Some(definition) = self.resolved_definition(expression) else {
+            self.parent.error(
+                expression.span(),
+                "function value has no resolved definition",
+            );
+            return None;
+        };
+        let key = FunctionKey::Definition {
+            definition,
+            concrete_args: Vec::new(),
+            specialization: CheckedGenericSpecialization::default(),
+        };
+        self.function_ids.get(&key).copied().or_else(|| {
+            self.parent.error(
+                expression.span(),
+                "function value has no checked concrete HIR function",
+            );
+            None
+        })
+    }
+
     fn resolve_user_call_target(&mut self, callee: &Expr, call_span: Span) -> Option<FunctionId> {
         if let Some(method) = self.method_calls.get(&call_span) {
             let key = FunctionKey::Method {
@@ -2158,16 +2672,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return Some(function);
         }
 
-        let Expr::Ident(ident) = callee else {
-            self.parent.error(
-                callee.span(),
-                "only direct user-function calls are in the current HIR subset",
-            );
-            return None;
-        };
-        let Some(definition) = self.parent.resolve.resolutions.get(&ident.span).copied() else {
+        let Some(definition) = self.resolved_definition(callee) else {
             self.parent
-                .error(ident.span, "call target has no resolved definition");
+                .error(callee.span(), "call target has no resolved definition");
             return None;
         };
         let key = if let Some(generic) = self.generic_calls.get(&call_span) {
@@ -2181,16 +2688,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             FunctionKey::Definition {
                 definition,
                 concrete_args: generic.concrete_args.clone(),
+                specialization: generic.specialization.clone(),
             }
         } else {
             FunctionKey::Definition {
                 definition,
                 concrete_args: Vec::new(),
+                specialization: CheckedGenericSpecialization::default(),
             }
         };
         let Some(function) = self.function_ids.get(&key).copied() else {
             self.parent.error(
-                ident.span,
+                callee.span(),
                 "call target has no checked concrete HIR function",
             );
             return None;
@@ -2263,8 +2772,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 evaluation_order,
             }
         } else {
+            let has_explicit_type_arguments = Self::has_explicit_type_arguments(&step.function);
             ExpressionKind::Intrinsic {
                 canonical_name: self.canonical_call_name(callee)?,
+                type_arguments: self
+                    .checked_intrinsic_type_arguments(step.span, has_explicit_type_arguments)?,
                 args,
                 evaluation_order,
             }
@@ -2285,6 +2797,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expr::Call(callee, args, _) => (callee, args, piped_as_view),
             Expr::GenericCall(callee, _, args, _) => (callee, args, piped_as_view),
             _ => (function, &step.extra_args, piped_as_view),
+        }
+    }
+
+    fn has_explicit_type_arguments(expression: &Expr) -> bool {
+        match expression {
+            Expr::GenericCall(_, arguments, _, _) => !arguments.is_empty(),
+            Expr::View(inner, _) | Expr::Paren(inner, _) => {
+                Self::has_explicit_type_arguments(inner)
+            }
+            _ => false,
         }
     }
 
@@ -2492,11 +3014,22 @@ fn lower_unary_op(op: ast::UnaryOp) -> UnaryOp {
     }
 }
 
+fn facts_in_span<V: Clone>(facts: &HashMap<Span, V>, owner: Span) -> HashMap<Span, V> {
+    facts
+        .iter()
+        .filter(|(span, _)| {
+            span.file == owner.file && span.start >= owner.start && span.end <= owner.end
+        })
+        .map(|(span, value)| (*span, value.clone()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use jett_common::FileId;
     use jett_diagnostics::Severity;
+    use jett_types::{CapabilityKind, TypeInterner};
 
     fn lower_source(source: &str) -> Program {
         let file = FileId::new(0);
@@ -2526,6 +3059,25 @@ mod tests {
         );
         let origins = HashMap::from([(file, SourceOrigin::Project)]);
         lower(&parsed.module, &resolved, &checked, &origins).expect("HIR lowering failed")
+    }
+
+    #[test]
+    fn lowers_capability_parameters_with_nominal_types() {
+        let program = lower_source(
+            r#"namespace app
+function main(stdout: Stdout, stderr: Stderr, stdin: Stdin, filesystem: Filesystem, network: Network, clock: Clock, random: Random, process: Process, environment: Environment, log: Log, graphics: Graphics) returns nothing:
+    return nothing
+"#,
+        );
+        let actual = program.functions[0]
+            .params
+            .iter()
+            .map(|param| param.ty)
+            .collect::<Vec<_>>();
+        let expected = CapabilityKind::ALL.map(TypeInterner::capability).to_vec();
+
+        assert_eq!(actual, expected);
+        assert!(actual.iter().all(|type_id| *type_id != TypeInterner::ERROR));
     }
 
     #[test]
@@ -2582,6 +3134,44 @@ function choose(flag: bool, a: int64, b: int64) returns int64:
                 .iter()
                 .any(|error| error.message.contains("source origin"))
         );
+    }
+
+    #[test]
+    fn lowers_mutual_function_bodies_through_declaration_resolutions() {
+        let program = lower_source(
+            r#"namespace app
+mutual:
+    function is_even(value: int64) returns bool
+    function is_odd(value: int64) returns bool
+function is_even(value: int64) returns bool:
+    if value == 0:
+        return true
+    return is_odd(value - 1)
+function is_odd(value: int64) returns bool:
+    if value == 0:
+        return false
+    return is_even(value - 1)
+"#,
+        );
+
+        assert_eq!(program.functions.len(), 2);
+        assert!(
+            program
+                .functions
+                .iter()
+                .all(|function| function.source_definition.is_some())
+        );
+    }
+
+    #[test]
+    fn canonicalizes_contextual_negated_literals_at_signed_minimum() {
+        let program = lower_source("function minimum() returns int8:\n    return -128\n");
+        let StatementKind::Return(Some(value)) = &program.functions[0].body.statements[0].kind
+        else {
+            panic!("expected a returned literal");
+        };
+        assert_eq!(value.ty, jett_types::TypeInterner::INT8);
+        assert_eq!(value.kind, ExpressionKind::Int(-128));
     }
 
     #[test]
@@ -2813,6 +3403,202 @@ function main() returns int64:
             panic!("expected outer[int64] to call inner[int64]");
         };
         assert_eq!(*function, inner.id);
+    }
+
+    #[test]
+    fn prunes_checker_selected_generic_if_and_match_control_flow() {
+        let program = lower_source(
+            r#"namespace app
+function list_length_or_zero[T](value: T) returns int64:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        list[int64] items = value
+        return 1
+    return 0
+function primitive_string_or_other[T](value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    match primitive:
+        string_type:
+            string text = value
+            return text
+        other:
+            return "other"
+function main() returns string:
+    list[int64] values = list(1, 2)
+    int64 present = list_length_or_zero[list[int64]](values)
+    int64 absent = list_length_or_zero[string]("Ada")
+    string text = primitive_string_or_other[string]("Ada")
+    string other = primitive_string_or_other[int64](7)
+    return "{present}:{absent}:{text}:{other}"
+"#,
+        );
+
+        let list_instantiations = program
+            .functions
+            .iter()
+            .filter(|function| function.identity.declaration.name == "list_length_or_zero")
+            .collect::<Vec<_>>();
+        assert_eq!(list_instantiations.len(), 2);
+        assert!(list_instantiations.iter().any(|function| {
+            matches!(
+                function.body.statements.as_slice(),
+                [
+                    Statement {
+                        kind: StatementKind::Scope(_),
+                        ..
+                    },
+                    Statement {
+                        kind: StatementKind::Return(_),
+                        ..
+                    }
+                ]
+            )
+        }));
+        assert!(list_instantiations.iter().any(|function| {
+            matches!(
+                function.body.statements.as_slice(),
+                [Statement {
+                    kind: StatementKind::Return(_),
+                    ..
+                }]
+            )
+        }));
+
+        let match_instantiations = program
+            .functions
+            .iter()
+            .filter(|function| function.identity.declaration.name == "primitive_string_or_other")
+            .collect::<Vec<_>>();
+        assert_eq!(match_instantiations.len(), 2);
+        assert!(match_instantiations.iter().all(|function| {
+            function
+                .body
+                .statements
+                .iter()
+                .all(|statement| !matches!(statement.kind, StatementKind::Match { .. }))
+                && function
+                    .body
+                    .statements
+                    .iter()
+                    .any(|statement| matches!(statement.kind, StatementKind::Scope(_)))
+        }));
+    }
+
+    #[test]
+    fn alias_and_underlying_type_lower_to_distinct_branch_and_match_functions() {
+        let program = lower_source(
+            r#"namespace app
+type Names = list[string]
+function classify_branch[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return "alias"
+    else:
+        return "list"
+function classify_match[T]() returns string:
+    match type.kind_tag[T]():
+        alias_type:
+            return "alias"
+        other:
+            return "list"
+function main() returns nothing:
+    string branch_alias = classify_branch[Names]()
+    string branch_list = classify_branch[list[string]]()
+    string match_alias = classify_match[Names]()
+    string match_list = classify_match[list[string]]()
+"#,
+        );
+
+        for name in ["classify_branch", "classify_match"] {
+            let instantiations = program
+                .functions
+                .iter()
+                .filter(|function| function.identity.declaration.name == name)
+                .collect::<Vec<_>>();
+            assert_eq!(instantiations.len(), 2);
+            assert_eq!(
+                instantiations[0].identity.type_arguments,
+                instantiations[1].identity.type_arguments
+            );
+            assert_ne!(
+                instantiations[0].identity.specialization,
+                instantiations[1].identity.specialization
+            );
+            assert!(instantiations.iter().all(|function| {
+                function.body.statements.iter().all(|statement| {
+                    !matches!(
+                        statement.kind,
+                        StatementKind::If { .. } | StatementKind::Match { .. }
+                    )
+                })
+            }));
+        }
+
+        let main = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .expect("main should lower");
+        let call_targets = main
+            .body
+            .statements
+            .iter()
+            .filter_map(|statement| match &statement.kind {
+                StatementKind::Let {
+                    value:
+                        Expression {
+                            kind: ExpressionKind::Call { function, .. },
+                            ..
+                        },
+                    ..
+                } => Some(*function),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(call_targets.len(), 4);
+    }
+
+    #[test]
+    fn rejects_static_selection_attached_to_the_wrong_statement_kind() {
+        let source = r#"function choose[T]() returns int64:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        return 1
+    return 0
+function main() returns int64:
+    return choose[list[int64]]()
+"#;
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(source, file);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let mut checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "type errors: {:?}",
+            checked.diagnostics
+        );
+        let instantiation = checked
+            .generic_function_instantiations
+            .first_mut()
+            .expect("choose[list[int64]] should be instantiated");
+        let span = *instantiation
+            .static_selections
+            .keys()
+            .next()
+            .expect("static if selection should be exported");
+        instantiation
+            .static_selections
+            .insert(span, CheckedStaticSelection::MatchArm(0));
+
+        let origins = HashMap::from([(file, SourceOrigin::Project)]);
+        let errors = lower(&parsed.module, &resolved, &checked, &origins)
+            .expect_err("mismatched static selection must fail lowering");
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("static match selection attached to an if")
+        }));
     }
 
     #[test]
@@ -3270,6 +4056,212 @@ function absolute(value: int64) returns int64:
         };
         assert_eq!(canonical_name, "math.abs");
         assert_eq!(args.len(), 1);
+    }
+
+    #[test]
+    fn preserves_checked_intrinsic_type_operands() {
+        let program = lower_source(
+            r#"namespace app
+function describe[T]() returns string:
+    return type.name[T]()
+function main() returns string:
+    return describe[int64]()
+"#,
+        );
+        let describe = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "describe")
+            .expect("concrete describe function should lower");
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Intrinsic {
+                    canonical_name,
+                    type_arguments,
+                    ..
+                },
+            ..
+        })) = &describe.body.statements[0].kind
+        else {
+            panic!("expected reflected compiler intrinsic");
+        };
+        assert_eq!(canonical_name, "type.name");
+        assert_eq!(type_arguments, describe.identity.type_arguments.as_slice());
+    }
+
+    #[test]
+    fn preserves_stdlib_kernel_type_operands_in_inferred_generic_instantiations() {
+        let source = r#"namespace list
+export function length[T](view items: list[T]) returns int64:
+    return list.__length[T](view items)
+function main() returns int64:
+    list[int64] items = list()
+    return list.length(view items)
+"#;
+        let file = FileId::new(jett_common::STDLIB_FILE_ID_START);
+        let parsed = jett_parser::parse(source, file);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "resolve errors: {:?}",
+            resolved.diagnostics
+        );
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "type errors: {:?}",
+            checked.diagnostics
+        );
+        let origins = HashMap::from([(file, SourceOrigin::Stdlib)]);
+        let program = lower(&parsed.module, &resolved, &checked, &origins)
+            .expect("stdlib generic kernel call should lower");
+
+        let length = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "length")
+            .expect("concrete length function should lower");
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Intrinsic {
+                    canonical_name,
+                    type_arguments,
+                    ..
+                },
+            ..
+        })) = &length.body.statements[0].kind
+        else {
+            panic!("expected stdlib kernel intrinsic");
+        };
+        assert_eq!(canonical_name, "list.__length");
+        assert_eq!(type_arguments, length.identity.type_arguments.as_slice());
+    }
+
+    #[test]
+    fn lowers_list_stdlib_specializations_with_checked_kernel_operands() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let stdlib_file = FileId::new(jett_common::STDLIB_FILE_ID_START);
+        let project_file = FileId::new(0);
+        let stdlib_source = std::fs::read_to_string(root.join("stdlib/list.jett"))
+            .expect("list stdlib source should be readable");
+        let project_source =
+            std::fs::read_to_string(root.join("tests/run_pass/list_operations.jett"))
+                .expect("list fixture should be readable");
+        let stdlib = jett_parser::parse(&stdlib_source, stdlib_file);
+        let project = jett_parser::parse(&project_source, project_file);
+        assert!(
+            stdlib.errors.is_empty(),
+            "stdlib parse errors: {:?}",
+            stdlib.errors
+        );
+        assert!(
+            project.errors.is_empty(),
+            "project parse errors: {:?}",
+            project.errors
+        );
+        let mut items = stdlib.module.items;
+        items.extend(project.module.items);
+        let module = Module {
+            items,
+            span: project.module.span,
+        };
+        let resolved = jett_resolve::resolve(&module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "resolve errors: {:?}",
+            resolved.diagnostics
+        );
+        let checked = jett_typecheck::check(&module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Severity::Error),
+            "type errors: {:?}",
+            checked.diagnostics
+        );
+        let origins = HashMap::from([
+            (stdlib_file, SourceOrigin::Stdlib),
+            (project_file, SourceOrigin::Project),
+        ]);
+        lower(&module, &resolved, &checked, &origins)
+            .expect("list stdlib specializations should lower");
+    }
+
+    #[test]
+    fn lowers_reflected_comptime_type_bodies_as_exclusive_dispatch() {
+        let program = lower_source(
+            r#"namespace app
+struct User:
+    name: string
+    age: int64
+    city: string
+function reflected_names[T](view value: T) returns string:
+    mutable string output = ""
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            output = type.name[Field]()
+    return output
+function main() returns string:
+    User user = User(name: "Ada", age: 37, city: "London")
+    return reflected_names[User](view user)
+"#,
+        );
+        let reflected = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "reflected_names")
+            .expect("concrete reflected function should lower");
+        let StatementKind::For { body, .. } = &reflected.body.statements[1].kind else {
+            panic!("expected reflected field loop");
+        };
+        let StatementKind::ReflectedTypeDispatch { type_info, arms } = &body.statements[0].kind
+        else {
+            panic!("expected compiler-owned reflected type dispatch");
+        };
+        assert!(matches!(type_info.kind, ExpressionKind::Field { .. }));
+        assert_eq!(arms.len(), 2);
+        assert_eq!(
+            arms.iter()
+                .map(|arm| arm.iteration_index)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_ne!(arms[0].bound_type, arms[1].bound_type);
+        for arm in arms {
+            let StatementKind::Assign {
+                value:
+                    Expression {
+                        kind:
+                            ExpressionKind::Intrinsic {
+                                canonical_name,
+                                type_arguments,
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } = &arm.body.statements[0].kind
+            else {
+                panic!("expected specialized reflected body");
+            };
+            assert_eq!(canonical_name, "type.name");
+            assert_eq!(type_arguments, &[arm.bound_type]);
+        }
     }
 
     #[test]

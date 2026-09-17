@@ -947,6 +947,15 @@ pub fn unspecialized_generic_function_value(name: &str, span: Span) -> Diagnosti
     )
 }
 
+/// E0374: One canonical generic instantiation cannot have two static bodies.
+pub fn conflicting_generic_static_selection(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        374,
+        "generic instantiation has conflicting compile-time control-flow selections".to_string(),
+        span,
+    )
+}
+
 /// E0800: Function body exceeds the statement count limit.
 pub fn function_statement_limit(
     function_name: &str,

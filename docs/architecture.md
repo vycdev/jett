@@ -836,9 +836,11 @@ The HIR is the first representation where generic functions are fully expanded. 
 Resolver `DefId` and `TypeId` values remain session-local join keys. An
 in-memory HIR function identity is the compiler-supplied source origin,
 canonical namespace, canonical declaration name and kind, plus concrete type
-arguments. Persistent artifacts replace raw type interner IDs with canonical
-structural type identities. Lowering never infers source authority from
-`FileId` ranges or trusted-looking names.
+arguments and the checker-owned reflection-visible specialization facts.
+Persistent artifacts replace raw type interner IDs with canonical structural
+type identities and encode those specialization facts deterministically so an
+alias-specialized body cannot collide with its underlying-type body. Lowering
+never infers source authority from `FileId` ranges or trusted-looking names.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 
@@ -2549,7 +2551,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0373 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
+| E0300–E0374 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |

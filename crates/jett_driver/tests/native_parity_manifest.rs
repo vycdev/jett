@@ -1,0 +1,411 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use jett_common::FileId;
+use jett_parser::ast::Item;
+use serde_json::{Map, Value};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Obligation {
+    Lower,
+    MainExecute,
+    RuntimeContract,
+}
+
+impl Obligation {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "lower" => Ok(Self::Lower),
+            "main_execute" => Ok(Self::MainExecute),
+            "runtime_contract" => Ok(Self::RuntimeContract),
+            unknown => Err(format!("unknown obligation `{unknown}`")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedOutcome {
+    LowerOnly,
+    Success,
+    WrappingSuccess,
+    ExpectedFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FixtureCategory {
+    RunPass,
+    RuntimeFail,
+}
+
+impl ExpectedOutcome {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "lower_only" => Ok(Self::LowerOnly),
+            "success" => Ok(Self::Success),
+            "wrapping_success" => Ok(Self::WrappingSuccess),
+            "expected_failure" => Ok(Self::ExpectedFailure),
+            unknown => Err(format!("unknown expected outcome `{unknown}`")),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Fixture {
+    obligations: BTreeSet<Obligation>,
+    expected_outcome: ExpectedOutcome,
+}
+
+#[derive(Debug)]
+struct Manifest {
+    fixtures: BTreeMap<String, Fixture>,
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should resolve")
+}
+
+fn require_exact_fields(
+    object: &Map<String, Value>,
+    expected: &[&str],
+    context: &str,
+) -> Result<(), String> {
+    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let missing = expected.difference(&actual).copied().collect::<Vec<_>>();
+    let unknown = actual.difference(&expected).copied().collect::<Vec<_>>();
+    if missing.is_empty() && unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{context} has invalid fields; missing={missing:?}, unknown={unknown:?}"
+        ))
+    }
+}
+
+fn required_string<'a>(
+    object: &'a Map<String, Value>,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, String> {
+    object[field]
+        .as_str()
+        .ok_or_else(|| format!("{context}.{field} must be a string"))
+}
+
+fn validate_fixture_path(path: &str, context: &str) -> Result<FixtureCategory, String> {
+    if path.contains('\\') || Path::new(path).is_absolute() {
+        return Err(format!(
+            "{context}.path must be a relative forward-slash path"
+        ));
+    }
+    let segments = path.split('/').collect::<Vec<_>>();
+    let ["tests", category, file_name] = segments.as_slice() else {
+        return Err(format!(
+            "{context}.path must be `tests/run_pass/*.jett` or `tests/runtime_fail/*.jett`"
+        ));
+    };
+    if file_name.is_empty() || !file_name.ends_with(".jett") {
+        return Err(format!("{context}.path is not a supported fixture path"));
+    }
+    match *category {
+        "run_pass" => Ok(FixtureCategory::RunPass),
+        "runtime_fail" => Ok(FixtureCategory::RuntimeFail),
+        _ => Err(format!("{context}.path is not a supported fixture path")),
+    }
+}
+
+fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), String> {
+    let context = format!("fixtures[{index}]");
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    require_exact_fields(
+        object,
+        &["path", "obligations", "expected_outcome"],
+        &context,
+    )?;
+
+    let path = required_string(object, "path", &context)?.to_owned();
+    let category = validate_fixture_path(&path, &context)?;
+    let obligation_values = object["obligations"]
+        .as_array()
+        .ok_or_else(|| format!("{context}.obligations must be an array"))?;
+    if obligation_values.is_empty() {
+        return Err(format!("{context}.obligations must not be empty"));
+    }
+    let mut obligations = BTreeSet::new();
+    for (obligation_index, value) in obligation_values.iter().enumerate() {
+        let value = value
+            .as_str()
+            .ok_or_else(|| format!("{context}.obligations[{obligation_index}] must be a string"))?;
+        let obligation = Obligation::parse(value)?;
+        if !obligations.insert(obligation) {
+            return Err(format!(
+                "{context}.obligations contains duplicate `{value}`"
+            ));
+        }
+    }
+    let expected_outcome =
+        ExpectedOutcome::parse(required_string(object, "expected_outcome", &context)?)?;
+
+    let lower_only = BTreeSet::from([Obligation::Lower]);
+    let main_execute = BTreeSet::from([Obligation::Lower, Obligation::MainExecute]);
+    let runtime_contract = BTreeSet::from([Obligation::RuntimeContract]);
+    let valid = if obligations == lower_only {
+        category == FixtureCategory::RunPass && expected_outcome == ExpectedOutcome::LowerOnly
+    } else if obligations == main_execute {
+        category == FixtureCategory::RunPass
+            && matches!(
+                expected_outcome,
+                ExpectedOutcome::Success | ExpectedOutcome::ExpectedFailure
+            )
+    } else if obligations == runtime_contract {
+        category == FixtureCategory::RuntimeFail
+            && matches!(
+                expected_outcome,
+                ExpectedOutcome::WrappingSuccess | ExpectedOutcome::ExpectedFailure
+            )
+    } else {
+        false
+    };
+    if !valid {
+        return Err(format!(
+            "{context} has an invalid path/obligation/outcome combination"
+        ));
+    }
+
+    Ok((
+        path,
+        Fixture {
+            obligations,
+            expected_outcome,
+        },
+    ))
+}
+
+fn parse_manifest(source: &str) -> Result<Manifest, String> {
+    let value: Value = serde_json::from_str(source)
+        .map_err(|error| format!("manifest is not valid JSON: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "manifest root must be an object".to_owned())?;
+    require_exact_fields(object, &["version", "fixtures"], "manifest")?;
+    if object["version"].as_u64() != Some(1) {
+        return Err("manifest.version must be the integer 1".to_owned());
+    }
+    let fixture_values = object["fixtures"]
+        .as_array()
+        .ok_or_else(|| "manifest.fixtures must be an array".to_owned())?;
+    let mut fixtures = BTreeMap::new();
+    for (index, value) in fixture_values.iter().enumerate() {
+        let (path, fixture) = parse_fixture(value, index)?;
+        if fixtures.insert(path.clone(), fixture).is_some() {
+            return Err(format!("manifest contains duplicate fixture path `{path}`"));
+        }
+    }
+    Ok(Manifest { fixtures })
+}
+
+fn discovered_fixture_paths(kind: &str) -> BTreeSet<String> {
+    let directory = workspace_root().join("tests").join(kind);
+    fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", directory.display()))
+        .map(|entry| entry.expect("fixture directory entry should be readable"))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jett")
+        })
+        .map(|entry| {
+            format!(
+                "tests/{kind}/{}",
+                entry
+                    .file_name()
+                    .to_str()
+                    .expect("fixture file names should be UTF-8")
+            )
+        })
+        .collect()
+}
+
+fn manifest_paths_with_obligation(manifest: &Manifest, obligation: Obligation) -> BTreeSet<String> {
+    manifest
+        .fixtures
+        .iter()
+        .filter(|(_, fixture)| fixture.obligations.contains(&obligation))
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+fn ast_main_paths(run_pass_paths: &BTreeSet<String>) -> BTreeSet<String> {
+    let root = workspace_root();
+    run_pass_paths
+        .iter()
+        .filter_map(|path| {
+            let source = fs::read_to_string(root.join(path))
+                .unwrap_or_else(|error| panic!("failed to read {path}: {error}"));
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(
+                parsed.errors.is_empty(),
+                "fixture {path} has parse errors: {:?}",
+                parsed.errors
+            );
+            parsed
+                .module
+                .items
+                .iter()
+                .any(
+                    |item| matches!(item, Item::Function(function) if function.name.name == "main"),
+                )
+                .then(|| path.clone())
+        })
+        .collect()
+}
+
+fn paths_with_outcome(
+    manifest: &Manifest,
+    obligation: Obligation,
+    outcome: ExpectedOutcome,
+) -> BTreeSet<String> {
+    manifest
+        .fixtures
+        .iter()
+        .filter(|(_, fixture)| {
+            fixture.obligations.contains(&obligation) && fixture.expected_outcome == outcome
+        })
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+#[test]
+fn native_parity_manifest_matches_fixture_inventory() {
+    let root = workspace_root();
+    let source = fs::read_to_string(root.join("tests/native_parity.json"))
+        .expect("native parity manifest should be readable");
+    let manifest = parse_manifest(&source).expect("native parity manifest should be valid");
+
+    let discovered_run_pass = discovered_fixture_paths("run_pass");
+    let manifested_lower = manifest_paths_with_obligation(&manifest, Obligation::Lower);
+    assert_eq!(
+        manifested_lower, discovered_run_pass,
+        "lowering manifest must exactly match tests/run_pass"
+    );
+    assert_eq!(manifested_lower.len(), 181, "lowering denominator changed");
+
+    let discovered_mains = ast_main_paths(&discovered_run_pass);
+    let manifested_mains = manifest_paths_with_obligation(&manifest, Obligation::MainExecute);
+    assert_eq!(
+        manifested_mains, discovered_mains,
+        "main-execution manifest must exactly match AST-discovered top-level main functions"
+    );
+    assert_eq!(manifested_mains.len(), 29, "main denominator changed");
+
+    let discovered_runtime = discovered_fixture_paths("runtime_fail");
+    let manifested_runtime = manifest_paths_with_obligation(&manifest, Obligation::RuntimeContract);
+    assert_eq!(
+        manifested_runtime, discovered_runtime,
+        "runtime-contract manifest must exactly match tests/runtime_fail"
+    );
+    assert_eq!(
+        manifested_runtime.len(),
+        25,
+        "runtime-contract denominator changed"
+    );
+
+    let expected_runtime_failures = [
+        "clock_provider_failure.jett",
+        "math_clamp_nan_bound.jett",
+        "math_clamp_nan_upper_bound.jett",
+        "math_clamp_reversed_float_bounds.jett",
+        "random_invalid_test_sample.jett",
+        "random_provider_exhausted.jett",
+        "range_capacity_overflow.jett",
+        "string_repeat_capacity_overflow.jett",
+    ]
+    .map(|name| format!("tests/runtime_fail/{name}"))
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let manifested_runtime_failures = paths_with_outcome(
+        &manifest,
+        Obligation::RuntimeContract,
+        ExpectedOutcome::ExpectedFailure,
+    );
+    assert_eq!(manifested_runtime_failures, expected_runtime_failures);
+    assert_eq!(manifested_runtime_failures.len(), 8);
+
+    let expected_wrapping_success = discovered_runtime
+        .difference(&expected_runtime_failures)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let manifested_wrapping_success = paths_with_outcome(
+        &manifest,
+        Obligation::RuntimeContract,
+        ExpectedOutcome::WrappingSuccess,
+    );
+    assert_eq!(manifested_wrapping_success, expected_wrapping_success);
+    assert_eq!(manifested_wrapping_success.len(), 17);
+
+    let expected_main_failures =
+        BTreeSet::from(["tests/run_pass/graphics_callback_runtime_error.jett".to_owned()]);
+    let manifested_main_failures = paths_with_outcome(
+        &manifest,
+        Obligation::MainExecute,
+        ExpectedOutcome::ExpectedFailure,
+    );
+    assert_eq!(manifested_main_failures, expected_main_failures);
+    assert_eq!(
+        paths_with_outcome(&manifest, Obligation::MainExecute, ExpectedOutcome::Success).len(),
+        28
+    );
+}
+
+#[test]
+fn native_parity_manifest_parser_rejects_malformed_entries() {
+    let invalid_manifests = [
+        (
+            "unknown root field",
+            r#"{"version":1,"fixtures":[],"extra":true}"#,
+        ),
+        (
+            "unknown fixture field",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only","extra":true}]}"#,
+        ),
+        (
+            "unknown obligation",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["compile"],"expected_outcome":"lower_only"}]}"#,
+        ),
+        (
+            "duplicate obligation",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower","lower"],"expected_outcome":"lower_only"}]}"#,
+        ),
+        (
+            "duplicate fixture",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only"},{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only"}]}"#,
+        ),
+        (
+            "unknown outcome",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"maybe"}]}"#,
+        ),
+        (
+            "invalid obligation combination",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["main_execute"],"expected_outcome":"success"}]}"#,
+        ),
+        (
+            "invalid category",
+            r#"{"version":1,"fixtures":[{"path":"tests/runtime_fail/a.jett","obligations":["lower"],"expected_outcome":"lower_only"}]}"#,
+        ),
+        ("invalid version", r#"{"version":2,"fixtures":[]}"#),
+    ];
+
+    for (name, source) in invalid_manifests {
+        assert!(
+            parse_manifest(source).is_err(),
+            "invalid manifest case `{name}` was accepted"
+        );
+    }
+}

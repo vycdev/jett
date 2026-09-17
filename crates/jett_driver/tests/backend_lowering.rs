@@ -1,0 +1,145 @@
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use jett_common::SourceOrigin;
+use jett_driver::lower_file_for_backend;
+
+fn fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass")
+}
+
+fn run_pass_fixtures() -> Vec<PathBuf> {
+    let mut fixtures = fs::read_dir(fixture_dir())
+        .expect("run-pass fixture directory should be readable")
+        .map(|entry| entry.expect("fixture entry should be readable").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jett")
+        })
+        .collect::<Vec<_>>();
+    fixtures.sort();
+    fixtures
+}
+
+fn fixture_name(path: &Path) -> String {
+    path.file_name()
+        .expect("fixture should have a file name")
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn backend_lowering_retains_explicit_project_and_stdlib_origins() {
+    let fixture = fixture_dir().join("simple.jett");
+    let lowered = lower_file_for_backend(&fixture).expect("simple fixture should lower");
+
+    assert_eq!(
+        lowered.source_origins.get(&jett_common::FileId::new(0)),
+        Some(&SourceOrigin::Project)
+    );
+    assert!(
+        lowered
+            .source_origins
+            .values()
+            .any(|origin| *origin == SourceOrigin::Stdlib),
+        "lowering should retain an explicit stdlib source origin"
+    );
+    assert!(!lowered.hir.functions.is_empty());
+    assert_eq!(lowered.hir.functions.len(), lowered.mir.functions.len());
+}
+
+#[test]
+fn backend_lowering_handles_function_values_and_qualified_type_operations() {
+    let fixtures = [
+        "generic_function_value_wrappers.jett",
+        "graphics_callback_runtime_error.jett",
+        "graphics_pipeline_scripted.jett",
+        "graphics_scene.jett",
+        "graphics_scripted.jett",
+        "json_namespace_duplicate_machine_envelope.jett",
+        "list_higher_order.jett",
+        "list_operations.jett",
+        "list_shape_helpers.jett",
+        "list_source_surface.jett",
+        "namespace_duplicate_leaf_types.jett",
+        "namespace_exports_syntax.jett",
+        "namespace_machine_branch_narrowing.jett",
+        "namespace_qualified_types.jett",
+        "namespace_use_alias.jett",
+        "reflection_type_id_duplicate_named_owners.jett",
+    ];
+
+    let failures = fixtures
+        .into_iter()
+        .filter_map(|name| {
+            lower_file_for_backend(&fixture_dir().join(name))
+                .err()
+                .map(|error| (name, error.to_string()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert!(
+        failures.is_empty(),
+        "checked function/type operations failed backend lowering:\n{failures:#?}"
+    );
+}
+
+#[test]
+fn backend_lowering_handles_reflection_driven_generic_bodies() {
+    let fixtures = [
+        "captured_local_function_name.jett",
+        "comptime_type_bind.jett",
+        "json_reflection_flat_decoder.jett",
+        "json_reflection_flat_serializer.jett",
+        "type_construction_builder.jett",
+        "type_construction_enum.jett",
+        "type_construction_machine.jett",
+    ];
+
+    let failures = fixtures
+        .into_iter()
+        .filter_map(|name| {
+            lower_file_for_backend(&fixture_dir().join(name))
+                .err()
+                .map(|error| (name, error.to_string()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert!(
+        failures.is_empty(),
+        "reflection generic bodies failed backend lowering:\n{failures:#?}"
+    );
+}
+
+#[test]
+fn run_pass_backend_lowering_gaps_are_explicit_and_monotonic() {
+    let fixtures = run_pass_fixtures();
+    assert_eq!(fixtures.len(), 181, "update the native parity denominator");
+
+    let worker_count = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(8)
+        .min(fixtures.len());
+    let chunk_size = fixtures.len().div_ceil(worker_count);
+    let failures = std::thread::scope(|scope| {
+        let workers = fixtures.chunks(chunk_size).map(|chunk| {
+            scope.spawn(|| {
+                chunk
+                    .iter()
+                    .filter_map(|fixture| {
+                        lower_file_for_backend(fixture)
+                            .err()
+                            .map(|error| (fixture_name(fixture), error.to_string()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        });
+        workers
+            .flat_map(|worker| worker.join().expect("lowering worker should not panic"))
+            .collect::<BTreeMap<_, _>>()
+    });
+
+    assert!(
+        failures.is_empty(),
+        "run-pass fixtures still outside backend lowering:\n{failures:#?}"
+    );
+}

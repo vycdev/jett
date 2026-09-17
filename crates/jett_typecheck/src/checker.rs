@@ -12,9 +12,10 @@ use jett_resolve::scope::{DefId, DefKind};
 use jett_types::{
     ActorDef as TypeActorDef, ActorMessageDef, BitfieldDef as TypeBitfieldDef,
     BitfieldFieldDef as TypeBitfieldFieldDef, BitfieldFieldKind as TypeBitfieldFieldKind,
-    BitfieldId, EnumDef as TypeEnumDef, FunctionSig, InterfaceDef as TypeInterfaceDef,
-    MachineDef as TypeMachineDef, MachineId, MachineStateDef as TypeMachineStateDef,
-    MachineStateId, MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
+    BitfieldId, CapabilityKind, EnumDef as TypeEnumDef, FunctionSig,
+    InterfaceDef as TypeInterfaceDef, MachineDef as TypeMachineDef, MachineId,
+    MachineStateDef as TypeMachineStateDef, MachineStateId,
+    MachineTransitionDef as TypeMachineTransitionDef, ReflectionBitfieldFieldInfo,
     ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionMachineInfo, ReflectionMachineStateInfo,
     ReflectionMachineTransitionInfo, ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
     StructDef as TypeStructDef, StructId, Type, TypeId, TypeInterner, VariantDef,
@@ -32,6 +33,9 @@ pub struct CheckedGenericFunctionInstantiation {
     pub definition: DefId,
     /// Concrete type arguments in source type-parameter order.
     pub concrete_args: Vec<TypeId>,
+    /// Checked source-kind and reflection facts that distinguish concrete
+    /// bodies whose canonical `TypeId` arguments are otherwise identical.
+    pub specialization: CheckedGenericSpecialization,
     /// Fully substituted parameter types.
     pub parameter_types: Vec<TypeId>,
     /// Fully substituted return type.
@@ -40,6 +44,12 @@ pub struct CheckedGenericFunctionInstantiation {
     pub type_map: HashMap<Span, TypeId>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Concrete type operands for accepted compiler-owned generic calls.
+    ///
+    /// These operands are not recoverable from the runtime arguments or result
+    /// type for reflection operations such as `type.name[T]()`. HIR consumes
+    /// this map instead of resolving source `TypeExpr` syntax again.
+    pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
     /// Source arguments normalized to parameter order for calls in this body.
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Concrete source-defined method targets selected in this body.
@@ -48,6 +58,68 @@ pub struct CheckedGenericFunctionInstantiation {
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Raw call-result types for pipeline steps before any step-local handle.
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
+    /// Checker-owned compile-time control-flow choices for this concrete body.
+    ///
+    /// HIR must consume these choices instead of re-evaluating reflection or
+    /// visiting branches that were deliberately not checked.
+    pub static_selections: HashMap<Span, CheckedStaticSelection>,
+    /// Concrete expansions of trusted `comptime type` statements in this body.
+    pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+}
+
+/// Checker facts for one concrete expansion of a `comptime type` body.
+#[derive(Debug, Clone)]
+pub struct CheckedComptimeTypeBinding {
+    /// How lowering selects this concrete body.
+    ///
+    /// Lowering must not execute every exported reflected-iteration body for
+    /// every runtime loop iteration. It may statically unroll the reflected
+    /// loop or emit a compiler-owned dispatch on canonical reflected type
+    /// identity (with the iteration index retained for stable ordering).
+    pub selection: CheckedComptimeTypeSelection,
+    /// The concrete type bound to the statement's scoped type name.
+    pub bound_type: TypeId,
+    /// Facts produced while checking the body under `bound_type`.
+    pub body: CheckedBodyFacts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedComptimeTypeSelection {
+    /// A direct trusted initializer such as `type.info[T]()` or
+    /// `type.arg[T](literal)`; its body executes once at this source point.
+    Unconditional,
+    /// The canonical position in a trusted reflected loop source. Exactly the
+    /// matching body executes for one runtime reflected element.
+    ReflectedIteration(usize),
+}
+
+/// Typed facts belonging to one checker-selected source-body expansion.
+///
+/// The structure is recursive because trusted reflection loops can contain
+/// nested `comptime type` statements. Span-keyed top-level maps cannot encode
+/// multiple checks of the same source body with different bound types.
+#[derive(Debug, Clone, Default)]
+pub struct CheckedBodyFacts {
+    pub type_map: HashMap<Span, TypeId>,
+    pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
+    pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
+    pub pipeline_step_call_types: HashMap<Span, TypeId>,
+    pub static_selections: HashMap<Span, CheckedStaticSelection>,
+    pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+}
+
+/// One compile-time control-flow choice made while checking a concrete generic
+/// function body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedStaticSelection {
+    IfThen,
+    IfElseIf(usize),
+    IfElse,
+    IfNoBranch,
+    MatchArm(usize),
 }
 
 /// The concrete generic target selected for one checked call expression.
@@ -55,6 +127,18 @@ pub struct CheckedGenericFunctionInstantiation {
 pub struct CheckedGenericCall {
     pub definition: DefId,
     pub concrete_args: Vec<TypeId>,
+    pub specialization: CheckedGenericSpecialization,
+}
+
+/// Checker-owned facts that distinguish generic bodies after canonical type
+/// interning has erased source aliases or other reflection-visible details.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct CheckedGenericSpecialization {
+    pub type_argument_kinds: Vec<String>,
+    pub type_info_kinds: Vec<(usize, String)>,
+    pub type_info_primitives: Vec<(usize, Option<String>)>,
+    pub type_kind_values: Vec<(usize, String)>,
+    pub type_primitive_values: Vec<(usize, String)>,
 }
 
 /// The checked permutation from parameter order to source argument order.
@@ -104,6 +188,9 @@ pub struct CheckResult {
     pub definition_types: HashMap<DefId, TypeId>,
     /// Generic calls made outside generic function bodies, keyed by call span.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Concrete type operands for compiler-owned generic calls outside generic
+    /// function bodies, keyed by call span.
+    pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
     /// Source arguments normalized to parameter order, keyed by call span.
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source-defined method bodies in deterministic declaration order.
@@ -116,6 +203,9 @@ pub struct CheckResult {
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
     /// Accepted concrete generic bodies in deterministic discovery order.
     pub generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
+    /// Concrete expansions of trusted `comptime type` statements outside
+    /// generic function bodies.
+    pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     /// The type interner, containing all types encountered during checking.
     pub interner: TypeInterner,
     /// Checked reflection metadata snapshot for comptime reflection builtins.
@@ -159,12 +249,14 @@ pub fn check_with_options(
         type_map: checker.type_map,
         definition_types: checker.type_env,
         generic_calls: checker.generic_calls,
+        intrinsic_type_arguments: checker.intrinsic_type_arguments,
         call_argument_orders: checker.call_argument_orders,
         method_definitions: checker.method_definitions,
         method_calls: checker.method_calls,
         struct_constructions: checker.struct_constructions,
         pipeline_step_call_types: checker.pipeline_step_call_types,
         generic_function_instantiations: checker.generic_function_instantiations,
+        comptime_type_bindings: checker.comptime_type_bindings,
         interner: checker.interner,
         reflection_metadata,
     }
@@ -247,10 +339,31 @@ struct ActiveGenericInstantiation {
     manifest_index: usize,
     type_map: HashMap<Span, TypeId>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
+    static_selections: HashMap<Span, CheckedStaticSelection>,
+    comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+}
+
+fn merge_static_selections(
+    destination: &mut HashMap<Span, CheckedStaticSelection>,
+    incoming: HashMap<Span, CheckedStaticSelection>,
+) -> Vec<Span> {
+    let mut conflicts = Vec::new();
+    for (span, selection) in incoming {
+        match destination.get(&span) {
+            Some(existing) if *existing != selection => conflicts.push(span),
+            Some(_) => {}
+            None => {
+                destination.insert(span, selection);
+            }
+        }
+    }
+    conflicts.sort_by_key(|span| (span.file.index(), span.start, span.end));
+    conflicts
 }
 
 // ---------------------------------------------------------------------------
@@ -373,13 +486,17 @@ struct TypeChecker<'a> {
     generic_function_templates: HashMap<String, FunctionDef>,
     /// Generic function instantiations whose bodies have already been checked.
     checked_generic_function_instantiations:
-        HashSet<(String, Vec<TypeId>, Vec<String>, ReflectionParamFacts)>,
+        HashSet<(String, Vec<TypeId>, CheckedGenericSpecialization)>,
     /// Canonical concrete identity to its deterministic manifest slot.
-    generic_instantiation_indices: HashMap<(DefId, Vec<TypeId>), usize>,
+    generic_instantiation_indices:
+        HashMap<(DefId, Vec<TypeId>, CheckedGenericSpecialization), usize>,
     /// Ordered, concrete checked-program handoff consumed by HIR.
     generic_function_instantiations: Vec<CheckedGenericFunctionInstantiation>,
     /// Concrete generic calls made outside a generic function body.
     generic_calls: HashMap<Span, CheckedGenericCall>,
+    /// Concrete type operands for compiler-owned generic calls outside a
+    /// generic function body.
+    intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
     /// Checked source-to-parameter permutations outside generic bodies.
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source method bodies exported to HIR.
@@ -394,6 +511,8 @@ struct TypeChecker<'a> {
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Raw pipeline call-result types outside generic bodies.
     pipeline_step_call_types: HashMap<Span, TypeId>,
+    /// Trusted `comptime type` expansions outside generic function bodies.
+    comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
     /// Per-instantiation facts currently being collected. Nested generic body
     /// checks push another scope so their spans never overwrite the caller's.
     active_generic_instantiations: Vec<ActiveGenericInstantiation>,
@@ -476,6 +595,7 @@ impl<'a> TypeChecker<'a> {
             generic_instantiation_indices: HashMap::new(),
             generic_function_instantiations: Vec::new(),
             generic_calls: HashMap::new(),
+            intrinsic_type_arguments: HashMap::new(),
             call_argument_orders: HashMap::new(),
             method_definitions: Vec::new(),
             method_definitions_by_owner: HashMap::new(),
@@ -483,6 +603,7 @@ impl<'a> TypeChecker<'a> {
             method_calls: HashMap::new(),
             struct_constructions: HashMap::new(),
             pipeline_step_call_types: HashMap::new(),
+            comptime_type_bindings: HashMap::new(),
             active_generic_instantiations: Vec::new(),
             specialize_reflection_branches: false,
             current_respond_type: None,
@@ -729,6 +850,8 @@ impl<'a> TypeChecker<'a> {
             Type::Bytes => "bytes".to_string(),
             Type::Nothing => "nothing".to_string(),
             Type::TypeConstruction => "TypeConstruction".to_string(),
+            Type::Never => "<never>".to_string(),
+            Type::Capability(kind) => kind.name().to_string(),
             Type::List(inner) => format!("list[{}]", self.type_name(*inner)),
             Type::Map(k, v) => format!("map[{}, {}]", self.type_name(*k), self.type_name(*v)),
             Type::Set(inner) => format!("set[{}]", self.type_name(*inner)),
@@ -1168,6 +1291,7 @@ impl<'a> TypeChecker<'a> {
             | Type::String
             | Type::Bool
             | Type::Nothing
+            | Type::Never
             | Type::Error => false,
             Type::Refinement { base, .. } => self.json_read_requires_view(*base),
             _ => true,
@@ -1679,7 +1803,11 @@ impl<'a> TypeChecker<'a> {
             Type::Machine(_) => "machine",
             Type::MachineState { .. } => "machine_state",
             Type::Resource(_) => "resource",
-            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown",
+            Type::Interface(_)
+            | Type::Actor(_)
+            | Type::Capability(_)
+            | Type::Never
+            | Type::Error => "unknown",
         }
     }
 
@@ -1714,7 +1842,11 @@ impl<'a> TypeChecker<'a> {
             Type::Machine(_) => "machine_type",
             Type::MachineState { .. } => "machine_state_type",
             Type::Resource(_) => "resource_type",
-            Type::Interface(_) | Type::Actor(_) | Type::Error => "unknown_type",
+            Type::Interface(_)
+            | Type::Actor(_)
+            | Type::Capability(_)
+            | Type::Never
+            | Type::Error => "unknown_type",
         }
     }
 
@@ -2325,10 +2457,12 @@ impl<'a> TypeChecker<'a> {
             | Type::Bool
             | Type::Bytes
             | Type::Nothing
+            | Type::Never
             | Type::Error => {}
             Type::TypeConstruction
             | Type::Interface(_)
             | Type::Actor(_)
+            | Type::Capability(_)
             | Type::Resource(_)
             | Type::Function { .. } => {
                 self.push_json_unsupported_type(ty, unsupported_types, unsupported);
@@ -2645,7 +2779,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
-        if expected == got || expected == TypeInterner::ERROR || got == TypeInterner::ERROR {
+        if expected == got
+            || expected == TypeInterner::ERROR
+            || got == TypeInterner::ERROR
+            || expected == TypeInterner::NEVER
+            || got == TypeInterner::NEVER
+        {
             return true;
         }
 
@@ -3074,7 +3213,7 @@ impl<'a> TypeChecker<'a> {
             "Filesystem.read_file" => {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
-                    vec![TypeInterner::ERROR, TypeInterner::STRING],
+                    vec![TypeInterner::FILESYSTEM, TypeInterner::STRING],
                     self.interner
                         .intern(Type::Result(TypeInterner::STRING, TypeInterner::STRING)),
                 ))
@@ -3083,7 +3222,7 @@ impl<'a> TypeChecker<'a> {
                 self.expect_no_type_args(&name, type_args, span);
                 Some((
                     vec![
-                        TypeInterner::ERROR,
+                        TypeInterner::FILESYSTEM,
                         TypeInterner::STRING,
                         TypeInterner::STRING,
                     ],
@@ -3095,7 +3234,7 @@ impl<'a> TypeChecker<'a> {
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR, TypeInterner::STRING],
+                vec![TypeInterner::STDOUT, TypeInterner::STRING],
                 TypeInterner::NOTHING,
             ),
             "json.parse" | "json.parse_exact" => {
@@ -3899,7 +4038,7 @@ impl<'a> TypeChecker<'a> {
                     .interner
                     .intern(Type::Result(TypeInterner::NOTHING, TypeInterner::STRING));
                 Some((
-                    vec![TypeInterner::ERROR, config, state, update, render],
+                    vec![TypeInterner::GRAPHICS, config, state, update, render],
                     result,
                 ))
             }
@@ -3909,7 +4048,7 @@ impl<'a> TypeChecker<'a> {
                 type_args,
                 span,
                 vec![
-                    TypeInterner::ERROR,
+                    TypeInterner::RANDOM,
                     TypeInterner::INT64,
                     TypeInterner::INT64,
                 ],
@@ -3919,14 +4058,14 @@ impl<'a> TypeChecker<'a> {
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR],
+                vec![TypeInterner::RANDOM],
                 TypeInterner::FLOAT64,
             ),
             "random.__bool" => self.no_type_args_signature(
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR],
+                vec![TypeInterner::RANDOM],
                 TypeInterner::BOOL,
             ),
             "string.__repeat" => self.no_type_args_signature(
@@ -4104,7 +4243,7 @@ impl<'a> TypeChecker<'a> {
                 &name,
                 type_args,
                 span,
-                vec![TypeInterner::ERROR],
+                vec![TypeInterner::CLOCK],
                 TypeInterner::INT64,
             ),
             "Environment.__get" => {
@@ -4113,31 +4252,34 @@ impl<'a> TypeChecker<'a> {
                 let result = self
                     .interner
                     .intern(Type::Result(optional_string, TypeInterner::STRING));
-                Some((vec![TypeInterner::ERROR, TypeInterner::STRING], result))
+                Some((
+                    vec![TypeInterner::ENVIRONMENT, TypeInterner::STRING],
+                    result,
+                ))
             }
             "Environment.__args" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let list_string = self.interner.intern(Type::List(TypeInterner::STRING));
-                Some((vec![TypeInterner::ERROR], list_string))
+                Some((vec![TypeInterner::ENVIRONMENT], list_string))
             }
             "test.mock.__random" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let step = *self.named_types.get("test.mock.RandomStep")?;
                 let steps = self.interner.intern(Type::List(step));
-                Some((vec![steps], TypeInterner::ERROR))
+                Some((vec![steps], TypeInterner::RANDOM))
             }
             "test.mock.__clock" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let step = *self.named_types.get("test.mock.ClockStep")?;
                 let steps = self.interner.intern(Type::List(step));
-                Some((vec![steps], TypeInterner::ERROR))
+                Some((vec![steps], TypeInterner::CLOCK))
             }
             "test.mock.__environment" => {
                 self.expect_no_type_args(&name, type_args, span);
                 let arguments = self.interner.intern(Type::List(TypeInterner::STRING));
                 let entry = *self.named_types.get("test.mock.EnvironmentEntry")?;
                 let entries = self.interner.intern(Type::List(entry));
-                Some((vec![arguments, entries], TypeInterner::ERROR))
+                Some((vec![arguments, entries], TypeInterner::ENVIRONMENT))
             }
             "log.__emit" => {
                 self.expect_no_type_args(&name, type_args, span);
@@ -4146,7 +4288,7 @@ impl<'a> TypeChecker<'a> {
                 let result = self
                     .interner
                     .intern(Type::Result(TypeInterner::NOTHING, error));
-                Some((vec![TypeInterner::ERROR, event], result))
+                Some((vec![TypeInterner::LOG, event], result))
             }
             // Private CSV kernels; public signatures live in stdlib/csv.jett.
             "csv.__parse" => {
@@ -5620,28 +5762,19 @@ impl<'a> TypeChecker<'a> {
         let uses_type_param_reflection = self.generic_function_uses_type_param_reflection(func);
         let branch_specializable = uses_type_param_reflection
             && self.generic_function_reflection_is_branch_specializable(func);
-        if uses_type_param_reflection && !branch_specializable {
+        let runtime_lowerable = uses_type_param_reflection
+            && self.generic_function_reflection_is_runtime_lowerable(func);
+        if uses_type_param_reflection && !branch_specializable && !runtime_lowerable {
             return;
         }
         let specialize_reflection_branches = branch_specializable || !param_facts.is_empty();
 
         let definition = self.declaration_def_id(func.name.span);
-
-        let kind_key = func
-            .type_params
-            .iter()
-            .map(|param| {
-                kind_subst
-                    .get(&param.name)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown_type".to_string())
-            })
-            .collect::<Vec<_>>();
+        let specialization = Self::generic_specialization(func, &kind_subst, &param_facts);
         let cache_key = (
             function_name.to_string(),
             concrete_args.to_vec(),
-            kind_key,
-            param_facts.clone(),
+            specialization.clone(),
         );
         if !self
             .checked_generic_function_instantiations
@@ -5669,7 +5802,7 @@ impl<'a> TypeChecker<'a> {
             .map(|ty| self.resolve_type_expr(ty))
             .unwrap_or(TypeInterner::NOTHING);
         let manifest_index = definition.map(|definition| {
-            let identity = (definition, concrete_args.to_vec());
+            let identity = (definition, concrete_args.to_vec(), specialization.clone());
             if let Some(index) = self.generic_instantiation_indices.get(&identity) {
                 *index
             } else {
@@ -5679,14 +5812,18 @@ impl<'a> TypeChecker<'a> {
                     .push(CheckedGenericFunctionInstantiation {
                         definition,
                         concrete_args: concrete_args.to_vec(),
+                        specialization: specialization.clone(),
                         parameter_types: parameter_types.clone(),
                         return_type,
                         type_map: HashMap::new(),
                         generic_calls: HashMap::new(),
+                        intrinsic_type_arguments: HashMap::new(),
                         call_argument_orders: HashMap::new(),
                         method_calls: HashMap::new(),
                         struct_constructions: HashMap::new(),
                         pipeline_step_call_types: HashMap::new(),
+                        static_selections: HashMap::new(),
+                        comptime_type_bindings: HashMap::new(),
                     });
                 index
             }
@@ -5714,10 +5851,13 @@ impl<'a> TypeChecker<'a> {
                     manifest_index,
                     type_map: HashMap::new(),
                     generic_calls: HashMap::new(),
+                    intrinsic_type_arguments: HashMap::new(),
                     call_argument_orders: HashMap::new(),
                     method_calls: HashMap::new(),
                     struct_constructions: HashMap::new(),
                     pipeline_step_call_types: HashMap::new(),
+                    static_selections: HashMap::new(),
+                    comptime_type_bindings: HashMap::new(),
                 });
         }
 
@@ -5730,19 +5870,32 @@ impl<'a> TypeChecker<'a> {
                 .active_generic_instantiations
                 .pop()
                 .expect("generic instantiation fact scope must be balanced");
-            let entry = &mut self.generic_function_instantiations[active.manifest_index];
-            entry.type_map.extend(active.type_map);
-            entry.generic_calls.extend(active.generic_calls);
-            entry
-                .call_argument_orders
-                .extend(active.call_argument_orders);
-            entry.method_calls.extend(active.method_calls);
-            entry
-                .struct_constructions
-                .extend(active.struct_constructions);
-            entry
-                .pipeline_step_call_types
-                .extend(active.pipeline_step_call_types);
+            let conflicts = {
+                let entry = &mut self.generic_function_instantiations[active.manifest_index];
+                entry.type_map.extend(active.type_map);
+                entry.generic_calls.extend(active.generic_calls);
+                entry
+                    .intrinsic_type_arguments
+                    .extend(active.intrinsic_type_arguments);
+                entry
+                    .call_argument_orders
+                    .extend(active.call_argument_orders);
+                entry.method_calls.extend(active.method_calls);
+                entry
+                    .struct_constructions
+                    .extend(active.struct_constructions);
+                entry
+                    .pipeline_step_call_types
+                    .extend(active.pipeline_step_call_types);
+                entry
+                    .comptime_type_bindings
+                    .extend(active.comptime_type_bindings);
+                merge_static_selections(&mut entry.static_selections, active.static_selections)
+            };
+            for span in conflicts {
+                self.sink
+                    .emit(errors::conflicting_generic_static_selection(span));
+            }
         }
 
         self.type_var_subst = old_subst;
@@ -5800,6 +5953,24 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_intrinsic_type_arguments(&mut self, span: Span, type_args: &[TypeExpr]) {
+        if type_args.is_empty() {
+            return;
+        }
+        let resolved = type_args
+            .iter()
+            .map(|type_arg| self.resolve_type_expr(type_arg))
+            .collect::<Vec<_>>();
+        if resolved.contains(&TypeInterner::ERROR) {
+            return;
+        }
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.intrinsic_type_arguments.insert(span, resolved);
+        } else {
+            self.intrinsic_type_arguments.insert(span, resolved);
+        }
+    }
+
     fn record_call_argument_order(&mut self, span: Span, source_indices: Vec<usize>) {
         let order = CheckedCallArgumentOrder { source_indices };
         if let Some(active) = self.active_generic_instantiations.last_mut() {
@@ -5843,11 +6014,116 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn span_is_within(span: Span, owner: Span) -> bool {
+        span.file == owner.file && span.start >= owner.start && span.end <= owner.end
+    }
+
+    fn facts_in_span<V: Clone>(source: &HashMap<Span, V>, owner: Span) -> HashMap<Span, V> {
+        source
+            .iter()
+            .filter(|(span, _)| Self::span_is_within(**span, owner))
+            .map(|(span, value)| (*span, value.clone()))
+            .collect()
+    }
+
+    fn clear_facts_in_span<V>(source: &mut HashMap<Span, V>, owner: Span) {
+        source.retain(|span, _| !Self::span_is_within(*span, owner));
+    }
+
+    fn clear_checked_body_facts(&mut self, owner: Span) {
+        // Expression types are also retained in the root map for the existing
+        // interpreter handoff, even while a generic fact scope is active.
+        Self::clear_facts_in_span(&mut self.type_map, owner);
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            Self::clear_facts_in_span(&mut active.type_map, owner);
+            Self::clear_facts_in_span(&mut active.generic_calls, owner);
+            Self::clear_facts_in_span(&mut active.intrinsic_type_arguments, owner);
+            Self::clear_facts_in_span(&mut active.call_argument_orders, owner);
+            Self::clear_facts_in_span(&mut active.method_calls, owner);
+            Self::clear_facts_in_span(&mut active.struct_constructions, owner);
+            Self::clear_facts_in_span(&mut active.pipeline_step_call_types, owner);
+            Self::clear_facts_in_span(&mut active.static_selections, owner);
+            Self::clear_facts_in_span(&mut active.comptime_type_bindings, owner);
+        } else {
+            Self::clear_facts_in_span(&mut self.generic_calls, owner);
+            Self::clear_facts_in_span(&mut self.intrinsic_type_arguments, owner);
+            Self::clear_facts_in_span(&mut self.call_argument_orders, owner);
+            Self::clear_facts_in_span(&mut self.method_calls, owner);
+            Self::clear_facts_in_span(&mut self.struct_constructions, owner);
+            Self::clear_facts_in_span(&mut self.pipeline_step_call_types, owner);
+            Self::clear_facts_in_span(&mut self.comptime_type_bindings, owner);
+        }
+    }
+
+    fn checked_body_facts(&self, owner: Span) -> CheckedBodyFacts {
+        if let Some(active) = self.active_generic_instantiations.last() {
+            return CheckedBodyFacts {
+                type_map: Self::facts_in_span(&active.type_map, owner),
+                generic_calls: Self::facts_in_span(&active.generic_calls, owner),
+                intrinsic_type_arguments: Self::facts_in_span(
+                    &active.intrinsic_type_arguments,
+                    owner,
+                ),
+                call_argument_orders: Self::facts_in_span(&active.call_argument_orders, owner),
+                method_calls: Self::facts_in_span(&active.method_calls, owner),
+                struct_constructions: Self::facts_in_span(&active.struct_constructions, owner),
+                pipeline_step_call_types: Self::facts_in_span(
+                    &active.pipeline_step_call_types,
+                    owner,
+                ),
+                static_selections: Self::facts_in_span(&active.static_selections, owner),
+                comptime_type_bindings: Self::facts_in_span(&active.comptime_type_bindings, owner),
+            };
+        }
+        CheckedBodyFacts {
+            type_map: Self::facts_in_span(&self.type_map, owner),
+            generic_calls: Self::facts_in_span(&self.generic_calls, owner),
+            intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
+            call_argument_orders: Self::facts_in_span(&self.call_argument_orders, owner),
+            method_calls: Self::facts_in_span(&self.method_calls, owner),
+            struct_constructions: Self::facts_in_span(&self.struct_constructions, owner),
+            pipeline_step_call_types: Self::facts_in_span(&self.pipeline_step_call_types, owner),
+            static_selections: HashMap::new(),
+            comptime_type_bindings: Self::facts_in_span(&self.comptime_type_bindings, owner),
+        }
+    }
+
+    fn record_comptime_type_bindings(
+        &mut self,
+        span: Span,
+        bindings: Vec<CheckedComptimeTypeBinding>,
+    ) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.comptime_type_bindings.insert(span, bindings);
+        } else {
+            self.comptime_type_bindings.insert(span, bindings);
+        }
+    }
+
+    fn record_static_selection(&mut self, span: Span, selection: CheckedStaticSelection) {
+        let conflict = self
+            .active_generic_instantiations
+            .last_mut()
+            .is_some_and(|active| match active.static_selections.get(&span) {
+                Some(existing) => *existing != selection,
+                None => {
+                    active.static_selections.insert(span, selection);
+                    false
+                }
+            });
+        if conflict {
+            self.sink
+                .emit(errors::conflicting_generic_static_selection(span));
+        }
+    }
+
     fn record_generic_call_for_template(
         &mut self,
         span: Span,
         func: &FunctionDef,
         concrete_args: &[TypeId],
+        kind_subst: &HashMap<String, String>,
+        param_facts: &ReflectionParamFacts,
     ) {
         let Some(definition) = self.declaration_def_id(func.name.span) else {
             return;
@@ -5857,8 +6133,32 @@ impl<'a> TypeChecker<'a> {
             CheckedGenericCall {
                 definition,
                 concrete_args: concrete_args.to_vec(),
+                specialization: Self::generic_specialization(func, kind_subst, param_facts),
             },
         );
+    }
+
+    fn generic_specialization(
+        func: &FunctionDef,
+        kind_subst: &HashMap<String, String>,
+        param_facts: &ReflectionParamFacts,
+    ) -> CheckedGenericSpecialization {
+        CheckedGenericSpecialization {
+            type_argument_kinds: func
+                .type_params
+                .iter()
+                .map(|param| {
+                    kind_subst
+                        .get(&param.name)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown_type".to_string())
+                })
+                .collect(),
+            type_info_kinds: param_facts.type_info_kinds.clone(),
+            type_info_primitives: param_facts.type_info_primitives.clone(),
+            type_kind_values: param_facts.type_kind_values.clone(),
+            type_primitive_values: param_facts.type_primitive_values.clone(),
+        }
     }
 
     fn generic_function_uses_type_param_reflection(&self, func: &FunctionDef) -> bool {
@@ -5877,6 +6177,108 @@ impl<'a> TypeChecker<'a> {
             .map(|param| param.name.clone())
             .collect::<HashSet<_>>();
         self.block_reflection_is_branch_specializable(&func.body, &type_params)
+    }
+
+    /// A deliberately small runtime-reflection slice that can be checked
+    /// concretely without turning runtime values into type proofs.
+    ///
+    /// `type.name[T]()` is permitted only as the direct returned value. The
+    /// metadata/read pair used by the flat serializer remains runtime checked:
+    /// `type.fields[T]()` may initialize a local and `type.field_value[T, U]()`
+    /// may initialize a concrete `U`. In particular, branching on a type-name
+    /// string is not included and cannot authorize a cast to or from `T`.
+    fn generic_function_reflection_is_runtime_lowerable(&self, func: &FunctionDef) -> bool {
+        let type_params = func
+            .type_params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<HashSet<_>>();
+        self.block_reflection_is_runtime_lowerable(&func.body, &type_params)
+    }
+
+    fn block_reflection_is_runtime_lowerable(
+        &self,
+        block: &Block,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        block
+            .stmts
+            .iter()
+            .all(|stmt| self.stmt_reflection_is_runtime_lowerable(stmt, type_params))
+    }
+
+    fn stmt_reflection_is_runtime_lowerable(
+        &self,
+        stmt: &Stmt,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        if !self.stmt_uses_type_param_reflection(stmt, type_params) {
+            return true;
+        }
+        match stmt {
+            Stmt::VarDecl(decl) => self.direct_runtime_reflection_call_is_one_of(
+                &decl.value,
+                type_params,
+                &["type.fields", "type.field_value"],
+            ),
+            Stmt::Return(ret) => ret.value.as_ref().is_some_and(|value| {
+                self.direct_runtime_reflection_call_is_one_of(value, type_params, &["type.name"])
+            }),
+            Stmt::If(if_stmt) => {
+                !self.expr_uses_type_param_reflection(&if_stmt.condition, type_params)
+                    && self.block_reflection_is_runtime_lowerable(&if_stmt.then_block, type_params)
+                    && if_stmt.else_ifs.iter().all(|(condition, block)| {
+                        !self.expr_uses_type_param_reflection(condition, type_params)
+                            && self.block_reflection_is_runtime_lowerable(block, type_params)
+                    })
+                    && if_stmt.else_block.as_ref().is_none_or(|block| {
+                        self.block_reflection_is_runtime_lowerable(block, type_params)
+                    })
+            }
+            Stmt::For(for_stmt) => {
+                !self.expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
+                    && self.block_reflection_is_runtime_lowerable(&for_stmt.body, type_params)
+            }
+            Stmt::While(while_stmt) => {
+                !self.expr_uses_type_param_reflection(&while_stmt.condition, type_params)
+                    && self.block_reflection_is_runtime_lowerable(&while_stmt.body, type_params)
+            }
+            Stmt::Match(match_stmt) => {
+                !self.expr_uses_type_param_reflection(&match_stmt.expr, type_params)
+                    && match_stmt.arms.iter().all(|arm| {
+                        self.block_reflection_is_runtime_lowerable(&arm.body, type_params)
+                    })
+            }
+            Stmt::Assign(_)
+            | Stmt::Respond(_)
+            | Stmt::ComptimeTypeBind(_)
+            | Stmt::Expr(_)
+            | Stmt::Assert(_)
+            | Stmt::Trace(_)
+            | Stmt::Breakpoint(_)
+            | Stmt::Use(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_) => false,
+        }
+    }
+
+    fn direct_runtime_reflection_call_is_one_of(
+        &self,
+        expr: &Expr,
+        type_params: &HashSet<String>,
+        allowed: &[&str],
+    ) -> bool {
+        let Expr::GenericCall(callee, type_args, args, _) = expr else {
+            return false;
+        };
+        self.resolved_expr_name(callee)
+            .is_some_and(|name| allowed.contains(&name.as_str()))
+            && type_args
+                .iter()
+                .any(|type_arg| Self::type_expr_mentions_type_param(type_arg, type_params))
+            && args
+                .iter()
+                .all(|arg| !self.expr_uses_type_param_reflection(&arg.value, type_params))
     }
 
     fn block_reflection_is_branch_specializable(
@@ -6885,7 +7287,15 @@ impl<'a> TypeChecker<'a> {
                 return;
             }
 
-            self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+            let body = self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+            self.record_comptime_type_bindings(
+                bind.span,
+                vec![CheckedComptimeTypeBinding {
+                    selection: CheckedComptimeTypeSelection::Unconditional,
+                    bound_type: bound_ty,
+                    body,
+                }],
+            );
             return;
         }
 
@@ -6899,7 +7309,16 @@ impl<'a> TypeChecker<'a> {
             let arg_types = self.type_info_arg_types_for_type_expr(source_type_expr);
             if let Some(&bound_ty) = arg_types.get(index) {
                 if bound_ty != TypeInterner::ERROR {
-                    self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+                    let body =
+                        self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+                    self.record_comptime_type_bindings(
+                        bind.span,
+                        vec![CheckedComptimeTypeBinding {
+                            selection: CheckedComptimeTypeSelection::Unconditional,
+                            bound_type: bound_ty,
+                            body,
+                        }],
+                    );
                 }
                 return;
             }
@@ -6912,22 +7331,48 @@ impl<'a> TypeChecker<'a> {
 
         if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
             if let Some(field_types) = self.reflected_field_types_for_name(field_name) {
-                for field_ty in field_types {
+                let mut bindings = Vec::new();
+                for (iteration_index, field_ty) in field_types.into_iter().enumerate() {
                     if field_ty != TypeInterner::ERROR {
-                        self.check_comptime_type_bind_body(&bind.name.name, field_ty, &bind.body);
+                        let body = self.check_comptime_type_bind_body(
+                            &bind.name.name,
+                            field_ty,
+                            &bind.body,
+                        );
+                        bindings.push(CheckedComptimeTypeBinding {
+                            selection: CheckedComptimeTypeSelection::ReflectedIteration(
+                                iteration_index,
+                            ),
+                            bound_type: field_ty,
+                            body,
+                        });
                     }
                 }
+                self.record_comptime_type_bindings(bind.span, bindings);
                 return;
             }
         }
 
         if let Some(info_name) = reflected_type_info_binding(&bind.value) {
             if let Some(info_types) = self.reflected_type_info_types_for_name(info_name) {
-                for info_ty in info_types {
+                let mut bindings = Vec::new();
+                for (iteration_index, info_ty) in info_types.into_iter().enumerate() {
                     if info_ty != TypeInterner::ERROR {
-                        self.check_comptime_type_bind_body(&bind.name.name, info_ty, &bind.body);
+                        let body = self.check_comptime_type_bind_body(
+                            &bind.name.name,
+                            info_ty,
+                            &bind.body,
+                        );
+                        bindings.push(CheckedComptimeTypeBinding {
+                            selection: CheckedComptimeTypeSelection::ReflectedIteration(
+                                iteration_index,
+                            ),
+                            bound_type: info_ty,
+                            body,
+                        });
                     }
                 }
+                self.record_comptime_type_bindings(bind.span, bindings);
                 return;
             }
         }
@@ -6937,7 +7382,17 @@ impl<'a> TypeChecker<'a> {
         self.check_block(&bind.body);
     }
 
-    fn check_comptime_type_bind_body(&mut self, name: &str, bound_ty: TypeId, body: &Block) {
+    fn check_comptime_type_bind_body(
+        &mut self,
+        name: &str,
+        bound_ty: TypeId,
+        body: &Block,
+    ) -> CheckedBodyFacts {
+        // The same source spans may be checked repeatedly for different
+        // reflected elements. Clear the previous flat facts so this snapshot
+        // contains only the current concrete expansion; the last expansion
+        // remains in the legacy flat maps for interpreter compatibility.
+        self.clear_checked_body_facts(body.span);
         let previous = self.type_var_subst.insert(name.to_string(), bound_ty);
         self.check_block(body);
         if let Some(previous) = previous {
@@ -6945,6 +7400,7 @@ impl<'a> TypeChecker<'a> {
         } else {
             self.type_var_subst.remove(name);
         }
+        self.checked_body_facts(body.span)
     }
 
     fn reflected_field_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
@@ -7689,6 +8145,16 @@ impl<'a> TypeChecker<'a> {
     fn check_if(&mut self, if_stmt: &ast::IfStmt) {
         if self.specialize_reflection_branches {
             if let Some(selected_branch) = self.static_reflection_if_branch(if_stmt) {
+                let selection = if selected_branch == 0 {
+                    CheckedStaticSelection::IfThen
+                } else if selected_branch <= if_stmt.else_ifs.len() {
+                    CheckedStaticSelection::IfElseIf(selected_branch - 1)
+                } else if if_stmt.else_block.is_some() {
+                    CheckedStaticSelection::IfElse
+                } else {
+                    CheckedStaticSelection::IfNoBranch
+                };
+                self.record_static_selection(if_stmt.span, selection);
                 self.check_condition_expr(&if_stmt.condition);
                 for (else_if_cond, _) in &if_stmt.else_ifs {
                     self.check_condition_expr(else_if_cond);
@@ -8254,6 +8720,12 @@ impl<'a> TypeChecker<'a> {
         } else {
             None
         };
+        if let Some(selected_arm) = selected_static_arm {
+            self.record_static_selection(
+                match_stmt.span,
+                CheckedStaticSelection::MatchArm(selected_arm),
+            );
+        }
         let unknown_reflection_span = if self.specialize_reflection_branches
             && selected_static_arm.is_none()
         {
@@ -8434,24 +8906,26 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Ok(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
-                // ok(T) → result[T, <error>] — the error type is unknown without context.
-                // For now, produce result[T, nothing].
+                // The absent failure payload is uninhabited until context
+                // supplies a concrete error type.
                 self.interner
-                    .intern(Type::Result(inner_ty, TypeInterner::ERROR))
+                    .intern(Type::Result(inner_ty, TypeInterner::NEVER))
             }
             Expr::Fail(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
-                // fail(E) → result[<error>, E]
+                // The absent success payload is uninhabited until context
+                // supplies a concrete success type.
                 self.interner
-                    .intern(Type::Result(TypeInterner::ERROR, inner_ty))
+                    .intern(Type::Result(TypeInterner::NEVER, inner_ty))
             }
             Expr::Some(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
                 self.interner.intern(Type::Optional(inner_ty))
             }
             Expr::None(_) => {
-                // none → optional[<error>] (unknown inner type without context)
-                self.interner.intern(Type::Optional(TypeInterner::ERROR))
+                // `none` has no payload, so its context-free payload type is
+                // the compiler-internal uninhabited type rather than Error.
+                self.interner.intern(Type::Optional(TypeInterner::NEVER))
             }
             Expr::Default(inner, span) => {
                 if self.handle_body_depth == 0 {
@@ -8733,7 +9207,11 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        let diagnostic_count = self.sink.diagnostics().len();
         let builtin_signature = self.builtin_signature(function, type_args, step.span);
+        if builtin_signature.is_some() && self.sink.diagnostics().len() == diagnostic_count {
+            self.record_intrinsic_type_arguments(step.span, type_args);
+        }
         if builtin_signature.is_none() && type_args.is_empty() {
             if let Some(return_type) = self.check_inferred_generic_function_pipeline_step(
                 callee_name.as_deref(),
@@ -8957,14 +9435,21 @@ impl<'a> TypeChecker<'a> {
         }
 
         if arguments_match {
-            self.record_generic_call_for_template(span, &template, &inferred.concrete_args);
+            let param_facts = ReflectionParamFacts::default();
+            self.record_generic_call_for_template(
+                span,
+                &template,
+                &inferred.concrete_args,
+                &inferred.kind_subst,
+                &param_facts,
+            );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &inferred.concrete_args,
                 inferred.subst,
                 inferred.kind_subst,
-                ReflectionParamFacts::default(),
+                param_facts,
             );
         }
         Some(inferred.return_type)
@@ -9085,14 +9570,21 @@ impl<'a> TypeChecker<'a> {
         }
 
         if arguments_match {
-            self.record_generic_call_for_template(span, &template, &concrete_args);
+            let param_facts = ReflectionParamFacts::default();
+            self.record_generic_call_for_template(
+                span,
+                &template,
+                &concrete_args,
+                &kind_subst,
+                &param_facts,
+            );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &concrete_args,
                 subst,
                 kind_subst,
-                ReflectionParamFacts::default(),
+                param_facts,
             );
         }
 
@@ -10042,14 +10534,22 @@ impl<'a> TypeChecker<'a> {
             return;
         };
         let subst = HashMap::from([(type_param.name.clone(), concrete)]);
-        self.record_generic_call_for_template(call_span, &template, &[concrete]);
+        let kind_subst = HashMap::new();
+        let param_facts = ReflectionParamFacts::default();
+        self.record_generic_call_for_template(
+            call_span,
+            &template,
+            &[concrete],
+            &kind_subst,
+            &param_facts,
+        );
         self.check_generic_function_instantiation(
             name,
             &template,
             &[concrete],
             subst,
-            HashMap::new(),
-            ReflectionParamFacts::default(),
+            kind_subst,
+            param_facts,
         );
     }
 
@@ -10167,7 +10667,11 @@ impl<'a> TypeChecker<'a> {
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
             .unwrap_or(false);
+        let diagnostic_count = self.sink.diagnostics().len();
         let builtin_signature = self.builtin_signature(callee, type_args, span);
+        if builtin_signature.is_some() && self.sink.diagnostics().len() == diagnostic_count {
+            self.record_intrinsic_type_arguments(span, type_args);
+        }
 
         if let Some(name @ ("time.now_ms" | "time.now_s")) = callee_name.as_deref() {
             let replacement = if name == "time.now_ms" {
@@ -10403,7 +10907,13 @@ impl<'a> TypeChecker<'a> {
                             &param_types,
                             &ordered_args,
                         );
-                        self.record_generic_call_for_template(span, &template, &concrete_args);
+                        self.record_generic_call_for_template(
+                            span,
+                            &template,
+                            &concrete_args,
+                            &kind_subst,
+                            &param_facts,
+                        );
                         self.check_generic_function_instantiation(
                             function_name,
                             &template,
@@ -11068,8 +11578,8 @@ impl<'a> TypeChecker<'a> {
         arg: &ast::CallArg,
     ) {
         if function_name == "graphics.run"
-            && expected != TypeInterner::ERROR
-            && got == TypeInterner::ERROR
+            && !matches!(self.interner.resolve(expected), Type::Capability(_))
+            && matches!(self.interner.resolve(got), Type::Capability(_))
         {
             self.sink.emit(errors::graphics_contract(
                 "graphics data and callbacks cannot be capability values",
@@ -11118,7 +11628,7 @@ impl<'a> TypeChecker<'a> {
             && inferred
                 .concrete_args
                 .iter()
-                .any(|&ty| ty == TypeInterner::ERROR)
+                .any(|&ty| matches!(self.interner.resolve(ty), Type::Capability(_) | Type::Error))
         {
             self.sink
                 .emit(errors::random_capability_element(function_name, span));
@@ -11150,7 +11660,13 @@ impl<'a> TypeChecker<'a> {
                 &inferred.param_types,
                 &ordered_args,
             );
-            self.record_generic_call_for_template(span, &template, &inferred.concrete_args);
+            self.record_generic_call_for_template(
+                span,
+                &template,
+                &inferred.concrete_args,
+                &inferred.kind_subst,
+                &param_facts,
+            );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
@@ -11226,7 +11742,11 @@ impl<'a> TypeChecker<'a> {
         match expected {
             TypeExpr::Named(ident) if type_params.contains(ident.name.as_str()) => {
                 match subst.get_mut(&ident.name) {
-                    Some(inferred) if *inferred == TypeInterner::ERROR => *inferred = actual,
+                    Some(inferred)
+                        if matches!(*inferred, TypeInterner::ERROR | TypeInterner::NEVER) =>
+                    {
+                        *inferred = actual;
+                    }
                     Some(_) => {}
                     None => {
                         subst.insert(ident.name.clone(), actual);
@@ -11341,7 +11861,9 @@ impl<'a> TypeChecker<'a> {
             }
             if let Some(type_id) = self.named_types.get(&base_ident.name).copied() {
                 if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
-                    return self.check_enum_variant(base_ident, field, &[], span);
+                    // Compiler-defined reflection enums have a named type but
+                    // their type name is not a runtime value in `type_env`.
+                    return self.check_enum_variant_by_type(type_id, field, &[], span);
                 }
                 if let Some(method_ty) = self.check_interface_method(type_id, field, span) {
                     return method_ty;
@@ -12209,8 +12731,9 @@ impl<'a> TypeChecker<'a> {
 
     fn check_list_construct(&mut self, elems: &[Expr]) -> TypeId {
         if elems.is_empty() {
-            // Empty list: list[<error>] since we can't infer the element type.
-            return self.interner.intern(Type::List(TypeInterner::ERROR));
+            // An empty collection has no element value. Keep that fact typed
+            // as an uninhabited element until an expected type supplies one.
+            return self.interner.intern(Type::List(TypeInterner::NEVER));
         }
 
         let first_ty = self.check_expr(&elems[0]);
@@ -12263,7 +12786,7 @@ impl<'a> TypeChecker<'a> {
         if entries.is_empty() {
             return self
                 .interner
-                .intern(Type::Map(TypeInterner::ERROR, TypeInterner::ERROR));
+                .intern(Type::Map(TypeInterner::NEVER, TypeInterner::NEVER));
         }
 
         let first_key_ty = self.check_expr(&entries[0].0);
@@ -12461,7 +12984,7 @@ impl<'a> TypeChecker<'a> {
                             .get(&expr_stmt.expr.span())
                             .copied()
                             .unwrap_or(TypeInterner::ERROR);
-                        if !self.types_compatible(success_ty, default_ty) {
+                        if success_ty != default_ty {
                             default_ty =
                                 self.check_expr_for_expected(default_value, success_ty, false);
                             self.record_expression_type(expr_stmt.expr.span(), default_ty);
@@ -12576,13 +13099,14 @@ impl<'a> TypeChecker<'a> {
             _ if self.type_aliases.contains_key(&lookup_name) => {
                 self.resolve_type_alias(&lookup_name, span)
             }
-            // Capability types are recognised but opaque — no further type
-            // checking is performed on values of these types.
-            _ if capability::is_capability_type(name) => TypeInterner::ERROR,
-            _ => {
-                self.sink.emit(errors::unknown_type(name, span));
-                TypeInterner::ERROR
-            }
+            // Capabilities are opaque values, but retain exact nominal identity.
+            _ => match CapabilityKind::from_name(name) {
+                Some(kind) => TypeInterner::capability(kind),
+                None => {
+                    self.sink.emit(errors::unknown_type(name, span));
+                    TypeInterner::ERROR
+                }
+            },
         }
     }
 
@@ -13373,6 +13897,40 @@ mod tests {
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    #[test]
+    fn compiler_reflection_enum_variants_have_concrete_expression_types() {
+        let source = r#"function matches(kind: TypeKind, primitive: TypePrimitive) returns bool:
+    return kind == TypeKind.alias_type and primitive == TypePrimitive.int8_type
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        for expected_name in ["TypeKind", "TypePrimitive"] {
+            let expression = if expected_name == "TypeKind" {
+                "TypeKind.alias_type"
+            } else {
+                "TypePrimitive.int8_type"
+            };
+            let start = source.find(expression).unwrap() as u32;
+            let span = Span::new(FileId::new(0), start, start + expression.len() as u32);
+            let ty = *result
+                .type_map
+                .get(&span)
+                .expect("reflection enum variant should be typed");
+            let Type::Enum(enum_id) = *result.interner.resolve(ty) else {
+                panic!("reflection enum variant should have an enum type");
+            };
+            assert_eq!(result.interner.resolve_enum(enum_id).name, expected_name);
+        }
     }
 
     #[test]
@@ -14743,6 +15301,57 @@ function piped() returns optional[int64]:
             checker.purity_map.get("printer").copied(),
             Some(false),
             "function with Stdout param should be impure"
+        );
+    }
+
+    #[test]
+    fn accepted_capability_parameters_have_distinct_concrete_types() {
+        let result = check_source_result(
+            r#"function main(stdout: Stdout, stderr: Stderr, stdin: Stdin, filesystem: Filesystem, network: Network, clock: Clock, random: Random, process: Process, environment: Environment, log: Log, graphics: Graphics) returns nothing:
+    return nothing
+"#,
+        );
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+
+        let expected = CapabilityKind::ALL.map(TypeInterner::capability).to_vec();
+        let checked_params = result
+            .definition_types
+            .values()
+            .find_map(|type_id| match result.interner.resolve(*type_id) {
+                Type::Function { params, .. } if params.len() == expected.len() => {
+                    Some(params.clone())
+                }
+                _ => None,
+            })
+            .expect("checked main function type");
+
+        assert_eq!(checked_params, expected);
+        assert!(
+            checked_params
+                .iter()
+                .all(|type_id| *type_id != TypeInterner::ERROR)
+        );
+    }
+
+    #[test]
+    fn distinct_capabilities_do_not_unify_at_builtin_calls() {
+        let errors = check_source_errors(
+            r#"function misuse(view err: Stderr) returns nothing:
+    Stdout.write(view err, "wrong authority")
+    return nothing
+"#,
+        );
+
+        assert!(
+            errors
+                .iter()
+                .any(|diagnostic| diagnostic.code.code() == 304),
+            "expected capability argument mismatch, got: {errors:?}"
         );
     }
 
@@ -16733,5 +17342,342 @@ function main() returns nothing:
         assert_eq!(nested_call.definition, inner.definition);
         assert_eq!(nested_call.concrete_args, vec![TypeInterner::INT64]);
         assert_eq!(result.generic_calls.len(), 2);
+    }
+
+    #[test]
+    fn generic_instantiations_export_checker_owned_static_selections() {
+        let result = check_source_result(
+            r#"struct User:
+    value: int64
+function classify[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        return "list"
+    else if type.kind_tag[T]() == TypeKind.primitive_type:
+        return "primitive"
+    else:
+        return "other"
+function maybe_list[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        return "list"
+    return "none"
+function classify_match[T]() returns string:
+    match type.kind_tag[T]():
+        primitive_type:
+            return "primitive"
+        other:
+            return "other"
+function main() returns nothing:
+    string list_label = classify[list[int64]]()
+    string primitive_label = classify[int64]()
+    string other_label = classify[User]()
+    string absent_label = maybe_list[string]()
+    string match_label = classify_match[int64]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let selections = result
+            .generic_function_instantiations
+            .iter()
+            .flat_map(|instantiation| instantiation.static_selections.values().copied())
+            .collect::<Vec<_>>();
+        assert!(selections.contains(&CheckedStaticSelection::IfThen));
+        assert!(selections.contains(&CheckedStaticSelection::IfElseIf(0)));
+        assert!(selections.contains(&CheckedStaticSelection::IfElse));
+        assert!(selections.contains(&CheckedStaticSelection::IfNoBranch));
+        assert!(selections.contains(&CheckedStaticSelection::MatchArm(0)));
+    }
+
+    #[test]
+    fn alias_and_underlying_type_keep_distinct_branch_and_match_specializations() {
+        let result = check_source_result(
+            r#"type Names = list[string]
+function classify_branch[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return "alias"
+    else:
+        return "list"
+function classify_match[T]() returns string:
+    match type.kind_tag[T]():
+        alias_type:
+            return "alias"
+        other:
+            return "list"
+function main() returns nothing:
+    string branch_alias = classify_branch[Names]()
+    string branch_list = classify_branch[list[string]]()
+    string match_alias = classify_match[Names]()
+    string match_list = classify_match[list[string]]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let mut by_definition: HashMap<DefId, Vec<&CheckedGenericFunctionInstantiation>> =
+            HashMap::new();
+        for instantiation in &result.generic_function_instantiations {
+            by_definition
+                .entry(instantiation.definition)
+                .or_default()
+                .push(instantiation);
+        }
+        assert_eq!(by_definition.len(), 2);
+        for instantiations in by_definition.values() {
+            assert_eq!(instantiations.len(), 2);
+            assert_eq!(
+                instantiations[0].concrete_args,
+                instantiations[1].concrete_args
+            );
+            assert_ne!(
+                instantiations[0].specialization,
+                instantiations[1].specialization
+            );
+            let kind_tags = instantiations
+                .iter()
+                .map(|instantiation| instantiation.specialization.type_argument_kinds[0].as_str())
+                .collect::<HashSet<_>>();
+            assert_eq!(kind_tags, HashSet::from(["alias_type", "list_type"]));
+            assert_ne!(
+                instantiations[0].static_selections,
+                instantiations[1].static_selections
+            );
+        }
+        assert_eq!(result.generic_calls.len(), 4);
+        assert!(result.generic_calls.values().all(|call| {
+            result
+                .generic_function_instantiations
+                .iter()
+                .any(|instantiation| {
+                    instantiation.definition == call.definition
+                        && instantiation.concrete_args == call.concrete_args
+                        && instantiation.specialization == call.specialization
+                })
+        }));
+    }
+
+    #[test]
+    fn differing_static_selections_conflict_for_one_canonical_instantiation() {
+        let span = sp(10, 20);
+        let mut selections = HashMap::from([(span, CheckedStaticSelection::IfThen)]);
+        let conflicts = merge_static_selections(
+            &mut selections,
+            HashMap::from([(span, CheckedStaticSelection::IfElse)]),
+        );
+
+        assert_eq!(conflicts, vec![span]);
+        assert_eq!(selections.get(&span), Some(&CheckedStaticSelection::IfThen));
+    }
+
+    #[test]
+    fn runtime_type_name_generic_exports_manifest_and_intrinsic_operand() {
+        let result = check_source_result(
+            r#"function describe[T]() returns string:
+    return type.name[T]()
+function main() returns string:
+    return describe[int64]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("describe[int64] should have one checked manifest entry");
+        };
+        assert_eq!(instantiation.concrete_args, vec![TypeInterner::INT64]);
+        assert_eq!(instantiation.intrinsic_type_arguments.len(), 1);
+        assert_eq!(
+            instantiation
+                .intrinsic_type_arguments
+                .values()
+                .next()
+                .unwrap(),
+            &vec![TypeInterner::INT64]
+        );
+    }
+
+    #[test]
+    fn runtime_field_reflection_exports_concrete_intrinsic_operands() {
+        let result = check_source_result(
+            r#"struct User:
+    name: string
+function first_string_field[T](view value: T) returns string:
+    list[TypeField] fields = type.fields[T]()
+    mutable string found = "missing"
+    for field in fields:
+        if field.type_name == "string":
+            string item = type.field_value[T, string](view value, view field)
+            found = item
+    return found
+function main() returns string:
+    User user = User(name: "Ada")
+    return first_string_field[User](view user)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("first_string_field[User] should have one checked manifest entry");
+        };
+        let owner = instantiation.concrete_args[0];
+        let mut operands = instantiation
+            .intrinsic_type_arguments
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        operands.sort_by_key(Vec::len);
+        assert_eq!(
+            operands,
+            vec![vec![owner], vec![owner, TypeInterner::STRING]]
+        );
+    }
+
+    #[test]
+    fn comptime_field_bindings_export_distinct_recursive_body_facts() {
+        let result = check_source_result(
+            r#"struct User:
+    name: string
+    age: int64
+    active: bool
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            string reflected_name = type.name[Field]()
+    return nothing
+function main() returns nothing:
+    User user = User(name: "Ada", age: 42, active: true)
+    inspect[User](view user)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+
+        let inspect = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instantiation| !instantiation.comptime_type_bindings.is_empty())
+            .expect("inspect[User] should export its comptime field expansions");
+        let bindings = inspect
+            .comptime_type_bindings
+            .values()
+            .next()
+            .expect("comptime binding should be keyed by its statement span");
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.selection)
+                .collect::<Vec<_>>(),
+            vec![
+                CheckedComptimeTypeSelection::ReflectedIteration(0),
+                CheckedComptimeTypeSelection::ReflectedIteration(1),
+                CheckedComptimeTypeSelection::ReflectedIteration(2),
+            ]
+        );
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| binding.bound_type)
+                .collect::<Vec<_>>(),
+            vec![
+                TypeInterner::STRING,
+                TypeInterner::INT64,
+                TypeInterner::BOOL,
+            ]
+        );
+        for binding in bindings {
+            assert_eq!(binding.body.intrinsic_type_arguments.len(), 1);
+            assert_eq!(
+                binding
+                    .body
+                    .intrinsic_type_arguments
+                    .values()
+                    .next()
+                    .unwrap(),
+                &vec![binding.bound_type]
+            );
+        }
+    }
+
+    #[test]
+    fn unconstrained_empty_list_inference_uses_uninhabited_type_not_error() {
+        let result = check_source_result(
+            r#"function is_empty[T](view items: list[T]) returns bool:
+    return true
+function main() returns bool:
+    return is_empty(list())
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("is_empty[<never>] should have one checked manifest entry");
+        };
+        assert_eq!(instantiation.concrete_args, vec![TypeInterner::NEVER]);
+        assert_ne!(instantiation.concrete_args[0], TypeInterner::ERROR);
+    }
+
+    #[test]
+    fn handle_default_is_rechecked_with_its_concrete_success_type() {
+        let source = r#"function fallback(value: optional[list[int64]]) returns list[int64]:
+    return value handle:
+        default list()
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let start = source.rfind("list()").expect("default list") as u32;
+        let span = Span::new(FileId::new(0), start, start + 6);
+        let default_ty = *result
+            .type_map
+            .get(&span)
+            .expect("default list should retain its contextual type");
+        assert_eq!(
+            result.interner.resolve(default_ty),
+            &Type::List(TypeInterner::INT64)
+        );
     }
 }

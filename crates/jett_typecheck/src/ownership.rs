@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use jett_common::{Span, is_json_implicit_view_facade};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{self, Block, CallArg, Expr, FunctionDef, Item, Module, Stmt, StringPart};
-use jett_types::{Type, TypeId, TypeInterner};
+use jett_types::{CapabilityKind, Type, TypeId, TypeInterner};
 
 // ---------------------------------------------------------------------------
 // Ownership state
@@ -97,6 +97,7 @@ pub(crate) fn is_implicitly_copyable(interner: &TypeInterner, type_id: TypeId) -
             | Type::String
             | Type::Bool
             | Type::Nothing
+            | Type::Never
             | Type::Error
     )
 }
@@ -909,8 +910,11 @@ impl<'a> OwnershipChecker<'a> {
                 "nothing" => TypeInterner::NOTHING,
                 "TypeConstruction" => TypeInterner::TYPE_CONSTRUCTION,
                 "TypeKind" | "TypePrimitive" => TypeInterner::INT64,
-                // Any other named type is a struct/enum — not copyable.
-                _ => TypeInterner::BYTES, // Use BYTES as a non-copyable stand-in
+                // Capabilities retain nominal identity; all remaining named types
+                // use a non-copyable stand-in in this simplified ownership pass.
+                name => CapabilityKind::from_name(name)
+                    .map(TypeInterner::capability)
+                    .unwrap_or(TypeInterner::BYTES),
             },
             ast::TypeExpr::Generic(_, _, _) => {
                 // Generic types (list[T], map[K,V], etc.) are handled by
@@ -981,6 +985,18 @@ mod tests {
             .iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    #[test]
+    fn capability_types_are_move_only() {
+        let interner = TypeInterner::new();
+
+        for kind in CapabilityKind::ALL {
+            assert!(!is_implicitly_copyable(
+                &interner,
+                TypeInterner::capability(kind)
+            ));
+        }
     }
 
     // ---------------------------------------------------------------

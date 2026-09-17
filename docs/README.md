@@ -16,6 +16,7 @@ canonical project overview:
 
 These notes describe live implementation and architecture staging:
 
+- [Native code generation parity](active/native_codegen_parity_plan.md)
 - [Frontend syntax tree staging](active/frontend_syntax_tree_staging.md)
 - [Ownership and value semantics](active/ownership_value_semantics.md)
 - [JSON stdlib extraction plan](active/stdlib_json_extraction_plan.md)

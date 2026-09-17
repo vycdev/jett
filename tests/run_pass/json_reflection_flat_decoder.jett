@@ -4,20 +4,23 @@ struct FlatUser:
     age: int64
     active: bool
 function decode_flat_value[T](view raw: json.JsonTree) returns result[T, string]:
-    string type_name = type.name[T]()
-    if type_name == "string":
-        string item = json.as_string(view raw) handle error:
-            return fail(error)
-        return ok(item)
-    if type_name == "int64":
-        int64 item = json.as_int64(view raw) handle error:
-            return fail(error)
-        return ok(item)
-    if type_name == "bool":
-        bool item = json.as_bool(view raw) handle error:
-            return fail(error)
-        return ok(item)
-    return fail("unsupported reflected JSON type: {type_name}")
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    match primitive:
+        string_type:
+            string item = json.as_string(view raw) handle error:
+                return fail(error)
+            return ok(item)
+        int64_type:
+            int64 item = json.as_int64(view raw) handle error:
+                return fail(error)
+            return ok(item)
+        bool_type:
+            bool item = json.as_bool(view raw) handle error:
+                return fail(error)
+            return ok(item)
+        other:
+            return fail("unsupported reflected JSON primitive")
 function decode_flat_struct[T](view raw: json.JsonTree) returns result[T, string]:
     mutable TypeConstruction builder = type.construct_start[T]()
     for field in type.fields[T]():
