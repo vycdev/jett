@@ -166,6 +166,11 @@ rather than rely on Rust layout or symbol compatibility.
 - Runtime context is passed explicitly for capabilities, allocation, resource
   registries, scheduling, diagnostics, and other per-program state. Native
   code must not acquire undeclared ambient authority.
+- The Cranelift ABI realizes that rule as one backend-private, pointer-sized
+  first parameter on every emitted Jett function. It is absent from source,
+  HIR, and MIR arity; direct Jett calls forward the caller's exact pointer,
+  and the exported `jett_aot_v1_entry(void *context)` wrapper passes its input
+  to the checked program entry without reconstructing or inspecting it.
 - Panics and Rust unwinding may not cross the ABI. Runtime operations translate
   failure to the stable status and error-value contract; native cleanup paths
   remain responsible for owned Jett values.

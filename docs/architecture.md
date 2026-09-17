@@ -1252,7 +1252,14 @@ LLVM is the compilation bottleneck. Strategies to minimize its impact:
 
 3. **ThinLTO for release:** ThinLTO imports callee summaries into each module, enabling cross-module inlining and devirtualization without merging everything into one module. Achieves ~90-95% of full LTO's performance at much lower compile time. Each module is re-optimized in parallel.
 
-4. **Future: Cranelift for debug builds.** Cranelift compiles ~5-10x faster than LLVM O0 by avoiding LLVM's inherent overhead (IR construction, verifier, pass infrastructure). Code runs ~20-30% slower, acceptable for debug. Supports x86-64, AArch64, RISC-V. This would be a `jett_codegen_cranelift` crate following the same MIR → IR interface.
+4. **Cranelift AOT backend.** The initial production path uses the
+   `jett_codegen_cranelift` crate to turn validated MIR into a host object.
+   Every emitted Jett function receives a backend-private runtime-context
+   pointer before its source parameters, and direct calls forward that exact
+   pointer. The exported C-ABI entry wrapper accepts the context from the
+   launcher and forwards it to the compiler-selected Jett entry function.
+   LLVM remains the later optimizing backend and must share the same validated
+   MIR, runtime ABI, and conformance suite.
 
 #### Linking
 

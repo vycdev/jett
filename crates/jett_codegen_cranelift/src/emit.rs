@@ -9,7 +9,9 @@ use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use jett_common::Span;
 use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
-use jett_mir::{Function, Program, Statement, StatementKind, Terminator, TerminatorKind};
+use jett_mir::{
+    ControlFlowGraph, Function, Program, Statement, StatementKind, Terminator, TerminatorKind,
+};
 use jett_types::{Type, TypeId, TypeInterner};
 use target_lexicon::{HOST, Triple};
 
@@ -110,9 +112,9 @@ pub fn emit_host_object(
 ///
 /// `entry` is an exact checked MIR identity; this API never selects an entry by
 /// source name. The wrapper has the target C ABI `uint32_t(void *context)`,
-/// calls the parameterless `nothing`-returning Jett function, and returns
-/// [`JETT_AOT_ENTRY_SUCCESS_V1`]. The opaque context is reserved for runtime
-/// integration and is not dereferenced by this initial slice.
+/// forwards its opaque runtime context to the parameterless,
+/// `nothing`-returning Jett function, and returns
+/// [`JETT_AOT_ENTRY_SUCCESS_V1`].
 pub fn emit_host_program_object(
     program: &Program,
     types: &TypeInterner,
@@ -341,10 +343,12 @@ fn define_program_entry_wrapper(
             .ok_or_else(|| CodegenError::UnreachableProgramEntry {
                 function_id: entry.index(),
             })?;
-    if !entry_function.signature.params.is_empty() || !entry_function.signature.returns.is_empty() {
+    if entry_function.signature.params.as_slice() != [runtime_context_abi_param(module)]
+        || !entry_function.signature.returns.is_empty()
+    {
         return Err(CodegenError::IncompatibleProgramEntry {
             function_id: entry.index(),
-            message: "native entry signature is not parameterless and void-returning".to_string(),
+            message: "native entry signature does not contain exactly one hidden runtime-context pointer and no return value".to_string(),
         });
     }
     if module.get_name(JETT_AOT_ENTRY_SYMBOL_V1).is_some() {
@@ -353,11 +357,7 @@ fn define_program_entry_wrapper(
         ));
     }
 
-    let mut signature = module.make_signature();
-    signature
-        .params
-        .push(AbiParam::new(module.target_config().pointer_type()));
-    signature.returns.push(AbiParam::new(ir::types::I32));
+    let signature = program_entry_signature(module);
     let wrapper_id = module
         .declare_function(JETT_AOT_ENTRY_SYMBOL_V1, Linkage::Export, &signature)
         .map_err(|error| {
@@ -368,13 +368,50 @@ fn define_program_entry_wrapper(
 
     let mut context = module.make_context();
     context.func.signature = signature;
+    translate_program_entry_wrapper(module, entry_function, entry, &mut context)?;
+
+    module
+        .define_function(wrapper_id, &mut context)
+        .map_err(|error| {
+            CodegenError::Backend(format!(
+                "failed to define program entry `{JETT_AOT_ENTRY_SYMBOL_V1}`: {error}; details: {error:?}"
+            ))
+        })?;
+    Ok(())
+}
+
+fn program_entry_signature(module: &ObjectModule) -> ir::Signature {
+    let mut signature = module.make_signature();
+    signature.params.push(runtime_context_abi_param(module));
+    signature.returns.push(AbiParam::new(ir::types::I32));
+    signature
+}
+
+fn runtime_context_abi_param(module: &ObjectModule) -> AbiParam {
+    AbiParam::new(module.target_config().pointer_type())
+}
+
+fn translate_program_entry_wrapper(
+    module: &mut ObjectModule,
+    entry_function: &DeclaredFunction,
+    entry: FunctionId,
+    context: &mut Context,
+) -> Result<(), CodegenError> {
     let mut builder_context = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
     let block = builder.create_block();
     builder.append_block_params_for_function_params(block);
     builder.switch_to_block(block);
+    let runtime_context = builder
+        .block_params(block)
+        .first()
+        .copied()
+        .ok_or_else(|| CodegenError::IncompatibleProgramEntry {
+            function_id: entry.index(),
+            message: "exported entry wrapper is missing its runtime-context pointer".to_string(),
+        })?;
     let entry_reference = module.declare_func_in_func(entry_function.native_id, builder.func);
-    let call = builder.ins().call(entry_reference, &[]);
+    let call = builder.ins().call(entry_reference, &[runtime_context]);
     if !builder.func.dfg.inst_results(call).is_empty() {
         return Err(CodegenError::IncompatibleProgramEntry {
             function_id: entry.index(),
@@ -387,14 +424,6 @@ fn define_program_entry_wrapper(
     builder.ins().return_(&[success]);
     builder.seal_all_blocks();
     builder.finalize();
-
-    module
-        .define_function(wrapper_id, &mut context)
-        .map_err(|error| {
-            CodegenError::Backend(format!(
-                "failed to define program entry `{JETT_AOT_ENTRY_SYMBOL_V1}`: {error}; details: {error:?}"
-            ))
-        })?;
     Ok(())
 }
 
@@ -404,6 +433,7 @@ fn signature(
     types: &TypeInterner,
 ) -> Result<ir::Signature, CodegenError> {
     let mut signature = module.make_signature();
+    signature.params.push(runtime_context_abi_param(module));
     for parameter in &function.params {
         if let Some(ty) = clif_type(types, parameter.ty, "function parameter")? {
             signature.params.push(AbiParam::new(ty));
@@ -460,30 +490,54 @@ fn translate_function(
     let entry = block_for(&blocks, function.entry.index(), function.span, symbol)?;
     builder.append_block_params_for_function_params(entry);
 
+    let runtime_context = builder.declare_var(module.target_config().pointer_type());
+
     let mut variables = Vec::with_capacity(function.locals.len());
     for local in &function.locals {
         variables
             .push(clif_type(types, local.ty, "function local")?.map(|ty| builder.declare_var(ty)));
     }
 
-    let entry_index = usize::try_from(function.entry.index()).map_err(|_| {
+    let control_flow = ControlFlowGraph::analyze(function).map_err(|errors| {
+        let details = errors
+            .into_iter()
+            .map(|error| error.message)
+            .collect::<Vec<_>>()
+            .join("; ");
         contract_error(
             symbol,
             function.span,
-            "entry block index does not fit this host",
+            format!("cannot analyze MIR control flow: {details}"),
         )
     })?;
-    let block_order = std::iter::once(entry_index)
-        .chain((0..function.blocks.len()).filter(|index| *index != entry_index));
-    for block_index in block_order {
+    for block_id in control_flow.reverse_postorder() {
+        let block_index = usize::try_from(block_id.index()).map_err(|_| {
+            contract_error(symbol, function.span, "block index does not fit this host")
+        })?;
         let block = function.blocks.get(block_index).ok_or_else(|| {
-            contract_error(symbol, function.span, "entry block is absent from MIR")
+            contract_error(symbol, function.span, "reachable block is absent from MIR")
         })?;
         let native_block = block_for(&blocks, block.id.index(), function.span, symbol)?;
         builder.switch_to_block(native_block);
         if block.id == function.entry {
             let incoming = builder.block_params(native_block).to_vec();
-            let mut incoming_index = 0_usize;
+            let context_value = incoming.first().copied().ok_or_else(|| {
+                contract_error(
+                    symbol,
+                    function.span,
+                    "missing hidden native runtime-context parameter",
+                )
+            })?;
+            builder
+                .try_def_var(runtime_context, context_value)
+                .map_err(|error| {
+                    contract_error(
+                        symbol,
+                        function.span,
+                        format!("cannot bind native runtime context: {error}"),
+                    )
+                })?;
+            let mut incoming_index = 1_usize;
             for parameter in &function.params {
                 let variable =
                     variable_for(&variables, parameter.local.index(), parameter.span, symbol)?;
@@ -509,6 +563,7 @@ fn translate_function(
             declarations,
             blocks: &blocks,
             variables: &variables,
+            runtime_context,
             types,
             symbol,
         };
@@ -535,6 +590,7 @@ struct Translator<'a, 'builder> {
     declarations: &'a DeclaredFunctions,
     blocks: &'a [ir::Block],
     variables: &'a [Option<Variable>],
+    runtime_context: Variable,
     types: &'a TypeInterner,
     symbol: &'a str,
 }
@@ -804,7 +860,18 @@ impl Translator<'_, '_> {
             |argument| self.expression(argument),
             invalid_order,
         )?;
-        let mut native_args = Vec::with_capacity(evaluated.len());
+        let runtime_context = self
+            .builder
+            .try_use_var(self.runtime_context)
+            .map_err(|error| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    format!("cannot read native runtime context: {error}"),
+                )
+            })?;
+        let mut native_args = Vec::with_capacity(evaluated.len() + 1);
+        native_args.push(runtime_context);
         for (argument, value) in args.iter().zip(evaluated) {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
@@ -1278,9 +1345,7 @@ mod tests {
         (mir, checked.interner)
     }
 
-    fn translated_clif(source: &str) -> HashMap<String, String> {
-        let (program, types) = lower_source(source);
-        let verified = verify_program(&program, &types).expect("supported scalar MIR");
+    fn test_object_module() -> ObjectModule {
         let flags = settings::Flags::new(settings::builder());
         let isa = isa::lookup(HOST)
             .expect("host ISA builder")
@@ -1289,9 +1354,20 @@ mod tests {
         let object_builder =
             ObjectBuilder::new(isa, b"jett-test".to_vec(), default_libcall_names())
                 .expect("object builder");
-        let mut module = ObjectModule::new(object_builder);
+        ObjectModule::new(object_builder)
+    }
+
+    fn declared_program(source: &str) -> (Program, TypeInterner, ObjectModule, DeclaredFunctions) {
+        let (program, types) = lower_source(source);
+        let verified = verify_program(&program, &types).expect("supported scalar MIR");
+        let mut module = test_object_module();
         let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
             .expect("function declarations");
+        (program, types, module, declarations)
+    }
+
+    fn translated_clif(source: &str) -> HashMap<String, String> {
+        let (program, types, mut module, declarations) = declared_program(source);
 
         let mut translated = HashMap::new();
         for declaration in declarations.iter() {
@@ -1313,6 +1389,40 @@ mod tests {
             );
         }
         translated
+    }
+
+    fn translated_function(source: &str, function_name: &str) -> ir::Function {
+        let (program, types, mut module, declarations) = declared_program(source);
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == function_name)
+            .expect("requested MIR function");
+        let declaration = declarations
+            .get(function.id)
+            .expect("requested native declaration");
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            function,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("function translation");
+        context.func
+    }
+
+    fn direct_call_arguments(function: &ir::Function) -> Vec<Vec<Value>> {
+        function
+            .layout
+            .blocks()
+            .flat_map(|block| function.layout.block_insts(block))
+            .filter(|instruction| function.dfg.insts[*instruction].opcode() == ir::Opcode::Call)
+            .map(|instruction| function.dfg.inst_args(instruction).to_vec())
+            .collect()
     }
 
     #[test]
@@ -1352,6 +1462,187 @@ mod tests {
             integer_immediate(i128::from(i64::MIN), ScalarKind::SignedInteger(64)),
             Some(i64::MIN)
         );
+    }
+
+    #[test]
+    fn emitted_jett_signatures_prepend_one_hidden_runtime_context_pointer() {
+        let (program, _types, module, declarations) = declared_program(
+            r#"namespace app
+function leaf(value: int64, enabled: bool) returns int64:
+    if enabled:
+        return value
+    return 0
+function root() returns int64:
+    return leaf(7, true)
+"#,
+        );
+        let pointer_type = module.target_config().pointer_type();
+
+        for declaration in declarations.iter() {
+            let function = program_function(&program, declaration.mir_id).expect("MIR function");
+            assert_eq!(
+                declaration.signature.params.len(),
+                function.params.len() + 1,
+                "{} must gain exactly one native-only parameter",
+                function.identity.declaration.name
+            );
+            assert_eq!(
+                declaration.signature.params[0],
+                AbiParam::new(pointer_type),
+                "{} must receive an ordinary runtime-context pointer first",
+                function.identity.declaration.name
+            );
+        }
+
+        let leaf = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "leaf")
+            .expect("leaf MIR function");
+        let root = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "root")
+            .expect("root MIR function");
+        assert_eq!(leaf.params.len(), 2, "source parameters stay unchanged");
+        assert!(root.params.is_empty(), "source parameters stay unchanged");
+    }
+
+    #[test]
+    fn direct_jett_calls_forward_the_exact_current_runtime_context() {
+        let function = translated_function(
+            r#"namespace app
+function leaf(value: int64) returns int64:
+    return value
+function caller(value: int64, choose_original: bool) returns int64:
+    if choose_original:
+        return leaf(value)
+    return leaf(value + 1)
+"#,
+            "caller",
+        );
+        let entry = function.layout.entry_block().expect("native entry block");
+        let runtime_context = function.dfg.block_params(entry)[0];
+        let calls = direct_call_arguments(&function);
+
+        assert_eq!(calls.len(), 2, "both branch-local calls must be emitted");
+        for arguments in calls {
+            assert_eq!(
+                arguments.len(),
+                2,
+                "hidden context plus one source argument"
+            );
+            assert_eq!(
+                function.dfg.resolve_aliases(arguments[0]),
+                runtime_context,
+                "direct calls must forward the caller's exact context value"
+            );
+        }
+    }
+
+    #[test]
+    fn unreachable_direct_call_blocks_are_not_emitted_with_an_undefined_context() {
+        let (mut program, types) = lower_source(
+            r#"namespace app
+function leaf(value: int64) returns int64:
+    return value
+function caller(value: int64, choose_original: bool) returns int64:
+    if choose_original:
+        return leaf(value)
+    return leaf(value + 1)
+"#,
+        );
+        let caller = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "caller")
+            .expect("caller MIR function");
+        let mut immediate_return = caller
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                TerminatorKind::Return(Some(expression))
+                    if matches!(expression.kind, ExpressionKind::Call { .. }) =>
+                {
+                    Some(expression.clone())
+                }
+                _ => None,
+            })
+            .expect("branch-local direct call");
+        immediate_return.kind = ExpressionKind::Int(0);
+        let entry_index =
+            usize::try_from(caller.entry.index()).expect("entry index fits this host");
+        caller.blocks[entry_index].terminator.kind = TerminatorKind::Return(Some(immediate_return));
+
+        let control_flow = ControlFlowGraph::analyze(caller).expect("valid mutated control flow");
+        assert_eq!(control_flow.reverse_postorder(), [caller.entry]);
+        assert!(
+            caller.blocks.iter().any(|block| {
+                matches!(
+                    &block.terminator.kind,
+                    TerminatorKind::Return(Some(Expression {
+                        kind: ExpressionKind::Call { .. },
+                        ..
+                    }))
+                )
+            }),
+            "the test must retain a direct call in a disconnected MIR block"
+        );
+
+        let verified = verify_program(&program, &types).expect("valid mutated scalar MIR");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("function declarations");
+        let caller = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "caller")
+            .expect("caller MIR function");
+        let declaration = declarations.get(caller.id).expect("caller declaration");
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            caller,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("reachable-only function translation");
+
+        assert_eq!(context.func.layout.blocks().count(), 1);
+        assert!(direct_call_arguments(&context.func).is_empty());
+    }
+
+    #[test]
+    fn exported_entry_wrapper_forwards_its_incoming_runtime_context() {
+        let (program, _types, mut module, declarations) = declared_program(
+            r#"namespace app
+function selected_entry() returns nothing:
+    return nothing
+"#,
+        );
+        let entry = program.functions[0].id;
+        let entry_function = declarations.get(entry).expect("native entry declaration");
+        let mut context = module.make_context();
+        context.func.signature = program_entry_signature(&module);
+        translate_program_entry_wrapper(&mut module, entry_function, entry, &mut context)
+            .expect("entry wrapper translation");
+
+        let block = context
+            .func
+            .layout
+            .entry_block()
+            .expect("wrapper entry block");
+        let incoming_context = context.func.dfg.block_params(block)[0];
+        let calls = direct_call_arguments(&context.func);
+        assert_eq!(calls, [vec![incoming_context]]);
+        assert_eq!(
+            context.func.signature.params,
+            [AbiParam::new(module.target_config().pointer_type())]
+        );
+        assert!(program.functions[0].params.is_empty());
     }
 
     #[test]
