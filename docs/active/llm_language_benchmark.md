@@ -59,6 +59,16 @@ API cost, latency, tool invocations, repair count, source lines/bytes, a simple
 branch-count complexity proxy, and grader runtime. Runtime is never folded into
 LLM correctness.
 
+Future repair-loop measurements should report the full attempt, from initial
+generation through diagnostics and any permitted repair to final validation.
+Record total elapsed time, cumulative tokens, tool invocations, and repair
+count, alongside time spent checking code. Keep failed and budget-exhausted
+attempts in the results so efficiency is not reported only for successes.
+Compare treatments under the same task, model, context, and repair budgets;
+compiler speed alone does not measure agent repair efficiency. These are
+reporting requirements for future runs, not measurements retroactively inferred
+from historical campaigns.
+
 Every result records the task version, language adapter version, prompt hash,
 model identifier, requested reasoning level, track, repetition, toolchain
 versions, git revision, and raw response identifier. Cost is derived from a

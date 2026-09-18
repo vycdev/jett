@@ -2097,6 +2097,12 @@ Since Jett has one canonical form for everything, the formatter is relatively si
 
 The `jett test` command runs both `verify` blocks (at compile time, via the comptime interpreter) and `property` blocks (at test time, via the fuzzer).
 
+Both mechanisms evaluate assertions for concrete inputs. A passing `verify`
+block establishes its assertions for the executed examples; a passing property
+run establishes them for the generated cases only. Neither is a universally
+quantified proof. Static guarantees such as ownership, capability requirements,
+and exhaustive enum matching are enforced separately by the typechecker.
+
 ### Fuzzer Architecture
 
 1. **Type-aware generation:** For each `given` parameter, generate random values based on the type:

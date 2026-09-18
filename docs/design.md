@@ -2712,7 +2712,7 @@ Jett borrows from Zig's approach: **tests are written directly below the functio
 
 #### 1. Co-located `verify` Blocks
 
-Every function can have a `verify` block immediately after its definition. The `verify` block contains test cases that are **contracts** — they are not optional quality checks, they are compiler-enforced proofs that the function behaves correctly.
+Every function can have a `verify` block immediately after its definition. The `verify` block contains test cases whose assertions are checked during compilation. Adding a block is optional; passing its checks is required once it is present. These checks establish the asserted behavior for the executed cases, not correctness for every possible input.
 
 **Basic example:**
 
@@ -2763,8 +2763,8 @@ verify add_positive:
 
 The binary is **never emitted** if a `verify` block fails. This means:
 
-- Every function with a `verify` block is **proven correct** (for the tested inputs) before the program ever runs.
-- Bugs are caught at compile time, not at runtime, not in CI, not in production.
+- Every assertion in a `verify` block has passed for its executed inputs before the program ever runs.
+- Failures exposed by these assertions are caught during compilation.
 - The LLM gets immediate feedback: write function → write verify → compile → if verify fails, fix → compile again.
 
 **Comptime verification limitations:**
@@ -2778,7 +2778,7 @@ propagate through the call graph. For impure functions, Jett provides
 
 #### 3. The Full Pattern: Function → Verify → Next Function
 
-The idiomatic Jett file follows a strict rhythm: define, verify, define, verify. Each function and its proof live together as a unit.
+The idiomatic Jett file follows a strict rhythm: define, verify, define, verify. Each function and its example checks live together as a unit.
 
 ```
 function celsius_to_fahrenheit(c: float64) returns float64:
@@ -2806,11 +2806,11 @@ verify is_boiling:
     assert is_boiling(200.0) == true
 ```
 
-Each function is immediately followed by its contract. When the LLM generates `celsius_to_fahrenheit`, it writes the verify block while the formula `c * 1.8 + 32.0` is still the most recent thing in its context. By the time it moves on to `fahrenheit_to_celsius`, the previous function is fully verified and can be trusted.
+Each function is immediately followed by its checks. When the LLM generates `celsius_to_fahrenheit`, it writes the verify block while the formula `c * 1.8 + 32.0` is still the most recent thing in its context. After a successful build, the assertions for that function have passed; behavior outside those assertions and inputs remains untested.
 
 #### 4. Verify Blocks and Refinement Types
 
-`verify` blocks work with refinement types (Rule Set 3) to create a powerful proof chain:
+`verify` blocks complement refinement types (Rule Set 3) by checking examples within the type's constraints:
 
 ```
 type Percentage = float64 where value >= 0.0 && value <= 100.0
@@ -2829,7 +2829,7 @@ verify calculate_grade:
     assert calculate_grade(1, 3) == 33.33 within 0.01
 ```
 
-The return type `Percentage` guarantees the result is between 0 and 100. The `verify` block proves specific input/output pairs. Together, the type system and the verification contracts provide two layers of correctness: the type constrains the range, the verify proves specific behaviors.
+The return type `Percentage` constrains returned values to the range from 0 to 100. The `verify` block checks specific input/output pairs. The type's range constraint and these example checks establish different facts; neither alone establishes that every result matches the intended grade calculation.
 
 **Float comparison with `== ... within`:**
 
@@ -2855,7 +2855,7 @@ The LLM generates code → the compiler runs verify blocks → if they fail, the
 
 **3. Tests are contracts, not afterthoughts.**
 
-Verify blocks are optional — but when present, they are compiler-enforced. If a verify block exists, the function is proven correct (for the tested inputs) before the binary exists. The natural workflow encourages writing them: generate function, generate verify, move on.
+Verify blocks are optional — but when present, their assertions must pass before the binary exists. A passing block establishes only its asserted behavior for the executed cases. The natural workflow encourages writing them: generate function, generate verify, compile, move on.
 
 **4. The LLM never writes a test for code it can't see.**
 
@@ -5779,8 +5779,13 @@ The LLM receives the **minimal failing input** — the simplest case that breaks
 
 `verify` and `property` are complementary:
 
-- **`verify`** — specific input/output pairs, executed at compile time (comptime). Proves the function is correct for known examples. Fast, deterministic, zero overhead.
-- **`property`** — invariant declarations, executed by the fuzzer at test time. Proves the function is correct for thousands of unknown examples. Finds the edge cases the LLM didn't imagine.
+- **`verify`** — explicit example assertions, executed at compile time (comptime). Checks the asserted behavior for those cases, with no production runtime overhead.
+- **`property`** — properties checked against generated inputs by the fuzzer at test time. Can find counterexamples beyond the hand-written examples; passing a finite run does not prove the property for every input.
+
+These execution-based checks are distinct from static guarantees enforced by
+the typechecker, such as ownership, capability requirements, and exhaustive
+enum matching. Neither `verify` nor `property` supplies a universally quantified
+proof of application behavior.
 
 ```
 function clamp(value: int64, low: int64, high: int64) returns int64:
@@ -5807,7 +5812,7 @@ property clamp:
             assert result == value
 ```
 
-The `verify` block proves 5 specific cases at compile time. The `property` block proves the invariants hold for 10,000 random `(value, low, high)` triples — including integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high` that the LLM would never think to test.
+The `verify` block checks 5 specific cases at compile time. The `property` block checks its assertions against 10,000 generated `(value, low, high)` triples. Generation can exercise integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high`; a passing run establishes no guarantee about untested triples.
 
 #### Property Tests with Capability Mocks
 
@@ -5984,7 +5989,7 @@ The fuzzer shrinks failing cases to the simplest reproduction. `sort_list(list(1
 
 **5. Catches hallucinated logic that verify blocks miss.**
 
-A `verify` block with 5 hand-picked examples might pass even if the function is completely wrong for edge cases. A `property` block with 10,000 random inputs will almost certainly catch it. The combination of both — `verify` for compile-time proof of known cases, `property` for test-time proof of unknown cases — provides the strongest correctness guarantee an LLM-generated function can have.
+A `verify` block with 5 hand-picked examples might pass while the function fails on other inputs. A `property` block can expose additional failures, but detection depends on the assertions, input generator, and iteration budget. Combining example checks with generated checks increases test coverage without proving correctness for all inputs.
 
 #### Implicit Views in Test and Debug Contexts
 
