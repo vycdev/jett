@@ -183,3 +183,11 @@ exit; ownership analysis unions active tokens across edges and preserves nested
 loans of the same owner. Moving or overwriting an actively iterated owner is
 rejected; moving after the exit is valid. Return/break/continue use ordinary
 frame cleanup and loop exit edges. Exact effects prove iterable evaluation once.
+
+Sequence preheaders are selected from CFG predecessors reachable from function entry
+without crossing the loop header, not from numeric block order. The lowering
+requires a unique unconditional entry edge; ambiguous shapes remain rejected.
+Regression coverage relocates the preheader after the loop, re-enters loops from
+an outer loop, checks empty inputs, nested loans and handled loop exits, and
+unpacks float32/int8/uint8 elements. Test-only allocation fault injection confirms
+partial nested list clone releases its cloned prefix without consuming sources.

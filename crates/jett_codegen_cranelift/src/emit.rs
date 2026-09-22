@@ -2075,4 +2075,45 @@ function visit(items: list[int64]) returns nothing:
             "{error}"
         );
     }
+    #[test]
+    fn sequence_preheader_is_selected_by_cfg_not_block_position() {
+        let (mut program, types) = lower_source(
+            r#"
+function visit(items: list[int64]) returns int64:
+    mutable int64 total = 0
+    for item in items:
+        total = total + item
+    return total
+"#,
+        );
+        let function = &mut program.functions[0];
+        let old_entry = function.entry;
+        let last = function.blocks.last().unwrap().id;
+        let remap = |id| {
+            if id == old_entry {
+                last
+            } else if id == last {
+                old_entry
+            } else {
+                id
+            }
+        };
+        function
+            .blocks
+            .swap(old_entry.index() as usize, last.index() as usize);
+        function.entry = remap(old_entry);
+        for block in &mut function.blocks {
+            block.id = remap(block.id);
+            match &mut block.terminator.kind {
+                TerminatorKind::Goto(target) => *target = remap(*target),
+                TerminatorKind::ForEach { body, exit, .. } => {
+                    *body = remap(*body);
+                    *exit = remap(*exit);
+                }
+                TerminatorKind::Return(_) | TerminatorKind::Unreachable => {}
+                other => panic!("unexpected fixture terminator {other:?}"),
+            }
+        }
+        emit_host_object(&program, &types).expect("late-numbered unique loop preheader");
+    }
 }

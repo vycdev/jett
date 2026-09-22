@@ -859,3 +859,53 @@ function main() returns nothing:
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
     assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
 }
+
+#[test]
+fn native_iteration_reentry_empty_handlers_and_payload_widths() {
+    run_source(
+        r#"
+function values(index: int64) returns list[string]:
+    print("build", index, ";")
+    if index == 0:
+        return list.new[string]()
+    return list("a", "b", "c")
+function reentry() returns nothing:
+    mutable int64 count = 0
+    while count < 3:
+        for item in values(count):
+            if item == "b":
+                continue
+            print(item)
+            optional[string] missing = none
+            string value = missing handle:
+                if count >= 0:
+                    break
+                default "unused"
+        count = count + 1
+    println("done")
+function payloads() returns nothing:
+    list[int8] narrow = list(127, -128)
+    for value in view narrow:
+        println(value + 1)
+    list[uint8] unsigned = list(255, 0)
+    for value in unsigned:
+        println(value + 1)
+    list[float32] floats = list(1.25, -0.0)
+    for value in view floats:
+        println(value)
+function main() returns nothing:
+    reentry()
+    payloads()
+    list[string] words = list("x", "y", "z")
+    for outer in view words:
+        for inner in view words:
+            if inner == "x":
+                continue
+            print(outer, inner)
+            break
+        if outer == "y":
+            break
+    println(list.length[string](view words))
+"#,
+    );
+}

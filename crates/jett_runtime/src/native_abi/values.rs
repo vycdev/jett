@@ -43,6 +43,8 @@ struct NativeSum {
 }
 #[derive(Default)]
 pub(super) struct NativeValues {
+    #[cfg(test)]
+    allocation_budget: Option<usize>,
     strings: HashMap<NativeHandle, NativeString>,
     bytes: HashMap<NativeHandle, Vec<u8>>,
     sums: HashMap<NativeHandle, NativeSum>,
@@ -58,6 +60,13 @@ pub(super) struct NativeValues {
     stdout: Option<u64>,
 }
 impl NativeValues {
+    #[cfg(test)]
+    fn allocation_checkpoint(&mut self) -> LeafResult<()> {
+        if let Some(budget) = &mut self.allocation_budget {
+            *budget = budget.checked_sub(1).ok_or(EXHAUSTED)?;
+        }
+        Ok(())
+    }
     pub(super) fn is_empty(&self) -> bool {
         self.strings.is_empty()
             && self.bytes.is_empty()
@@ -68,6 +77,8 @@ impl NativeValues {
             && self.lists_created == self.lists_destroyed
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
         let id = next_identity()?;
         self.strings.insert(
             id,
@@ -79,6 +90,8 @@ impl NativeValues {
         Ok(id)
     }
     fn insert_bytes(&mut self, bytes: Vec<u8>) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
         let id = next_identity()?;
         self.bytes.insert(id, bytes);
         self.bytes_created += 1;
@@ -91,6 +104,8 @@ impl NativeValues {
         ))
     }
     fn sum(&mut self, tag: u32, bits: u64, owned: bool) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
         if tag > SUM_SUCCESS {
             return Err(INVALID_SUM);
         }
@@ -115,6 +130,8 @@ impl NativeValues {
         }
     }
     fn new_list(&mut self, owned: bool) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
         let id = next_identity()?;
         self.lists.insert(
             id,
@@ -905,6 +922,43 @@ mod tests {
             assert_eq!((values.lists_created, values.lists_destroyed), (1, 1));
             assert!(!values.cleanup_failed);
             assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn partial_nested_list_clone_allocation_failure_releases_cloned_prefix() {
+        let context = Context::new();
+        unsafe {
+            let a = jett_rt_v1_bytes_new(context.pointer());
+            let b = jett_rt_v1_bytes_new(context.pointer());
+            let inner = jett_rt_v1_list_new(context.pointer(), 1);
+            jett_rt_v1_list_append(context.pointer(), inner, a);
+            jett_rt_v1_list_append(context.pointer(), inner, b);
+            let outer = jett_rt_v1_list_new(context.pointer(), 1);
+            jett_rt_v1_list_append(context.pointer(), outer, inner);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            {
+                let mut state = lock_unpoisoned(&lease.entry.state);
+                // Clone first byte, fail allocation of second byte. The source
+                // lists and both originals must remain owned by the caller.
+                state.as_mut().unwrap().values.allocation_budget = Some(1);
+            }
+            assert_eq!(jett_rt_v1_list_clone(context.pointer(), outer), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 1));
+                assert!(values.bytes.contains_key(&a) && values.bytes.contains_key(&b));
+                assert_eq!((values.lists_created, values.lists_destroyed), (2, 0));
+            }
+            jett_rt_v1_value_drop(context.pointer(), outer);
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert!(values.is_empty());
+            assert!(!values.cleanup_failed);
         }
     }
 }

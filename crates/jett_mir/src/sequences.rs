@@ -65,13 +65,35 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             {
                 continue;
             }
-            // HIR lowering emits the preheader before the header; backedges
-            // are later blocks. Require that structural preheader explicitly.
-            let Some(preheader) = function.blocks[..index].iter().position(
-                |b| matches!(b.terminator.kind, TerminatorKind::Goto(target) if target == header),
-            ) else {
+            // A preheader is the unique predecessor reachable from entry
+            // without crossing this header. Backedges are dominated by the
+            // header; disconnected blocks and numeric block order are irrelevant.
+            let Ok(cfg) = ControlFlowGraph::analyze(function) else {
                 continue;
             };
+            let mut outside = vec![false; function.blocks.len()];
+            let mut pending = vec![function.entry];
+            while let Some(block) = pending.pop() {
+                if block == header || outside[block.index() as usize] {
+                    continue;
+                }
+                outside[block.index() as usize] = true;
+                pending.extend_from_slice(cfg.successors(block));
+            }
+            let candidates = cfg
+                .predecessors(header)
+                .iter()
+                .copied()
+                .filter(|id| outside[id.index() as usize])
+                .collect::<Vec<_>>();
+            let [preheader] = candidates.as_slice() else {
+                continue;
+            };
+            let preheader = preheader.index() as usize;
+            if !matches!(function.blocks[preheader].terminator.kind, TerminatorKind::Goto(target) if target == header)
+            {
+                continue;
+            }
             let span = iterable.span;
             let cursor = temporary(function, TypeInterner::INT64, span);
             let length = temporary(function, TypeInterner::INT64, span);
