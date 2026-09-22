@@ -3,12 +3,15 @@
 use crate::copy_values::CopyValuePlan;
 use crate::{ControlFlowGraph, Function, ParamMode, Program, StatementKind, TerminatorKind};
 use jett_hir::{BinaryOp, Expression, ExpressionKind, IntrinsicId, StringSegment};
-use jett_types::{TypeId, TypeInterner};
+use jett_types::{Type, TypeId, TypeInterner};
 use std::collections::BTreeSet;
 type Set = BTreeSet<usize>;
 
-pub fn is_linear(ty: TypeId) -> bool {
-    ty == TypeInterner::BYTES
+pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
+    matches!(
+        types.resolve(ty),
+        Type::Bytes | Type::Result(..) | Type::Optional(_)
+    )
 }
 
 pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
@@ -62,6 +65,7 @@ impl MoveValuePlan {
                 let state = incoming(id, &outgoing);
                 let next = Flow {
                     program,
+                    types,
                     function,
                     state,
                     loans: Set::new(),
@@ -78,6 +82,7 @@ impl MoveValuePlan {
         for &id in cfg.reverse_postorder() {
             Flow {
                 program,
+                types,
                 function,
                 state: incoming(id, &outgoing),
                 loans: Set::new(),
@@ -91,6 +96,7 @@ impl MoveValuePlan {
 struct Flow<'a> {
     program: &'a Program,
     function: &'a Function,
+    types: &'a TypeInterner,
     state: Set,
     loans: Set,
     validate: bool,
@@ -100,6 +106,24 @@ impl Flow<'_> {
         let block = &self.function.blocks[id.index() as usize];
         for statement in &block.statements {
             match &statement.kind {
+                StatementKind::SumTag { source, target }
+                | StatementKind::SumTake { source, target, .. } => {
+                    let source_id = source.index() as usize;
+                    if self.validate && !self.state.contains(&source_id) {
+                        return Err("sum source is moved or uninitialized".into());
+                    }
+                    if matches!(statement.kind, StatementKind::SumTake { .. }) {
+                        if self
+                            .function
+                            .parameter_for_local(*source)
+                            .is_some_and(|p| p.mode == ParamMode::View)
+                        {
+                            return Err("cannot take payload from borrowed sum".into());
+                        }
+                        self.state.remove(&source_id);
+                    }
+                    self.state.insert(target.index() as usize);
+                }
                 StatementKind::Let { local, value } => {
                     self.expr(value, false)?;
                     self.state.insert(local.index() as usize);
@@ -113,7 +137,7 @@ impl Flow<'_> {
                         .function
                         .parameter_for_local(local)
                         .is_some_and(|p| p.mode == ParamMode::View)
-                        && is_linear(target.ty)
+                        && is_linear(self.types, target.ty)
                     {
                         return Err("cannot overwrite a borrowed native place".into());
                     }
@@ -142,7 +166,7 @@ impl Flow<'_> {
                 if self.validate && !self.state.contains(&id) {
                     return Err(format!("native place {id} is moved or uninitialized"));
                 }
-                if is_linear(value.ty) {
+                if is_linear(self.types, value.ty) {
                     if borrowed {
                         self.loans.insert(id);
                     } else {
@@ -161,7 +185,7 @@ impl Flow<'_> {
                 }
             }
             ExpressionKind::View(v) => {
-                if !borrowed && is_linear(value.ty) {
+                if !borrowed && is_linear(self.types, value.ty) {
                     return Err("native view cannot escape into an owning value".into());
                 }
                 self.expr(v, true)?;
@@ -204,7 +228,11 @@ impl Flow<'_> {
                     self.state = self.state.intersection(&before).copied().collect();
                 }
             }
-            ExpressionKind::Unary { value, .. } => self.expr(value, false)?,
+            ExpressionKind::Unary { value, .. }
+            | ExpressionKind::ResultOk(value)
+            | ExpressionKind::ResultFail(value)
+            | ExpressionKind::OptionalSome(value) => self.expr(value, false)?,
+            ExpressionKind::OptionalNone => {}
             ExpressionKind::StringInterpolation(segments) => {
                 for segment in segments {
                     if let StringSegment::Value(v) = segment {

@@ -39,6 +39,81 @@ impl Translator<'_, '_> {
             })?;
         self.next_temporary += 1;
         self.builder.ins().stack_store(value, *slot, 0);
+        Ok(LoweredValue::Owned(value, *slot))
+    }
+    pub(super) fn construct_sum(
+        &mut self,
+        success: bool,
+        payload: Option<&Expression>,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let value = if let Some(payload) = payload {
+            self.expression(payload)?
+        } else {
+            LoweredValue::Nothing
+        };
+        let (bits, owned) = match value {
+            LoweredValue::Nothing => (self.builder.ins().iconst(ir::types::I64, 0), false),
+            LoweredValue::Owned(v, _) => (v, true),
+            LoweredValue::Scalar(v) => {
+                let ty = self.builder.func.dfg.value_type(v);
+                let bits = if ty == ir::types::F64 {
+                    self.builder
+                        .ins()
+                        .bitcast(ir::types::I64, ir::MemFlags::new(), v)
+                } else if ty == ir::types::F32 {
+                    let bits = self
+                        .builder
+                        .ins()
+                        .bitcast(ir::types::I32, ir::MemFlags::new(), v);
+                    self.builder.ins().uextend(ir::types::I64, bits)
+                } else if ty != ir::types::I64 {
+                    self.builder.ins().uextend(ir::types::I64, v)
+                } else {
+                    v
+                };
+                (bits, false)
+            }
+        };
+        let tag = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(success));
+        let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+        let sum = self.leaf(NativeLeaf::SumNew, &[tag, bits, owns], true)?;
+        if let LoweredValue::Owned(_, slot) = value {
+            self.clear_slot(slot);
+        }
+        let _ = span;
+        self.own_linear(sum)
+    }
+    pub(super) fn unpack_payload(
+        &mut self,
+        bits: Value,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        if ty == TypeInterner::STRING || is_linear(self.types, ty) {
+            return self.own(bits);
+        }
+        let Some(native) = clif_type(self.types, ty, "sum payload")? else {
+            return Ok(LoweredValue::Nothing);
+        };
+        let value = if native == ir::types::F64 {
+            self.builder
+                .ins()
+                .bitcast(native, ir::MemFlags::new(), bits)
+        } else if native == ir::types::F32 {
+            let bits = self.builder.ins().ireduce(ir::types::I32, bits);
+            self.builder
+                .ins()
+                .bitcast(native, ir::MemFlags::new(), bits)
+        } else if native != ir::types::I64 {
+            self.builder.ins().ireduce(native, bits)
+        } else {
+            bits
+        };
+        let _ = span;
         Ok(LoweredValue::Scalar(value))
     }
     pub(super) fn clear_slot(&mut self, slot: ir::StackSlot) {
@@ -55,7 +130,7 @@ impl Translator<'_, '_> {
         expression: &Expression,
         borrowed: bool,
     ) -> Result<LoweredValue, CodegenError> {
-        if borrowed && is_linear(expression.ty) {
+        if borrowed && is_linear(self.types, expression.ty) {
             match &expression.kind {
                 ExpressionKind::View(inner) => return self.argument(inner, true),
                 ExpressionKind::Local(local) => {

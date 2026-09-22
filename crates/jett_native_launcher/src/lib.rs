@@ -520,4 +520,28 @@ mod tests {
             b"runtime error: string.repeat: requested output is too large\n"
         );
     }
+    #[test]
+    fn native_double_drop_overrides_terminal_failure_without_erasing_it() {
+        let mut runtime = NativeRuntime;
+        let mut stderr = Vec::new();
+        let exit = launch_with(
+            &mut runtime,
+            |context| {
+                use jett_runtime::native_abi::values::*;
+                unsafe {
+                    let context = context.cast();
+                    let value = jett_rt_v1_bytes_new(context);
+                    let text = jett_rt_v1_string_literal(context, b"ab".as_ptr(), 2);
+                    jett_rt_v1_string_repeat(context, text, i64::MAX);
+                    jett_rt_v1_value_drop(context, value);
+                    jett_rt_v1_value_drop(context, value);
+                    jett_rt_v1_value_drop(context, text);
+                    jett_rt_v1_value_status(context)
+                }
+            },
+            &mut stderr,
+        );
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_DESTROY_FAILURE);
+        assert_eq!(stderr, b"runtime error: string.repeat: requested output is too large\njett launcher: runtime context destruction failed (status 1): native value cleanup failed\n");
+    }
 }

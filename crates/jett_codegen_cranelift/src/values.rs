@@ -72,6 +72,25 @@ pub(crate) fn verify_intrinsic(
         }
         return Err(format!("invalid native numeric signature for {id}"));
     }
+    let sum_signature = match id {
+        IntrinsicId::Int64FromString => Some((vec![T::STRING], Type::Result(T::INT64, T::STRING))),
+        IntrinsicId::Uint64FromString => {
+            Some((vec![T::STRING], Type::Result(T::UINT64, T::STRING)))
+        }
+        IntrinsicId::Float64FromString => {
+            Some((vec![T::STRING], Type::Result(T::FLOAT64, T::STRING)))
+        }
+        IntrinsicId::BytesGet => Some((vec![T::BYTES, T::INT64], Type::Optional(T::INT64))),
+        IntrinsicId::BytesToString => Some((vec![T::BYTES], Type::Result(T::STRING, T::STRING))),
+        IntrinsicId::BytesFromHex => Some((vec![T::STRING], Type::Result(T::BYTES, T::STRING))),
+        _ => None,
+    };
+    if let Some((parameters, expected)) = sum_signature {
+        if types.resolve(result) == &expected && args.iter().map(|a| a.ty).eq(parameters) {
+            return Ok(());
+        }
+        return Err(format!("invalid native sum leaf signature for {id}"));
+    }
     let (parameters, expected): (&[TypeId], TypeId) = match id {
         IntrinsicId::BytesNew => (&[], T::BYTES),
         IntrinsicId::BytesLength => (&[T::BYTES], T::INT64),
@@ -165,12 +184,18 @@ pub(crate) fn math_leaf(id: IntrinsicId, first: Option<TypeId>) -> Option<Native
 
 pub(crate) fn bytes_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
     Some(match id {
+        IntrinsicId::Int64FromString => NativeLeaf::ParseInt,
+        IntrinsicId::Uint64FromString => NativeLeaf::ParseUint,
+        IntrinsicId::Float64FromString => NativeLeaf::ParseFloat,
         IntrinsicId::BytesNew => NativeLeaf::BytesNew,
         IntrinsicId::BytesLength => NativeLeaf::BytesLength,
         IntrinsicId::BytesFromString => NativeLeaf::BytesFromString,
         IntrinsicId::BytesConcat => NativeLeaf::BytesConcat,
         IntrinsicId::BytesSlice => NativeLeaf::BytesSlice,
         IntrinsicId::BytesToHex => NativeLeaf::BytesToHex,
+        IntrinsicId::BytesGet => NativeLeaf::BytesGet,
+        IntrinsicId::BytesToString => NativeLeaf::BytesToString,
+        IntrinsicId::BytesFromHex => NativeLeaf::BytesFromHex,
         _ => return None,
     })
 }

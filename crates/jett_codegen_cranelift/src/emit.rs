@@ -464,7 +464,9 @@ fn clif_type(
         ScalarKind::Float(32) => Some(ir::types::F32),
         ScalarKind::Float(64) => Some(ir::types::F64),
         ScalarKind::Nothing => None,
-        ScalarKind::String | ScalarKind::Bytes | ScalarKind::Stdout => Some(ir::types::I64),
+        ScalarKind::String | ScalarKind::Bytes | ScalarKind::Sum | ScalarKind::Stdout => {
+            Some(ir::types::I64)
+        }
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -615,7 +617,7 @@ fn translate_function(
                     let v = translator
                         .builder
                         .use_var(variables[parameter.local.index() as usize].unwrap());
-                    let owned = if is_linear(parameter.ty) {
+                    let owned = if is_linear(types, parameter.ty) {
                         v
                     } else {
                         translator.leaf(NativeLeaf::Retain, &[v], true)?
@@ -688,6 +690,33 @@ struct Translator<'a, 'builder> {
 impl Translator<'_, '_> {
     fn statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::SumTag { source, target } => {
+                let slot = self.local_slots[source.index() as usize]
+                    .ok_or_else(|| self.unsupported(statement.span, "sum view tag place"))?;
+                let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                let tag = self.leaf(NativeLeaf::SumTag, &[v], true)?;
+                let flag = self.builder.ins().ireduce(ir::types::I8, tag);
+                self.define_local(*target, LoweredValue::Scalar(flag), statement.span)
+            }
+            StatementKind::SumTake {
+                source,
+                target,
+                success,
+            } => {
+                let slot = self.local_slots[source.index() as usize]
+                    .ok_or_else(|| self.unsupported(statement.span, "take borrowed sum"))?;
+                let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                let tag = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(*success));
+                let bits = self.leaf(NativeLeaf::SumTake, &[v, tag], true)?;
+                self.clear_slot(slot);
+                let ty = self.local_types[target.index() as usize].ty;
+                let value = self.unpack_payload(bits, ty, statement.span)?;
+                self.define_local(*target, value, statement.span)
+            }
+
             StatementKind::Let { local, value } => {
                 let value = self.expression(value)?;
                 self.define_local(*local, value, statement.span)
@@ -833,7 +862,7 @@ impl Translator<'_, '_> {
                 };
                 if let Some(slot) = self.local_slots[local.index() as usize] {
                     let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
-                    if is_linear(expression.ty) {
+                    if is_linear(self.types, expression.ty) {
                         self.clear_slot(slot);
                         return self.own_linear(v);
                     }
@@ -901,10 +930,15 @@ impl Translator<'_, '_> {
                 Err(self.unsupported(expression.span, "unbaked comptime expression"))
             }
             ExpressionKind::View(value) => self.argument(value, true),
-            ExpressionKind::Clone(value) if is_linear(value.ty) => {
+            ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
                 let borrowed = self.argument(value, true)?;
                 let v = self.scalar(borrowed, value.span)?;
-                let cloned = self.leaf(NativeLeaf::BytesClone, &[v], true)?;
+                let leaf = if value.ty == TypeInterner::BYTES {
+                    NativeLeaf::BytesClone
+                } else {
+                    NativeLeaf::SumClone
+                };
+                let cloned = self.leaf(leaf, &[v], true)?;
                 self.own_linear(cloned)
             }
             ExpressionKind::Clone(value) => self.expression(value),
@@ -936,12 +970,13 @@ impl Translator<'_, '_> {
             ExpressionKind::MapConstruct { .. } => {
                 Err(self.unsupported(expression.span, "map construction"))
             }
-            ExpressionKind::ResultOk(_) | ExpressionKind::ResultFail(_) => {
-                Err(self.unsupported(expression.span, "result construction"))
+            ExpressionKind::ResultOk(value) | ExpressionKind::OptionalSome(value) => {
+                self.construct_sum(true, Some(value), expression.span)
             }
-            ExpressionKind::OptionalSome(_) | ExpressionKind::OptionalNone => {
-                Err(self.unsupported(expression.span, "optional construction"))
+            ExpressionKind::ResultFail(value) => {
+                self.construct_sum(false, Some(value), expression.span)
             }
+            ExpressionKind::OptionalNone => self.construct_sum(false, None, expression.span),
             ExpressionKind::Handle { .. } => {
                 Err(self.unsupported(expression.span, "failure handler"))
             }
@@ -1013,7 +1048,9 @@ impl Translator<'_, '_> {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
                 LoweredValue::Owned(value, slot) => {
-                    if modes[index] == jett_mir::ParamMode::Owned {
+                    if modes[index] == jett_mir::ParamMode::Owned
+                        && is_linear(self.types, argument.ty)
+                    {
                         self.clear_slot(slot);
                     }
                     native_args.push(value);
@@ -1066,7 +1103,7 @@ impl Translator<'_, '_> {
                     "value-returning call produced no native value",
                 )
             })?;
-            if is_linear(expression.ty) {
+            if is_linear(self.types, expression.ty) {
                 self.own_linear(value)
             } else if expression.ty == TypeInterner::STRING {
                 self.own(value)
@@ -1196,7 +1233,11 @@ impl Translator<'_, '_> {
                     ));
                 }
             },
-            ScalarKind::Nothing | ScalarKind::String | ScalarKind::Bytes | ScalarKind::Stdout => {
+            ScalarKind::Nothing
+            | ScalarKind::String
+            | ScalarKind::Bytes
+            | ScalarKind::Sum
+            | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,
                     span,
@@ -1328,7 +1369,7 @@ impl Translator<'_, '_> {
         span: Span,
     ) -> Result<(), CodegenError> {
         if let Some(slot) = self.local_slots[local.index() as usize] {
-            let owned = if is_linear(self.local_types[local.index() as usize].ty) {
+            let owned = if is_linear(self.types, self.local_types[local.index() as usize].ty) {
                 let LoweredValue::Owned(v, source) = value else {
                     return Err(self.unsupported(span, "borrow escaping into owner"));
                 };

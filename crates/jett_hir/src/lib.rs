@@ -35,6 +35,11 @@ impl FunctionId {
 pub struct LocalId(u32);
 
 impl LocalId {
+    /// Allocate a canonical local identity during backend-neutral lowering.
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }

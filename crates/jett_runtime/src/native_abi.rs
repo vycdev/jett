@@ -517,7 +517,14 @@ pub unsafe extern "C" fn jett_rt_v1_context_destroy(
             return JettRuntimeResultV1::failure(JettRuntimeStatusV1::PANIC, PANIC_MESSAGE);
         };
         let leaked = !state.values.is_empty();
+        let cleanup_failed = state.values.cleanup_failed;
         drop(state);
+        if cleanup_failed {
+            return JettRuntimeResultV1::failure(
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"native value cleanup failed",
+            );
+        }
         if leaked {
             return JettRuntimeResultV1::failure(
                 JettRuntimeStatusV1::INVALID_ARGUMENT,

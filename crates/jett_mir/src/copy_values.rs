@@ -40,6 +40,20 @@ impl CopyValuePlan {
                 let mut reads = Set::new();
                 let mut temporaries = 0;
                 let definition = match &statement.kind {
+                    StatementKind::SumTag { source, target }
+                    | StatementKind::SumTake { source, target, .. }
+                        if program.is_some() =>
+                    {
+                        reads.insert(source.index() as usize);
+                        if matches!(statement.kind, StatementKind::SumTake { .. }) {
+                            let ty = function.locals[target.index() as usize].ty;
+                            temporaries += usize::from(
+                                ty == TypeInterner::STRING
+                                    || crate::move_values::is_linear(types, ty),
+                            );
+                        }
+                        Some(target.index() as usize)
+                    }
                     StatementKind::Let { local, value } => {
                         visit(value, &mut reads, &mut temporaries, types, program, false)?;
                         Some(local.index() as usize)
@@ -173,7 +187,7 @@ impl CopyValuePlan {
                 .filter(|l| {
                     matches!(types.resolve(l.ty), Type::String)
                         || (program.is_some()
-                            && l.ty == TypeInterner::BYTES
+                            && crate::move_values::is_linear(types, l.ty)
                             && !function
                                 .parameter_for_local(l.id)
                                 .is_some_and(|p| p.mode == crate::ParamMode::View))
@@ -196,12 +210,16 @@ fn visit(
     borrowed: bool,
 ) -> Result<(), String> {
     plan_type(types, value.ty, program)?;
-    if value.ty == TypeInterner::BYTES {
+    if program.is_some() && crate::move_values::is_linear(types, value.ty) {
         *temporaries += usize::from(match &value.kind {
             ExpressionKind::Local(_) => !borrowed,
             ExpressionKind::Call { .. }
             | ExpressionKind::Intrinsic { .. }
-            | ExpressionKind::Clone(_) => true,
+            | ExpressionKind::Clone(_)
+            | ExpressionKind::ResultOk(_)
+            | ExpressionKind::ResultFail(_)
+            | ExpressionKind::OptionalSome(_)
+            | ExpressionKind::OptionalNone => true,
             _ => false,
         });
     }
@@ -248,6 +266,14 @@ fn visit(
         ExpressionKind::Binary { left, right, .. } => {
             visit(left, reads, temporaries, types, program, false)?;
             visit(right, reads, temporaries, types, program, false)?;
+        }
+        ExpressionKind::OptionalNone if program.is_some() => {}
+        ExpressionKind::ResultOk(value)
+        | ExpressionKind::ResultFail(value)
+        | ExpressionKind::OptionalSome(value)
+            if program.is_some() =>
+        {
+            visit(value, reads, temporaries, types, program, false)?
         }
         ExpressionKind::Unary { value, .. } => {
             visit(value, reads, temporaries, types, program, false)?
@@ -330,8 +356,16 @@ fn plan_type(
     ty: TypeId,
     program: Option<&crate::Program>,
 ) -> Result<(), String> {
-    if program.is_some() && ty == TypeInterner::BYTES {
-        return Ok(());
+    if program.is_some() {
+        match types.resolve(ty) {
+            Type::Bytes => return Ok(()),
+            Type::Optional(inner) => return plan_type(types, *inner, program),
+            Type::Result(ok, error) => {
+                plan_type(types, *ok, program)?;
+                return plan_type(types, *error, program);
+            }
+            _ => {}
+        }
     }
     copy_plan_type(types, ty)
 }

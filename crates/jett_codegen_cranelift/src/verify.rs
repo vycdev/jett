@@ -17,6 +17,7 @@ pub(crate) enum ScalarKind {
     Nothing,
     String,
     Bytes,
+    Sum,
     Stdout,
 }
 
@@ -141,6 +142,15 @@ pub(crate) fn scalar_kind(
         Type::Nothing => ScalarKind::Nothing,
         Type::String => ScalarKind::String,
         Type::Bytes => ScalarKind::Bytes,
+        Type::Optional(inner) => {
+            scalar_kind(types, *inner, "optional payload")?;
+            ScalarKind::Sum
+        }
+        Type::Result(ok, error) => {
+            scalar_kind(types, *ok, "result success payload")?;
+            scalar_kind(types, *error, "result failure payload")?;
+            ScalarKind::Sum
+        }
         Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
         unsupported => {
             return Err(CodegenError::UnsupportedType {
@@ -242,6 +252,39 @@ impl Verifier<'_> {
 
     fn statement(&self, function: &Function, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::SumTag { source, target }
+            | StatementKind::SumTake { source, target, .. } => {
+                let source = function.local(*source).ok_or_else(|| {
+                    self.contract_error(function, statement.span, "missing sum place")
+                })?;
+                let target = function.local(*target).ok_or_else(|| {
+                    self.contract_error(function, statement.span, "missing payload place")
+                })?;
+                let payload = match (self.types.resolve(source.ty), &statement.kind) {
+                    (Type::Result(..) | Type::Optional(_), StatementKind::SumTag { .. }) => {
+                        TypeInterner::BOOL
+                    }
+                    (Type::Result(ok, error), StatementKind::SumTake { success, .. }) => {
+                        if *success { *ok } else { *error }
+                    }
+                    (Type::Optional(inner), StatementKind::SumTake { success: true, .. }) => *inner,
+                    _ => {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "invalid sum projection",
+                        ));
+                    }
+                };
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    payload,
+                    target.ty,
+                    "sum payload type mismatch",
+                )
+            }
+
             StatementKind::Let { local, value } => {
                 let local = function.local(*local).ok_or_else(|| {
                     self.contract_error(
@@ -549,11 +592,36 @@ impl Verifier<'_> {
             ExpressionKind::MapConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "map construction"))
             }
-            ExpressionKind::ResultOk(_) | ExpressionKind::ResultFail(_) => {
-                Err(self.unsupported(function, expression.span, "result construction"))
+            ExpressionKind::ResultOk(value)
+            | ExpressionKind::ResultFail(value)
+            | ExpressionKind::OptionalSome(value) => {
+                let payload = match (&expression.kind, self.types.resolve(expression.ty)) {
+                    (ExpressionKind::ResultOk(_), Type::Result(ok, _)) => *ok,
+                    (ExpressionKind::ResultFail(_), Type::Result(_, error)) => *error,
+                    (ExpressionKind::OptionalSome(_), Type::Optional(inner)) => *inner,
+                    _ => {
+                        return Err(self.expression_kind_error(
+                            function,
+                            expression,
+                            "sum constructor",
+                        ));
+                    }
+                };
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    payload,
+                    value.ty,
+                    "sum constructor payload type mismatch",
+                )
             }
-            ExpressionKind::OptionalSome(_) | ExpressionKind::OptionalNone => {
-                Err(self.unsupported(function, expression.span, "optional construction"))
+            ExpressionKind::OptionalNone => {
+                if matches!(self.types.resolve(expression.ty), Type::Optional(_)) {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "optional none"))
+                }
             }
             ExpressionKind::Handle { .. } => {
                 Err(self.unsupported(function, expression.span, "failure handler"))
@@ -658,7 +726,7 @@ impl Verifier<'_> {
             BinaryOp::Equal | BinaryOp::NotEqual => {
                 !matches!(
                     operand,
-                    ScalarKind::Nothing | ScalarKind::Stdout | ScalarKind::Bytes
+                    ScalarKind::Nothing | ScalarKind::Stdout | ScalarKind::Bytes | ScalarKind::Sum
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {

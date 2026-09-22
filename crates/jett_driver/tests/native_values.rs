@@ -500,3 +500,188 @@ function main() returns nothing:
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
     assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
 }
+
+#[test]
+fn native_bytes_result_optional_fixture_functions_execute() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/bytes_operations.jett");
+    let mut source = std::fs::read_to_string(fixture).unwrap();
+    source.push_str(
+        r#"
+function main() returns nothing:
+    println(new_bytes_test(), from_string_length_test(), to_string_test())
+    println(get_valid_test(), get_oob_test(), get_negative_test())
+    println(slice_test(), slice_content_test(), concat_test(), concat_length_test())
+    println(slice_clamp_test(), roundtrip_test(), to_hex_test())
+    println(from_hex_length_test(), from_hex_prefix_test())
+    println(from_hex_invalid_message(), from_hex_odd_message(), concat_empty_test())
+    println(observer_views_preserve_owner(), explicit_clone_preserves_original())
+"#,
+    );
+    let actual = run_source(&source);
+    assert!(actual.stdout.starts_with(b"0 5 hello\n65 -1 -1\n"));
+}
+
+#[test]
+fn native_nested_owned_sum_payloads_and_handler_exits() {
+    let actual = run_source(
+        r#"
+function wrap(value: bytes) returns result[optional[bytes], string]:
+    return ok(some(value))
+function unwrap(value: result[optional[bytes], string]) returns bytes:
+    optional[bytes] inner = value handle error:
+        return bytes.from_string(error)
+    bytes output = inner handle:
+        default bytes.from_string("none")
+    return output
+function main() returns nothing:
+    result[optional[bytes], string] nested = wrap(bytes.from_string("yes"))
+    result[optional[bytes], string] duplicate = clone nested
+    bytes first = unwrap(nested)
+    bytes second = unwrap(duplicate)
+    bytes failed = unwrap(fail("bad"))
+    bytes absent = unwrap(ok(none))
+    println(bytes.to_hex(first), bytes.to_hex(second), bytes.to_hex(failed), bytes.to_hex(absent))
+"#,
+    );
+    assert_eq!(actual.stdout, b"796573 796573 626164 6e6f6e65\n");
+}
+
+#[test]
+fn native_handler_backedges_defaults_and_binary_byte_errors() {
+    let actual = run_source(
+        r#"
+function classify(raw: string) returns string:
+    bytes data = bytes.from_hex(raw) handle error:
+        return error
+    string decoded = bytes.to_string(data) handle error:
+        return error
+    return decoded
+function main() returns nothing:
+    println(classify("0X41"), classify("+1"), classify("ff"), classify("00"))
+    mutable int64 index = 0
+    mutable optional[bytes] held = some(bytes.from_string("old"))
+    while index < 4:
+        index = index + 1
+        held = some(bytes.from_string("{index}"))
+        bytes data = bytes.from_hex("zz") handle error:
+            if index == 2:
+                continue
+            if index == 3:
+                break
+            default bytes.from_string(error)
+        println(bytes.length(data))
+    bytes last = held handle:
+        default bytes.new()
+    println(bytes.to_hex(last))
+"#,
+    );
+    assert!(actual.stdout.ends_with(b"35\n33\n"));
+}
+
+#[test]
+fn native_numeric_result_parsing_and_original_minimum_contracts() {
+    for name in [
+        "math_abs_int64_min",
+        "math_gcd_int64_min",
+        "math_lcm_int64_min",
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../tests/runtime_fail/{name}.jett"));
+        let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("program");
+        build_host_executable(&fixture, &launcher(), &binary).expect("numeric result fixture");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty());
+    }
+    run_source(
+        r#"
+function number(raw: string) returns string:
+    int64 parsed = int64.from_string(raw) handle error:
+        return error
+    return "{parsed}"
+function main() returns nothing:
+    println(number("-9223372036854775808"), number("wrong"))
+    uint64 large = uint64.from_string("18446744073709551615") handle error:
+        default 0
+    float64 real = float64.from_string("-0") handle error:
+        default 1.0
+    println(large, real)
+"#,
+    );
+}
+
+#[test]
+fn native_terminal_failure_bypasses_result_handler_with_live_nested_owners() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("failure.jett");
+    std::fs::write(
+        &path,
+        r#"
+function explode(value: bytes) returns result[bytes, string]:
+    string doomed = string.repeat("ab", 9223372036854775807)
+    return ok(bytes.concat(value, bytes.from_string(doomed)))
+function relay(value: bytes) returns result[bytes, string]:
+    optional[bytes] held = some(bytes.from_string("held"))
+    result[bytes, string] outcome = explode(value)
+    bytes after = held handle:
+        default bytes.new()
+    print(bytes.length(after))
+    return outcome
+function main() returns nothing:
+    result[optional[bytes], string] held = ok(some(bytes.from_string("outer")))
+    bytes output = relay(bytes.from_string("input")) handle error:
+        println("must not catch terminal failure")
+        default bytes.from_string(error)
+    optional[bytes] nested = held handle error:
+        return nothing
+    print(bytes.length(output))
+"#,
+    )
+    .unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&path).expect_err("terminal oracle");
+    let binary = directory.path().join("program");
+    build_host_executable(&path, &launcher(), &binary).expect("sum cleanup compilation");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
+fn native_linear_argument_order_and_conditional_moves() {
+    let actual = run_source(
+        r#"
+function observed(view value: bytes) returns int64:
+    print("observe:", bytes.to_hex(view value), ";")
+    return bytes.length(view value)
+function marked(value: bytes) returns bytes:
+    print("mark:", bytes.to_hex(view value), ";")
+    return value
+function pair(first: int64, second: bytes) returns nothing:
+    println(first, bytes.to_hex(view second))
+function shared(view first: bytes, second: bytes) returns nothing:
+    println(bytes.to_hex(view first), bytes.to_hex(view second))
+function consumed(value: bytes) returns bool:
+    println("consume", bytes.to_hex(view value))
+    return true
+function branch(flag: bool) returns nothing:
+    bytes owner = bytes.from_string("x")
+    bool used = flag && consumed(owner)
+    println(used)
+function main() returns nothing:
+    bytes owner = bytes.from_string("ab")
+    shared(second: marked(clone owner), first: view owner)
+    pair(first: observed(view owner), second: owner)
+    bytes a = bytes.from_string("a")
+    bytes b = bytes.from_string("b")
+    pair(second: marked(b), first: observed(view a))
+    branch(false)
+    branch(true)
+"#,
+    );
+    assert_eq!(actual.stdout, b"mark: 6162 ;6162 6162\nobserve: 6162 ;2 6162\nmark: 62 ;observe: 61 ;1 62\nfalse\nconsume 78\ntrue\n");
+}

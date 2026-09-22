@@ -12,6 +12,10 @@ const INVALID_HANDLE: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native string handle",
 );
+const INVALID_SUM: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native sum handle or tag",
+);
 const EXHAUSTED: Failure = (
     JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
     b"native value capacity exhausted",
@@ -21,13 +25,25 @@ struct NativeString {
     text: String,
     references: u64,
 }
+/// Stable discriminants for optional and result storage (not terminal status).
+pub const SUM_FAILURE: u32 = 0;
+pub const SUM_SUCCESS: u32 = 1;
+struct NativeSum {
+    tag: u32,
+    bits: u64,
+    owned: bool,
+}
 #[derive(Default)]
 pub(super) struct NativeValues {
     strings: HashMap<NativeHandle, NativeString>,
     bytes: HashMap<NativeHandle, Vec<u8>>,
+    sums: HashMap<NativeHandle, NativeSum>,
+    sums_created: u64,
+    sums_destroyed: u64,
     bytes_created: u64,
     bytes_destroyed: u64,
     failure: Option<Failure>,
+    pub(super) cleanup_failed: bool,
     stdout: Option<u64>,
 }
 impl NativeValues {
@@ -35,6 +51,8 @@ impl NativeValues {
         self.strings.is_empty()
             && self.bytes.is_empty()
             && self.bytes_created == self.bytes_destroyed
+            && self.sums.is_empty()
+            && self.sums_created == self.sums_destroyed
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
         let id = next_identity()?;
@@ -59,7 +77,57 @@ impl NativeValues {
             b"invalid native bytes handle",
         ))
     }
+    fn sum(&mut self, tag: u32, bits: u64, owned: bool) -> LeafResult<u64> {
+        if tag > SUM_SUCCESS {
+            return Err(INVALID_SUM);
+        }
+        let id = next_identity()?;
+        self.sums.insert(id, NativeSum { tag, bits, owned });
+        self.sums_created += 1;
+        Ok(id)
+    }
+    fn parsed_sum(&mut self, parsed: Result<u64, String>) -> LeafResult<u64> {
+        match parsed {
+            Ok(bits) => self.sum(SUM_SUCCESS, bits, false),
+            Err(error) => {
+                let payload = self.insert(error)?;
+                match self.sum(SUM_FAILURE, payload, true) {
+                    Ok(value) => Ok(value),
+                    Err(error) => {
+                        self.drop_value(payload)?;
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+    fn clone_value(&mut self, id: u64) -> LeafResult<u64> {
+        if let Some(sum) = self.sums.get(&id) {
+            let (tag, bits, owned) = (sum.tag, sum.bits, sum.owned);
+            let bits = if owned { self.clone_value(bits)? } else { bits };
+            return match self.sum(tag, bits, owned) {
+                Ok(id) => Ok(id),
+                Err(error) => {
+                    if owned {
+                        self.drop_value(bits)?;
+                    }
+                    Err(error)
+                }
+            };
+        }
+        if let Some(bytes) = self.bytes.get(&id) {
+            return self.insert_bytes(bytes.clone());
+        }
+        self.retain(id)
+    }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if let Some(sum) = self.sums.remove(&id) {
+            self.sums_destroyed += 1;
+            if sum.owned {
+                self.drop_value(sum.bits)?;
+            }
+            return Ok(0);
+        }
         if self.bytes.remove(&id).is_some() {
             self.bytes_destroyed += 1;
             return Ok(0);
@@ -149,6 +217,7 @@ fn leaf<T: FailureDefault>(
                 }
                 Ok(Ok(_)) => unreachable!(),
             };
+            state.values.cleanup_failed |= cleanup;
             state.values.failure.get_or_insert(error);
             T::failure_default()
         }
@@ -185,6 +254,40 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    ParseInt, jett_rt_v1_parse_int, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?; let parsed = text.parse::<i64>().map(|v| v as u64).map_err(|_| format!("int64.from_string: cannot parse '{text}' as int64")); s.parsed_sum(parsed) };
+    ParseUint, jett_rt_v1_parse_uint, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?; let parsed = text.parse::<u64>().map_err(|_| format!("uint64.from_string: cannot parse '{text}' as uint64")); s.parsed_sum(parsed) };
+    ParseFloat, jett_rt_v1_parse_float, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?; let parsed = text.parse::<f64>().map(f64::to_bits).map_err(|_| format!("float64.from_string: cannot parse '{text}' as float64")); s.parsed_sum(parsed) };
+
+    SumNew, jett_rt_v1_sum_new, false, (tag: u32 => I32, bits: u64 => I64, owned: u32 => I32), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_SUM); } s.sum(tag, bits, owned != 0) };
+    SumTag, jett_rt_v1_sum_tag, false, (value: u64 => I64), u32 => I32,
+        |s| s.sums.get(&value).map(|v| v.tag).ok_or(INVALID_SUM);
+    SumTake, jett_rt_v1_sum_take, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
+        |s| { if s.sums.get(&value).is_none_or(|v| v.tag != tag) { return Err(INVALID_SUM); }
+            let sum = s.sums.remove(&value).ok_or(INVALID_SUM)?;
+            s.sums_destroyed += 1; Ok(sum.bits) };
+    SumClone, jett_rt_v1_sum_clone, false, (value: u64 => I64), u64 => I64,
+        |s| { if !s.sums.contains_key(&value) { return Err(INVALID_SUM); } s.clone_value(value) };
+    BytesGet, jett_rt_v1_bytes_get, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let found = usize::try_from(index).ok().and_then(|i| s.bytes(value).ok()?.get(i)).copied();
+            s.bytes(value)?;
+            s.sum(u32::from(found.is_some()), found.unwrap_or(0) as u64, false) };
+    BytesToString, jett_rt_v1_bytes_to_string, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = String::from_utf8(s.bytes(value)?.to_vec());
+            let (tag, text) = match decoded { Ok(text) => (SUM_SUCCESS, text), Err(e) => (SUM_FAILURE, format!("invalid UTF-8: {e}")) };
+            let payload = s.insert(text)?;
+            match s.sum(tag, payload, true) { Ok(v) => Ok(v), Err(e) => { s.drop_value(payload)?; Err(e) } } };
+    BytesFromHex, jett_rt_v1_bytes_from_hex, false, (value: u64 => I64), u64 => I64,
+        |s| { let raw = s.text(value)?; let raw = raw.strip_prefix("0x").unwrap_or(raw);
+            let decoded = if raw.len() % 2 != 0 { Err("bytes.from_hex: expected even-length hex string") }
+                else if !raw.bytes().all(|b| b.is_ascii_hexdigit()) { Err("bytes.from_hex: expected hex string") }
+                else { (0..raw.len()).step_by(2).map(|i| u8::from_str_radix(&raw[i..i+2], 16).map_err(|_| "bytes.from_hex: expected hex string")).collect::<Result<Vec<_>, _>>() };
+            let (tag, payload) = match decoded { Ok(data) => (SUM_SUCCESS, s.insert_bytes(data)?), Err(error) => (SUM_FAILURE, s.insert(error.to_owned())?) };
+            match s.sum(tag, payload, true) { Ok(v) => Ok(v), Err(e) => { s.drop_value(payload)?; Err(e) } } };
+
     DropValue, jett_rt_v1_value_drop, true, (value: u64 => I64), u32 => I32,
         |s| s.drop_value(value);
     BytesNew, jett_rt_v1_bytes_new, false, (), u64 => I64,
@@ -401,6 +504,17 @@ mod tests {
             );
             Self(value)
         }
+        fn destroy(self, expected: JettRuntimeStatusV1) {
+            let mut context = std::mem::ManuallyDrop::new(self);
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+                expected
+            );
+            unsafe {
+                drop(ptr::read(&context.0));
+            }
+        }
         fn pointer(&self) -> *const JettRuntimeContextV1 {
             &*self.0
         }
@@ -489,6 +603,7 @@ mod tests {
             );
             assert_eq!(jett_rt_v1_string_release(second.pointer(), empty), 0);
         }
+        second.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
     }
     #[test]
     fn context_destruction_reports_owned_value_leaks() {
@@ -562,5 +677,65 @@ mod tests {
         unsafe {
             drop(ptr::read(&context.0));
         }
+    }
+    #[test]
+    fn sum_tags_take_only_selected_payload_and_cleanup_nested_owners() {
+        let context = Context::new();
+        unsafe {
+            let data = jett_rt_v1_bytes_new(context.pointer());
+            let inner = jett_rt_v1_sum_new(context.pointer(), SUM_SUCCESS, data, 1);
+            let outer = jett_rt_v1_sum_new(context.pointer(), SUM_SUCCESS, inner, 1);
+            let clone = jett_rt_v1_sum_clone(context.pointer(), outer);
+            assert_ne!(clone, outer);
+            assert_eq!(jett_rt_v1_sum_tag(context.pointer(), outer), SUM_SUCCESS);
+            let taken = jett_rt_v1_sum_take(context.pointer(), outer, SUM_SUCCESS);
+            assert_eq!(taken, inner);
+            jett_rt_v1_value_drop(context.pointer(), taken);
+            // Invalid tag extraction must not consume the still-owned record.
+            assert_eq!(
+                jett_rt_v1_sum_take(context.pointer(), clone, SUM_FAILURE),
+                0
+            );
+            assert_ne!(jett_rt_v1_value_status(context.pointer()), 0);
+            jett_rt_v1_value_drop(context.pointer(), clone);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert_eq!((values.sums_created, values.sums_destroyed), (4, 4));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn sum_registry_leak_is_independent_of_payload_ownership() {
+        let mut context = Context::new();
+        unsafe {
+            jett_rt_v1_sum_new(context.pointer(), SUM_SUCCESS, 42, 0);
+        }
+        assert_eq!(context.count(), 0);
+        let mut result = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+            JettRuntimeStatusV1::INVALID_ARGUMENT
+        );
+        let context = std::mem::ManuallyDrop::new(context);
+        unsafe {
+            drop(ptr::read(&context.0));
+        }
+    }
+    #[test]
+    fn foreign_and_stale_bytes_cannot_be_used_or_double_dropped() {
+        let first = Context::new();
+        let second = Context::new();
+        unsafe {
+            let value = jett_rt_v1_bytes_new(first.pointer());
+            assert_eq!(jett_rt_v1_bytes_clone(second.pointer(), value), 0);
+            assert_ne!(jett_rt_v1_value_status(second.pointer()), 0);
+            jett_rt_v1_value_drop(first.pointer(), value);
+            assert_eq!(jett_rt_v1_bytes_clone(first.pointer(), value), 0);
+            jett_rt_v1_value_drop(first.pointer(), value);
+            assert_ne!(jett_rt_v1_value_status(first.pointer()), 0);
+        }
+        first.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
     }
 }

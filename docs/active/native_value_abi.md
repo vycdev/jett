@@ -116,3 +116,40 @@ terminal failure, and byte creation/destruction counters must balance in
 addition to both registries being empty. Runtime tests separately prove byte
 storage independence, exact destruction and byte-only leak detection. This is
 not evidence for resource finalizers or full native parity.
+
+## Result and optional ownership and handlers
+
+Native sums have separate context-associated, move-only handles. Their internal
+records contain a genuine discriminant (0: fail/none, 1: ok/some), a 64-bit
+payload carrier, and an owned-payload flag. Fixed-width scalars preserve bits;
+float32/64 are bitcast, never numerically cast into the carrier. Nothing/none
+have no owned payload. Owning payloads transfer into the record only on
+successful construction. Sum destruction recursively drops the active payload
+only; explicit clone recursively clones bytes/sums and retains copyable strings.
+Taking a payload checks the expected tag, destroys the outer record, and
+transfers the payload to a new initialized place without destroying it. A failed
+tag check leaves the record available to terminal cleanup. Sum allocation and
+destruction counters are checked independently from string and byte registries.
+
+Statement-root result/optional handles now lower to SumTag, ordinary Branch,
+SumTake, and explicit continuation blocks. Handler default yields to that
+continuation; return exits the enclosing function; break/continue retain their
+enclosing loop edges. Failure branches without an error binding drop the sum
+normally. Terminal runtime failure still bypasses these language-level branches.
+The move fixed point covers the extracted edges and transferred payload places.
+Nested payloads work; handlers nested inside arbitrary expression operands,
+refinement handlers, and match/aggregate lowering remain separate prerequisites
+and are still rejected by native validation rather than executed eagerly.
+
+All original bytes_operations fixture functions execute in a supplemental
+native main, including binary conversion errors and borrowed observer aliases.
+int64/uint64/float64 string parsing produces ordinary tagged result data; the
+three original math MIN runtime contracts now execute using that path. Full
+fixture denominators and unsupported families remain unchanged.
+
+Cleanup-operation failure is recorded separately from the first terminal error.
+Even after all registries empty, a double drop forces context destruction to
+fail and launcher exit 72; the original runtime failure diagnostic is retained.
+Named argument tests distinguish lexical evaluation from parameter order and
+prove nested views end before a later legitimate move, while same-call active
+loans reject conflicting moves.
