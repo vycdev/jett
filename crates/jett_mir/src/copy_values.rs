@@ -3,7 +3,7 @@
 //! hidden control flow. Resources and other move-only values need a distinct
 //! move/borrow/drop analysis before their backend support can be enabled.
 use crate::{ControlFlowGraph, Function, StatementKind, TerminatorKind};
-use jett_hir::{Expression, ExpressionKind, StringSegment};
+use jett_hir::{Expression, ExpressionKind, IntrinsicId, StringSegment};
 use jett_types::{Type, TypeInterner};
 use std::collections::BTreeSet;
 type Set = BTreeSet<usize>;
@@ -22,45 +22,45 @@ impl CopyValuePlan {
         let cfg = ControlFlowGraph::analyze(function).map_err(|e| format!("{e:?}"))?;
         let n = function.blocks.len();
         let mut facts = Vec::new();
-        let mut max_nodes = 0;
+        let mut max_temporaries = 0;
         for block in &function.blocks {
             let mut statements = Vec::new();
             for statement in &block.statements {
                 let mut reads = Set::new();
-                let mut nodes = 0;
+                let mut temporaries = 0;
                 let definition = match &statement.kind {
                     StatementKind::Let { local, value } => {
-                        visit(value, &mut reads, &mut nodes)?;
+                        visit(value, &mut reads, &mut temporaries)?;
                         Some(local.index() as usize)
                     }
                     StatementKind::Assign { target, value } => {
                         let ExpressionKind::Local(local) = target.kind else {
                             return Err("nonlocal assignment needs place ownership".into());
                         };
-                        visit(value, &mut reads, &mut nodes)?;
+                        visit(value, &mut reads, &mut temporaries)?;
                         Some(local.index() as usize)
                     }
                     StatementKind::Evaluate(value) => {
-                        visit(value, &mut reads, &mut nodes)?;
+                        visit(value, &mut reads, &mut temporaries)?;
                         None
                     }
                     _ => return Err("statement needs explicit ownership lowering".into()),
                 };
-                max_nodes = max_nodes.max(nodes);
+                max_temporaries = max_temporaries.max(temporaries);
                 statements.push((reads, definition));
             }
             let mut reads = Set::new();
-            let mut nodes = 0;
+            let mut temporaries = 0;
             match &block.terminator.kind {
                 TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
-                    visit(v, &mut reads, &mut nodes)?
+                    visit(v, &mut reads, &mut temporaries)?
                 }
                 TerminatorKind::Return(None)
                 | TerminatorKind::Goto(_)
                 | TerminatorKind::Unreachable => {}
                 _ => return Err("terminator needs explicit ownership lowering".into()),
             }
-            max_nodes = max_nodes.max(nodes);
+            max_temporaries = max_temporaries.max(temporaries);
             facts.push((statements, reads));
         }
         // Definite initialization is an intersection fixed point, including
@@ -165,16 +165,41 @@ impl CopyValuePlan {
             live_in,
             live_out,
             live_after_statement: after,
-            temporary_slots: if max_nodes == 0 { 0 } else { max_nodes * 4 + 8 },
+            temporary_slots: max_temporaries,
         })
     }
 }
-fn visit(value: &Expression, reads: &mut Set, nodes: &mut usize) -> Result<(), String> {
-    if value.ty == TypeInterner::STRING {
-        *nodes += 1;
-    }
-    if let ExpressionKind::Intrinsic { args, .. } = &value.kind {
-        *nodes += args.len() + 1;
+fn visit(value: &Expression, reads: &mut Set, temporaries: &mut usize) -> Result<(), String> {
+    // Count owning emitter operations, not string-typed AST nodes. Children
+    // accumulate until full-expression cleanup; even short-circuit alternatives
+    // receive distinct slots during emission. View/clone add no ownership.
+    match &value.kind {
+        ExpressionKind::String(_) | ExpressionKind::Local(_) | ExpressionKind::Call { .. }
+            if value.ty == TypeInterner::STRING =>
+        {
+            *temporaries += 1
+        }
+        ExpressionKind::Intrinsic {
+            intrinsic: id,
+            args,
+            ..
+        } => {
+            if matches!(id, IntrinsicId::Print | IntrinsicId::Println) {
+                // Empty output, argument concatenations, inter-argument spaces
+                // (literal + concat), and the optional newline (literal + concat).
+                *temporaries += 1 + args.len() + 2 * args.len().saturating_sub(1);
+                *temporaries += usize::from(*id == IntrinsicId::Println) * 2;
+                *temporaries += args.iter().filter(|a| a.ty != TypeInterner::STRING).count();
+            } else if value.ty == TypeInterner::STRING {
+                // String-returning leaves and scalar conversion each own once.
+                *temporaries += 1;
+            }
+        }
+        ExpressionKind::StringInterpolation(segments) => {
+            // Initial empty literal plus one concatenation per segment.
+            *temporaries += 1 + segments.len();
+        }
+        _ => {}
     }
     match &value.kind {
         ExpressionKind::Local(l) => {
@@ -186,22 +211,27 @@ fn visit(value: &Expression, reads: &mut Set, nodes: &mut usize) -> Result<(), S
         | ExpressionKind::String(_)
         | ExpressionKind::Nothing => {}
         ExpressionKind::Binary { left, right, .. } => {
-            visit(left, reads, nodes)?;
-            visit(right, reads, nodes)?;
+            visit(left, reads, temporaries)?;
+            visit(right, reads, temporaries)?;
         }
         ExpressionKind::Unary { value, .. }
         | ExpressionKind::View(value)
-        | ExpressionKind::Clone(value) => visit(value, reads, nodes)?,
+        | ExpressionKind::Clone(value) => visit(value, reads, temporaries)?,
         ExpressionKind::Call { args, .. } | ExpressionKind::Intrinsic { args, .. } => {
             for v in args {
-                visit(v, reads, nodes)?;
+                visit(v, reads, temporaries)?;
             }
         }
         ExpressionKind::StringInterpolation(segments) => {
             for s in segments {
                 match s {
-                    StringSegment::Value(v) => visit(v, reads, nodes)?,
-                    StringSegment::Text(_) => *nodes += 1,
+                    StringSegment::Value(v) => {
+                        visit(v, reads, temporaries)?;
+                        // Scalar formatting owns a new string; string formatting
+                        // passes through the ownership already counted in v.
+                        *temporaries += usize::from(v.ty != TypeInterner::STRING);
+                    }
+                    StringSegment::Text(_) => *temporaries += 1,
                 }
             }
         }

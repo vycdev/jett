@@ -17,7 +17,7 @@ fn launcher() -> NativeLauncherBundle {
             .args(["build", "-q", "-p", "jett_native_launcher", "--target-dir"])
             .arg(&target)
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-            .env("CARGO_BUILD_JOBS", "2")
+            .env("CARGO_BUILD_JOBS", "1")
             .status()
             .expect("build target-matched launcher");
         assert!(status.success(), "launcher build failed: {status}");
@@ -301,4 +301,51 @@ fn native_math_runtime_contract_fixtures() {
             }
         }
     }
+}
+
+#[test]
+fn native_adjacent_scalar_interpolation_has_structural_capacity() {
+    let output = run_source(
+        r#"
+function render(value: int64) returns string:
+    return "{value}{value}{value}{value}{value}{value}"
+function main() returns nothing:
+    println(render(7))
+"#,
+    );
+    assert_eq!(output.stdout, b"777777\n");
+}
+
+#[test]
+fn native_long_interpolation_calls_print_and_cleanup() {
+    let scalars = "{value}".repeat(64);
+    let strings = "{text}".repeat(64);
+    let source = format!(
+        r#"
+function render(value: int64, text: string) returns string:
+    return "{scalars}{strings}"
+function nested(value: int64) returns string:
+    return "[{{"{{render(value, "x")}}"}}]"
+function main() returns nothing:
+    mutable int64 index = 0
+    while index < 3:
+        string text = nested(index)
+        string alias = text
+        if text == alias && text != "":
+            print(text)
+        index = index + 1
+    println(nested(7), 1, 2, 3, 4, 5, 6, true, nothing)
+"#
+    );
+    let output = run_source(&source);
+    let mut expected = String::new();
+    for value in [0, 1, 2, 7] {
+        expected.push_str(&format!(
+            "[{}{}]",
+            value.to_string().repeat(64),
+            "x".repeat(64)
+        ));
+    }
+    expected.push_str(" 1 2 3 4 5 6 true nothing\n");
+    assert_eq!(output.stdout, expected.as_bytes());
 }

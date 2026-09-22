@@ -35,3 +35,13 @@ Runtime exports use fixed-width scalar parameters and typed leaf operations;
 no universal operation/name dispatcher. Panics are contained at each C boundary.
 The existing ABI v1 lifecycle remains compatible; added leaf signatures are
 shared by the runtime and emitter. Layout/tag tests pin the added contract.
+
+Temporary capacity is a structural MIR bound on emitter ownership operations,
+not a multiplier on string-typed expressions. Literals, string-local retains,
+string-call results and string-producing intrinsics each own one slot.
+Interpolation owns an initial empty string, then one concatenation per segment
+and one formatting slot per scalar segment (text segments own a literal).
+Print owns its empty accumulator, argument formatting/concatenations, two slots
+per separator, and two for a newline. Child costs accumulate recursively until
+full-expression cleanup; both short-circuit branches get distinct frame slots.
+The maximum full-expression cost determines the frame capacity.
