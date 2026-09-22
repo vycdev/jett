@@ -199,6 +199,9 @@ fn visit(value: &Expression, reads: &mut Set, nodes: &mut usize) -> Result<(), S
         }
         ExpressionKind::StringInterpolation(segments) => {
             for s in segments {
+                // Even a scalar segment creates a formatted string and a
+                // concatenation result. Count it independently of its type.
+                *nodes += 1;
                 match s {
                     StringSegment::Value(v) => visit(v, reads, nodes)?,
                     StringSegment::Text(_) => *nodes += 1,

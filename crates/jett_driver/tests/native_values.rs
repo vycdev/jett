@@ -302,3 +302,16 @@ fn native_math_runtime_contract_fixtures() {
         }
     }
 }
+
+#[test]
+fn native_interpolation_ownership_bound_counts_scalar_segments() {
+    let output = run_source(
+        r#"
+function compose(value: int64) returns string:
+    return "{value}{value + 1}{value + 2}{value + 3}{value + 4}{value + 5}{value + 6}{value + 7}{value + 8}{value + 9}{value + 10}{value + 11}"
+function main() returns nothing:
+    println(compose(1))
+"#,
+    );
+    assert_eq!(output.stdout, b"123456789101112\n");
+}
