@@ -1,3 +1,5 @@
+# ERROR: E0402
+# The state closure also attempts to capture the move-only Stdout capability.
 # ERROR: E0372
 namespace app
 struct State:

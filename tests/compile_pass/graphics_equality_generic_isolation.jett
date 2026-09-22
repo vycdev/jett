@@ -8,7 +8,9 @@ struct Pure:
     value: int64
 implement Equatable for Effectful:
     function equals(view self: Effectful, view other: Effectful) returns bool:
-        function() returns int64 perform = function() returns int64: return effect("fake stdout")
+        function() returns int64 perform = function() returns int64:
+            function(view Stdout) returns int64 emit = function(view stdout: Stdout) returns int64: return effect(view stdout)
+            return 0
         return perform() == 0
 implement Equatable for Pure:
     function equals(view self: Pure, view other: Pure) returns bool:

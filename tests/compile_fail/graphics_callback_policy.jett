@@ -1,4 +1,6 @@
 # ERROR: E0372 x3
+# ERROR: E0300
+# impure_update also has Graphics where the update signature requires Key.
 namespace app
 function update(state: int64, key: graphics.Key) returns int64:
     return state

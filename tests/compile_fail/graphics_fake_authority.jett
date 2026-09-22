@@ -1,3 +1,5 @@
+# ERROR: E0300
+# The forged string is not a Graphics capability as well as not an explicit view.
 # ERROR: E0372
 namespace app
 function update(state: int64, key: graphics.Key) returns int64:

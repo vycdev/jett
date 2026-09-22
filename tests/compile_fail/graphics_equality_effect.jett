@@ -1,4 +1,5 @@
 # ERROR: E0500
+# ERROR: E0372 x2
 namespace app
 function effect(view stdout: Stdout) returns int64:
     Stdout.write(view stdout, "effect inside equality callback")
@@ -7,7 +8,9 @@ struct Number:
     value: int64
 implement Equatable for Number:
     function equals(view self: Number, view other: Number) returns bool:
-        function() returns int64 perform = function() returns int64: return effect("fake stdout")
+        function() returns int64 perform = function() returns int64:
+            function(view Stdout) returns int64 emit = function(view stdout: Stdout) returns int64: return effect(view stdout)
+            return 0
         return perform() == 0
 function update(state: int64, key: graphics.Key) returns int64:
     Number left = Number(value: state)
