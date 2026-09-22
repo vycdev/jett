@@ -27,7 +27,7 @@ explicitly marked unimplemented, with the reason recorded in the same change.
 Run-pass files without `main`, including verification and property fixtures,
 count toward the 182-fixture lowering obligation. The initial executable
 harness does not execute their `verify` blocks natively, so they do not count
-toward the 29-fixture execution obligation. Passing them through frontend
+toward the 30-fixture execution obligation. Passing them through frontend
 verification is not evidence that their bodies executed as native code. A
 future native verification harness may add a separate execution denominator.
 
@@ -297,10 +297,26 @@ The current fixture gates are therefore:
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
 | Native object generation | 2 | 182 | manifest-driven production object gate for `simple.jett` and `native_scalar_entry.jett` |
-| Successful/expected `main` execution | 0 | 30 | automated native link-and-run differential gate pending |
+| Successful/expected `main` execution | 1 | 30 | Linux GNU `native_execution::native_scalar_entry_links_and_executes_without_source_tree`; all other mains pending |
 | Runtime contracts | 0 | 25 | native runtime-contract differential gate pending |
 
 These are intentionally conservative counts. The two scalar object fixtures
 count because the manifest gate executes the production emission API and checks
 deterministic nonempty artifacts. A manual linked smoke run is not counted as
 execution coverage until the same path is enforced by an automated gate.
+
+## Linux GNU executable harness
+
+The production linker also accepts exactly `x86_64-unknown-linux-gnu` when it
+is the compiler host. `NativeLauncherBundle::linux_gnu_v1` specifies the Rust
+static launcher archive, ABI v1, dynamic GNU CRT, and ordered system libraries.
+`cc` (or the literal executable path in `JETT_NATIVE_CC`) links the Cranelift
+object without a shell. Cross-target bundles are rejected before linking.
+Windows MSVC retains its static CRT, SDK discovery, library order, and atomic
+publication contract; Windows execution has not been verified on Linux.
+
+`cargo test -p jett_driver --test native_execution` builds the target-matched
+launcher archive and executes the scalar-entry fixture in an empty directory
+with an empty environment and a deadline. The executable needs no compiler
+source at runtime. This is one executable seed, not full native parity or a
+clean-distribution packaging claim. All remaining fixture obligations remain.

@@ -7450,3 +7450,15 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 3. A compressed reference file (`skill.md`) should be created for LLM agents — containing compiler usage, syntax overview, code rules, common patterns, and short code examples. This is the file an LLM loads into its context before writing Jett code. Should be done after the design document is stable.
 4. TOON (`toon.serialize()`, `toon.parse()`) could be exposed as a standard library module for user code, alongside JSON. This would let Jett programs produce TOON output for LLM consumption — not just the compiler. To be considered after core stdlib is stable.
 5. Fast compilation is an implementation goal: incremental compilation, caching, and minimal rebuilds. Target should be sub-second recompilation for typical changes. Slow compilation breaks the LLM compile-test-fix feedback cycle.
+
+### Native Linux executable seed
+
+The Cranelift scalar AOT path can link on the exact x86-64 Linux GNU host as
+well as the existing Windows MSVC target. An explicit, target-matched launcher
+bundle supplies ABI version, CRT mode, archive and system libraries. Linux uses
+`cc` or a literal `JETT_NATIVE_CC` executable path, without shell interpolation;
+Windows retains MSVC SDK discovery and the static-CRT contract. Both publish
+only a successfully linked executable. The Linux scalar seed runs under an
+automated deadline without source-tree or compiler environment dependencies.
+Full language/runtime parity and clean Windows execution are still release
+gates, not claims made by this seed. See `active/native_codegen_parity_plan.md`.

@@ -2,8 +2,8 @@
 //!
 //! Native compilation is deliberately split into an object stage and a link
 //! stage. The object stage consumes the exact checked program-entry identity
-//! published by [`crate::BackendLoweringResult`]. The Windows MSVC link stage
-//! accepts launcher metadata explicitly, invokes `link.exe` without a shell,
+//! published by [`crate::BackendLoweringResult`]. The Windows MSVC and Linux GNU
+//! link stages accept explicit launcher metadata and invoke tools without a shell,
 //! and publishes an executable only after a successful bounded link.
 
 use std::ffi::{OsStr, OsString};
@@ -22,6 +22,20 @@ use crate::{BackendLoweringError, BackendLoweringResult, lower_file_for_backend}
 
 /// The sole target accepted by the version 1 native Windows linker.
 pub const WINDOWS_MSVC_NATIVE_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Supported Linux GNU host; this is not a cross-linking contract.
+pub const LINUX_GNU_NATIVE_TARGET: &str = "x86_64-unknown-linux-gnu";
+
+/// System libraries required by the GNU dynamic-CRT launcher archive.
+pub const LINUX_GNU_V1_NATIVE_LIBRARIES: &[&str] = &[
+    "-lgcc_s",
+    "-lutil",
+    "-lrt",
+    "-lpthread",
+    "-lm",
+    "-ldl",
+    "-lc",
+];
 
 /// The runtime ABI expected by the version 1 native launcher.
 pub const NATIVE_RUNTIME_ABI_VERSION_V1: u32 = 1;
@@ -76,6 +90,20 @@ pub struct NativeLauncherBundle {
 }
 
 impl NativeLauncherBundle {
+    /// Describe a Linux GNU launcher archive built for the compiler host.
+    pub fn linux_gnu_v1(archive_path: impl Into<PathBuf>) -> Self {
+        Self {
+            archive_path: archive_path.into(),
+            target: LINUX_GNU_NATIVE_TARGET.to_string(),
+            runtime_abi_version: NATIVE_RUNTIME_ABI_VERSION_V1,
+            crt_mode: NativeCrtMode::Dynamic,
+            native_library_args: LINUX_GNU_V1_NATIVE_LIBRARIES
+                .iter()
+                .map(OsString::from)
+                .collect(),
+        }
+    }
+
     /// Describe the canonical version 1 static-CRT launcher for Windows MSVC.
     pub fn windows_msvc_static_v1(archive_path: impl Into<PathBuf>) -> Self {
         Self {
@@ -370,8 +398,8 @@ impl fmt::Display for NativeBuildError {
             ),
             Self::LauncherNativeLibrariesMismatch { actual } => write!(
                 formatter,
-                "launcher native-library arguments {:?} do not match the canonical version 1 static-CRT contract {:?}",
-                actual, WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES
+                "launcher native-library arguments {:?} do not match the canonical target-specific version 1 contract",
+                actual
             ),
             Self::CreateTemporaryDirectory { parent, source } => write!(
                 formatter,
@@ -576,12 +604,20 @@ fn link_host_object_with_timeout(
     timeout: Duration,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
     validate_link_host(object)?;
-    validate_launcher(launcher)?;
+    validate_host_launcher(launcher)?;
     validate_regular_file(
         &launcher.archive_path,
         NativePathRole::LauncherArchive,
-        Some("lib"),
+        Some(if launcher.target == LINUX_GNU_NATIVE_TARGET {
+            "a"
+        } else {
+            "lib"
+        }),
     )?;
+    // Linking runs in a temporary directory, so relative archive inputs must
+    // be resolved against the callers current directory first.
+    let mut launcher = launcher.clone();
+    launcher.archive_path = absolute_output_path(&launcher.archive_path)?;
     let output_path = absolute_output_path(output_path)?;
     validate_output_path(&output_path)?;
 
@@ -607,14 +643,24 @@ fn link_host_object_with_timeout(
         source,
     })?;
 
-    link_windows_msvc(
-        &object_path,
-        launcher,
-        &linked_executable,
-        &linked_pdb,
-        build_directory.path(),
-        timeout,
-    )?;
+    if launcher.target == LINUX_GNU_NATIVE_TARGET {
+        link_linux_gnu(
+            &object_path,
+            &launcher,
+            &linked_executable,
+            build_directory.path(),
+            timeout,
+        )?;
+    } else {
+        link_windows_msvc(
+            &object_path,
+            &launcher,
+            &linked_executable,
+            &linked_pdb,
+            build_directory.path(),
+            timeout,
+        )?;
+    }
     let linked_metadata = fs::metadata(&linked_executable).map_err(|source| {
         if source.kind() == io::ErrorKind::NotFound {
             NativeBuildError::MissingLinkedExecutable {
@@ -646,9 +692,11 @@ fn link_host_object_with_timeout(
 
 fn validate_link_host(object: &NativeProgramObjectArtifact) -> Result<(), NativeBuildError> {
     let host_target = jett_codegen_cranelift::host_target().to_string();
-    if !cfg!(all(target_os = "windows", target_env = "msvc"))
-        || host_target != WINDOWS_MSVC_NATIVE_TARGET
-    {
+    let supported = (cfg!(all(target_os = "windows", target_env = "msvc"))
+        && host_target == WINDOWS_MSVC_NATIVE_TARGET)
+        || (cfg!(all(target_os = "linux", target_env = "gnu"))
+            && host_target == LINUX_GNU_NATIVE_TARGET);
+    if !supported {
         return Err(NativeBuildError::UnsupportedHost {
             actual: host_target,
             supported: WINDOWS_MSVC_NATIVE_TARGET,
@@ -666,11 +714,42 @@ fn validate_link_host(object: &NativeProgramObjectArtifact) -> Result<(), Native
     Ok(())
 }
 
+fn validate_host_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildError> {
+    if cfg!(all(
+        target_os = "linux",
+        target_env = "gnu",
+        target_arch = "x86_64"
+    )) {
+        validate_launcher_contract(
+            launcher,
+            LINUX_GNU_NATIVE_TARGET,
+            NativeCrtMode::Dynamic,
+            LINUX_GNU_V1_NATIVE_LIBRARIES,
+        )
+    } else {
+        validate_launcher(launcher)
+    }
+}
+
 fn validate_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildError> {
-    if launcher.target != WINDOWS_MSVC_NATIVE_TARGET {
+    validate_launcher_contract(
+        launcher,
+        WINDOWS_MSVC_NATIVE_TARGET,
+        NativeCrtMode::Static,
+        WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES,
+    )
+}
+
+fn validate_launcher_contract(
+    launcher: &NativeLauncherBundle,
+    target: &'static str,
+    crt: NativeCrtMode,
+    libraries: &[&str],
+) -> Result<(), NativeBuildError> {
+    if launcher.target != target {
         return Err(NativeBuildError::LauncherTargetMismatch {
             actual: launcher.target.clone(),
-            expected: WINDOWS_MSVC_NATIVE_TARGET,
+            expected: target,
         });
     }
     if launcher.runtime_abi_version != NATIVE_RUNTIME_ABI_VERSION_V1 {
@@ -679,16 +758,13 @@ fn validate_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildE
             expected: NATIVE_RUNTIME_ABI_VERSION_V1,
         });
     }
-    if launcher.crt_mode != NativeCrtMode::Static {
+    if launcher.crt_mode != crt {
         return Err(NativeBuildError::LauncherCrtMismatch {
             actual: launcher.crt_mode,
-            expected: NativeCrtMode::Static,
+            expected: crt,
         });
     }
-    let expected: Vec<OsString> = WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES
-        .iter()
-        .map(OsString::from)
-        .collect();
+    let expected: Vec<OsString> = libraries.iter().map(OsString::from).collect();
     if launcher.native_library_args != expected {
         return Err(NativeBuildError::LauncherNativeLibrariesMismatch {
             actual: launcher.native_library_args.clone(),
@@ -726,7 +802,7 @@ fn validate_regular_file(
 }
 
 fn validate_output_path(path: &Path) -> Result<(), NativeBuildError> {
-    if !has_ascii_case_insensitive_extension(path, "exe") {
+    if cfg!(windows) && !has_ascii_case_insensitive_extension(path, "exe") {
         return Err(NativeBuildError::InvalidExtension {
             role: NativePathRole::Output,
             path: path.to_path_buf(),
@@ -778,6 +854,40 @@ fn absolute_output_path(path: &Path) -> Result<PathBuf, NativeBuildError> {
     std::env::current_dir()
         .map(|current| current.join(path))
         .map_err(NativeBuildError::ResolveCurrentDirectory)
+}
+
+fn link_linux_gnu(
+    object: &Path,
+    launcher: &NativeLauncherBundle,
+    executable: &Path,
+    working_directory: &Path,
+    timeout: Duration,
+) -> Result<(), NativeBuildError> {
+    // One literal executable path, never shell text or space-split flags.
+    let linker =
+        PathBuf::from(std::env::var_os("JETT_NATIVE_CC").unwrap_or_else(|| OsString::from("cc")));
+    let mut command = Command::new(&linker);
+    command
+        .current_dir(working_directory)
+        .arg("-no-pie")
+        .arg("-o")
+        .arg(executable)
+        .arg(object)
+        .arg(&launcher.archive_path)
+        .args(&launcher.native_library_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_command_with_timeout(command, &linker, timeout)?;
+    if !output.status.success() {
+        return Err(NativeBuildError::LinkFailed {
+            linker,
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -837,6 +947,7 @@ fn link_windows_msvc(
     })
 }
 
+#[cfg(any(windows, test))]
 fn linker_arguments(
     object_path: &Path,
     launcher: &NativeLauncherBundle,
@@ -858,6 +969,7 @@ fn linker_arguments(
     arguments
 }
 
+#[cfg(any(windows, test))]
 fn prefixed_path_argument(prefix: &str, path: &Path) -> OsString {
     let mut argument = OsString::from(prefix);
     argument.push(path.as_os_str());
@@ -1065,6 +1177,54 @@ fn publish_executable(from: &Path, to: &Path) -> Result<(), NativeBuildError> {
 mod tests {
     use super::*;
 
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    #[test]
+    fn linux_launcher_contract_rejects_incompatible_metadata() {
+        let canonical = NativeLauncherBundle::linux_gnu_v1("launcher.a");
+        assert!(validate_host_launcher(&canonical).is_ok());
+        let mut wrong = canonical.clone();
+        wrong.target = WINDOWS_MSVC_NATIVE_TARGET.to_owned();
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherTargetMismatch { .. })
+        ));
+        wrong = canonical.clone();
+        wrong.runtime_abi_version += 1;
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherRuntimeAbiMismatch { .. })
+        ));
+        wrong = canonical.clone();
+        wrong.crt_mode = NativeCrtMode::Static;
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherCrtMismatch { .. })
+        ));
+        wrong = canonical;
+        wrong.native_library_args.pop();
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherNativeLibrariesMismatch { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_runner_enforces_unix_deadline_and_reaps_child() {
+        let mut command = Command::new("sleep");
+        command
+            .arg("10")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let start = Instant::now();
+        assert!(matches!(
+            run_command_with_timeout(command, Path::new("sleep"), Duration::from_millis(25)),
+            Err(NativeBuildError::LinkTimedOut { .. })
+        ));
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
     #[test]
     fn canonical_launcher_metadata_is_complete_and_static() {
         let bundle = NativeLauncherBundle::windows_msvc_static_v1("launcher.lib");
@@ -1222,6 +1382,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn output_validation_rejects_a_non_executable_extension_before_linking() {
         let path = std::env::current_dir()

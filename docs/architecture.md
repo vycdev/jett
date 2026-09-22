@@ -2582,3 +2582,15 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 | E0800–E0802 | Complexity limit errors (too many statements, too much nesting, too much cyclomatic complexity) |
 | E0999–E1000 | Lexer/parser diagnostics surfaced by the parser |
 | E9000 | Comptime verify failures |
+
+### Native Linux executable seed
+
+The Cranelift scalar AOT path can link on the exact x86-64 Linux GNU host as
+well as the existing Windows MSVC target. An explicit, target-matched launcher
+bundle supplies ABI version, CRT mode, archive and system libraries. Linux uses
+`cc` or a literal `JETT_NATIVE_CC` executable path, without shell interpolation;
+Windows retains MSVC SDK discovery and the static-CRT contract. Both publish
+only a successfully linked executable. The Linux scalar seed runs under an
+automated deadline without source-tree or compiler environment dependencies.
+Full language/runtime parity and clean Windows execution are still release
+gates, not claims made by this seed. See `active/native_codegen_parity_plan.md`.
