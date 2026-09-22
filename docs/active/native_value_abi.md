@@ -45,3 +45,26 @@ Print owns its empty accumulator, argument formatting/concatenations, two slots
 per separator, and two for a newline. Child costs accumulate recursively until
 full-expression cleanup; both short-circuit branches get distinct frame slots.
 The maximum full-expression cost determines the frame capacity.
+
+## Float32 oracle correction
+
+The design defines float32 as 32-bit floating point, with IEEE arithmetic.
+Retaining parsed f64 precision in the interpreter contradicts that contract:
+`(value + 1.0) - 1.0` at float32 must round the intermediate addition, not
+just the final result. Native already emits typed f32 instructions. The
+interpreter therefore must normalize float32 at its existing checked-expression
+and declared-type boundaries (including literal, assignment, argument, return,
+and explicit comptime evaluation), just as it already normalizes narrow integers.
+The internal Value::Float64 f64 carrier may represent a widened f32, but cannot
+retain extra precision for a checked float32 expression. Alias/refinement base
+type resolution remains centralized in the existing normalization boundary.
+
+Two possible formatting changes were considered: dedicated shortest-f32 decimal
+formatting, or retaining the current shared f64-carrier display. This fix retains
+the existing display: normalize the value first, then format the exactly widened
+f32 with the same f64 conversion used by native and interpreter. Thus float32
+0.1 displays as 0.10000000149011612, while float64 0.1 still displays as 0.1.
+This does not introduce a new shortest-f32 formatting policy, disable formatting,
+or treat the old unnormalized f64 oracle as evidence of correct float32 behavior.
+Regression tests compare actual executable bytes to the corrected checked oracle
+and pin formatting-dependent string equality/control flow, including comptime.

@@ -976,6 +976,11 @@ primitive interface dispatch. The same normalization enforces the declared
 `int8`/`int16`/`int32` and `uint8`/`uint16`/`uint32` ranges after expressions
 and at typed assignment, parameter, and return boundaries; values outside the
 checked primitive range stop interpretation with a deterministic diagnostic.
+The same checked-expression and declared-type normalization rounds float32
+literals and arithmetic results to f32 before widening into the internal
+`Value::Float64` carrier. Both runtime and explicit comptime evaluation use
+this boundary, so intermediate arithmetic cannot silently retain f64 precision.
+Native formatting and interpreter display both format that exactly widened value.
 The driver additionally evaluates every explicit `comptime expression` after
 type checking and stores the resulting value by source span. Runtime
 interpretation consumes that stored value instead of evaluating the expression

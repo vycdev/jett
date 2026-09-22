@@ -1550,6 +1550,12 @@ impl Interpreter {
     ) -> Result<Value, String> {
         let primitive_type_name = self.primitive_base_type_name(type_name);
         match primitive_type_name.as_ref() {
+            // Value::Float64 is an f64 carrier, not permission to retain f64
+            // precision in a checked float32 expression or typed boundary.
+            "float32" => match value {
+                Value::Float64(value) => Ok(Value::Float64((value as f32) as f64)),
+                other => Ok(other),
+            },
             "int8" => Self::normalize_sized_integer(
                 &primitive_type_name,
                 value,
@@ -14818,6 +14824,60 @@ mod tests {
         let mut interp = Interpreter::new();
         let expr = binary(int(i64::MIN), BinOp::Modulo, int(-1));
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(0));
+    }
+
+    #[test]
+    fn normalize_float32_alias_preserves_only_binary32_precision() {
+        let mut interp = Interpreter::new();
+        interp.register_type_alias(&type_alias("SmallFloat", "float32", None));
+        interp.register_type_alias(&type_alias("Reading", "SmallFloat", None));
+        for type_name in ["float32", "SmallFloat", "Reading", "secret[float32]"] {
+            assert_eq!(
+                interp.normalize_value_for_type_name(type_name, Value::Float64(0.1)),
+                Ok(Value::Float64(0.1_f32 as f64))
+            );
+        }
+        assert_eq!(
+            interp.normalize_value_for_type_name("float64", Value::Float64(0.1)),
+            Ok(Value::Float64(0.1))
+        );
+    }
+
+    #[test]
+    fn float32_declared_boundaries_normalize_without_checked_expression_map() {
+        let mut interp = Interpreter::new();
+        interp
+            .exec_stmt(&typed_var_decl("float32", "x", float(0.1)))
+            .unwrap();
+        assert_eq!(
+            interp.eval_expr(&var("x")).unwrap(),
+            Value::Float64(0.1_f32 as f64)
+        );
+        interp.exec_stmt(&assign("x", float(0.2))).unwrap();
+        assert_eq!(
+            interp.eval_expr(&var("x")).unwrap(),
+            Value::Float64(0.2_f32 as f64)
+        );
+        let mut echo = func_def(
+            "echo_f32",
+            vec![("value", "float32")],
+            block(vec![return_stmt(var("value"))]),
+        );
+        echo.return_type = Some(type_named("float32"));
+        interp.register_function(&echo);
+        assert_eq!(
+            interp
+                .call_function("echo_f32", vec![Value::Float64(0.1)])
+                .unwrap(),
+            Value::Float64(0.1_f32 as f64)
+        );
+        let mut literal = func_def("literal_f32", vec![], block(vec![return_stmt(float(0.1))]));
+        literal.return_type = Some(type_named("float32"));
+        interp.register_function(&literal);
+        assert_eq!(
+            interp.call_function("literal_f32", vec![]).unwrap(),
+            Value::Float64(0.1_f32 as f64)
+        );
     }
 
     #[test]

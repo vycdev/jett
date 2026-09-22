@@ -7023,7 +7023,12 @@ width, including signed minimum divided by `-1`. Integer division and modulo
 are accepted only when the divisor is statically proven nonzero by its
 refinement, a nonzero literal or immutable binding, or a visible equality
 guard. Floating-point arithmetic follows IEEE behavior, including infinity and
-NaN for division by zero. Arithmetic therefore does not create runtime
+NaN for division by zero. A float32 expression rounds to 32-bit precision at
+each expression result, including literals and intermediate arithmetic, in both
+runtime and explicit comptime evaluation. Its current string conversion formats
+that value exactly widened to the shared float64 display carrier; it does not
+restore discarded precision or promise shortest-float32 decimal output.
+Arithmetic therefore does not create runtime
 exceptions or handled errors. Refinement types remain the way to constrain an
 application to a mathematically non-overflowing domain.
 

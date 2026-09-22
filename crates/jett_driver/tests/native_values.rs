@@ -349,3 +349,62 @@ function main() returns nothing:
     expected.push_str(" 1 2 3 4 5 6 true nothing\n");
     assert_eq!(output.stdout, expected.as_bytes());
 }
+
+#[test]
+fn native_float32_formatting_matches_typed_oracle() {
+    let output = run_source(
+        r#"
+function compute(value: float32) returns float32:
+    return (value + 1.0) - 1.0
+function literal() returns float32:
+    return 0.1
+function main() returns nothing:
+    mutable float32 value = 0.1
+    println(value, "{value}")
+    value = 0.2
+    println(value, compute(0.1), literal())
+    float32 baked = comptime compute(0.1)
+    float32 computed = compute(0.1)
+    string text = "{computed}"
+    if text == "{baked}" && text != "0.1":
+        println("rounded", text)
+    else:
+        println("wrong precision")
+    float64 wide = 0.1
+    println(wide)
+"#,
+    );
+    assert_eq!(output.stdout, b"0.10000000149011612 0.10000000149011612\n0.20000000298023224 0.10000002384185791 0.10000000149011612\nrounded 0.10000002384185791\n0.1\n");
+}
+
+#[test]
+fn native_float32_arithmetic_and_ieee_edges_match_oracle() {
+    let output = run_source(
+        r#"
+function arithmetic(value: float32) returns float32:
+    return (value * value + value) / 0.3
+function cancellation(value: float32) returns float32:
+    return (value + 1.0) - value
+function main() returns nothing:
+    println(arithmetic(0.1), cancellation(16777216.0))
+    float32 rounded_literal = 16777217.0
+    println(rounded_literal - 16777216.0)
+    float32 huge = 340282346638528859811704183484516925440.0
+    float32 tiny = 0.0000000000000000000000000000000000000000000014
+    float32 zero = 0.0
+    float32 negative = -zero
+    float32 infinity = huge * 2.0
+    float32 nan = zero / zero
+    println(infinity, -infinity, tiny / 2.0, negative, nan == nan)
+    string text = "{infinity} {negative}"
+    if text == "inf -0":
+        println("ieee")
+"#,
+    );
+    let value = 0.1_f32;
+    let arithmetic = ((value * value + value) / 0.3_f32) as f64;
+    assert_eq!(
+        output.stdout,
+        format!("{arithmetic} 0\n0\ninf -inf 0 -0 false\nieee\n").as_bytes()
+    );
+}
