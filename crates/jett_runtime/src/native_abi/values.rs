@@ -3,6 +3,7 @@
 //! bytes which are borrowed for the call. No Rust value crosses this ABI.
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub type NativeHandle = u64;
 type Failure = (JettRuntimeStatusV1, &'static [u8]);
@@ -170,6 +171,42 @@ leaves! {
             let length = a.len().checked_add(b.len()).ok_or(EXHAUSTED)?;
             let mut text = String::new(); text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
             text.push_str(a); text.push_str(b); s.insert(text)
+        };
+    CharCount, jett_rt_v1_string_char_count, false, (value: u64 => I64), u64 => I64,
+        |s| Ok(s.text(value)?.graphemes(true).count() as u64);
+    Slice, jett_rt_v1_string_slice, false, (value: u64 => I64, start: i64 => I64, end: i64 => I64), u64 => I64,
+        |s| {
+            let parts = s.text(value)?.graphemes(true).collect::<Vec<_>>();
+            let length = parts.len() as i64;
+            let start = start.clamp(0, length) as usize;
+            let end = end.clamp(0, length) as usize;
+            let text = parts[start.min(end)..end].concat();
+            s.insert(text)
+        };
+    Upper, jett_rt_v1_string_upper, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.to_uppercase(); s.insert(text) };
+    Lower, jett_rt_v1_string_lower, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.to_lowercase(); s.insert(text) };
+    Trim, jett_rt_v1_string_trim, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.trim().to_owned(); s.insert(text) };
+    TrimStart, jett_rt_v1_string_trim_start, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.trim_start().to_owned(); s.insert(text) };
+    TrimEnd, jett_rt_v1_string_trim_end, false, (value: u64 => I64), u64 => I64,
+        |s| { let text = s.text(value)?.trim_end().to_owned(); s.insert(text) };
+    IsAlpha, jett_rt_v1_string_is_alpha, false, (value: u64 => I64), u32 => I32,
+        |s| { let text = s.text(value)?; Ok(u32::from(!text.is_empty() && text.chars().all(char::is_alphabetic))) };
+    IsNumeric, jett_rt_v1_string_is_numeric, false, (value: u64 => I64), u32 => I32,
+        |s| { let text = s.text(value)?; Ok(u32::from(!text.is_empty() && text.chars().all(|c| c.is_ascii_digit()))) };
+    Repeat, jett_rt_v1_string_repeat, false, (value: u64 => I64, count: i64 => I64), u64 => I64,
+        |s| {
+            let text = s.text(value)?;
+            let count = usize::try_from(count.max(0)).unwrap_or(usize::MAX);
+            if text.is_empty() || count == 0 { return s.insert(String::new()); }
+            let error = (JettRuntimeStatusV1::RESOURCE_EXHAUSTED, b"string.repeat: requested output is too large".as_slice());
+            let length = text.len().checked_mul(count).ok_or(error)?;
+            let mut result = String::new(); result.try_reserve_exact(length).map_err(|_| error)?;
+            for _ in 0..count { result.push_str(text); }
+            s.insert(result)
         };
     Equal, jett_rt_v1_string_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
         |s| Ok(u32::from(s.text(left)? == s.text(right)?));

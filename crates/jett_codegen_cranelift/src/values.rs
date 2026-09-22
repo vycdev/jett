@@ -56,6 +56,15 @@ pub(crate) fn verify_intrinsic(
 ) -> Result<(), String> {
     use TypeInterner as T;
     let (parameters, expected): (&[TypeId], TypeId) = match id {
+        IntrinsicId::StringCharCount => (&[T::STRING], T::INT64),
+        IntrinsicId::StringSlice => (&[T::STRING, T::INT64, T::INT64], T::STRING),
+        IntrinsicId::StringUpper
+        | IntrinsicId::StringLower
+        | IntrinsicId::StringTrim
+        | IntrinsicId::StringTrimStart
+        | IntrinsicId::StringTrimEnd => (&[T::STRING], T::STRING),
+        IntrinsicId::StringIsAlpha | IntrinsicId::StringIsNumeric => (&[T::STRING], T::BOOL),
+        IntrinsicId::StringRepeat => (&[T::STRING, T::INT64], T::STRING),
         IntrinsicId::StdoutWrite => (&[T::STDOUT, T::STRING], T::NOTHING),
         IntrinsicId::StringFromInt64 => (&[T::INT64], T::STRING),
         IntrinsicId::StringFromUint64 => (&[T::UINT64], T::STRING),
@@ -73,4 +82,21 @@ pub(crate) fn verify_intrinsic(
         return Err(format!("invalid native signature for {id}"));
     }
     Ok(())
+}
+
+/// Exact checked identities, not canonical-name inference.
+pub(crate) fn string_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
+    Some(match id {
+        IntrinsicId::StringCharCount => NativeLeaf::CharCount,
+        IntrinsicId::StringSlice => NativeLeaf::Slice,
+        IntrinsicId::StringUpper => NativeLeaf::Upper,
+        IntrinsicId::StringLower => NativeLeaf::Lower,
+        IntrinsicId::StringTrim => NativeLeaf::Trim,
+        IntrinsicId::StringTrimStart => NativeLeaf::TrimStart,
+        IntrinsicId::StringTrimEnd => NativeLeaf::TrimEnd,
+        IntrinsicId::StringIsAlpha => NativeLeaf::IsAlpha,
+        IntrinsicId::StringIsNumeric => NativeLeaf::IsNumeric,
+        IntrinsicId::StringRepeat => NativeLeaf::Repeat,
+        _ => return None,
+    })
 }

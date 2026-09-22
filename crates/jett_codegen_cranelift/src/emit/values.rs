@@ -180,6 +180,20 @@ impl Translator<'_, '_> {
             |a| self.expression(a),
             || CodegenError::Backend("invalid intrinsic argument order".into()),
         )?;
+        if let Some(leaf) = crate::values::string_leaf(id) {
+            let native_args = evaluated
+                .iter()
+                .map(|v| self.scalar(*v, span))
+                .collect::<Result<Vec<_>, _>>()?;
+            let value = self.leaf(leaf, &native_args, true)?;
+            return match leaf {
+                NativeLeaf::CharCount => Ok(LoweredValue::Scalar(value)),
+                NativeLeaf::IsAlpha | NativeLeaf::IsNumeric => Ok(LoweredValue::Scalar(
+                    self.builder.ins().ireduce(ir::types::I8, value),
+                )),
+                _ => self.own(value),
+            };
+        }
         match id {
             IntrinsicId::StringFromInt64
             | IntrinsicId::StringFromUint64

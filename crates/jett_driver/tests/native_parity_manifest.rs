@@ -311,13 +311,21 @@ fn native_parity_manifest_matches_fixture_inventory() {
 
     let manifested_object_emit = manifest_paths_with_obligation(&manifest, Obligation::ObjectEmit);
     let expected_object_emit = BTreeSet::from([
+        "tests/run_pass/escape_sequences.jett".to_owned(),
+        "tests/run_pass/explicit_comptime_expression.jett".to_owned(),
         "tests/run_pass/fibonacci.jett".to_owned(),
+        "tests/run_pass/hello_print.jett".to_owned(),
         "tests/run_pass/integer_wrapping_and_float_ieee.jett".to_owned(),
         "tests/run_pass/logical_ops.jett".to_owned(),
         "tests/run_pass/multi_verify.jett".to_owned(),
-        "tests/run_pass/native_scalar_entry.jett".to_owned(),
+        "tests/run_pass/named_argument_runtime_order.jett".to_owned(),
+        "tests/run_pass/namespace_runtime_main_context.jett".to_owned(),
         "tests/run_pass/namespace_runtime_verify_context.jett".to_owned(),
+        "tests/run_pass/native_scalar_entry.jett".to_owned(),
         "tests/run_pass/simple.jett".to_owned(),
+        "tests/run_pass/stdlib_loading.jett".to_owned(),
+        "tests/run_pass/string_indic_grapheme.jett".to_owned(),
+        "tests/run_pass/string_interpolation.jett".to_owned(),
         "tests/run_pass/verify_test.jett".to_owned(),
     ]);
     assert_eq!(
@@ -326,7 +334,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
     );
     assert_eq!(
         manifested_object_emit.len(),
-        8,
+        16,
         "native object-emission coverage changed"
     );
 

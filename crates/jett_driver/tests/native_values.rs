@@ -150,3 +150,96 @@ function main() returns nothing:
     );
     assert_eq!(output.stdout, b"12v1 v2 false true\n");
 }
+
+#[test]
+fn native_terminal_failure_unwinds_compiled_string_frames() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/runtime_fail/string_repeat_capacity_overflow.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let nested = directory.path().join("nested.jett");
+    std::fs::write(
+        &nested,
+        r#"
+function explode(value: string) returns string:
+    string alias = value
+    print("before:", alias)
+    return "left{string.repeat(value, 9223372036854775807)}right"
+function relay(value: string) returns string:
+    return explode(value)
+function main() returns nothing:
+    string keep = "keep"
+    println("left", relay("ab"), keep)
+    println("must not execute")
+"#,
+    )
+    .unwrap();
+    for path in [&fixture, &nested] {
+        let expected =
+            jett_driver::run_file_capture_outcome(path).expect_err("terminal failure oracle");
+        let binary = directory.path().join("program");
+        build_host_executable(path, &launcher(), &binary).expect("compile terminal failure");
+        let actual = run_bounded(&binary, directory.path());
+        assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+        assert_eq!(
+            String::from_utf8(actual.stderr).unwrap(),
+            format!("{}\n", expected.message)
+        );
+    }
+}
+
+#[test]
+fn native_unicode_leaf_operations_preserve_graphemes() {
+    let output = run_source(
+        r#"
+function main() returns nothing:
+    string text = "é🇷🇴x"
+    println(string.char_count(text), string.slice(text, 0, 1), string.slice(text, 1, 2))
+    println(string.slice(text, -10, 20), string.slice(text, 2, 1))
+    println(string.upper("Straße"), string.lower("İ"), string.trim("  hi  "))
+    println(string.trim_start("  a  "), string.trim_end("  b  "))
+    println(string.repeat("é", 3), string.repeat("x", -1), string.repeat("", 9223372036854775807))
+    println(string.is_alpha("é"), string.is_numeric("１２"), string.is_numeric("123"))
+    println(string.center("hi", 7), string.zfill("-42", 6))
+"#,
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with("3 é 🇷🇴\n")
+    );
+}
+
+#[test]
+fn native_proven_fixture_outputs_remain_monotonic() {
+    for name in [
+        "tests/run_pass/escape_sequences.jett",
+        "tests/run_pass/explicit_comptime_expression.jett",
+        "tests/run_pass/hello_print.jett",
+        "tests/run_pass/named_argument_runtime_order.jett",
+        "tests/run_pass/namespace_runtime_main_context.jett",
+        "tests/run_pass/native_scalar_entry.jett",
+        "tests/run_pass/stdlib_loading.jett",
+        "tests/run_pass/string_interpolation.jett",
+        "tests/runtime_fail/int16_return_overflow.jett",
+        "tests/runtime_fail/int32_assignment_underflow.jett",
+        "tests/runtime_fail/int8_expression_underflow.jett",
+        "tests/runtime_fail/uint16_parameter_overflow.jett",
+        "tests/runtime_fail/uint32_multiplication_overflow.jett",
+        "tests/runtime_fail/uint32_nested_expression_overflow.jett",
+        "tests/runtime_fail/uint8_expression_overflow.jett",
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(name);
+        let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("program");
+        build_host_executable(&fixture, &launcher(), &binary)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+        assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+    }
+}
