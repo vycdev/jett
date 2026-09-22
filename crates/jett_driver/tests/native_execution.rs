@@ -2,28 +2,65 @@
 #![cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 
 use jett_driver::native::{NativeLauncherBundle, build_host_executable};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
-fn launcher() -> NativeLauncherBundle {
-    static ARCHIVE: OnceLock<PathBuf> = OnceLock::new();
+struct Launcher {
+    bundle: NativeLauncherBundle,
+    _directory: tempfile::TempDir,
+}
+
+impl std::ops::Deref for Launcher {
+    type Target = NativeLauncherBundle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.bundle
+    }
+}
+
+fn launcher() -> Launcher {
+    // Cache bytes, not a path into a stale build tree or a leaked TempDir.
+    static ARCHIVE: OnceLock<Vec<u8>> = OnceLock::new();
     let archive = ARCHIVE.get_or_init(|| {
         let executable = std::env::current_exe().expect("test executable");
-        let debug = executable.parent().unwrap().parent().unwrap();
-        let target = debug.parent().unwrap();
+        let profile_directory = executable.parent().unwrap().parent().unwrap();
+        let profile = profile_directory.file_name().unwrap().to_str().unwrap();
+        // Cargo's built-in test profile shares the debug output directory.
+        let cargo_profile = if profile == "debug" { "test" } else { profile };
+        let host = jett_driver::native::host_target();
+        // A fresh target directory prevents stale archives masking a wrong
+        // build and avoids contending with the outer Cargo's build lock.
+        let target = tempfile::tempdir().expect("isolated launcher target directory");
         let status = Command::new(env!("CARGO"))
-            .args(["build", "-q", "-p", "jett_native_launcher", "--target-dir"])
-            .arg(target)
+            .args(["build", "-q", "-p", "jett_native_launcher", "--jobs", "1"])
+            .args([
+                "--target",
+                &host,
+                "--profile",
+                cargo_profile,
+                "--target-dir",
+            ])
+            .arg(target.path())
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
             .status()
-            .expect("build target-matched launcher");
+            .expect("build host- and profile-matched launcher");
         assert!(status.success(), "launcher build failed: {status}");
-        let archive = debug.join("libjett_native_launcher.a");
-        assert!(archive.is_file(), "missing archive: {}", archive.display());
-        archive
+        let archive = target
+            .path()
+            .join(&host)
+            .join(profile)
+            .join("libjett_native_launcher.a");
+        std::fs::read(&archive)
+            .unwrap_or_else(|error| panic!("missing archive {}: {error}", archive.display()))
     });
-    NativeLauncherBundle::linux_gnu_v1(archive.clone())
+    let directory = tempfile::tempdir().expect("launcher bundle directory");
+    let path = directory.path().join("libjett_native_launcher.a");
+    std::fs::write(&path, archive).expect("materialize launcher archive");
+    Launcher {
+        bundle: NativeLauncherBundle::linux_gnu_v1(path),
+        _directory: directory,
+    }
 }
 
 #[test]
@@ -48,47 +85,63 @@ fn native_scalar_entry_links_and_executes_without_source_tree() {
     assert_eq!(output.stderr, b"");
 }
 
+struct ExecutionChild(std::process::Child);
+
+impl Drop for ExecutionChild {
+    fn drop(&mut self) {
+        // Also runs on poll errors and timeout panics. No reader threads outlive
+        // the child, and an already reaped Child will not signal a reused PID.
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn run_bounded(executable: &Path, directory: &Path) -> std::process::Output {
+    run_bounded_with_timeout(executable, directory, std::time::Duration::from_secs(10))
+}
+
+fn run_bounded_with_timeout(
+    executable: &Path,
+    directory: &Path,
+    timeout: std::time::Duration,
+) -> std::process::Output {
+    use std::io::Read;
     use std::process::Stdio;
     use std::time::{Duration, Instant};
-    let mut child = Command::new(executable)
-        .current_dir(directory)
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("execute native artifact");
-    // Drain concurrently so output larger than a pipe does not deadlock.
-    use std::io::Read;
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    let out = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        stdout.read_to_end(&mut b).unwrap();
-        b
-    });
-    let err = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        stderr.read_to_end(&mut b).unwrap();
-        b
-    });
+    // A descendant retaining stdout/stderr cannot keep a pipe reader alive.
+    let mut stdout = tempfile::NamedTempFile::new().unwrap();
+    let mut stderr = tempfile::NamedTempFile::new().unwrap();
+    let mut child = ExecutionChild(
+        Command::new(executable)
+            .current_dir(directory)
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(stdout.reopen().unwrap())
+            .stderr(stderr.reopen().unwrap())
+            .spawn()
+            .expect("execute native artifact"),
+    );
     let start = Instant::now();
     let status = loop {
-        if let Some(status) = child.try_wait().expect("poll native artifact") {
+        if let Some(status) = child.0.try_wait().expect("poll native artifact") {
             break status;
         }
-        if start.elapsed() > Duration::from_secs(10) {
-            child.kill().expect("terminate stuck native artifact");
-            child.wait().expect("reap stuck native artifact");
-            panic!("native executable exceeded 10 second deadline");
-        }
+        assert!(
+            start.elapsed() < timeout,
+            "native executable exceeded {timeout:?} deadline"
+        );
         std::thread::sleep(Duration::from_millis(10));
+    };
+    let snapshot = |file: &mut std::fs::File| {
+        let length = file.metadata().unwrap().len();
+        let mut bytes = Vec::new();
+        file.take(length).read_to_end(&mut bytes).unwrap();
+        bytes
     };
     std::process::Output {
         status,
-        stdout: out.join().unwrap(),
-        stderr: err.join().unwrap(),
+        stdout: snapshot(stdout.as_file_mut()),
+        stderr: snapshot(stderr.as_file_mut()),
     }
 }
 
@@ -128,4 +181,51 @@ fn native_uint32_wrapping_contract_matches_interpreter() {
     build_host_executable(&source, &launcher(), &binary).unwrap();
     std::fs::remove_file(source).unwrap();
     assert!(run_bounded(&binary, directory.path()).status.success());
+}
+
+#[test]
+fn native_harness_does_not_wait_for_inherited_output_pipes() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("detached-output");
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\n/bin/sleep 4 &\nprintf captured\nprintf diagnostic >&2\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let start = std::time::Instant::now();
+    let output = run_bounded(&executable, directory.path());
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "inherited pipes defeated the deadline"
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"captured");
+    assert_eq!(output.stderr, b"diagnostic");
+}
+
+#[test]
+fn native_harness_timeout_reaps_the_direct_child() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("timeout");
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\nprintf '%s' \"$$\" > child.pid\nexec /bin/sleep 10\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let start = Instant::now();
+    let result = std::panic::catch_unwind(|| {
+        run_bounded_with_timeout(&executable, directory.path(), Duration::from_millis(100))
+    });
+    assert!(result.is_err(), "stuck native child must time out");
+    assert!(start.elapsed() < Duration::from_secs(2));
+    let pid = std::fs::read_to_string(directory.path().join("child.pid")).unwrap();
+    assert!(
+        !Path::new("/proc").join(pid.trim()).exists(),
+        "child must be reaped"
+    );
 }
