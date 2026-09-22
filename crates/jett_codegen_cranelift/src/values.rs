@@ -55,6 +55,23 @@ pub(crate) fn verify_intrinsic(
     types: &TypeInterner,
 ) -> Result<(), String> {
     use TypeInterner as T;
+    if let Some(leaf) = math_leaf(id, args.first().map(|a| a.ty)) {
+        let parameters = &leaf.parameters()[1..];
+        let native_type = |ty| match ty {
+            AbiScalar::I64 => T::INT64,
+            AbiScalar::F64 => T::FLOAT64,
+            _ => T::ERROR,
+        };
+        if result == native_type(leaf.result())
+            && args
+                .iter()
+                .map(|a| a.ty)
+                .eq(parameters.iter().copied().map(native_type))
+        {
+            return Ok(());
+        }
+        return Err(format!("invalid native numeric signature for {id}"));
+    }
     let (parameters, expected): (&[TypeId], TypeId) = match id {
         IntrinsicId::StringCharCount => (&[T::STRING], T::INT64),
         IntrinsicId::StringSlice => (&[T::STRING, T::INT64, T::INT64], T::STRING),
@@ -97,6 +114,45 @@ pub(crate) fn string_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
         IntrinsicId::StringIsAlpha => NativeLeaf::IsAlpha,
         IntrinsicId::StringIsNumeric => NativeLeaf::IsNumeric,
         IntrinsicId::StringRepeat => NativeLeaf::Repeat,
+        _ => return None,
+    })
+}
+
+pub(crate) fn math_leaf(id: IntrinsicId, first: Option<TypeId>) -> Option<NativeLeaf> {
+    Some(match id {
+        IntrinsicId::MathKernelAbs | IntrinsicId::MathAbs => match first? {
+            TypeInterner::INT64 => NativeLeaf::IntAbs,
+            TypeInterner::FLOAT64 => NativeLeaf::FloatAbs,
+            _ => return None,
+        },
+        IntrinsicId::MathKernelMin | IntrinsicId::MathMin => match first? {
+            TypeInterner::INT64 => NativeLeaf::IntMin,
+            TypeInterner::FLOAT64 => NativeLeaf::FloatMin,
+            _ => return None,
+        },
+        IntrinsicId::MathKernelMax | IntrinsicId::MathMax => match first? {
+            TypeInterner::INT64 => NativeLeaf::IntMax,
+            TypeInterner::FLOAT64 => NativeLeaf::FloatMax,
+            _ => return None,
+        },
+        IntrinsicId::MathSqrt => NativeLeaf::Sqrt,
+        IntrinsicId::MathFloor => NativeLeaf::Floor,
+        IntrinsicId::MathCeil => NativeLeaf::Ceil,
+        IntrinsicId::MathRound => NativeLeaf::Round,
+        IntrinsicId::MathLog => NativeLeaf::Log,
+        IntrinsicId::MathLog2 => NativeLeaf::Log2,
+        IntrinsicId::MathLog10 => NativeLeaf::Log10,
+        IntrinsicId::MathSin => NativeLeaf::Sin,
+        IntrinsicId::MathCos => NativeLeaf::Cos,
+        IntrinsicId::MathTan => NativeLeaf::Tan,
+        IntrinsicId::MathPow => NativeLeaf::Pow,
+        IntrinsicId::MathPi => NativeLeaf::Pi,
+        IntrinsicId::MathE => NativeLeaf::E,
+        IntrinsicId::MathClamp => NativeLeaf::Clamp,
+        IntrinsicId::MathMod => NativeLeaf::Mod,
+        IntrinsicId::MathGcd => NativeLeaf::Gcd,
+        IntrinsicId::MathLcm => NativeLeaf::Lcm,
+        IntrinsicId::MathFactorial => NativeLeaf::Factorial,
         _ => return None,
     })
 }

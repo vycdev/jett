@@ -180,6 +180,13 @@ impl Translator<'_, '_> {
             |a| self.expression(a),
             || CodegenError::Backend("invalid intrinsic argument order".into()),
         )?;
+        if let Some(leaf) = crate::values::math_leaf(id, args.first().map(|a| a.ty)) {
+            let arguments = evaluated
+                .iter()
+                .map(|v| self.scalar(*v, span))
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(LoweredValue::Scalar(self.leaf(leaf, &arguments, true)?));
+        }
         if let Some(leaf) = crate::values::string_leaf(id) {
             let native_args = evaluated
                 .iter()

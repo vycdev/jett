@@ -243,3 +243,62 @@ fn native_proven_fixture_outputs_remain_monotonic() {
         assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
     }
 }
+
+#[test]
+fn native_numeric_intrinsics_match_wrapping_and_ieee_contracts() {
+    let output = run_source(
+        r#"
+function main() returns nothing:
+    int64 minimum = -9223372036854775807 - 1
+    println(math.abs(minimum), math.gcd(minimum, 0), math.lcm(minimum, 1))
+    println(math.factorial(21), math.mod(minimum, -1), math.lcm(3037000500, 3037000501))
+    println(math.min(4, -3), math.max(-4, 3), math.abs(-2.5))
+    println(math.sqrt(9.0), math.pow(2.0, 5.0), math.round(-1.5), math.floor(1.9), math.ceil(1.1))
+    println(math.log(1.0), math.log2(8.0), math.log10(100.0), math.clamp(3.0, 0.0, 2.0))
+    println(math.sin(0.0), math.cos(0.0), math.tan(0.0), math.pi(), math.e())
+    float64 nan = math.sqrt(-1.0)
+    println(math.min(nan, 1.0), math.max(1.0, nan), nan == nan)
+"#,
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("-9223372036854775808 -9223372036854775808 -9223372036854775808\n")
+    );
+}
+
+#[test]
+fn native_math_runtime_contract_fixtures() {
+    for name in [
+        "math_factorial_overflow",
+        "math_mod_overflow",
+        "math_lcm_overflow",
+        "math_clamp_nan_bound",
+        "math_clamp_nan_upper_bound",
+        "math_clamp_reversed_float_bounds",
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../tests/runtime_fail/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture);
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("program");
+        build_host_executable(&fixture, &launcher(), &binary)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let actual = run_bounded(&binary, directory.path());
+        match expected {
+            Ok(output) => {
+                assert!(actual.status.success(), "{name}: {actual:?}");
+                assert_eq!(actual.stdout, output.stdout.as_bytes());
+                assert!(actual.stderr.is_empty());
+            }
+            Err(failure) => {
+                assert_eq!(actual.status.code(), Some(71), "{name}: {actual:?}");
+                assert_eq!(actual.stdout, failure.output.stdout.as_bytes());
+                assert_eq!(
+                    String::from_utf8(actual.stderr).unwrap(),
+                    format!("{}\n", failure.message)
+                );
+            }
+        }
+    }
+}

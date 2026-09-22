@@ -500,7 +500,23 @@ impl Verifier<'_> {
                 for arg in args {
                     self.expression(function, arg)?;
                 }
-                if !type_arguments.is_empty() {
+                let numeric_generic = matches!(
+                    intrinsic,
+                    jett_hir::IntrinsicId::MathKernelAbs
+                        | jett_hir::IntrinsicId::MathKernelMin
+                        | jett_hir::IntrinsicId::MathKernelMax
+                );
+                if numeric_generic
+                    && type_arguments.as_slice()
+                        != [args.first().map_or(TypeInterner::ERROR, |a| a.ty)]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "numeric intrinsic type argument differs from operand",
+                    ));
+                }
+                if !numeric_generic && !type_arguments.is_empty() {
                     return Err(self.unsupported(
                         function,
                         expression.span,

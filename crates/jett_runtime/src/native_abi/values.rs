@@ -86,6 +86,16 @@ impl FailureDefault for u32 {
         JettRuntimeStatusV1::INVALID_CONTEXT.code()
     }
 }
+impl FailureDefault for i64 {
+    fn failure_default() -> Self {
+        0
+    }
+}
+impl FailureDefault for f64 {
+    fn failure_default() -> Self {
+        0.0
+    }
+}
 fn leaf<T: FailureDefault>(
     context: *const JettRuntimeContextV1,
     cleanup: bool,
@@ -151,6 +161,66 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    Sqrt, jett_rt_v1_math_sqrt, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.sqrt());
+    Floor, jett_rt_v1_math_floor, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.floor());
+    Ceil, jett_rt_v1_math_ceil, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.ceil());
+    Round, jett_rt_v1_math_round, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.round());
+    Log, jett_rt_v1_math_log, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.ln());
+    Log2, jett_rt_v1_math_log2, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.log2());
+    Log10, jett_rt_v1_math_log10, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.log10());
+    Sin, jett_rt_v1_math_sin, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.sin());
+    Cos, jett_rt_v1_math_cos, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.cos());
+    Tan, jett_rt_v1_math_tan, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.tan());
+    FloatAbs, jett_rt_v1_math_floatabs, false, (value: f64 => F64), f64 => F64,
+        |_| Ok(value.abs());
+    FloatMin, jett_rt_v1_math_floatmin, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first.min(second));
+    FloatMax, jett_rt_v1_math_floatmax, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first.max(second));
+    Pow, jett_rt_v1_math_pow, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first.powf(second));
+    Pi, jett_rt_v1_math_pi, false, (), f64 => F64,
+        |_| Ok(std::f64::consts::PI);
+    E, jett_rt_v1_math_e, false, (), f64 => F64,
+        |_| Ok(std::f64::consts::E);
+    IntAbs, jett_rt_v1_math_int_abs, false, (value: i64 => I64), i64 => I64,
+        |_| Ok(value.wrapping_abs());
+    IntMin, jett_rt_v1_math_int_min, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| Ok(first.min(second));
+    IntMax, jett_rt_v1_math_int_max, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| Ok(first.max(second));
+    Mod, jett_rt_v1_math_mod, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| if second == 0 { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.mod: division by zero")) } else { Ok(first.wrapping_rem(second)) };
+    Gcd, jett_rt_v1_math_gcd, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| Ok(unsigned_gcd(first.unsigned_abs(), second.unsigned_abs()) as i64);
+    Lcm, jett_rt_v1_math_lcm, false, (first: i64 => I64, second: i64 => I64), i64 => I64,
+        |_| {
+            let a = first.unsigned_abs(); let b = second.unsigned_abs();
+            if a == 0 || b == 0 { Ok(0) } else { Ok((a / unsigned_gcd(a,b)).wrapping_mul(b) as i64) }
+        };
+    Factorial, jett_rt_v1_math_factorial, false, (value: i64 => I64), i64 => I64,
+        |_| {
+            if value < 0 { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.factorial: argument must be non-negative")); }
+            let mut result = 1_i64;
+            for n in 2..=value { result = result.wrapping_mul(n); if result == 0 { break; } }
+            Ok(result)
+        };
+    Clamp, jett_rt_v1_math_clamp, false, (value: f64 => F64, lower: f64 => F64, upper: f64 => F64), f64 => F64,
+        |_| {
+            if lower.is_nan() || upper.is_nan() { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.clamp bounds must not be NaN")) }
+            else if lower > upper { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.clamp requires lower bound <= upper bound")) }
+            else { Ok(value.clamp(lower, upper)) }
+        };
     Status, jett_rt_v1_value_status, true, (), u32 => I32,
         |s| Ok(s.failure.map_or(0, |e| e.0.code()));
     Retain, jett_rt_v1_string_retain, false, (value: u64 => I64), u64 => I64,
@@ -394,4 +464,11 @@ mod tests {
         }
         assert_eq!(context.count(), 0);
     }
+}
+
+fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
