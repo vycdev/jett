@@ -106,3 +106,26 @@ fn native_explicit_comptime_is_baked_before_runtime_codegen() {
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
+
+#[test]
+fn native_uint32_wrapping_contract_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/runtime_fail/uint32_multiplication_overflow.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("wrapping");
+    build_host_executable(&fixture, &launcher(), &binary).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success());
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty());
+    assert!(expected.debug_output.is_empty());
+
+    // The original fixture has no observable arithmetic result. Supplement it
+    // with a runtime branch so a non-wrapping result cannot pass merely by exit.
+    let source = directory.path().join("observe.jett");
+    std::fs::write(&source, "function main() returns nothing:\n    uint32 maximum = 4294967295\n    uint32 wrapped = maximum * maximum\n    while wrapped != 1:\n        int64 unexpected = 0\n    return nothing\n").unwrap();
+    build_host_executable(&source, &launcher(), &binary).unwrap();
+    std::fs::remove_file(source).unwrap();
+    assert!(run_bounded(&binary, directory.path()).status.success());
+}

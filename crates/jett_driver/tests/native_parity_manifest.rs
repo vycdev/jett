@@ -311,8 +311,14 @@ fn native_parity_manifest_matches_fixture_inventory() {
 
     let manifested_object_emit = manifest_paths_with_obligation(&manifest, Obligation::ObjectEmit);
     let expected_object_emit = BTreeSet::from([
+        "tests/run_pass/fibonacci.jett".to_owned(),
+        "tests/run_pass/integer_wrapping_and_float_ieee.jett".to_owned(),
+        "tests/run_pass/logical_ops.jett".to_owned(),
+        "tests/run_pass/multi_verify.jett".to_owned(),
         "tests/run_pass/native_scalar_entry.jett".to_owned(),
+        "tests/run_pass/namespace_runtime_verify_context.jett".to_owned(),
         "tests/run_pass/simple.jett".to_owned(),
+        "tests/run_pass/verify_test.jett".to_owned(),
     ]);
     assert_eq!(
         manifested_object_emit, expected_object_emit,
@@ -320,7 +326,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
     );
     assert_eq!(
         manifested_object_emit.len(),
-        2,
+        8,
         "native object-emission coverage changed"
     );
 
