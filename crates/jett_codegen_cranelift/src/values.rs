@@ -55,6 +55,16 @@ pub(crate) fn verify_intrinsic(
     types: &TypeInterner,
 ) -> Result<(), String> {
     use TypeInterner as T;
+    if id == IntrinsicId::Range {
+        return if (1..=3).contains(&args.len())
+            && args.iter().all(|a| a.ty == T::INT64)
+            && matches!(types.resolve(result), Type::List(inner) if *inner == T::INT64)
+        {
+            Ok(())
+        } else {
+            Err("invalid native range signature".into())
+        };
+    }
     if let Some(leaf) = math_leaf(id, args.first().map(|a| a.ty)) {
         let parameters = &leaf.parameters()[1..];
         let native_type = |ty| match ty {

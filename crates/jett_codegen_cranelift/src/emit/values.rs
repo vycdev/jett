@@ -372,6 +372,22 @@ impl Translator<'_, '_> {
                 jett_mir::move_values::intrinsic_borrows(id, index),
             )?;
         }
+        if id == IntrinsicId::Range {
+            let zero = self.builder.ins().iconst(ir::types::I64, 0);
+            let one = self.builder.ins().iconst(ir::types::I64, 1);
+            let mut native = evaluated
+                .iter()
+                .map(|v| self.scalar(*v, span))
+                .collect::<Result<Vec<_>, _>>()?;
+            if native.len() == 1 {
+                native.insert(0, zero);
+            }
+            if native.len() == 2 {
+                native.push(one);
+            }
+            let value = self.leaf(NativeLeaf::Range, &native, true)?;
+            return self.own_linear(value);
+        }
         if crate::values::list_intrinsic(id) {
             return self.list_intrinsic(id, &evaluated, result_type, span);
         }

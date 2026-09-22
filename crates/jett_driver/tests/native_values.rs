@@ -909,3 +909,65 @@ function main() returns nothing:
 "#,
     );
 }
+
+#[test]
+fn native_range_boundaries_and_terminal_capacity_contract() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/run_pass/range_step_boundaries.jett");
+    let mut source = std::fs::read_to_string(fixture).unwrap();
+    source.push_str(
+        r#"
+function main() returns nothing:
+    println(positive_step_boundary(), negative_step_boundary())
+    for item in range(5):
+        print(item)
+    for item in range(5, -1, -2):
+        print(item)
+    println(list.length[int64](range(4, 2)), list.sum[int64](range(2, 6)))
+"#,
+    );
+    let actual = run_source(&source);
+    assert_eq!(
+        actual.stdout,
+        b"9223372036854775806 -9223372036854775807\n012345310 14\n"
+    );
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/runtime_fail/range_capacity_overflow.jett");
+    let expected =
+        jett_driver::run_file_capture_outcome(&fixture).expect_err("terminal range contract");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("program");
+    build_host_executable(&fixture, &launcher(), &binary).expect("range fixture compilation");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
+fn native_range_failure_cleans_nested_live_owners_without_entering_handler() {
+    for step in ["0", "1"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("range_failure.jett");
+        let source = r#"
+function explode(value: list[bytes], step: int64) returns result[list[int64], string]:
+    print(list.length[bytes](view value))
+    return ok(range(0, 9223372036854775807, step))
+function main() returns nothing:
+    list[result[bytes, string]] outer = list(ok(bytes.from_string("held")))
+    list[int64] output = explode(list(bytes.from_string("argument")), STEP) handle error:
+        println("not a result failure")
+        return nothing
+    println(list.length[int64](view output), list.length[result[bytes, string]](view outer))
+"#
+        .replace("STEP", step);
+        std::fs::write(&path, source).unwrap();
+        let expected = jett_driver::run_file_capture_outcome(&path).expect_err("terminal oracle");
+        let binary = directory.path().join("program");
+        build_host_executable(&path, &launcher(), &binary).expect("range cleanup compilation");
+        let actual = run_bounded(&binary, directory.path());
+        assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+        assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    }
+}

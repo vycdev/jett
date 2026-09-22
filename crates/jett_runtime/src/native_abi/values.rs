@@ -143,6 +143,42 @@ impl NativeValues {
         self.lists_created += 1;
         Ok(id)
     }
+    fn range(&mut self, start: i64, end: i64, step: i64) -> LeafResult<u64> {
+        if step == 0 {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"range step cannot be zero",
+            ));
+        }
+        let too_large = (
+            JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
+            b"range: requested output is too large" as &'static [u8],
+        );
+        let distance = if step > 0 && start < end {
+            (i128::from(end) - i128::from(start)) as u128
+        } else if step < 0 && start > end {
+            (i128::from(start) - i128::from(end)) as u128
+        } else {
+            0
+        };
+        let count = distance.div_ceil(i128::from(step).unsigned_abs());
+        let capacity = usize::try_from(count).map_err(|_| too_large)?;
+        let mut elements = Vec::new();
+        elements
+            .try_reserve_exact(capacity)
+            .map_err(|_| too_large)?;
+        let mut value = start;
+        while (step > 0 && value < end) || (step < 0 && value > end) {
+            elements.push(Some(value as u64));
+            let Some(next) = value.checked_add(step) else {
+                break;
+            };
+            value = next;
+        }
+        let id = self.new_list(false)?;
+        self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = elements;
+        Ok(id)
+    }
     fn clone_list(&mut self, id: u64) -> LeafResult<u64> {
         let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
         let (elements, owned) = (list.elements.clone(), list.owned);
@@ -348,6 +384,8 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    Range, jett_rt_v1_range_int64, false, (start: i64 => I64, end: i64 => I64, step: i64 => I64), u64 => I64,
+        |s| s.range(start, end, step);
     ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             usize::try_from(index).ok().and_then(|i| list.elements.get_mut(i)).and_then(Option::take).ok_or(INVALID_LIST) };

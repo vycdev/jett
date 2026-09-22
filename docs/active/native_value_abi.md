@@ -191,3 +191,9 @@ Regression coverage relocates the preheader after the loop, re-enters loops from
 an outer loop, checks empty inputs, nested loans and handled loop exits, and
 unpacks float32/int8/uint8 elements. Test-only allocation fault injection confirms
 partial nested list clone releases its cloned prefix without consuming sources.
+
+The typed int64 range leaf builds owned scalar list storage with checked capacity
+and checked progression at signed boundaries. One/two-argument defaults are emitted
+constants, after source arguments are evaluated in their checked order. Zero step
+and oversized output are terminal failures (not ordinary result.fail), matching
+interpreter diagnostics and unwinding live bytes/sum/list owners in callers.
