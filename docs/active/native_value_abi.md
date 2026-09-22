@@ -85,3 +85,34 @@ with exit 72. An expected runtime failure counts in the exhaustive audit only wh
 its output/message match and exit 71 establishes successful checked destruction.
 Resource finalizer instrumentation must be extended before move-only resource
 families can use this gate.
+
+## Linear bytes places (phase 3)
+
+CopyValuePlan retains its copy-only public guard. MoveValuePlan additionally
+proves definite availability over the MIR CFG, with intersection at joins and
+loop backedges, ordered operand evaluation, and call-bounded view loans. It
+rejects consuming a view, escaping a view into an owner, moving a borrowed
+argument during later argument evaluation, and reading a moved place. It does
+not yet accept aggregates, sums, resources, or hidden handler control flow.
+
+Bytes use distinct context-associated handles backed by owned mutable Vec<u8>
+storage, not UTF-8 strings and not reference-counted owners. Explicit clone
+allocates independent storage. A local move clears its materialized source
+slot and creates one owning expression slot. Zero is the drop flag for an
+uninitialized/moved slot. Assignment evaluates the RHS before dropping the old
+owner. Owned call arguments transfer only after every argument is evaluated;
+temporary owners remain available to failure cleanup until that point. Views
+borrow a local or an owning temporary through the call only. Callees own owned
+parameters and never destroy view parameters. Owned returns detach their slot
+before frame cleanup. Leaf byte kernels borrow their inputs for the call;
+compiled stdlib bodies implement language-level consumption and control flow.
+
+Bytes new/from_string/slice/concat, explicit clone, length and to_hex execute
+natively. Concat creates real checked-capacity byte storage. No byte mutation
+syntax is added. Byte temporaries add one structural slot per allocating call,
+intrinsic, explicit clone, or local move; local views add none. Existing string
+structural costs are unchanged. Cleanup accepts both owned families, including
+terminal failure, and byte creation/destruction counters must balance in
+addition to both registries being empty. Runtime tests separately prove byte
+storage independence, exact destruction and byte-only leak detection. This is
+not evidence for resource finalizers or full native parity.

@@ -41,9 +41,43 @@ impl Translator<'_, '_> {
         self.builder.ins().stack_store(value, *slot, 0);
         Ok(LoweredValue::Scalar(value))
     }
+    pub(super) fn clear_slot(&mut self, slot: ir::StackSlot) {
+        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+        self.builder.ins().stack_store(zero, slot, 0);
+    }
+    pub(super) fn own_linear(&mut self, value: Value) -> Result<LoweredValue, CodegenError> {
+        let index = self.next_temporary;
+        self.own(value)?;
+        Ok(LoweredValue::Owned(value, self.temporary_slots[index]))
+    }
+    pub(super) fn argument(
+        &mut self,
+        expression: &Expression,
+        borrowed: bool,
+    ) -> Result<LoweredValue, CodegenError> {
+        if borrowed && is_linear(expression.ty) {
+            match &expression.kind {
+                ExpressionKind::View(inner) => return self.argument(inner, true),
+                ExpressionKind::Local(local) => {
+                    let index = local.index() as usize;
+                    let v =
+                        if let Some(slot) = self.local_slots[index] {
+                            self.builder.ins().stack_load(ir::types::I64, slot, 0)
+                        } else {
+                            self.builder.use_var(self.variables[index].ok_or_else(|| {
+                                CodegenError::Backend("borrow has no place".into())
+                            })?)
+                        };
+                    return Ok(LoweredValue::Scalar(v));
+                }
+                _ => {}
+            }
+        }
+        self.expression(expression)
+    }
     pub(super) fn drop_slot(&mut self, slot: ir::StackSlot) -> Result<(), CodegenError> {
         let value = self.builder.ins().stack_load(ir::types::I64, slot, 0);
-        self.leaf(NativeLeaf::Release, &[value], false)?;
+        self.leaf(NativeLeaf::DropValue, &[value], false)?;
         let zero = self.builder.ins().iconst(ir::types::I64, 0);
         self.builder.ins().stack_store(zero, slot, 0);
         Ok(())
@@ -174,12 +208,25 @@ impl Translator<'_, '_> {
         order: &[usize],
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
-        let evaluated = reordered_map(
-            args,
-            order,
-            |a| self.expression(a),
-            || CodegenError::Backend("invalid intrinsic argument order".into()),
-        )?;
+        let mut evaluated = vec![LoweredValue::Nothing; args.len()];
+        for &index in order {
+            evaluated[index] = self.argument(
+                &args[index],
+                jett_mir::move_values::intrinsic_borrows(id, index),
+            )?;
+        }
+        if let Some(leaf) = crate::values::bytes_leaf(id) {
+            let arguments = evaluated
+                .iter()
+                .map(|v| self.scalar(*v, span))
+                .collect::<Result<Vec<_>, _>>()?;
+            let v = self.leaf(leaf, &arguments, true)?;
+            return match leaf {
+                NativeLeaf::BytesLength => Ok(LoweredValue::Scalar(v)),
+                NativeLeaf::BytesToHex => self.own(v),
+                _ => self.own_linear(v),
+            };
+        }
         if let Some(leaf) = crate::values::math_leaf(id, args.first().map(|a| a.ty)) {
             let arguments = evaluated
                 .iter()

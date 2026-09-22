@@ -2,6 +2,7 @@
 
 mod analysis;
 pub mod copy_values;
+pub mod move_values;
 
 pub use analysis::{AnalysisError, ControlFlowGraph};
 pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};

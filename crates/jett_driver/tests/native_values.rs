@@ -421,3 +421,82 @@ function main() returns nothing:
     );
     assert_eq!(output.stdout, b"123456789101112\n");
 }
+
+#[test]
+fn native_owned_bytes_move_borrow_clone_and_loop() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/bytes_ownership.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("bytes oracle");
+    assert_eq!(expected.stdout.as_bytes(), b"2 486921\n787878 2\n");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("program");
+    build_host_executable(&fixture, &launcher(), &binary).expect("bytes native compilation");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_bytes_cleanup_across_early_returns_and_short_circuit() {
+    let output = run_source(
+        r#"
+function select(value: bytes, stop: bool) returns bytes:
+    bytes unused = bytes.from_string("discard")
+    if stop:
+        return value
+    return bytes.concat(value, bytes.from_string("!"))
+function consume(value: bytes) returns bool:
+    println(bytes.to_hex(view value))
+    return true
+function main() returns nothing:
+    bytes a = select(bytes.from_string("a"), true)
+    bytes b = select(bytes.from_string("b"), false)
+    bool no = false && consume(bytes.from_string("no"))
+    bool yes = true || consume(bytes.from_string("no"))
+    println(bytes.to_hex(a), bytes.to_hex(b), no, yes)
+    mutable bytes current = bytes.new()
+    mutable int64 index = 0
+    while index < 4:
+        current = bytes.from_string("{index}")
+        index = index + 1
+        if index == 2:
+            continue
+        if index == 3:
+            break
+    println(bytes.to_hex(current))
+"#,
+    );
+    assert_eq!(output.stdout, b"61 6221 false true\n32\n");
+}
+
+#[test]
+fn native_terminal_failure_drops_bytes_in_nested_frames_and_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("failure.jett");
+    std::fs::write(
+        &path,
+        r#"
+function explode(value: bytes) returns string:
+    bytes other = clone value
+    print(bytes.to_hex(view value))
+    return string.repeat("ab", 9223372036854775807)
+function relay(value: bytes) returns string:
+    bytes local = bytes.from_string("held")
+    return explode(value)
+function later(first: bytes, second: string) returns nothing:
+    println("unreachable")
+function main() returns nothing:
+    bytes owner = bytes.from_string("x")
+    later(bytes.from_string("temporary"), relay(owner))
+"#,
+    )
+    .unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&path).expect_err("terminal oracle");
+    let binary = directory.path().join("program");
+    build_host_executable(&path, &launcher(), &binary).expect("compile byte cleanup");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}

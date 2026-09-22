@@ -16,6 +16,7 @@ pub(crate) enum ScalarKind {
     Bool,
     Nothing,
     String,
+    Bytes,
     Stdout,
 }
 
@@ -139,6 +140,7 @@ pub(crate) fn scalar_kind(
         Type::Bool => ScalarKind::Bool,
         Type::Nothing => ScalarKind::Nothing,
         Type::String => ScalarKind::String,
+        Type::Bytes => ScalarKind::Bytes,
         Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
         unsupported => {
             return Err(CodegenError::UnsupportedType {
@@ -186,7 +188,7 @@ impl Verifier<'_> {
             }
             self.terminator(function, &block.terminator)?;
         }
-        jett_mir::copy_values::CopyValuePlan::analyze(function, self.types)
+        jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
             .map_err(|message| self.contract_error(function, function.span, message))?;
         Ok(())
     }
@@ -654,8 +656,10 @@ impl Verifier<'_> {
             }
             BinaryOp::Modulo => operand.is_integer() && result == operand,
             BinaryOp::Equal | BinaryOp::NotEqual => {
-                !matches!(operand, ScalarKind::Nothing | ScalarKind::Stdout)
-                    && result == ScalarKind::Bool
+                !matches!(
+                    operand,
+                    ScalarKind::Nothing | ScalarKind::Stdout | ScalarKind::Bytes
+                ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {
                 operand.is_numeric() && result == ScalarKind::Bool

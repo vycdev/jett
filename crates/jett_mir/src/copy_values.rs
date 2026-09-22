@@ -19,9 +19,16 @@ pub struct CopyValuePlan {
 }
 impl CopyValuePlan {
     pub fn analyze(function: &Function, types: &TypeInterner) -> Result<Self, String> {
-        copy_plan_type(types, function.return_type)?;
+        Self::analyze_storage(function, types, None)
+    }
+    pub(crate) fn analyze_storage(
+        function: &Function,
+        types: &TypeInterner,
+        program: Option<&crate::Program>,
+    ) -> Result<Self, String> {
+        plan_type(types, function.return_type, program)?;
         for local in &function.locals {
-            copy_plan_type(types, local.ty)?;
+            plan_type(types, local.ty, program)?;
         }
         let cfg = ControlFlowGraph::analyze(function).map_err(|e| format!("{e:?}"))?;
         let n = function.blocks.len();
@@ -34,18 +41,18 @@ impl CopyValuePlan {
                 let mut temporaries = 0;
                 let definition = match &statement.kind {
                     StatementKind::Let { local, value } => {
-                        visit(value, &mut reads, &mut temporaries, types)?;
+                        visit(value, &mut reads, &mut temporaries, types, program, false)?;
                         Some(local.index() as usize)
                     }
                     StatementKind::Assign { target, value } => {
                         let ExpressionKind::Local(local) = target.kind else {
                             return Err("nonlocal assignment needs place ownership".into());
                         };
-                        visit(value, &mut reads, &mut temporaries, types)?;
+                        visit(value, &mut reads, &mut temporaries, types, program, false)?;
                         Some(local.index() as usize)
                     }
                     StatementKind::Evaluate(value) => {
-                        visit(value, &mut reads, &mut temporaries, types)?;
+                        visit(value, &mut reads, &mut temporaries, types, program, false)?;
                         None
                     }
                     _ => return Err("statement needs explicit ownership lowering".into()),
@@ -57,7 +64,7 @@ impl CopyValuePlan {
             let mut temporaries = 0;
             match &block.terminator.kind {
                 TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
-                    visit(v, &mut reads, &mut temporaries, types)?
+                    visit(v, &mut reads, &mut temporaries, types, program, false)?
                 }
                 TerminatorKind::Return(None)
                 | TerminatorKind::Goto(_)
@@ -163,7 +170,14 @@ impl CopyValuePlan {
             owned_locals: function
                 .locals
                 .iter()
-                .filter(|l| matches!(types.resolve(l.ty), Type::String))
+                .filter(|l| {
+                    matches!(types.resolve(l.ty), Type::String)
+                        || (program.is_some()
+                            && l.ty == TypeInterner::BYTES
+                            && !function
+                                .parameter_for_local(l.id)
+                                .is_some_and(|p| p.mode == crate::ParamMode::View))
+                })
                 .map(|l| l.id.index() as usize)
                 .collect(),
             live_in,
@@ -178,8 +192,19 @@ fn visit(
     reads: &mut Set,
     temporaries: &mut usize,
     types: &TypeInterner,
+    program: Option<&crate::Program>,
+    borrowed: bool,
 ) -> Result<(), String> {
-    copy_plan_type(types, value.ty)?;
+    plan_type(types, value.ty, program)?;
+    if value.ty == TypeInterner::BYTES {
+        *temporaries += usize::from(match &value.kind {
+            ExpressionKind::Local(_) => !borrowed,
+            ExpressionKind::Call { .. }
+            | ExpressionKind::Intrinsic { .. }
+            | ExpressionKind::Clone(_) => true,
+            _ => false,
+        });
+    }
     // Count owning emitter operations, not string-typed AST nodes. Children
     // accumulate until full-expression cleanup; even short-circuit alternatives
     // receive distinct slots during emission. View/clone add no ownership.
@@ -221,22 +246,43 @@ fn visit(
         | ExpressionKind::String(_)
         | ExpressionKind::Nothing => {}
         ExpressionKind::Binary { left, right, .. } => {
-            visit(left, reads, temporaries, types)?;
-            visit(right, reads, temporaries, types)?;
+            visit(left, reads, temporaries, types, program, false)?;
+            visit(right, reads, temporaries, types, program, false)?;
         }
-        ExpressionKind::Unary { value, .. }
-        | ExpressionKind::View(value)
-        | ExpressionKind::Clone(value) => visit(value, reads, temporaries, types)?,
-        ExpressionKind::Call { args, .. } | ExpressionKind::Intrinsic { args, .. } => {
-            for v in args {
-                visit(v, reads, temporaries, types)?;
+        ExpressionKind::Unary { value, .. } => {
+            visit(value, reads, temporaries, types, program, false)?
+        }
+        ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
+            visit(value, reads, temporaries, types, program, true)?
+        }
+        ExpressionKind::Call { function, args, .. } => {
+            for (index, v) in args.iter().enumerate() {
+                let borrowed = program.is_some_and(|p| {
+                    p.functions[function.index() as usize].params[index].mode
+                        == crate::ParamMode::View
+                });
+                visit(v, reads, temporaries, types, program, borrowed)?;
+            }
+        }
+        ExpressionKind::Intrinsic {
+            intrinsic, args, ..
+        } => {
+            for (index, v) in args.iter().enumerate() {
+                visit(
+                    v,
+                    reads,
+                    temporaries,
+                    types,
+                    program,
+                    crate::move_values::intrinsic_borrows(*intrinsic, index),
+                )?;
             }
         }
         ExpressionKind::StringInterpolation(segments) => {
             for s in segments {
                 match s {
                     StringSegment::Value(v) => {
-                        visit(v, reads, temporaries, types)?;
+                        visit(v, reads, temporaries, types, program, false)?;
                         // Scalar formatting owns a new string; string formatting
                         // passes through the ownership already counted in v.
                         *temporaries += usize::from(v.ty != TypeInterner::STRING);
@@ -277,4 +323,15 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
         "type {} requires separate move/borrow/drop analysis",
         types.type_name(ty)
     ))
+}
+
+fn plan_type(
+    types: &TypeInterner,
+    ty: TypeId,
+    program: Option<&crate::Program>,
+) -> Result<(), String> {
+    if program.is_some() && ty == TypeInterner::BYTES {
+        return Ok(());
+    }
+    copy_plan_type(types, ty)
 }

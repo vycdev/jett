@@ -73,6 +73,12 @@ pub(crate) fn verify_intrinsic(
         return Err(format!("invalid native numeric signature for {id}"));
     }
     let (parameters, expected): (&[TypeId], TypeId) = match id {
+        IntrinsicId::BytesNew => (&[], T::BYTES),
+        IntrinsicId::BytesLength => (&[T::BYTES], T::INT64),
+        IntrinsicId::BytesFromString => (&[T::STRING], T::BYTES),
+        IntrinsicId::BytesConcat => (&[T::BYTES, T::BYTES], T::BYTES),
+        IntrinsicId::BytesSlice => (&[T::BYTES, T::INT64, T::INT64], T::BYTES),
+        IntrinsicId::BytesToHex => (&[T::BYTES], T::STRING),
         IntrinsicId::StringCharCount => (&[T::STRING], T::INT64),
         IntrinsicId::StringSlice => (&[T::STRING, T::INT64, T::INT64], T::STRING),
         IntrinsicId::StringUpper
@@ -153,6 +159,18 @@ pub(crate) fn math_leaf(id: IntrinsicId, first: Option<TypeId>) -> Option<Native
         IntrinsicId::MathGcd => NativeLeaf::Gcd,
         IntrinsicId::MathLcm => NativeLeaf::Lcm,
         IntrinsicId::MathFactorial => NativeLeaf::Factorial,
+        _ => return None,
+    })
+}
+
+pub(crate) fn bytes_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
+    Some(match id {
+        IntrinsicId::BytesNew => NativeLeaf::BytesNew,
+        IntrinsicId::BytesLength => NativeLeaf::BytesLength,
+        IntrinsicId::BytesFromString => NativeLeaf::BytesFromString,
+        IntrinsicId::BytesConcat => NativeLeaf::BytesConcat,
+        IntrinsicId::BytesSlice => NativeLeaf::BytesSlice,
+        IntrinsicId::BytesToHex => NativeLeaf::BytesToHex,
         _ => return None,
     })
 }

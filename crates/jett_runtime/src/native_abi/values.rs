@@ -24,12 +24,17 @@ struct NativeString {
 #[derive(Default)]
 pub(super) struct NativeValues {
     strings: HashMap<NativeHandle, NativeString>,
+    bytes: HashMap<NativeHandle, Vec<u8>>,
+    bytes_created: u64,
+    bytes_destroyed: u64,
     failure: Option<Failure>,
     stdout: Option<u64>,
 }
 impl NativeValues {
     pub(super) fn is_empty(&self) -> bool {
         self.strings.is_empty()
+            && self.bytes.is_empty()
+            && self.bytes_created == self.bytes_destroyed
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
         let id = next_identity()?;
@@ -41,6 +46,25 @@ impl NativeValues {
             },
         );
         Ok(id)
+    }
+    fn insert_bytes(&mut self, bytes: Vec<u8>) -> LeafResult<u64> {
+        let id = next_identity()?;
+        self.bytes.insert(id, bytes);
+        self.bytes_created += 1;
+        Ok(id)
+    }
+    fn bytes(&self, id: u64) -> LeafResult<&[u8]> {
+        self.bytes.get(&id).map(Vec::as_slice).ok_or((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"invalid native bytes handle",
+        ))
+    }
+    fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if self.bytes.remove(&id).is_some() {
+            self.bytes_destroyed += 1;
+            return Ok(0);
+        }
+        self.release(id)
     }
     fn text(&self, id: u64) -> LeafResult<&str> {
         self.strings
@@ -161,6 +185,31 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    DropValue, jett_rt_v1_value_drop, true, (value: u64 => I64), u32 => I32,
+        |s| s.drop_value(value);
+    BytesNew, jett_rt_v1_bytes_new, false, (), u64 => I64,
+        |s| s.insert_bytes(Vec::new());
+    BytesClone, jett_rt_v1_bytes_clone, false, (value: u64 => I64), u64 => I64,
+        |s| { let data = s.bytes(value)?.to_vec(); s.insert_bytes(data) };
+    BytesLength, jett_rt_v1_bytes_length, false, (value: u64 => I64), i64 => I64,
+        |s| Ok(s.bytes(value)?.len() as i64);
+    BytesFromString, jett_rt_v1_bytes_from_string, false, (value: u64 => I64), u64 => I64,
+        |s| { let data = s.text(value)?.as_bytes().to_vec(); s.insert_bytes(data) };
+    BytesSlice, jett_rt_v1_bytes_slice, false, (value: u64 => I64, start: i64 => I64, end: i64 => I64), u64 => I64,
+        |s| { let data = s.bytes(value)?; let len = data.len() as i64;
+            let start = start.clamp(0, len) as usize; let end = end.clamp(0, len) as usize;
+            let result = data[start.min(end)..end].to_vec(); s.insert_bytes(result) };
+    BytesConcat, jett_rt_v1_bytes_concat, false, (first: u64 => I64, second: u64 => I64), u64 => I64,
+        |s| { let a = s.bytes(first)?; let b = s.bytes(second)?;
+            let len = a.len().checked_add(b.len()).ok_or(EXHAUSTED)?;
+            let mut result = Vec::new(); result.try_reserve_exact(len).map_err(|_| EXHAUSTED)?;
+            result.extend_from_slice(a); result.extend_from_slice(b); s.insert_bytes(result) };
+    BytesToHex, jett_rt_v1_bytes_to_hex, false, (value: u64 => I64), u64 => I64,
+        |s| { use std::fmt::Write; let bytes = s.bytes(value)?;
+            let mut text = String::new(); text.try_reserve_exact(bytes.len().checked_mul(2).ok_or(EXHAUSTED)?).map_err(|_| EXHAUSTED)?;
+            for byte in bytes { write!(text, "{byte:02x}").map_err(|_| EXHAUSTED)?; }
+            s.insert(text) };
+
     Sqrt, jett_rt_v1_math_sqrt, false, (value: f64 => F64), f64 => F64,
         |_| Ok(value.sqrt());
     Floor, jett_rt_v1_math_floor, false, (value: f64 => F64), f64 => F64,
@@ -470,5 +519,48 @@ mod tests {
             jett_rt_v1_string_release(context.pointer(), value);
         }
         assert_eq!(context.count(), 0);
+    }
+    #[test]
+    fn bytes_have_distinct_storage_and_exact_destruction_counts() {
+        let context = Context::new();
+        let text = context.text("raw");
+        unsafe {
+            let a = jett_rt_v1_bytes_from_string(context.pointer(), text);
+            let b = jett_rt_v1_bytes_clone(context.pointer(), a);
+            assert_ne!(a, b);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            {
+                let mut state = lock_unpoisoned(&lease.entry.state);
+                let values = &mut state.as_mut().unwrap().values;
+                values.bytes.get_mut(&a).unwrap()[0] = 255;
+                assert_eq!(values.bytes(a).unwrap(), &[255, 97, 119]);
+                assert_eq!(values.bytes(b).unwrap(), b"raw");
+                assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 0));
+            }
+            jett_rt_v1_value_drop(context.pointer(), a);
+            jett_rt_v1_value_drop(context.pointer(), b);
+            jett_rt_v1_value_drop(context.pointer(), text);
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn bytes_registry_leak_is_not_hidden_by_empty_string_registry() {
+        let mut context = Context::new();
+        unsafe {
+            jett_rt_v1_bytes_new(context.pointer());
+        }
+        assert_eq!(context.count(), 0);
+        let mut result = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+            JettRuntimeStatusV1::INVALID_ARGUMENT
+        );
+        let context = std::mem::ManuallyDrop::new(context);
+        unsafe {
+            drop(ptr::read(&context.0));
+        }
     }
 }

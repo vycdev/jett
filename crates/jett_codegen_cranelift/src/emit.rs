@@ -1,5 +1,5 @@
 mod values;
-use jett_mir::copy_values::CopyValuePlan;
+use jett_mir::move_values::{MoveValuePlan, is_linear};
 use jett_runtime::native_abi::values::NativeLeaf;
 use std::str::FromStr;
 
@@ -40,6 +40,7 @@ struct DeclaredFunction {
     native_id: FuncId,
     symbol: String,
     signature: ir::Signature,
+    modes: Vec<jett_mir::ParamMode>,
 }
 
 /// Sparse original-MIR-index mapping. Only backend-reachable functions have a
@@ -214,6 +215,7 @@ fn emit_for_triple(
         translate_function(
             &mut module,
             &declarations,
+            program,
             function,
             types,
             &declaration.symbol,
@@ -272,6 +274,7 @@ fn declare_reachable_functions(
             native_id,
             symbol: verified_function.symbol.clone(),
             signature,
+            modes: function.params.iter().map(|p| p.mode).collect(),
         })?;
     }
     Ok(declarations)
@@ -461,7 +464,7 @@ fn clif_type(
         ScalarKind::Float(32) => Some(ir::types::F32),
         ScalarKind::Float(64) => Some(ir::types::F64),
         ScalarKind::Nothing => None,
-        ScalarKind::String | ScalarKind::Stdout => Some(ir::types::I64),
+        ScalarKind::String | ScalarKind::Bytes | ScalarKind::Stdout => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -477,6 +480,7 @@ fn clif_type(
 fn translate_function(
     module: &mut ObjectModule,
     declarations: &DeclaredFunctions,
+    program: &Program,
     function: &Function,
     types: &TypeInterner,
     symbol: &str,
@@ -493,7 +497,7 @@ fn translate_function(
     builder.append_block_params_for_function_params(entry);
 
     let runtime_context = builder.declare_var(module.target_config().pointer_type());
-    let ownership = CopyValuePlan::analyze(function, types)
+    let ownership = MoveValuePlan::analyze(program, function, types)
         .map_err(|message| contract_error(symbol, function.span, message))?;
     let local_slots = function
         .locals
@@ -599,6 +603,7 @@ fn translate_function(
             runtime_context,
             types,
             symbol,
+            local_types: &function.locals,
             local_slots: &local_slots,
             temporary_slots: &temporary_slots,
             next_temporary: 0,
@@ -610,7 +615,11 @@ fn translate_function(
                     let v = translator
                         .builder
                         .use_var(variables[parameter.local.index() as usize].unwrap());
-                    let owned = translator.leaf(NativeLeaf::Retain, &[v], true)?;
+                    let owned = if is_linear(parameter.ty) {
+                        v
+                    } else {
+                        translator.leaf(NativeLeaf::Retain, &[v], true)?
+                    };
                     translator.builder.ins().stack_store(owned, slot, 0);
                 }
             }
@@ -634,6 +643,7 @@ fn translate_function(
         runtime_context,
         types,
         symbol,
+        local_types: &function.locals,
         local_slots: &local_slots,
         temporary_slots: &temporary_slots,
         next_temporary: temporary_slots.len(),
@@ -655,6 +665,7 @@ fn translate_function(
 #[derive(Clone, Copy)]
 enum LoweredValue {
     Scalar(Value),
+    Owned(Value, ir::StackSlot),
     Nothing,
 }
 
@@ -667,6 +678,7 @@ struct Translator<'a, 'builder> {
     runtime_context: Variable,
     types: &'a TypeInterner,
     symbol: &'a str,
+    local_types: &'a [jett_mir::Local],
     local_slots: &'a [Option<ir::StackSlot>],
     temporary_slots: &'a [ir::StackSlot],
     next_temporary: usize,
@@ -711,9 +723,13 @@ impl Translator<'_, '_> {
                     let v = self.scalar(result, terminator.span)?;
                     result = LoweredValue::Scalar(self.leaf(NativeLeaf::Retain, &[v], true)?);
                 }
+                if let LoweredValue::Owned(v, slot) = result {
+                    self.clear_slot(slot);
+                    result = LoweredValue::Scalar(v);
+                }
                 self.drop_all()?;
                 match result {
-                    LoweredValue::Scalar(v) => {
+                    LoweredValue::Scalar(v) | LoweredValue::Owned(v, _) => {
                         self.builder.ins().return_(&[v]);
                     }
                     LoweredValue::Nothing => {
@@ -817,6 +833,10 @@ impl Translator<'_, '_> {
                 };
                 if let Some(slot) = self.local_slots[local.index() as usize] {
                     let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                    if is_linear(expression.ty) {
+                        self.clear_slot(slot);
+                        return self.own_linear(v);
+                    }
                     let v = self.leaf(NativeLeaf::Retain, &[v], true)?;
                     return self.own(v);
                 }
@@ -880,7 +900,14 @@ impl Translator<'_, '_> {
             ExpressionKind::Comptime(_) => {
                 Err(self.unsupported(expression.span, "unbaked comptime expression"))
             }
-            ExpressionKind::View(value) | ExpressionKind::Clone(value) => self.expression(value),
+            ExpressionKind::View(value) => self.argument(value, true),
+            ExpressionKind::Clone(value) if is_linear(value.ty) => {
+                let borrowed = self.argument(value, true)?;
+                let v = self.scalar(borrowed, value.span)?;
+                let cloned = self.leaf(NativeLeaf::BytesClone, &[v], true)?;
+                self.own_linear(cloned)
+            }
+            ExpressionKind::Clone(value) => self.expression(value),
             ExpressionKind::String(text) => self.literal(text),
             ExpressionKind::Intrinsic {
                 intrinsic,
@@ -957,10 +984,17 @@ impl Translator<'_, '_> {
                 "call evaluation order is not a permutation",
             )
         };
+        let modes = self
+            .declarations
+            .get(function)
+            .ok_or_else(invalid_order)?
+            .modes
+            .clone();
+        let indexed = args.iter().enumerate().collect::<Vec<_>>();
         let evaluated = reordered_map(
-            args,
+            &indexed,
             evaluation_order,
-            |argument| self.expression(argument),
+            |(index, argument)| self.argument(argument, modes[*index] == jett_mir::ParamMode::View),
             invalid_order,
         )?;
         let runtime_context = self
@@ -975,9 +1009,15 @@ impl Translator<'_, '_> {
             })?;
         let mut native_args = Vec::with_capacity(evaluated.len() + 1);
         native_args.push(runtime_context);
-        for (argument, value) in args.iter().zip(evaluated) {
+        for (index, (argument, value)) in args.iter().zip(evaluated).enumerate() {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
+                LoweredValue::Owned(value, slot) => {
+                    if modes[index] == jett_mir::ParamMode::Owned {
+                        self.clear_slot(slot);
+                    }
+                    native_args.push(value);
+                }
                 LoweredValue::Nothing => {
                     if scalar_kind(self.types, argument.ty, "nothing argument")?
                         != ScalarKind::Nothing
@@ -1026,7 +1066,9 @@ impl Translator<'_, '_> {
                     "value-returning call produced no native value",
                 )
             })?;
-            if expression.ty == TypeInterner::STRING {
+            if is_linear(expression.ty) {
+                self.own_linear(value)
+            } else if expression.ty == TypeInterner::STRING {
                 self.own(value)
             } else {
                 Ok(LoweredValue::Scalar(value))
@@ -1154,7 +1196,7 @@ impl Translator<'_, '_> {
                     ));
                 }
             },
-            ScalarKind::Nothing | ScalarKind::String | ScalarKind::Stdout => {
+            ScalarKind::Nothing | ScalarKind::String | ScalarKind::Bytes | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,
                     span,
@@ -1286,8 +1328,16 @@ impl Translator<'_, '_> {
         span: Span,
     ) -> Result<(), CodegenError> {
         if let Some(slot) = self.local_slots[local.index() as usize] {
-            let value = self.scalar(value, span)?;
-            let owned = self.leaf(NativeLeaf::Retain, &[value], true)?;
+            let owned = if is_linear(self.local_types[local.index() as usize].ty) {
+                let LoweredValue::Owned(v, source) = value else {
+                    return Err(self.unsupported(span, "borrow escaping into owner"));
+                };
+                self.clear_slot(source);
+                v
+            } else {
+                let value = self.scalar(value, span)?;
+                self.leaf(NativeLeaf::Retain, &[value], true)?
+            };
             self.drop_slot(slot)?;
             self.builder.ins().stack_store(owned, slot, 0);
             return Ok(());
@@ -1324,7 +1374,7 @@ impl Translator<'_, '_> {
 
     fn scalar(&self, value: LoweredValue, span: Span) -> Result<Value, CodegenError> {
         match value {
-            LoweredValue::Scalar(value) => Ok(value),
+            LoweredValue::Scalar(value) | LoweredValue::Owned(value, _) => Ok(value),
             LoweredValue::Nothing => Err(contract_error(
                 self.symbol,
                 span,
@@ -1430,6 +1480,7 @@ mod tests {
     use jett_common::{FileId, SourceOrigin};
 
     use super::*;
+    use jett_mir::copy_values::CopyValuePlan;
 
     fn lower_source(source: &str) -> (Program, TypeInterner) {
         let file = FileId::new(0);
@@ -1492,6 +1543,7 @@ mod tests {
             translate_function(
                 &mut module,
                 &declarations,
+                &program,
                 function,
                 &types,
                 &declaration.symbol,
@@ -1521,6 +1573,7 @@ mod tests {
         translate_function(
             &mut module,
             &declarations,
+            &program,
             function,
             &types,
             &declaration.symbol,
@@ -1719,6 +1772,7 @@ function caller(value: int64, choose_original: bool) returns int64:
         translate_function(
             &mut module,
             &declarations,
+            &program,
             caller,
             &types,
             &declaration.symbol,
@@ -1846,5 +1900,50 @@ function discard(view value: bytes) returns nothing:
         let error = CopyValuePlan::analyze(&program.functions[0], &types)
             .expect_err("bytes needs move/borrow/drop analysis");
         assert!(error.contains("move/borrow/drop"), "{error}");
+    }
+    #[test]
+    fn native_linear_plan_rejects_move_across_loop_backedge() {
+        let (program, types) = lower_source(
+            r#"
+function consume(value: bytes) returns nothing:
+    return nothing
+function loop_move(value: bytes, repeat: bool) returns nothing:
+    while repeat:
+        consume(value)
+"#,
+        );
+        let error = emit_host_object(&program, &types)
+            .expect_err("loop reads moved place on next iteration");
+        assert!(
+            error.to_string().contains("moved or uninitialized"),
+            "{error}"
+        );
+    }
+    #[test]
+    fn native_linear_plan_rejects_borrow_escape_and_argument_alias() {
+        let (mut program, types) = lower_source(
+            r#"
+function identity(value: bytes) returns bytes:
+    return value
+"#,
+        );
+        program.functions[0].params[0].mode = jett_mir::ParamMode::View;
+        let error =
+            emit_host_object(&program, &types).expect_err("view cannot be returned as owner");
+        assert!(
+            error.to_string().contains("cannot move borrowed"),
+            "{error}"
+        );
+        let (program, types) = lower_source(
+            r#"
+function mixed(view first: bytes, second: bytes) returns nothing:
+    return nothing
+function alias(value: bytes) returns nothing:
+    mixed(view value, value)
+"#,
+        );
+        let error = emit_host_object(&program, &types)
+            .expect_err("loan must survive all argument evaluation");
+        assert!(error.to_string().contains("while borrowed"), "{error}");
     }
 }
