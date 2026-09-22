@@ -4,7 +4,7 @@
 //! move/borrow/drop analysis before their backend support can be enabled.
 use crate::{ControlFlowGraph, Function, StatementKind, TerminatorKind};
 use jett_hir::{Expression, ExpressionKind, StringSegment};
-use jett_types::{Type, TypeInterner};
+use jett_types::{CapabilityKind, Type, TypeId, TypeInterner};
 use std::collections::BTreeSet;
 type Set = BTreeSet<usize>;
 
@@ -19,6 +19,10 @@ pub struct CopyValuePlan {
 }
 impl CopyValuePlan {
     pub fn analyze(function: &Function, types: &TypeInterner) -> Result<Self, String> {
+        copy_plan_type(types, function.return_type)?;
+        for local in &function.locals {
+            copy_plan_type(types, local.ty)?;
+        }
         let cfg = ControlFlowGraph::analyze(function).map_err(|e| format!("{e:?}"))?;
         let n = function.blocks.len();
         let mut facts = Vec::new();
@@ -30,18 +34,18 @@ impl CopyValuePlan {
                 let mut nodes = 0;
                 let definition = match &statement.kind {
                     StatementKind::Let { local, value } => {
-                        visit(value, &mut reads, &mut nodes)?;
+                        visit(value, &mut reads, &mut nodes, types)?;
                         Some(local.index() as usize)
                     }
                     StatementKind::Assign { target, value } => {
                         let ExpressionKind::Local(local) = target.kind else {
                             return Err("nonlocal assignment needs place ownership".into());
                         };
-                        visit(value, &mut reads, &mut nodes)?;
+                        visit(value, &mut reads, &mut nodes, types)?;
                         Some(local.index() as usize)
                     }
                     StatementKind::Evaluate(value) => {
-                        visit(value, &mut reads, &mut nodes)?;
+                        visit(value, &mut reads, &mut nodes, types)?;
                         None
                     }
                     _ => return Err("statement needs explicit ownership lowering".into()),
@@ -53,7 +57,7 @@ impl CopyValuePlan {
             let mut nodes = 0;
             match &block.terminator.kind {
                 TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
-                    visit(v, &mut reads, &mut nodes)?
+                    visit(v, &mut reads, &mut nodes, types)?
                 }
                 TerminatorKind::Return(None)
                 | TerminatorKind::Goto(_)
@@ -169,7 +173,13 @@ impl CopyValuePlan {
         })
     }
 }
-fn visit(value: &Expression, reads: &mut Set, nodes: &mut usize) -> Result<(), String> {
+fn visit(
+    value: &Expression,
+    reads: &mut Set,
+    nodes: &mut usize,
+    types: &TypeInterner,
+) -> Result<(), String> {
+    copy_plan_type(types, value.ty)?;
     if value.ty == TypeInterner::STRING {
         *nodes += 1;
     }
@@ -186,15 +196,15 @@ fn visit(value: &Expression, reads: &mut Set, nodes: &mut usize) -> Result<(), S
         | ExpressionKind::String(_)
         | ExpressionKind::Nothing => {}
         ExpressionKind::Binary { left, right, .. } => {
-            visit(left, reads, nodes)?;
-            visit(right, reads, nodes)?;
+            visit(left, reads, nodes, types)?;
+            visit(right, reads, nodes, types)?;
         }
         ExpressionKind::Unary { value, .. }
         | ExpressionKind::View(value)
-        | ExpressionKind::Clone(value) => visit(value, reads, nodes)?,
+        | ExpressionKind::Clone(value) => visit(value, reads, nodes, types)?,
         ExpressionKind::Call { args, .. } | ExpressionKind::Intrinsic { args, .. } => {
             for v in args {
-                visit(v, reads, nodes)?;
+                visit(v, reads, nodes, types)?;
             }
         }
         ExpressionKind::StringInterpolation(segments) => {
@@ -203,7 +213,7 @@ fn visit(value: &Expression, reads: &mut Set, nodes: &mut usize) -> Result<(), S
                 // concatenation result. Count it independently of its type.
                 *nodes += 1;
                 match s {
-                    StringSegment::Value(v) => visit(v, reads, nodes)?,
+                    StringSegment::Value(v) => visit(v, reads, nodes, types)?,
                     StringSegment::Text(_) => *nodes += 1,
                 }
             }
@@ -211,4 +221,33 @@ fn visit(value: &Expression, reads: &mut Set, nodes: &mut usize) -> Result<(), S
         _ => return Err("expression needs explicit ownership lowering".into()),
     }
     Ok(())
+}
+
+fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
+    if ty.index() as usize >= types.len() {
+        return Err("invalid type in native ownership plan".into());
+    }
+    if matches!(
+        types.resolve(ty),
+        Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::Bool
+            | Type::Nothing
+            | Type::String
+            | Type::Capability(CapabilityKind::Stdout)
+    ) {
+        return Ok(());
+    }
+    Err(format!(
+        "type {} requires separate move/borrow/drop analysis",
+        types.type_name(ty)
+    ))
 }

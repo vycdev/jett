@@ -471,4 +471,53 @@ mod tests {
         assert_eq!(runtime.destroy_calls, 1);
         assert_eq!(stderr, DESTROY_PANIC_MESSAGE);
     }
+
+    #[test]
+    fn native_owned_value_leak_cannot_report_successful_failure_cleanup() {
+        let mut runtime = NativeRuntime;
+        let mut stderr = Vec::new();
+        let exit = launch_with(
+            &mut runtime,
+            |context| {
+                let text = b"deliberately unreleased";
+                let value = unsafe {
+                    jett_runtime::native_abi::values::jett_rt_v1_string_literal(
+                        context.cast(),
+                        text.as_ptr(),
+                        text.len() as u64,
+                    )
+                };
+                assert_ne!(value, 0);
+                19
+            },
+            &mut stderr,
+        );
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_DESTROY_FAILURE);
+        assert_eq!(stderr, b"jett launcher: program entry failed (status 19)\njett launcher: runtime context destruction failed (status 1): native value ownership leak\n");
+    }
+
+    #[test]
+    fn native_terminal_failure_releases_values_and_preserves_message() {
+        let mut runtime = NativeRuntime;
+        let mut stderr = Vec::new();
+        let exit = launch_with(
+            &mut runtime,
+            |context| {
+                use jett_runtime::native_abi::values::*;
+                unsafe {
+                    let context = context.cast();
+                    let value = jett_rt_v1_string_literal(context, b"ab".as_ptr(), 2);
+                    assert_eq!(jett_rt_v1_string_repeat(context, value, i64::MAX), 0);
+                    jett_rt_v1_string_release(context, value);
+                    jett_rt_v1_value_status(context)
+                }
+            },
+            &mut stderr,
+        );
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_ENTRY_FAILURE);
+        assert_eq!(
+            stderr,
+            b"runtime error: string.repeat: requested output is too large\n"
+        );
+    }
 }

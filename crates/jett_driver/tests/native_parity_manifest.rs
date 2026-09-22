@@ -317,6 +317,9 @@ fn native_parity_manifest_matches_fixture_inventory() {
         "tests/run_pass/hello_print.jett".to_owned(),
         "tests/run_pass/integer_wrapping_and_float_ieee.jett".to_owned(),
         "tests/run_pass/logical_ops.jett".to_owned(),
+        "tests/run_pass/math_advanced.jett".to_owned(),
+        "tests/run_pass/math_error_helpers.jett".to_owned(),
+        "tests/run_pass/math_operations.jett".to_owned(),
         "tests/run_pass/multi_verify.jett".to_owned(),
         "tests/run_pass/named_argument_runtime_order.jett".to_owned(),
         "tests/run_pass/namespace_runtime_main_context.jett".to_owned(),
@@ -334,7 +337,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
     );
     assert_eq!(
         manifested_object_emit.len(),
-        16,
+        19,
         "native object-emission coverage changed"
     );
 

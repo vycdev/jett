@@ -57,10 +57,10 @@ impl Translator<'_, '_> {
     }
     pub(super) fn drop_dead_locals(&mut self, live: &BTreeSet<usize>) -> Result<(), CodegenError> {
         for (i, slot) in self.local_slots.iter().enumerate() {
-            if !live.contains(&i) {
-                if let Some(slot) = slot {
-                    self.drop_slot(*slot)?;
-                }
+            if !live.contains(&i)
+                && let Some(slot) = slot
+            {
+                self.drop_slot(*slot)?;
             }
         }
         Ok(())
