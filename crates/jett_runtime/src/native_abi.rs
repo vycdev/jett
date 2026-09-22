@@ -3,8 +3,9 @@
 //! This module is the narrow C ABI used by ahead-of-time generated code. Rust
 //! ABI values never cross this boundary: every shared value has a fixed-width
 //! scalar or `repr(C)` layout, runtime state is reached through an opaque
-//! token, and every operation writes failure details to an explicit
-//! [`JettRuntimeResultV1`] out parameter.
+//! token. Lifecycle operations write an explicit [`JettRuntimeResultV1`] out
+//! parameter; the typed leaves in [`values`] use the context-local terminal
+//! failure channel, checked by generated code after every fallible call.
 //!
 //! # Ownership and lifetimes
 //!

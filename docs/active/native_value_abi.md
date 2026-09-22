@@ -68,3 +68,20 @@ This does not introduce a new shortest-f32 formatting policy, disable formatting
 or treat the old unnormalized f64 oracle as evidence of correct float32 behavior.
 Regression tests compare actual executable bytes to the corrected checked oracle
 and pin formatting-dependent string equality/control flow, including comptime.
+
+
+`print` and `println` retain their existing language diagnostic-output permission:
+their dedicated leaf receives the explicit runtime context, not a fabricated
+Stdout token. `Stdout.write` requires the separate granted token and rejects a
+token from another context. Ordinary user code cannot construct that token.
+
+Typed numeric leaves preserve fixed-width wrapping, IEEE values, and exact
+library error text. Integer division syntax remains governed by the frontend
+nonzero proof; leaf errors such as invalid `math.clamp` bounds are terminal.
+
+Cleanup evidence is executable: destruction rejects a nonempty value registry,
+and launcher tests prove that a deliberately leaked owner overrides entry failure
+with exit 72. An expected runtime failure counts in the exhaustive audit only when
+its output/message match and exit 71 establishes successful checked destruction.
+Resource finalizer instrumentation must be extended before move-only resource
+families can use this gate.

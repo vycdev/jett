@@ -7474,3 +7474,27 @@ runtime calls. The backend rejects any unresolved `Comptime` marker instead of
 emitting its source computation. Composite constants still need native layout
 lowering and remain an explicit native parity gap. A native regression executes
 baked `math.factorial(5)` after removing its source file.
+
+
+### Native string and numeric execution slice
+
+The current Cranelift subset also executes immutable strings, interpolation,
+print/println, checked Stdout entry parameters, and typed numeric runtime kernels.
+String handles have explicit retain/release ownership and are destroyed at last
+release. MIR definite-initialization and liveness facts drive local and temporary
+cleanup through branches, loops, overwrites, returns, and terminal failures.
+
+Terminal runtime failure is a context-local first error, not `result.fail` data.
+Compiled calls test that channel before using a return value; failure edges release
+frame owners and propagate it to the launcher. Context destruction checks for leaked
+native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
+use the same extended-grapheme segmentation dependency as the interpreter. This
+initial handle representation is not the proposed inline/SSO optimization.
+
+The full native parity gate is still incomplete: 19/182 genuine objects, 8/30
+main outcomes, and 14/25 runtime contracts, with 182/182 typed lowering. See
+`active/native_value_abi.md` for ABI ownership and failure contracts and
+`active/native_codegen_parity_plan.md` for the remaining gates. In particular,
+move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
+reflection/JSON, actors/tasks, other capabilities, and clean Windows release
+verification are not established by this slice.

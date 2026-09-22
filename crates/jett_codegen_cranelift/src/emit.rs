@@ -115,9 +115,9 @@ pub fn emit_host_object(
 ///
 /// `entry` is an exact checked MIR identity; this API never selects an entry by
 /// source name. The wrapper has the target C ABI `uint32_t(void *context)`,
-/// forwards its opaque runtime context to the parameterless,
-/// `nothing`-returning Jett function, and returns
-/// [`JETT_AOT_ENTRY_SUCCESS_V1`].
+/// forwards its opaque runtime context to a `nothing`-returning Jett function,
+/// supplies explicit tokens for checked Stdout parameters, and returns the
+/// terminal failure status (or [`JETT_AOT_ENTRY_SUCCESS_V1`]).
 pub fn emit_host_program_object(
     program: &Program,
     types: &TypeInterner,
@@ -1833,5 +1833,18 @@ function selected_entry(keep: bool) returns string:
                 assert!(plan.live_out[block.id.index() as usize].contains(&local));
             }
         }
+    }
+
+    #[test]
+    fn copy_value_plan_does_not_claim_move_only_ownership() {
+        let (program, types) = lower_source(
+            r#"
+function discard(view value: bytes) returns nothing:
+    return nothing
+"#,
+        );
+        let error = CopyValuePlan::analyze(&program.functions[0], &types)
+            .expect_err("bytes needs move/borrow/drop analysis");
+        assert!(error.contains("move/borrow/drop"), "{error}");
     }
 }

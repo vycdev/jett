@@ -91,10 +91,14 @@ fn behavior(
     };
     Ok(
         json!({"behavior_matches":matched,"exit_code":actual.status.code(),"stdout":stdout,"stderr":stderr,
-        "interpreter_stdout":oracle.stdout,"interpreter_debug":oracle.debug_output,"interpreter_failure":failure,
-        // Failure cleanup instrumentation and capability-effect oracles are
-        // additional release gates, not inferred from an exit status.
-        "failure_cleanup_verified":false}),
+                "interpreter_stdout":oracle.stdout,"interpreter_debug":oracle.debug_output,"interpreter_failure":failure,
+                // Current scalar/string ABI destruction checks its live owning-value
+                // registry. Entry-failure 71 requires successful destruction; a leak
+                // overrides it with 72. Launcher tests enforce both outcomes. Future
+                // resource families also need finalizer/effect oracles before acceptance.
+                "failure_cleanup_verified":expected_failure && matched && actual.status.code() == Some(71),
+                "cleanup_contract":"native owning-value registry empty at checked context destruction"
+        }),
     )
 }
 
@@ -178,7 +182,7 @@ fn main() -> ExitCode {
                     match behavior(&source, &output, directory.path(), failure) {
                         Err(error) => row["execution_error"] = json!(error),
                         Ok(result) => {
-                            let pass = result["behavior_matches"] == true && !failure;
+                            let pass = execution_passes(&result, failure);
                             main_pass += usize::from(main && pass);
                             runtime_pass += usize::from(runtime && pass);
                             row["execution"] = result;
@@ -203,12 +207,36 @@ fn main() -> ExitCode {
         && main_pass == main_total
         && runtime_pass == runtime_total;
     let report = json!({"complete":complete,"target":native::host_target(),"counts":counts,"fixtures":rows,
-        "pending_release_gates":["failure cleanup instrumentation","capability-effect differential oracles","clean Windows MSVC distribution"]});
+        "pending_release_gates":["move-only resource finalizer instrumentation","capability-effect differential oracles","clean Windows MSVC distribution"]});
     fs::write(&args[1], serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     println!("{counts}");
     if complete {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+fn execution_passes(result: &Value, expected_failure: bool) -> bool {
+    result["behavior_matches"] == true
+        && (!expected_failure || result["failure_cleanup_verified"] == true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn expected_failures_count_only_with_cleanup_evidence() {
+        let verified = json!({"behavior_matches":true, "failure_cleanup_verified":true});
+        assert!(execution_passes(&verified, true));
+        assert!(!execution_passes(
+            &json!({"behavior_matches":true, "failure_cleanup_verified":false}),
+            true
+        ));
+        assert!(!execution_passes(
+            &json!({"behavior_matches":false, "failure_cleanup_verified":true}),
+            true
+        ));
+        assert!(execution_passes(&json!({"behavior_matches":true}), false));
     }
 }

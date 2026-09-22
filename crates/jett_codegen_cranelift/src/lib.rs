@@ -1,8 +1,9 @@
 //! Cranelift ahead-of-time object generation for validated Jett MIR.
 //!
 //! This crate deliberately consumes MIR rather than source or AST nodes. The
-//! initial backend slice supports scalar primitives and explicit control flow;
-//! every other MIR construct is rejected before object generation.
+//! current subset supports scalar primitives, owned immutable strings, typed
+//! runtime leaves, and explicit control flow. Unsupported MIR is rejected
+//! before object generation; there is no interpreter fallback.
 
 mod emit;
 mod error;

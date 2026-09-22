@@ -280,13 +280,13 @@ lowering alone never changes an execution row to complete.
 | Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
-| Strings and bytes | covered | pending | pending |
+| Strings and bytes | covered | immutable strings, formatting, and scalar Unicode kernels; bytes pending | string fixtures and cleanup covered; bytes pending |
 | Structs, enums, bitfields, machines, and refinements | covered | pending | pending |
 | Lists, maps, and sets | covered | pending | pending |
 | Results, optionals, and `handle` control flow | covered, but handler bodies still require explicit MIR CFG extraction | pending | pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
 | Compiler intrinsics and reflection | covered with checked operands and closed `IntrinsicId` identities | pending | pending |
-| Capabilities and runtime resources | nominal checked types covered | pending | pending |
+| Capabilities and runtime resources | nominal checked types covered | explicit Stdout entry and write; others pending | Stdout output covered; other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
 | Trace, breakpoint, assert, and failure reporting | covered | pending | pending |
@@ -296,14 +296,22 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 2 | 182 | manifest-driven production object gate for `simple.jett` and `native_scalar_entry.jett` |
-| Successful/expected `main` execution | 1 | 30 | Linux GNU `native_execution::native_scalar_entry_links_and_executes_without_source_tree`; all other mains pending |
-| Runtime contracts | 0 | 25 | native runtime-contract differential gate pending |
+| Native object generation | 19 | 182 | manifest-driven deterministic production object gate for all 19 proven fixtures |
+| Successful/expected `main` execution | 8 | 30 | Linux GNU production linking and exact interpreter stdout comparison in `native_execution` and `native_values` |
+| Runtime contracts | 14 | 25 | 10 wrapping-success cases and 4 terminal failures; exact output/message plus checked native-value cleanup |
 
-These are intentionally conservative counts. The two scalar object fixtures
-count because the manifest gate executes the production emission API and checks
-deterministic nonempty artifacts. A manual linked smoke run is not counted as
-execution coverage until the same path is enforced by an automated gate.
+These counts come from the exhaustive 207-row `native_parity` probe, which
+attempts every fixture regardless of staged `object_emit` labels and returns
+failure until all denominators pass. The manifest pins all 19 nonempty,
+code-bearing objects; verification-only empty objects do not count. Native
+execution tests additionally assert computed output, not only process success.
+
+Terminal failures count only after behavior and cleanup match. ABI context
+destruction now rejects unreleased string owners; launcher exit 71 requires
+successful destruction, while leaks override it with exit 72. Dedicated launcher
+tests exercise both paths and nested native-call tests exercise temporary/local
+cleanup. This is evidence for the current scalar/string runtime, not a claim
+that unsupported resource families already have finalizer/effect instrumentation.
 
 ## Linux GNU executable harness
 
@@ -327,3 +335,27 @@ runtime calls. The backend rejects any unresolved `Comptime` marker instead of
 emitting its source computation. Composite constants still need native layout
 lowering and remain an explicit native parity gap. A native regression executes
 baked `math.factorial(5)` after removing its source file.
+
+
+## Native runtime-value slice
+
+`active/native_value_abi.md` defines immutable context-associated string handles,
+borrowed call inputs, owned results, terminal failure transport, and the separate
+Stdout token. `jett_mir::copy_values::CopyValuePlan` computes definite initialization
+and liveness over CFG backedges. Cranelift consumes those facts to release dead
+locals, overwritten values, full-expression temporaries, and all frame owners on
+return or terminal failure. Runtime allocation maps remove each string at its last
+release; context destruction is a leak check, not a program-long value arena.
+
+Ordinary Jett calls, branches, loops, argument evaluation, and string interpolation
+are emitted code. Typed runtime leaves implement string storage, formatting,
+grapheme slicing/counting, selected Unicode operations, stdout, and numeric kernels.
+They consume no interpreter Value, AST, HIR, or source operation names. Exact checked
+IntrinsicId and concrete numeric type arguments select the native leaf signature.
+
+Full ownership remains open for bytes and other move-only values, capabilities
+beyond the Stdout seed, resources, aggregates, closures, and tasks. Handlers and
+iteration still require explicit MIR extraction. These types/forms remain rejected
+rather than being made nominally supported by the copyable-string plan. CLI
+packaging, other capability providers, and clean Windows MSVC execution also remain
+release gates.
