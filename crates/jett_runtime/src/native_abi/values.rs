@@ -143,6 +143,54 @@ impl NativeValues {
         self.lists_created += 1;
         Ok(id)
     }
+    fn string_list(&mut self, parts: Vec<String>) -> LeafResult<u64> {
+        let mut elements = Vec::new();
+        elements
+            .try_reserve_exact(parts.len())
+            .map_err(|_| EXHAUSTED)?;
+        let id = self.new_list(true)?;
+        for part in parts {
+            match self.insert(part) {
+                Ok(value) => elements.push(Some(value)),
+                Err(error) => {
+                    self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = elements;
+                    self.drop_value(id)?;
+                    return Err(error);
+                }
+            }
+        }
+        self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = elements;
+        Ok(id)
+    }
+    fn join_strings(&mut self, value: u64, separator: u64) -> LeafResult<u64> {
+        let list = self.lists.get(&value).ok_or(INVALID_LIST)?;
+        if !list.owned {
+            return Err(INVALID_LIST);
+        }
+        let separator = self.text(separator)?;
+        let mut parts = Vec::new();
+        parts
+            .try_reserve_exact(list.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        let mut length = separator
+            .len()
+            .checked_mul(list.elements.len().saturating_sub(1))
+            .ok_or(EXHAUSTED)?;
+        for element in &list.elements {
+            let text = self.text(element.ok_or(INVALID_LIST)?)?;
+            length = length.checked_add(text.len()).ok_or(EXHAUSTED)?;
+            parts.push(text);
+        }
+        let mut output = String::new();
+        output.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+        for (index, part) in parts.into_iter().enumerate() {
+            if index != 0 {
+                output.push_str(separator);
+            }
+            output.push_str(part);
+        }
+        self.insert(output)
+    }
     fn range(&mut self, start: i64, end: i64, step: i64) -> LeafResult<u64> {
         if step == 0 {
             return Err((
@@ -287,6 +335,108 @@ impl NativeValues {
         Ok(0)
     }
 }
+fn native_split<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
+    if delimiter.is_empty() {
+        let graphemes = native_graphemes(haystack);
+        let mut parts = Vec::with_capacity(graphemes.len() + 2);
+        parts.push("");
+        parts.extend(graphemes);
+        parts.push("");
+        return parts;
+    }
+
+    if delimiter.len() > haystack.len() {
+        return vec![haystack];
+    }
+    let boundaries = native_grapheme_boundaries(haystack);
+    let needle = delimiter.as_bytes();
+    let mut prefix = vec![0; needle.len()];
+    for index in 1..needle.len() {
+        let mut matched = prefix[index - 1];
+        while matched > 0 && needle[index] != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if needle[index] == needle[matched] {
+            matched += 1;
+        }
+        prefix[index] = matched;
+    }
+
+    let mut parts = Vec::new();
+    let mut part_start = 0;
+    let mut matched = 0;
+    let mut start_boundary = 0;
+    let mut end_boundary = 0;
+    // KMP avoids comparing a long near-match again at every grapheme boundary.
+    // Both boundary cursors move only forward, so the entire scan is linear.
+    for (index, &byte) in haystack.as_bytes().iter().enumerate() {
+        while matched > 0 && byte != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if byte == needle[matched] {
+            matched += 1;
+        }
+        if matched != needle.len() {
+            continue;
+        }
+
+        let end = index + 1;
+        let start = end - needle.len();
+        while boundaries[start_boundary] < start {
+            start_boundary += 1;
+        }
+        while boundaries[end_boundary] < end {
+            end_boundary += 1;
+        }
+        if boundaries[start_boundary] == start && boundaries[end_boundary] == end {
+            parts.push(&haystack[part_start..start]);
+            part_start = end;
+            matched = 0;
+        } else {
+            // A rejected byte match can overlap a later valid grapheme match.
+            matched = prefix[matched - 1];
+        }
+    }
+    parts.push(&haystack[part_start..]);
+    parts
+}
+
+fn native_grapheme_boundaries(s: &str) -> Vec<usize> {
+    let mut boundaries = vec![0];
+    let mut offset = 0;
+    for cluster in native_graphemes(s) {
+        offset += cluster.len();
+        boundaries.push(offset);
+    }
+    boundaries
+}
+
+fn native_graphemes(s: &str) -> Vec<&str> {
+    UnicodeSegmentation::graphemes(s, true).collect()
+}
+
+fn native_lines(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        if matches!(bytes[index], 13 | 10) {
+            parts.push(text[start..index].to_owned());
+            if bytes[index] == 13 && bytes.get(index + 1) == Some(&10) {
+                index += 1;
+            }
+            index += 1;
+            start = index;
+        } else {
+            index += 1;
+        }
+    }
+    if start < bytes.len() {
+        parts.push(text[start..].to_owned());
+    }
+    parts
+}
 fn next_identity() -> LeafResult<u64> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
@@ -384,6 +534,16 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    StringChars, jett_rt_v1_string_chars, false, (value: u64 => I64), u64 => I64,
+        |s| { let parts = s.text(value)?.graphemes(true).map(str::to_owned).collect(); s.string_list(parts) };
+    StringWords, jett_rt_v1_string_words, false, (value: u64 => I64), u64 => I64,
+        |s| { let parts = s.text(value)?.split_whitespace().map(str::to_owned).collect(); s.string_list(parts) };
+    StringLines, jett_rt_v1_string_lines, false, (value: u64 => I64), u64 => I64,
+        |s| { let parts = native_lines(s.text(value)?); s.string_list(parts) };
+    StringSplit, jett_rt_v1_string_split, false, (value: u64 => I64, delimiter: u64 => I64), u64 => I64,
+        |s| { let parts = native_split(s.text(value)?, s.text(delimiter)?).into_iter().map(str::to_owned).collect(); s.string_list(parts) };
+    StringJoin, jett_rt_v1_string_join, false, (value: u64 => I64, separator: u64 => I64), u64 => I64,
+        |s| s.join_strings(value, separator);
     Range, jett_rt_v1_range_int64, false, (start: i64 => I64, end: i64 => I64, step: i64 => I64), u64 => I64,
         |s| s.range(start, end, step);
     ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
@@ -997,6 +1157,31 @@ mod tests {
             let values = &state.as_ref().unwrap().values;
             assert!(values.is_empty());
             assert!(!values.cleanup_failed);
+        }
+    }
+    #[test]
+    fn string_segmentation_allocation_failure_cleans_partial_owned_list() {
+        let context = Context::new();
+        let text = context.text("abc");
+        let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+        {
+            let mut state = lock_unpoisoned(&lease.entry.state);
+            state.as_mut().unwrap().values.allocation_budget = Some(2);
+        }
+        unsafe {
+            assert_eq!(jett_rt_v1_string_chars(context.pointer(), text), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!((values.lists_created, values.lists_destroyed), (1, 1));
+                assert_eq!(values.strings.len(), 1);
+                assert_eq!(values.text(text).unwrap(), "abc");
+            }
+            jett_rt_v1_value_drop(context.pointer(), text);
         }
     }
 }

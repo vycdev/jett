@@ -971,3 +971,39 @@ function main() returns nothing:
         assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
     }
 }
+
+#[test]
+fn native_string_list_kernels_run_real_split_and_line_fixtures() {
+    for (name, call) in [
+        (
+            "string_split_grapheme_boundaries",
+            "split_ignores_partial_grapheme_delimiters()",
+        ),
+        ("string_lines_mixed_endings", "lines_mixed_endings_test()"),
+        (
+            "string_split_max",
+            "limited_split_preserves_remainder(), one_part_keeps_original_value(), limited_split_ignores_partial_grapheme_delimiter()",
+        ),
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/run_pass/{name}.jett"));
+        let mut source = std::fs::read_to_string(fixture).unwrap();
+        source.push_str(&format!(
+            "\nfunction main() returns nothing:\n    println({call})\n"
+        ));
+        run_source(&source);
+    }
+    run_source(
+        r#"
+function main() returns nothing:
+    bytes data = bytes.from_hex("65cc81f09f91a8e2808df09f91a9e2808df09f91a7e2808df09f91a6f09f87baf09f87b8") handle error:
+        return nothing
+    string text = bytes.to_string(data) handle error:
+        return nothing
+    println(string.reverse(text), string.join(string.chars(text), "|"))
+    println(string.join(string.words("  one\t two\nthree  "), ","))
+    println(string.join(string.split("ab", ""), "|"))
+    println(list.length[string](string.lines("")), string.join(string.lines("\r\n\nend\r"), "|"))
+"#,
+    );
+}

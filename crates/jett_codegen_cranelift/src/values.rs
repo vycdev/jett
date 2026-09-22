@@ -82,6 +82,28 @@ pub(crate) fn verify_intrinsic(
         }
         return Err(format!("invalid native numeric signature for {id}"));
     }
+    if matches!(
+        id,
+        IntrinsicId::StringChars
+            | IntrinsicId::StringWords
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringSplit
+            | IntrinsicId::StringJoin
+    ) {
+        let list = |ty| matches!(types.resolve(ty), Type::List(inner) if *inner == T::STRING);
+        let valid = if id == IntrinsicId::StringJoin {
+            args.len() == 2 && list(args[0].ty) && args[1].ty == T::STRING && result == T::STRING
+        } else {
+            args.len() == if id == IntrinsicId::StringSplit { 2 } else { 1 }
+                && args.iter().all(|a| a.ty == T::STRING)
+                && list(result)
+        };
+        return if valid {
+            Ok(())
+        } else {
+            Err("invalid native string-list signature".into())
+        };
+    }
     if list_intrinsic(id) {
         let element = list_element(id, args, result, types)
             .ok_or_else(|| "invalid native list type".to_string())?;
@@ -166,6 +188,11 @@ pub(crate) fn verify_intrinsic(
 /// Exact checked identities, not canonical-name inference.
 pub(crate) fn string_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
     Some(match id {
+        IntrinsicId::StringChars => NativeLeaf::StringChars,
+        IntrinsicId::StringWords => NativeLeaf::StringWords,
+        IntrinsicId::StringLines => NativeLeaf::StringLines,
+        IntrinsicId::StringSplit => NativeLeaf::StringSplit,
+        IntrinsicId::StringJoin => NativeLeaf::StringJoin,
         IntrinsicId::StringCharCount => NativeLeaf::CharCount,
         IntrinsicId::StringSlice => NativeLeaf::Slice,
         IntrinsicId::StringUpper => NativeLeaf::Upper,

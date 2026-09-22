@@ -197,3 +197,13 @@ and checked progression at signed boundaries. One/two-argument defaults are emit
 constants, after source arguments are evaluated in their checked order. Zero step
 and oversized output are terminal failures (not ordinary result.fail), matching
 interpreter diagnostics and unwinding live bytes/sum/list owners in callers.
+
+String chars/words/lines/split are typed segmentation leaves returning genuinely
+owned list[string] storage. Partial construction releases every inserted string
+and the list on allocation failure. Join borrows its native list input for the
+leaf; source-level consumption still moves the list into a tracked caller temporary,
+which is destroyed at full-expression cleanup. Grapheme split requires both ends
+of every delimiter match to be grapheme boundaries, including overlapping rejected
+byte matches. Empty delimiters preserve endpoint empty strings. CR/LF/CRLF line
+segmentation matches the interpreter. split_max, reverse and list.skip remain
+compiled Jett control flow, not runtime implementations of their source bodies.
