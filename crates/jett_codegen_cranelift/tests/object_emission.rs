@@ -700,3 +700,11 @@ function caller() returns int64:
 
     assert!(matches!(error, CodegenError::InvalidMir(_)));
 }
+
+#[test]
+fn rejects_unbaked_comptime_instead_of_executing_it_at_runtime() {
+    let (program, types) = lower_source("function main() returns int64:\n    return comptime 42\n");
+    let error = emit_host_object(&program, &types)
+        .expect_err("unbaked comptime must not become runtime code");
+    assert!(error.to_string().contains("unbaked comptime"), "{error}");
+}

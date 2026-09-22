@@ -91,3 +91,18 @@ fn run_bounded(executable: &Path, directory: &Path) -> std::process::Output {
         stderr: err.join().unwrap(),
     }
 }
+
+#[test]
+fn native_explicit_comptime_is_baked_before_runtime_codegen() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("constant.jett");
+    std::fs::write(&source, "function main() returns nothing:\n    int64 baked = comptime math.factorial(5)\n    while baked != 120:\n        int64 unexpected = 0\n    return nothing\n").unwrap();
+    let binary = directory.path().join("constant");
+    build_host_executable(&source, &launcher(), &binary)
+        .expect("bake pure stdlib computation and link");
+    std::fs::remove_file(&source).unwrap();
+    let output = run_bounded(&binary, directory.path());
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}

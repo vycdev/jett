@@ -777,9 +777,10 @@ impl Translator<'_, '_> {
                 args,
                 evaluation_order,
             } => self.call(*function, args, evaluation_order, expression),
-            ExpressionKind::Comptime(value)
-            | ExpressionKind::View(value)
-            | ExpressionKind::Clone(value) => self.expression(value),
+            ExpressionKind::Comptime(_) => {
+                Err(self.unsupported(expression.span, "unbaked comptime expression"))
+            }
+            ExpressionKind::View(value) | ExpressionKind::Clone(value) => self.expression(value),
             ExpressionKind::String(_) => Err(self.unsupported(expression.span, "string literal")),
             ExpressionKind::Intrinsic { intrinsic, .. } => {
                 let construct = format!("runtime intrinsic `{}`", intrinsic.canonical_name());

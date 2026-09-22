@@ -320,3 +320,10 @@ launcher archive and executes the scalar-entry fixture in an empty directory
 with an empty environment and a deadline. The executable needs no compiler
 source at runtime. This is one executable seed, not full native parity or a
 clean-distribution packaging claim. All remaining fixture obligations remain.
+
+Explicit `comptime` primitive results are imported into typed HIR before MIR
+lowering, retaining their checked type and span. Ordinary pure calls remain
+runtime calls. The backend rejects any unresolved `Comptime` marker instead of
+emitting its source computation. Composite constants still need native layout
+lowering and remain an explicit native parity gap. A native regression executes
+baked `math.factorial(5)` after removing its source file.

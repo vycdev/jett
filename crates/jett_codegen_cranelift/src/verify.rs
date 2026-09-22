@@ -468,9 +468,10 @@ impl Verifier<'_> {
                     "direct call result type does not match its signature",
                 )
             }
-            ExpressionKind::Comptime(value)
-            | ExpressionKind::View(value)
-            | ExpressionKind::Clone(value) => {
+            ExpressionKind::Comptime(_) => {
+                Err(self.unsupported(function, expression.span, "unbaked comptime expression"))
+            }
+            ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
                 self.expression(function, value)?;
                 self.require_same_type(
                     function,
