@@ -74,6 +74,8 @@ pub enum StatementKind {
         target: LocalId,
     },
     SequenceGet {
+        /// Transfer an initialized element from an exclusively owned iterator.
+        consume: bool,
         source: LocalId,
         index: LocalId,
         target: LocalId,
@@ -350,6 +352,7 @@ impl FunctionValidator<'_, '_> {
                 source,
                 index,
                 target,
+                ..
             } => {
                 self.check_local(*source, statement.span, "sequence source");
                 self.check_local(*index, statement.span, "sequence index");

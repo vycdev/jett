@@ -707,19 +707,25 @@ impl Translator<'_, '_> {
                 };
                 let value = self.argument(&source_expr, true)?;
                 let value = self.scalar(value, statement.span)?;
-                let output = if let StatementKind::SequenceGet { index, .. } = statement.kind {
-                    let index = self
-                        .builder
-                        .use_var(self.variables[index.index() as usize].unwrap());
-                    let bits = self.leaf(NativeLeaf::ListElementClone, &[value, index], true)?;
-                    self.unpack_payload(
-                        bits,
-                        self.local_types[target.index() as usize].ty,
-                        statement.span,
-                    )?
-                } else {
-                    LoweredValue::Scalar(self.leaf(NativeLeaf::ListLength, &[value], true)?)
-                };
+                let output =
+                    if let StatementKind::SequenceGet { index, consume, .. } = statement.kind {
+                        let index = self
+                            .builder
+                            .use_var(self.variables[index.index() as usize].unwrap());
+                        let leaf = if consume {
+                            NativeLeaf::ListElementTake
+                        } else {
+                            NativeLeaf::ListElementClone
+                        };
+                        let bits = self.leaf(leaf, &[value, index], true)?;
+                        self.unpack_payload(
+                            bits,
+                            self.local_types[target.index() as usize].ty,
+                            statement.span,
+                        )?
+                    } else {
+                        LoweredValue::Scalar(self.leaf(NativeLeaf::ListLength, &[value], true)?)
+                    };
                 self.define_local(*target, output, statement.span)
             }
 
@@ -2042,5 +2048,31 @@ function escaped(items: list[int64]) returns list[int64]:
         let error =
             emit_host_object(&program, &types).expect_err("outer iteration view remains active");
         assert!(error.to_string().contains("while borrowed"), "{error}");
+    }
+    #[test]
+    fn consuming_sequence_cannot_take_from_a_borrowed_parameter() {
+        let (mut program, types) = lower_source(
+            r#"
+function visit(items: list[int64]) returns nothing:
+    for item in view items:
+        break
+"#,
+        );
+        jett_mir::prepare_native_sequences(&mut program, &types);
+        program.functions[0].params[0].mode = jett_mir::ParamMode::View;
+        for block in &mut program.functions[0].blocks {
+            for statement in &mut block.statements {
+                if let StatementKind::SequenceGet { consume, .. } = &mut statement.kind {
+                    *consume = true;
+                }
+            }
+        }
+        let error = emit_host_object(&program, &types).expect_err("cannot take a borrowed element");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot take element from borrowed"),
+            "{error}"
+        );
     }
 }

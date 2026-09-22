@@ -173,9 +173,12 @@ wrapping numeric leaf. No name-dispatch or loop interpreter is introduced.
 Before native validation, a MIR sequence pass materializes supported iterables
 in a preheader exactly once, creates a cursor and length, and replaces ForEach
 with ordinary Branch, SequenceGet, increment, and existing exit/backedge CFG.
-This first iteration slice yields copyable scalar/string elements. Iteration of
-move-only elements remains rejected until projected places and view lifetimes
-are implemented. A borrowed container has an explicit token from preheader to
+Consuming iteration transfers scalar/string and move-only elements from initialized
+element places. Each list slot has an independent initialized flag; a take clears
+only that slot after bounds/initialization checks. Partial-list destruction visits
+only remaining initialized slots, including early return/break and terminal failure.
+Borrowed iteration currently yields copyable scalar/string elements only; projected
+move-only views remain rejected until projection lifetimes are implemented. A borrowed container has an explicit token from preheader to
 exit; ownership analysis unions active tokens across edges and preserves nested
 loans of the same owner. Moving or overwriting an actively iterated owner is
 rejected; moving after the exit is valid. Return/break/continue use ordinary

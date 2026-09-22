@@ -33,7 +33,7 @@ struct NativeString {
 pub const SUM_FAILURE: u32 = 0;
 pub const SUM_SUCCESS: u32 = 1;
 struct NativeList {
-    elements: Vec<u64>,
+    elements: Vec<Option<u64>>,
     owned: bool,
 }
 struct NativeSum {
@@ -134,25 +134,29 @@ impl NativeValues {
             .try_reserve_exact(elements.len())
             .map_err(|_| EXHAUSTED)?;
         for bits in elements {
+            let Some(bits) = bits else {
+                output.push(None);
+                continue;
+            };
             if owned {
                 match self.clone_value(bits) {
-                    Ok(value) => output.push(value),
+                    Ok(value) => output.push(Some(value)),
                     Err(error) => {
-                        for v in output {
+                        for v in output.into_iter().flatten() {
                             self.drop_value(v)?;
                         }
                         return Err(error);
                     }
                 }
             } else {
-                output.push(bits);
+                output.push(Some(bits));
             }
         }
         let id = match self.new_list(owned) {
             Ok(id) => id,
             Err(error) => {
                 if owned {
-                    for v in output {
+                    for v in output.into_iter().flatten() {
                         self.drop_value(v)?;
                     }
                 }
@@ -188,7 +192,7 @@ impl NativeValues {
         if let Some(list) = self.lists.remove(&id) {
             self.lists_destroyed += 1;
             if list.owned {
-                for value in list.elements {
+                for value in list.elements.into_iter().flatten() {
                     self.drop_value(value)?;
                 }
             }
@@ -327,15 +331,19 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            usize::try_from(index).ok().and_then(|i| list.elements.get_mut(i)).and_then(Option::take).ok_or(INVALID_LIST) };
+
     ListElementClone, jett_rt_v1_list_element_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
-            let bits = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied().ok_or(INVALID_LIST)?;
+            let bits = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied().flatten().ok_or(INVALID_LIST)?;
             if list.owned { s.clone_value(bits) } else { Ok(bits) } };
 
     ListSumInt, jett_rt_v1_list_sum_int64, false, (value: u64 => I64), i64 => I64,
         |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
             if list.owned { return Err(INVALID_LIST); }
-            Ok(list.elements.iter().fold(0_i64, |acc, bits| acc.wrapping_add(*bits as i64))) };
+            Ok(list.elements.iter().flatten().fold(0_i64, |acc, bits| acc.wrapping_add(*bits as i64))) };
 
     ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
@@ -344,11 +352,11 @@ leaves! {
     ListAppend, jett_rt_v1_list_append, false, (value: u64 => I64, bits: u64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
-            list.elements.push(bits); Ok(value) };
+            list.elements.push(Some(bits)); Ok(value) };
     ListGet, jett_rt_v1_list_get_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
             let owned = list.owned;
-            let found = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied();
+            let found = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied().flatten();
             let Some(bits) = found else { return s.sum(SUM_FAILURE, 0, false); };
             let bits = if owned { s.clone_value(bits)? } else { bits };
             match s.sum(SUM_SUCCESS, bits, owned) { Ok(v) => Ok(v), Err(e) => { if owned { s.drop_value(bits)?; } Err(e) } } };
@@ -871,5 +879,32 @@ mod tests {
             jett_rt_v1_list_new(context.pointer(), 0);
         }
         context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn consuming_list_elements_transfer_identity_and_drop_only_initialized_slots() {
+        let context = Context::new();
+        unsafe {
+            let first = jett_rt_v1_bytes_new(context.pointer());
+            let second = jett_rt_v1_bytes_new(context.pointer());
+            let list = jett_rt_v1_list_new(context.pointer(), 1);
+            jett_rt_v1_list_append(context.pointer(), list, first);
+            jett_rt_v1_list_append(context.pointer(), list, second);
+            assert_eq!(
+                jett_rt_v1_list_element_take(context.pointer(), list, 0),
+                first
+            );
+            // A repeated take fails before changing either remaining owner.
+            assert_eq!(jett_rt_v1_list_element_take(context.pointer(), list, 0), 0);
+            assert_ne!(jett_rt_v1_value_status(context.pointer()), 0);
+            jett_rt_v1_value_drop(context.pointer(), list);
+            jett_rt_v1_value_drop(context.pointer(), first);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert_eq!((values.lists_created, values.lists_destroyed), (1, 1));
+            assert!(!values.cleanup_failed);
+            assert!(values.is_empty());
+        }
     }
 }

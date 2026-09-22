@@ -807,3 +807,55 @@ function main() returns nothing:
     );
     assert_eq!(actual.stdout, b"once;ac;\n18 3\n");
 }
+
+#[test]
+fn native_consuming_iteration_moves_nested_elements_and_drops_remainders() {
+    let actual = run_source(
+        r#"
+function first(items: list[bytes]) returns bytes:
+    for item in items:
+        return item
+    return bytes.new()
+function main() returns nothing:
+    list[list[bytes]] nested = list(list(bytes.from_string("a"), bytes.from_string("b")), list(bytes.from_string("c")))
+    list[bytes] flat = list.flatten[bytes](nested)
+    list[bytes] copied = clone flat
+    println(bytes.to_hex(first(flat)))
+    mutable int64 index = 0
+    for item in copied:
+        index = index + 1
+        if index == 1:
+            continue
+        println(bytes.to_hex(item))
+        break
+    list[list[int64]] chunks = list.chunk[int64](list(1, 2, 3, 4, 5), 2)
+    for inner in chunks:
+        println(list.sum[int64](view inner))
+"#,
+    );
+    assert_eq!(actual.stdout, b"61\n62\n3\n7\n5\n");
+}
+
+#[test]
+fn native_consuming_iteration_failure_drops_yield_and_unvisited_elements() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("failure.jett");
+    std::fs::write(&path, r#"
+function explode(value: bytes) returns string:
+    print(bytes.to_hex(view value))
+    return string.repeat("ab", 9223372036854775807)
+function main() returns nothing:
+    list[result[bytes, string]] items = list(ok(bytes.from_string("first")), ok(bytes.from_string("unvisited")), fail("last"))
+    for item in items:
+        bytes payload = item handle error:
+            return nothing
+        println(explode(payload))
+"#).unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&path).expect_err("terminal oracle");
+    let binary = directory.path().join("program");
+    build_host_executable(&path, &launcher(), &binary).expect("consuming loop cleanup compilation");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}

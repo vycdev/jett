@@ -1,5 +1,5 @@
 //! Materialize native list iterables once, before the loop backedge.
-//! This slice yields copyable elements only. Move-only yielded views need
+//! Consuming iteration takes initialized element places. Move-only views need
 //! projected-place loans and are deliberately left unsupported.
 use super::*;
 use jett_hir::{BinaryOp, ExpressionKind};
@@ -45,22 +45,24 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 continue;
             };
             let element = *element;
-            if !matches!(
-                types.resolve(element),
-                Type::Int8
-                    | Type::Int16
-                    | Type::Int32
-                    | Type::Int64
-                    | Type::Uint8
-                    | Type::Uint16
-                    | Type::Uint32
-                    | Type::Uint64
-                    | Type::Float32
-                    | Type::Float64
-                    | Type::Bool
-                    | Type::String
-                    | Type::Nothing
-            ) {
+            if by_view
+                && !matches!(
+                    types.resolve(element),
+                    Type::Int8
+                        | Type::Int16
+                        | Type::Int32
+                        | Type::Int64
+                        | Type::Uint8
+                        | Type::Uint16
+                        | Type::Uint32
+                        | Type::Uint64
+                        | Type::Float32
+                        | Type::Float64
+                        | Type::Bool
+                        | Type::String
+                        | Type::Nothing
+                )
+            {
                 continue;
             }
             // HIR lowering emits the preheader before the header; backedges
@@ -143,6 +145,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             let mut prefix = vec![
                 Statement {
                     kind: StatementKind::SequenceGet {
+                        consume: !by_view,
                         source,
                         index: cursor,
                         target: key,

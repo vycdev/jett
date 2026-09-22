@@ -162,6 +162,22 @@ impl Flow<'_> {
                     {
                         return Err("sequence index uninitialized".into());
                     }
+                    if let StatementKind::SequenceGet { consume: true, .. } = statement.kind {
+                        if self
+                            .function
+                            .parameter_for_local(*source)
+                            .is_some_and(|p| p.mode == ParamMode::View)
+                        {
+                            return Err("cannot take element from borrowed sequence".into());
+                        }
+                        if self.validate
+                            && self.active.iter().any(|token| {
+                                self.borrow_sources.get(token) == Some(&(source.index() as usize))
+                            })
+                        {
+                            return Err("cannot take element while sequence is borrowed".into());
+                        }
+                    }
                     self.state.insert(target.index() as usize);
                 }
                 StatementKind::SumTag { source, target }
