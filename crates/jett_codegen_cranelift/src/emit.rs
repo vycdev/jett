@@ -1,3 +1,6 @@
+mod values;
+use jett_mir::copy_values::CopyValuePlan;
+use jett_runtime::native_abi::values::NativeLeaf;
 use std::str::FromStr;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -308,7 +311,7 @@ fn validate_program_entry_contract(
             function_id: entry.index(),
         });
     }
-    if !function.params.is_empty() {
+    if function.params.iter().any(|p| p.ty != TypeInterner::STDOUT) {
         return Err(CodegenError::IncompatibleProgramEntry {
             function_id: entry.index(),
             message: format!("expected no parameters, found {}", function.params.len()),
@@ -343,14 +346,6 @@ fn define_program_entry_wrapper(
             .ok_or_else(|| CodegenError::UnreachableProgramEntry {
                 function_id: entry.index(),
             })?;
-    if entry_function.signature.params.as_slice() != [runtime_context_abi_param(module)]
-        || !entry_function.signature.returns.is_empty()
-    {
-        return Err(CodegenError::IncompatibleProgramEntry {
-            function_id: entry.index(),
-            message: "native entry signature does not contain exactly one hidden runtime-context pointer and no return value".to_string(),
-        });
-    }
     if module.get_name(JETT_AOT_ENTRY_SYMBOL_V1).is_some() {
         return Err(CodegenError::DuplicateSymbol(
             JETT_AOT_ENTRY_SYMBOL_V1.to_string(),
@@ -411,17 +406,23 @@ fn translate_program_entry_wrapper(
             message: "exported entry wrapper is missing its runtime-context pointer".to_string(),
         })?;
     let entry_reference = module.declare_func_in_func(entry_function.native_id, builder.func);
-    let call = builder.ins().call(entry_reference, &[runtime_context]);
-    if !builder.func.dfg.inst_results(call).is_empty() {
-        return Err(CodegenError::IncompatibleProgramEntry {
-            function_id: entry.index(),
-            message: "native entry call unexpectedly returns a value".to_string(),
-        });
+    let mut args = vec![runtime_context];
+    if entry_function.signature.params.len() > 1 {
+        let leaf = crate::values::declare_leaf(module, NativeLeaf::GrantStdout)?;
+        let leaf = module.declare_func_in_func(leaf, builder.func);
+        let call = builder.ins().call(leaf, &[runtime_context]);
+        let authority = builder.func.dfg.inst_results(call)[0];
+        args.extend(std::iter::repeat_n(
+            authority,
+            entry_function.signature.params.len() - 1,
+        ));
     }
-    let success = builder
-        .ins()
-        .iconst(ir::types::I32, i64::from(JETT_AOT_ENTRY_SUCCESS_V1));
-    builder.ins().return_(&[success]);
+    builder.ins().call(entry_reference, &args);
+    let leaf = crate::values::declare_leaf(module, NativeLeaf::Status)?;
+    let leaf = module.declare_func_in_func(leaf, builder.func);
+    let call = builder.ins().call(leaf, &[runtime_context]);
+    let status = builder.func.dfg.inst_results(call)[0];
+    builder.ins().return_(&[status]);
     builder.seal_all_blocks();
     builder.finalize();
     Ok(())
@@ -460,6 +461,7 @@ fn clif_type(
         ScalarKind::Float(32) => Some(ir::types::F32),
         ScalarKind::Float(64) => Some(ir::types::F64),
         ScalarKind::Nothing => None,
+        ScalarKind::String | ScalarKind::Stdout => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -491,6 +493,33 @@ fn translate_function(
     builder.append_block_params_for_function_params(entry);
 
     let runtime_context = builder.declare_var(module.target_config().pointer_type());
+    let ownership = CopyValuePlan::analyze(function, types)
+        .map_err(|message| contract_error(symbol, function.span, message))?;
+    let local_slots = function
+        .locals
+        .iter()
+        .map(|l| {
+            if ownership.owned_locals.contains(&(l.id.index() as usize)) {
+                Some(builder.create_sized_stack_slot(ir::StackSlotData::new(
+                    ir::StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                )))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let temporary_slots = (0..ownership.temporary_slots)
+        .map(|_| {
+            builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let failure_block = builder.create_block();
 
     let mut variables = Vec::with_capacity(function.locals.len());
     for local in &function.locals {
@@ -537,6 +566,10 @@ fn translate_function(
                         format!("cannot bind native runtime context: {error}"),
                     )
                 })?;
+            let zero = builder.ins().iconst(ir::types::I64, 0);
+            for slot in local_slots.iter().flatten().chain(&temporary_slots) {
+                builder.ins().stack_store(zero, *slot, 0);
+            }
             let mut incoming_index = 1_usize;
             for parameter in &function.params {
                 let variable =
@@ -566,13 +599,54 @@ fn translate_function(
             runtime_context,
             types,
             symbol,
+            local_slots: &local_slots,
+            temporary_slots: &temporary_slots,
+            next_temporary: 0,
+            failure_block,
         };
-        for statement in &block.statements {
+        if block.id == function.entry {
+            for parameter in &function.params {
+                if let Some(slot) = local_slots[parameter.local.index() as usize] {
+                    let v = translator
+                        .builder
+                        .use_var(variables[parameter.local.index() as usize].unwrap());
+                    let owned = translator.leaf(NativeLeaf::Retain, &[v], true)?;
+                    translator.builder.ins().stack_store(owned, slot, 0);
+                }
+            }
+        }
+        translator.drop_dead_locals(&ownership.live_in[block_index])?;
+        for (index, statement) in block.statements.iter().enumerate() {
             translator.statement(statement)?;
+            translator.drop_temporaries()?;
+            translator.drop_dead_locals(&ownership.live_after_statement[block_index][index])?;
         }
         translator.terminator(&block.terminator)?;
     }
 
+    builder.switch_to_block(failure_block);
+    let mut translator = Translator {
+        builder: &mut builder,
+        module,
+        declarations,
+        blocks: &blocks,
+        variables: &variables,
+        runtime_context,
+        types,
+        symbol,
+        local_slots: &local_slots,
+        temporary_slots: &temporary_slots,
+        next_temporary: temporary_slots.len(),
+        failure_block,
+    };
+    translator.drop_all()?;
+    let results = match clif_type(types, function.return_type, "failure return")? {
+        None => vec![],
+        Some(ir::types::F32) => vec![translator.builder.ins().f32const(0.0)],
+        Some(ir::types::F64) => vec![translator.builder.ins().f64const(0.0)],
+        Some(t) => vec![translator.builder.ins().iconst(t, 0)],
+    };
+    translator.builder.ins().return_(&results);
     builder.seal_all_blocks();
     builder.finalize();
     Ok(())
@@ -593,6 +667,10 @@ struct Translator<'a, 'builder> {
     runtime_context: Variable,
     types: &'a TypeInterner,
     symbol: &'a str,
+    local_slots: &'a [Option<ir::StackSlot>],
+    temporary_slots: &'a [ir::StackSlot],
+    next_temporary: usize,
+    failure_block: ir::Block,
 }
 
 impl Translator<'_, '_> {
@@ -625,21 +703,27 @@ impl Translator<'_, '_> {
     fn terminator(&mut self, terminator: &Terminator) -> Result<(), CodegenError> {
         match &terminator.kind {
             TerminatorKind::Return(value) => {
-                if let Some(value) = value {
-                    match self.expression(value)? {
-                        LoweredValue::Scalar(value) => {
-                            self.builder.ins().return_(&[value]);
-                        }
-                        LoweredValue::Nothing => {
-                            self.builder.ins().return_(&[]);
-                        }
+                let mut result = match value {
+                    Some(v) => self.expression(v)?,
+                    None => LoweredValue::Nothing,
+                };
+                if value.as_ref().is_some_and(|v| v.ty == TypeInterner::STRING) {
+                    let v = self.scalar(result, terminator.span)?;
+                    result = LoweredValue::Scalar(self.leaf(NativeLeaf::Retain, &[v], true)?);
+                }
+                self.drop_all()?;
+                match result {
+                    LoweredValue::Scalar(v) => {
+                        self.builder.ins().return_(&[v]);
                     }
-                } else {
-                    self.builder.ins().return_(&[]);
+                    LoweredValue::Nothing => {
+                        self.builder.ins().return_(&[]);
+                    }
                 }
                 Ok(())
             }
             TerminatorKind::Goto(target) => {
+                self.drop_temporaries()?;
                 let target = block_for(self.blocks, target.index(), terminator.span, self.symbol)?;
                 self.builder.ins().jump(target, &[]);
                 Ok(())
@@ -651,6 +735,7 @@ impl Translator<'_, '_> {
             } => {
                 let lowered_condition = self.expression(condition)?;
                 let condition = self.scalar(lowered_condition, condition.span)?;
+                self.drop_temporaries()?;
                 let then_block = block_for(
                     self.blocks,
                     then_block.index(),
@@ -730,6 +815,11 @@ impl Translator<'_, '_> {
                 let Some(variable) = variable else {
                     return Ok(LoweredValue::Nothing);
                 };
+                if let Some(slot) = self.local_slots[local.index() as usize] {
+                    let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                    let v = self.leaf(NativeLeaf::Retain, &[v], true)?;
+                    return self.own(v);
+                }
                 let value = self.builder.try_use_var(variable).map_err(|error| {
                     contract_error(
                         self.symbol,
@@ -768,6 +858,16 @@ impl Translator<'_, '_> {
                 }
                 let lowered_right = self.expression(right)?;
                 let right_value = self.scalar(lowered_right, right.span)?;
+                if operand_kind == ScalarKind::String {
+                    let value = self.leaf(NativeLeaf::Equal, &[left_value, right_value], true)?;
+                    let value = self.builder.ins().ireduce(ir::types::I8, value);
+                    let value = if *op == BinaryOp::NotEqual {
+                        self.builder.ins().bxor_imm(value, 1)
+                    } else {
+                        value
+                    };
+                    return Ok(LoweredValue::Scalar(value));
+                }
                 let value =
                     self.binary(left_value, *op, right_value, operand_kind, expression.span)?;
                 Ok(LoweredValue::Scalar(value))
@@ -781,11 +881,13 @@ impl Translator<'_, '_> {
                 Err(self.unsupported(expression.span, "unbaked comptime expression"))
             }
             ExpressionKind::View(value) | ExpressionKind::Clone(value) => self.expression(value),
-            ExpressionKind::String(_) => Err(self.unsupported(expression.span, "string literal")),
-            ExpressionKind::Intrinsic { intrinsic, .. } => {
-                let construct = format!("runtime intrinsic `{}`", intrinsic.canonical_name());
-                Err(self.unsupported(expression.span, &construct))
-            }
+            ExpressionKind::String(text) => self.literal(text),
+            ExpressionKind::Intrinsic {
+                intrinsic,
+                args,
+                evaluation_order,
+                ..
+            } => self.intrinsic(*intrinsic, args, evaluation_order, expression.span),
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(expression.span, "indirect call"))
             }
@@ -819,8 +921,8 @@ impl Translator<'_, '_> {
             ExpressionKind::EnumConstruct { .. } => {
                 Err(self.unsupported(expression.span, "enum construction"))
             }
-            ExpressionKind::StringInterpolation(_) => {
-                Err(self.unsupported(expression.span, "string interpolation"))
+            ExpressionKind::StringInterpolation(segments) => {
+                self.interpolate(segments, expression.span)
             }
             ExpressionKind::Declassify(_) | ExpressionKind::Coarsen(_) => {
                 Err(self.unsupported(expression.span, "secret operation"))
@@ -904,7 +1006,8 @@ impl Translator<'_, '_> {
             .module
             .declare_func_in_func(function_id, self.builder.func);
         let call = self.builder.ins().call(reference, &native_args);
-        let results = self.builder.func.dfg.inst_results(call);
+        let results = self.builder.func.dfg.inst_results(call).to_vec();
+        self.check_failure()?;
         if scalar_kind(self.types, expression.ty, "call result")? == ScalarKind::Nothing {
             if results.is_empty() {
                 Ok(LoweredValue::Nothing)
@@ -923,7 +1026,11 @@ impl Translator<'_, '_> {
                     "value-returning call produced no native value",
                 )
             })?;
-            Ok(LoweredValue::Scalar(value))
+            if expression.ty == TypeInterner::STRING {
+                self.own(value)
+            } else {
+                Ok(LoweredValue::Scalar(value))
+            }
         }
     }
 
@@ -1047,7 +1154,7 @@ impl Translator<'_, '_> {
                     ));
                 }
             },
-            ScalarKind::Nothing => {
+            ScalarKind::Nothing | ScalarKind::String | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,
                     span,
@@ -1178,6 +1285,13 @@ impl Translator<'_, '_> {
         value: LoweredValue,
         span: Span,
     ) -> Result<(), CodegenError> {
+        if let Some(slot) = self.local_slots[local.index() as usize] {
+            let value = self.scalar(value, span)?;
+            let owned = self.leaf(NativeLeaf::Retain, &[value], true)?;
+            self.drop_slot(slot)?;
+            self.builder.ins().stack_store(owned, slot, 0);
+            return Ok(());
+        }
         let variable = variable_for(self.variables, local.index(), span, self.symbol)?;
         match (variable, value) {
             (Some(variable), LoweredValue::Scalar(value)) => {
@@ -1526,12 +1640,12 @@ function caller(value: int64, choose_original: bool) returns int64:
         let runtime_context = function.dfg.block_params(entry)[0];
         let calls = direct_call_arguments(&function);
 
-        assert_eq!(calls.len(), 2, "both branch-local calls must be emitted");
+        assert_eq!(calls.len(), 4, "two Jett calls and two failure checks");
+        assert_eq!(calls.iter().filter(|args| args.len() == 2).count(), 2);
         for arguments in calls {
-            assert_eq!(
-                arguments.len(),
-                2,
-                "hidden context plus one source argument"
+            assert!(
+                matches!(arguments.len(), 1 | 2),
+                "status receives context; Jett call also receives source argument"
             );
             assert_eq!(
                 function.dfg.resolve_aliases(arguments[0]),
@@ -1612,7 +1726,7 @@ function caller(value: int64, choose_original: bool) returns int64:
         )
         .expect("reachable-only function translation");
 
-        assert_eq!(context.func.layout.blocks().count(), 1);
+        assert_eq!(context.func.layout.blocks().count(), 2); // plus terminal-failure epilogue
         assert!(direct_call_arguments(&context.func).is_empty());
     }
 
@@ -1638,7 +1752,7 @@ function selected_entry() returns nothing:
             .expect("wrapper entry block");
         let incoming_context = context.func.dfg.block_params(block)[0];
         let calls = direct_call_arguments(&context.func);
-        assert_eq!(calls, [vec![incoming_context]]);
+        assert_eq!(calls, [vec![incoming_context], vec![incoming_context]]); // entry and failure status
         assert_eq!(
             context.func.signature.params,
             [AbiParam::new(module.target_config().pointer_type())]
@@ -1671,6 +1785,53 @@ function or_value(left: bool) returns bool:
                 !clif.contains("band ") && !clif.contains("bor "),
                 "{name} used eager boolean arithmetic:\n{clif}"
             );
+        }
+    }
+
+    #[test]
+    fn native_ownership_rejects_read_before_initialization() {
+        let (mut program, types) = lower_source(
+            r#"
+function selected_entry() returns string:
+    string value = "live"
+    return value
+"#,
+        );
+        program.functions[0].blocks[0].statements.clear();
+        let error =
+            emit_host_object(&program, &types).expect_err("missing initializer is invalid MIR");
+        assert!(
+            error.to_string().contains("definite initialization"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn native_ownership_plan_keeps_loop_carried_strings_live() {
+        let (program, types) = lower_source(
+            r#"
+function selected_entry(keep: bool) returns string:
+    mutable string value = "live"
+    while keep:
+        value = "next"
+    return value
+"#,
+        );
+        let function = &program.functions[0];
+        let plan = CopyValuePlan::analyze(function, &types).unwrap();
+        let local = function
+            .locals
+            .iter()
+            .find(|l| l.name == "value")
+            .unwrap()
+            .id
+            .index() as usize;
+        assert!(plan.owned_locals.contains(&local));
+        for block in &function.blocks {
+            if matches!(block.terminator.kind, TerminatorKind::Branch { .. }) {
+                assert!(plan.live_in[block.id.index() as usize].contains(&local));
+                assert!(plan.live_out[block.id.index() as usize].contains(&local));
+            }
         }
     }
 }

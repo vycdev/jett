@@ -15,6 +15,8 @@ pub(crate) enum ScalarKind {
     Float(u16),
     Bool,
     Nothing,
+    String,
+    Stdout,
 }
 
 impl ScalarKind {
@@ -136,6 +138,8 @@ pub(crate) fn scalar_kind(
         Type::Float64 => ScalarKind::Float(64),
         Type::Bool => ScalarKind::Bool,
         Type::Nothing => ScalarKind::Nothing,
+        Type::String => ScalarKind::String,
+        Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
         unsupported => {
             return Err(CodegenError::UnsupportedType {
                 type_name: types.type_name(ty),
@@ -182,6 +186,8 @@ impl Verifier<'_> {
             }
             self.terminator(function, &block.terminator)?;
         }
+        jett_mir::copy_values::CopyValuePlan::analyze(function, self.types)
+            .map_err(|message| self.contract_error(function, function.span, message))?;
         Ok(())
     }
 
@@ -481,14 +487,29 @@ impl Verifier<'_> {
                     "scalar wrapper changes its value type",
                 )
             }
+            ExpressionKind::String(_) if kind == ScalarKind::String => Ok(()),
             ExpressionKind::String(_) => {
-                Err(self.unsupported(function, expression.span, "string literal"))
+                Err(self.expression_kind_error(function, expression, "string literal"))
             }
-            ExpressionKind::Intrinsic { intrinsic, .. } => Err(self.unsupported(
-                function,
-                expression.span,
-                format!("runtime intrinsic `{}`", intrinsic.canonical_name()),
-            )),
+            ExpressionKind::Intrinsic {
+                intrinsic,
+                args,
+                type_arguments,
+                ..
+            } => {
+                for arg in args {
+                    self.expression(function, arg)?;
+                }
+                if !type_arguments.is_empty() {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "generic native intrinsic",
+                    ));
+                }
+                crate::values::verify_intrinsic(*intrinsic, args, expression.ty, self.types)
+                    .map_err(|message| self.contract_error(function, expression.span, message))
+            }
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(function, expression.span, "indirect call"))
             }
@@ -522,8 +543,19 @@ impl Verifier<'_> {
             ExpressionKind::EnumConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "enum construction"))
             }
-            ExpressionKind::StringInterpolation(_) => {
-                Err(self.unsupported(function, expression.span, "string interpolation"))
+            ExpressionKind::StringInterpolation(segments) => {
+                if kind != ScalarKind::String {
+                    return Err(self.expression_kind_error(function, expression, "interpolation"));
+                }
+                for segment in segments {
+                    if let jett_hir::StringSegment::Value(value) = segment {
+                        self.expression(function, value)?;
+                        if !crate::values::is_formattable(self.types, value.ty) {
+                            return Err(self.unsupported(function, value.span, "format value"));
+                        }
+                    }
+                }
+                Ok(())
             }
             ExpressionKind::Declassify(_) | ExpressionKind::Coarsen(_) => {
                 Err(self.unsupported(function, expression.span, "secret operation"))
@@ -606,7 +638,8 @@ impl Verifier<'_> {
             }
             BinaryOp::Modulo => operand.is_integer() && result == operand,
             BinaryOp::Equal | BinaryOp::NotEqual => {
-                operand != ScalarKind::Nothing && result == ScalarKind::Bool
+                !matches!(operand, ScalarKind::Nothing | ScalarKind::Stdout)
+                    && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {
                 operand.is_numeric() && result == ScalarKind::Bool

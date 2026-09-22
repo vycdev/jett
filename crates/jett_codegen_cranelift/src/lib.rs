@@ -8,6 +8,7 @@ mod emit;
 mod error;
 mod mangle;
 mod reachability;
+mod values;
 mod verify;
 
 pub use emit::{

@@ -1,6 +1,7 @@
 //! Jett's backend-neutral control-flow graph representation.
 
 mod analysis;
+pub mod copy_values;
 
 pub use analysis::{AnalysisError, ControlFlowGraph};
 pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};
@@ -702,6 +703,9 @@ pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
 fn lower_function(function: &hir::Function) -> Function {
     let mut builder = Builder::new(function.body.span);
     builder.lower_block(&function.body);
+    if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
+        builder.terminate(TerminatorKind::Return(None), function.body.span);
+    }
     Function {
         id: function.id,
         identity: function.identity.clone(),

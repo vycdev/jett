@@ -1,0 +1,360 @@
+//! Typed native leaf operations. See docs/active/native_value_abi.md.
+//! Every pointer must refer to a live stationary ABI context, except literal
+//! bytes which are borrowed for the call. No Rust value crosses this ABI.
+use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+pub type NativeHandle = u64;
+type Failure = (JettRuntimeStatusV1, &'static [u8]);
+type LeafResult<T> = Result<T, Failure>;
+const INVALID_HANDLE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native string handle",
+);
+const EXHAUSTED: Failure = (
+    JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
+    b"native value capacity exhausted",
+);
+
+struct NativeString {
+    text: String,
+    references: u64,
+}
+#[derive(Default)]
+pub(super) struct NativeValues {
+    strings: HashMap<NativeHandle, NativeString>,
+    failure: Option<Failure>,
+    stdout: Option<u64>,
+}
+impl NativeValues {
+    pub(super) fn is_empty(&self) -> bool {
+        self.strings.is_empty()
+    }
+    fn insert(&mut self, text: String) -> LeafResult<u64> {
+        let id = next_identity()?;
+        self.strings.insert(
+            id,
+            NativeString {
+                text,
+                references: 1,
+            },
+        );
+        Ok(id)
+    }
+    fn text(&self, id: u64) -> LeafResult<&str> {
+        self.strings
+            .get(&id)
+            .map(|s| s.text.as_str())
+            .ok_or(INVALID_HANDLE)
+    }
+    fn retain(&mut self, id: u64) -> LeafResult<u64> {
+        let value = self.strings.get_mut(&id).ok_or(INVALID_HANDLE)?;
+        value.references = value.references.checked_add(1).ok_or(EXHAUSTED)?;
+        Ok(id)
+    }
+    fn release(&mut self, id: u64) -> LeafResult<u32> {
+        if id == 0 {
+            return Ok(0);
+        }
+        let value = self.strings.get_mut(&id).ok_or(INVALID_HANDLE)?;
+        value.references -= 1;
+        if value.references == 0 {
+            self.strings.remove(&id);
+        }
+        Ok(0)
+    }
+}
+fn next_identity() -> LeafResult<u64> {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .map_err(|_| EXHAUSTED)
+}
+
+// Hold the existing context lease through the operation. Cleanup is permitted
+// after failure; normal operations cannot run once the first failure is set.
+trait FailureDefault {
+    fn failure_default() -> Self;
+}
+impl FailureDefault for u64 {
+    fn failure_default() -> Self {
+        0
+    }
+}
+impl FailureDefault for u32 {
+    fn failure_default() -> Self {
+        JettRuntimeStatusV1::INVALID_CONTEXT.code()
+    }
+}
+fn leaf<T: FailureDefault>(
+    context: *const JettRuntimeContextV1,
+    cleanup: bool,
+    operation: impl FnOnce(&mut NativeValues) -> LeafResult<T>,
+) -> T {
+    let Ok(key) = context_key(context) else {
+        return T::failure_default();
+    };
+    let Ok(lease) = acquire_context(key) else {
+        return T::failure_default();
+    };
+    let mut state = lock_unpoisoned(&lease.entry.state);
+    let Some(state) = state.as_mut() else {
+        return T::failure_default();
+    };
+    if state.values.failure.is_some() && !cleanup {
+        return T::failure_default();
+    }
+    match catch_unwind(AssertUnwindSafe(|| operation(&mut state.values))) {
+        Ok(Ok(value)) => value,
+        outcome => {
+            let error = match outcome {
+                Ok(Err(error)) => error,
+                Err(payload) => {
+                    discard_panic_payload(payload);
+                    (JettRuntimeStatusV1::PANIC, PANIC_MESSAGE)
+                }
+                Ok(Ok(_)) => unreachable!(),
+            };
+            state.values.failure.get_or_insert(error);
+            T::failure_default()
+        }
+    }
+}
+
+/// Scalar signature schema consumed by Cranelift, never inferred from names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbiScalar {
+    Pointer,
+    I32,
+    I64,
+    F64,
+}
+macro_rules! leaves {
+    ($( $variant:ident, $name:ident, $cleanup:literal, ($($arg:ident: $rust:ty => $abi:ident),*), $ret:ty => $retabi:ident, $body:expr; )*) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum NativeLeaf { $( $variant, )* }
+        impl NativeLeaf {
+            pub fn symbol(self) -> &'static str { match self { $( Self::$variant => stringify!($name), )* } }
+            pub fn parameters(self) -> &'static [AbiScalar] { match self { $( Self::$variant => &[AbiScalar::Pointer, $( AbiScalar::$abi, )*], )* } }
+            pub fn result(self) -> AbiScalar { match self { $( Self::$variant => AbiScalar::$retabi, )* } }
+        }
+        $(
+            /// Typed leaf operation; borrowed inputs, owned handle results.
+            /// # Safety
+            /// Context must be readable, stationary and live for the call.
+            /// Pointer/length inputs must describe one readable allocation.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn $name(context: *const JettRuntimeContextV1, $( $arg: $rust ),*) -> $ret {
+                leaf(context, $cleanup, $body)
+            }
+        )*
+    }
+}
+leaves! {
+    Status, jett_rt_v1_value_status, true, (), u32 => I32,
+        |s| Ok(s.failure.map_or(0, |e| e.0.code()));
+    Retain, jett_rt_v1_string_retain, false, (value: u64 => I64), u64 => I64,
+        |s| s.retain(value);
+    Release, jett_rt_v1_string_release, true, (value: u64 => I64), u32 => I32,
+        |s| s.release(value);
+    Literal, jett_rt_v1_string_literal, false, (data: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| {
+            if length > isize::MAX as u64 { return Err((JettRuntimeStatusV1::LENGTH_OUT_OF_RANGE, STRING_LENGTH_MESSAGE)); }
+            if length != 0 && data.is_null() { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, STRING_NULL_MESSAGE)); }
+            let bytes = if length == 0 { &[] } else { unsafe { slice::from_raw_parts(data, length as usize) } };
+            let text = str::from_utf8(bytes).map_err(|_| (JettRuntimeStatusV1::INVALID_UTF8, STRING_UTF8_MESSAGE))?;
+            s.insert(text.to_owned())
+        };
+    Concat, jett_rt_v1_string_concat, false, (left: u64 => I64, right: u64 => I64), u64 => I64,
+        |s| {
+            let a = s.text(left)?; let b = s.text(right)?;
+            let length = a.len().checked_add(b.len()).ok_or(EXHAUSTED)?;
+            let mut text = String::new(); text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+            text.push_str(a); text.push_str(b); s.insert(text)
+        };
+    Equal, jett_rt_v1_string_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| Ok(u32::from(s.text(left)? == s.text(right)?));
+    FromInt, jett_rt_v1_string_from_int, false, (value: i64 => I64), u64 => I64,
+        |s| s.insert(value.to_string());
+    FromUint, jett_rt_v1_string_from_uint, false, (value: u64 => I64), u64 => I64,
+        |s| s.insert(value.to_string());
+    FromFloat, jett_rt_v1_string_from_float, false, (value: f64 => F64), u64 => I64,
+        |s| s.insert(value.to_string());
+    FromBool, jett_rt_v1_string_from_bool, false, (value: u32 => I32), u64 => I64,
+        |s| if value > 1 { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid native bool")) } else { s.insert((value != 0).to_string()) };
+    GrantStdout, jett_rt_v1_grant_stdout, false, (), u64 => I64,
+        |s| { if let Some(token) = s.stdout { return Ok(token); } let token = next_identity()?; s.stdout = Some(token); Ok(token) };
+    Stdout, jett_rt_v1_string_stdout, false, (authority: u64 => I64, value: u64 => I64), u32 => I32,
+        |s| {
+            if s.stdout != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority")); }
+            { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, s.text(value)?.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0)
+        };
+    DebugPrint, jett_rt_v1_string_debug_print, false, (value: u64 => I64), u32 => I32,
+        |s| { { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, s.text(value)?.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0) };
+}
+
+/// Read the first terminal failure without clearing it. Static message storage
+/// remains valid after context destruction, like all v1 result messages.
+/// # Safety
+/// Same context and result pointer requirements as the lifecycle ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_value_failure(
+    context: *const JettRuntimeContextV1,
+    out: *mut JettRuntimeResultV1,
+) -> JettRuntimeStatusV1 {
+    complete_call(out, || {
+        let key = match context_key(context) {
+            Ok(k) => k,
+            Err(status) => return JettRuntimeResultV1::failure(status, CONTEXT_INVALID_MESSAGE),
+        };
+        let lease = match acquire_context(key) {
+            Ok(l) => l,
+            Err(_) => {
+                return JettRuntimeResultV1::failure(
+                    JettRuntimeStatusV1::INVALID_CONTEXT,
+                    CONTEXT_INVALID_MESSAGE,
+                );
+            }
+        };
+        let state = lock_unpoisoned(&lease.entry.state);
+        match state.as_ref().and_then(|s| s.values.failure) {
+            Some((status, message)) => JettRuntimeResultV1::failure(status, message),
+            None => JettRuntimeResultV1::ok(),
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::MaybeUninit;
+    struct Context(Box<JettRuntimeContextV1>);
+    impl Context {
+        fn new() -> Self {
+            let mut value = Box::new(JettRuntimeContextV1::retired());
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                unsafe { jett_rt_v1_context_create(1, &mut *value, result.as_mut_ptr()) },
+                JettRuntimeStatusV1::OK
+            );
+            Self(value)
+        }
+        fn pointer(&self) -> *const JettRuntimeContextV1 {
+            &*self.0
+        }
+        fn text(&self, text: &str) -> u64 {
+            unsafe { jett_rt_v1_string_literal(self.pointer(), text.as_ptr(), text.len() as u64) }
+        }
+        fn count(&self) -> usize {
+            let lease = acquire_context(context_key(self.pointer()).unwrap()).unwrap();
+            lock_unpoisoned(&lease.entry.state)
+                .as_ref()
+                .unwrap()
+                .values
+                .strings
+                .len()
+        }
+    }
+    impl Drop for Context {
+        fn drop(&mut self) {
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                unsafe { jett_rt_v1_context_destroy(&mut *self.0, result.as_mut_ptr()) },
+                JettRuntimeStatusV1::OK
+            );
+        }
+    }
+    #[test]
+    fn strings_release_immediately_and_retain_preserves_aliases() {
+        let context = Context::new();
+        let value = context.text("hé\0llo");
+        assert_ne!(value, 0);
+        assert_eq!(context.count(), 1);
+        unsafe {
+            assert_eq!(jett_rt_v1_string_retain(context.pointer(), value), value);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), value), 0);
+            assert_eq!(context.count(), 1);
+            assert_eq!(jett_rt_v1_string_equal(context.pointer(), value, value), 1);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), value), 0);
+            assert_eq!(context.count(), 0);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), 0), 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+        }
+    }
+    #[test]
+    fn foreign_and_stale_handles_fail_but_cleanup_remains_available() {
+        let first = Context::new();
+        let second = Context::new();
+        let a = first.text("first");
+        let b = second.text("second");
+        unsafe {
+            assert_eq!(jett_rt_v1_string_retain(second.pointer(), a), 0);
+            assert_ne!(jett_rt_v1_value_status(second.pointer()), 0);
+            assert_eq!(
+                jett_rt_v1_string_literal(second.pointer(), b"no".as_ptr(), 2),
+                0
+            );
+            assert_eq!(jett_rt_v1_string_release(second.pointer(), b), 0);
+            assert_eq!(second.count(), 0);
+            assert_eq!(jett_rt_v1_string_release(first.pointer(), a), 0);
+            assert_eq!(jett_rt_v1_string_retain(first.pointer(), a), 0);
+            assert_ne!(jett_rt_v1_value_status(first.pointer()), 0);
+            assert_eq!(first.count(), 0);
+            assert_ne!(jett_rt_v1_value_status(ptr::null()), 0);
+        }
+    }
+    #[test]
+    fn stdout_authority_is_context_bound_and_failure_is_first_wins() {
+        let first = Context::new();
+        let second = Context::new();
+        let empty = second.text("");
+        unsafe {
+            let token = jett_rt_v1_grant_stdout(first.pointer());
+            let other = jett_rt_v1_grant_stdout(second.pointer());
+            assert_ne!(token, other);
+            assert_eq!(jett_rt_v1_string_stdout(second.pointer(), other, empty), 0);
+            jett_rt_v1_string_stdout(second.pointer(), token, empty);
+            jett_rt_v1_string_release(second.pointer(), u64::MAX);
+            let mut failure = MaybeUninit::uninit();
+            assert_ne!(
+                jett_rt_v1_value_failure(second.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::OK
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"invalid Stdout authority"
+            );
+            assert_eq!(jett_rt_v1_string_release(second.pointer(), empty), 0);
+        }
+    }
+    #[test]
+    fn context_destruction_reports_owned_value_leaks() {
+        let mut context = Context::new();
+        context.text("unreleased");
+        let mut result = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { jett_rt_v1_context_destroy(&mut *context.0, result.as_mut_ptr()) },
+            JettRuntimeStatusV1::INVALID_ARGUMENT
+        );
+        // The context has already retired; drop its storage without a second destroy.
+        let context = std::mem::ManuallyDrop::new(context);
+        unsafe {
+            drop(ptr::read(&context.0));
+        }
+    }
+    #[test]
+    fn panic_becomes_terminal_failure_and_releases_existing_values() {
+        let context = Context::new();
+        let value = context.text("held");
+        let result: u64 = leaf(context.pointer(), false, |_| panic!("injected leaf panic"));
+        assert_eq!(result, 0);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::PANIC.code()
+            );
+            jett_rt_v1_string_release(context.pointer(), value);
+        }
+        assert_eq!(context.count(), 0);
+    }
+}

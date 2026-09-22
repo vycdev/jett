@@ -53,6 +53,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use crate::{ResourceRegistry, discard_panic_payload};
 
+pub mod values;
+
 /// The native runtime ABI version implemented by this module.
 pub const JETT_RUNTIME_ABI_VERSION_V1: u32 = 1;
 
@@ -185,6 +187,7 @@ const _: () = {
 };
 
 struct NativeContextState {
+    values: values::NativeValues,
     _resources: ResourceRegistry,
 }
 
@@ -192,6 +195,7 @@ impl NativeContextState {
     fn new() -> Self {
         Self {
             _resources: ResourceRegistry::new(),
+            values: values::NativeValues::default(),
         }
     }
 }
@@ -511,7 +515,14 @@ pub unsafe extern "C" fn jett_rt_v1_context_destroy(
         let Some(state) = entry.wait_for_leases_and_take_state() else {
             return JettRuntimeResultV1::failure(JettRuntimeStatusV1::PANIC, PANIC_MESSAGE);
         };
+        let leaked = !state.values.is_empty();
         drop(state);
+        if leaked {
+            return JettRuntimeResultV1::failure(
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"native value ownership leak",
+            );
+        }
         JettRuntimeResultV1::ok()
     })
 }
