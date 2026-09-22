@@ -685,3 +685,125 @@ function main() returns nothing:
     );
     assert_eq!(actual.stdout, b"mark: 6162 ;6162 6162\nobserve: 6162 ;2 6162\nmark: 62 ;observe: 61 ;1 62\nfalse\nconsume 78\ntrue\n");
 }
+
+#[test]
+fn native_list_access_fixture_executes_compiled_stdlib_control_flow() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/list_access_source.jett");
+    let mut source = std::fs::read_to_string(fixture).unwrap();
+    source.push_str(r#"
+function main() returns nothing:
+    println(inferred_first_reuses_list(), inferred_first_view_parameter(), inferred_pipeline_first_reuses_list())
+    println(explicit_last_reuses_list(), empty_first_and_last(), is_empty_outcomes_reuse_lists())
+"#);
+    let actual = run_source(&source);
+    assert_eq!(actual.stdout, b"13 42 62\n33 true true\n");
+}
+
+#[test]
+fn native_nested_lists_clone_owned_elements_and_run_stdlib_loops() {
+    let actual = run_source(
+        r#"
+function main() returns nothing:
+    bytes data = bytes.from_string("x")
+    list[bytes] originals = list(data)
+    list[bytes] copies = clone originals
+    list[bytes] extended = list.append[bytes](copies, bytes.from_string("y"))
+    list[bytes] reversed = list.reverse[bytes](extended)
+    bytes first = list.first[bytes](view reversed) handle:
+        default bytes.new()
+    bytes original = list.first[bytes](view originals) handle:
+        default bytes.new()
+    println(bytes.to_hex(first), bytes.to_hex(original), list.length[bytes](view reversed))
+    list[list[bytes]] nested = list(originals, reversed)
+    list[list[bytes]] duplicate = clone nested
+    list[bytes] inner = list.last[list[bytes]](view duplicate) handle:
+        default list.new[bytes]()
+    bytes last = list.last[bytes](view inner) handle:
+        default bytes.new()
+    println(bytes.to_hex(last), list.length[list[bytes]](view nested))
+    list[string] repeated = list.repeat[string]("held", 3)
+    string text = list.last[string](view repeated) handle:
+        default "empty"
+    float64 number = list.first[float64](list(-0.0, 2.5)) handle:
+        default 1.0
+    println(text, list.length[string](view repeated), number)
+"#,
+    );
+    assert_eq!(actual.stdout, b"79 78 2\n78 2\nheld 3 -0\n");
+}
+#[test]
+fn native_partial_list_construction_and_nested_owner_failure_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("failure.jett");
+    std::fs::write(&path, r#"
+function explode(view held: list[optional[bytes]]) returns list[bytes]:
+    return list(bytes.from_string("first"), bytes.from_string(string.repeat("ab", 9223372036854775807)), bytes.from_string("{list.length[optional[bytes]](view held)}"))
+function main() returns nothing:
+    list[optional[bytes]] held = list(some(bytes.from_string("held")))
+    list[bytes] output = explode(view held)
+    println(list.length[bytes](view output), list.length[optional[bytes]](view held))
+"#).unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&path).expect_err("terminal oracle");
+    let binary = directory.path().join("program");
+    build_host_executable(&path, &launcher(), &binary).expect("partial list compilation");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
+fn native_list_sum_wrapping_contracts_and_observable_results() {
+    for name in ["list_sum_overflow", "math_sum_overflow"] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../tests/runtime_fail/{name}.jett"));
+        let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("program");
+        build_host_executable(&fixture, &launcher(), &binary).expect("sum fixture compilation");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty());
+    }
+    let actual = run_source(
+        r#"
+function main() returns nothing:
+    list[int64] items = list(9223372036854775807, 1)
+    println(list.sum[int64](view items), list.length[int64](view items))
+    println(math.sum(list(9223372036854775807, 2)))
+"#,
+    );
+    assert_eq!(
+        actual.stdout,
+        b"-9223372036854775808 2\n-9223372036854775807\n"
+    );
+}
+
+#[test]
+fn native_list_iteration_evaluates_once_and_bounds_nested_loans() {
+    let actual = run_source(
+        r#"
+function produced() returns list[string]:
+    print("once;")
+    return list("a", "b", "c")
+function main() returns nothing:
+    for value in produced():
+        if value == "b":
+            continue
+        print(value)
+    println(";")
+    list[int64] original = list(1, 2, 3)
+    mutable int64 total = 0
+    for item in view original:
+        for inner in view original:
+            total = total + item * inner
+            if inner == 2:
+                break
+    list[int64] moved = original
+    println(total, list.length[int64](view moved))
+"#,
+    );
+    assert_eq!(actual.stdout, b"once;ac;\n18 3\n");
+}

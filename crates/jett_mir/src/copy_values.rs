@@ -40,6 +40,21 @@ impl CopyValuePlan {
                 let mut reads = Set::new();
                 let mut temporaries = 0;
                 let definition = match &statement.kind {
+                    StatementKind::IterationBorrow { source, .. } => {
+                        reads.insert(source.index() as usize);
+                        None
+                    }
+                    StatementKind::SequenceLength { source, target }
+                    | StatementKind::SequenceGet { source, target, .. } => {
+                        reads.insert(source.index() as usize);
+                        if let StatementKind::SequenceGet { index, .. } = statement.kind {
+                            reads.insert(index.index() as usize);
+                            temporaries += usize::from(
+                                function.locals[target.index() as usize].ty == TypeInterner::STRING,
+                            );
+                        }
+                        Some(target.index() as usize)
+                    }
                     StatementKind::SumTag { source, target }
                     | StatementKind::SumTake { source, target, .. }
                         if program.is_some() =>
@@ -219,7 +234,8 @@ fn visit(
             | ExpressionKind::ResultOk(_)
             | ExpressionKind::ResultFail(_)
             | ExpressionKind::OptionalSome(_)
-            | ExpressionKind::OptionalNone => true,
+            | ExpressionKind::OptionalNone
+            | ExpressionKind::ListConstruct { .. } => true,
             _ => false,
         });
     }
@@ -268,6 +284,11 @@ fn visit(
             visit(right, reads, temporaries, types, program, false)?;
         }
         ExpressionKind::OptionalNone if program.is_some() => {}
+        ExpressionKind::ListConstruct { elements } if program.is_some() => {
+            for element in elements {
+                visit(element, reads, temporaries, types, program, false)?;
+            }
+        }
         ExpressionKind::ResultOk(value)
         | ExpressionKind::ResultFail(value)
         | ExpressionKind::OptionalSome(value)
@@ -359,7 +380,7 @@ fn plan_type(
     if program.is_some() {
         match types.resolve(ty) {
             Type::Bytes => return Ok(()),
-            Type::Optional(inner) => return plan_type(types, *inner, program),
+            Type::Optional(inner) | Type::List(inner) => return plan_type(types, *inner, program),
             Type::Result(ok, error) => {
                 plan_type(types, *ok, program)?;
                 return plan_type(types, *error, program);

@@ -181,6 +181,10 @@ fn emit_for_triple(
     if let Some(entry) = entry {
         validate_program_entry_contract(program, types, entry)?;
     }
+    jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    let mut prepared = program.clone();
+    jett_mir::prepare_native_sequences(&mut prepared, types);
+    let program = &prepared;
     let verified = verify_program(program, types)?;
     if let Some(entry) = entry
         && verified.get(entry).is_none()
@@ -464,9 +468,11 @@ fn clif_type(
         ScalarKind::Float(32) => Some(ir::types::F32),
         ScalarKind::Float(64) => Some(ir::types::F64),
         ScalarKind::Nothing => None,
-        ScalarKind::String | ScalarKind::Bytes | ScalarKind::Sum | ScalarKind::Stdout => {
-            Some(ir::types::I64)
-        }
+        ScalarKind::String
+        | ScalarKind::Bytes
+        | ScalarKind::Sum
+        | ScalarKind::List
+        | ScalarKind::Stdout => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -690,6 +696,33 @@ struct Translator<'a, 'builder> {
 impl Translator<'_, '_> {
     fn statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::IterationBorrow { .. } => Ok(()),
+            StatementKind::SequenceLength { source, target }
+            | StatementKind::SequenceGet { source, target, .. } => {
+                let ty = self.local_types[source.index() as usize].ty;
+                let source_expr = Expression {
+                    kind: ExpressionKind::Local(*source),
+                    ty,
+                    span: statement.span,
+                };
+                let value = self.argument(&source_expr, true)?;
+                let value = self.scalar(value, statement.span)?;
+                let output = if let StatementKind::SequenceGet { index, .. } = statement.kind {
+                    let index = self
+                        .builder
+                        .use_var(self.variables[index.index() as usize].unwrap());
+                    let bits = self.leaf(NativeLeaf::ListElementClone, &[value, index], true)?;
+                    self.unpack_payload(
+                        bits,
+                        self.local_types[target.index() as usize].ty,
+                        statement.span,
+                    )?
+                } else {
+                    LoweredValue::Scalar(self.leaf(NativeLeaf::ListLength, &[value], true)?)
+                };
+                self.define_local(*target, output, statement.span)
+            }
+
             StatementKind::SumTag { source, target } => {
                 let slot = self.local_slots[source.index() as usize]
                     .ok_or_else(|| self.unsupported(statement.span, "sum view tag place"))?;
@@ -933,10 +966,10 @@ impl Translator<'_, '_> {
             ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
                 let borrowed = self.argument(value, true)?;
                 let v = self.scalar(borrowed, value.span)?;
-                let leaf = if value.ty == TypeInterner::BYTES {
-                    NativeLeaf::BytesClone
-                } else {
-                    NativeLeaf::SumClone
+                let leaf = match self.types.resolve(value.ty) {
+                    Type::Bytes => NativeLeaf::BytesClone,
+                    Type::List(_) => NativeLeaf::ListClone,
+                    _ => NativeLeaf::SumClone,
                 };
                 let cloned = self.leaf(leaf, &[v], true)?;
                 self.own_linear(cloned)
@@ -948,7 +981,13 @@ impl Translator<'_, '_> {
                 args,
                 evaluation_order,
                 ..
-            } => self.intrinsic(*intrinsic, args, evaluation_order, expression.span),
+            } => self.intrinsic(
+                *intrinsic,
+                args,
+                evaluation_order,
+                expression.ty,
+                expression.span,
+            ),
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(expression.span, "indirect call"))
             }
@@ -964,8 +1003,8 @@ impl Translator<'_, '_> {
             ExpressionKind::MachineTransition { .. } => {
                 Err(self.unsupported(expression.span, "machine transition"))
             }
-            ExpressionKind::ListConstruct { .. } => {
-                Err(self.unsupported(expression.span, "list construction"))
+            ExpressionKind::ListConstruct { elements } => {
+                self.construct_list(elements, expression.ty, expression.span)
             }
             ExpressionKind::MapConstruct { .. } => {
                 Err(self.unsupported(expression.span, "map construction"))
@@ -1237,6 +1276,7 @@ impl Translator<'_, '_> {
             | ScalarKind::String
             | ScalarKind::Bytes
             | ScalarKind::Sum
+            | ScalarKind::List
             | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,
@@ -1985,6 +2025,22 @@ function alias(value: bytes) returns nothing:
         );
         let error = emit_host_object(&program, &types)
             .expect_err("loan must survive all argument evaluation");
+        assert!(error.to_string().contains("while borrowed"), "{error}");
+    }
+    #[test]
+    fn iteration_loan_survives_nested_loop_and_rejects_owner_escape() {
+        let (program, types) = lower_source(
+            r#"
+function escaped(items: list[int64]) returns list[int64]:
+    for item in view items:
+        for other in view items:
+            break
+        return items
+    return items
+"#,
+        );
+        let error =
+            emit_host_object(&program, &types).expect_err("outer iteration view remains active");
         assert!(error.to_string().contains("while borrowed"), "{error}");
     }
 }

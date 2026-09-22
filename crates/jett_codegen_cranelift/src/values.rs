@@ -72,6 +72,33 @@ pub(crate) fn verify_intrinsic(
         }
         return Err(format!("invalid native numeric signature for {id}"));
     }
+    if list_intrinsic(id) {
+        let element = list_element(id, args, result, types)
+            .ok_or_else(|| "invalid native list type".to_string())?;
+        let list = |ty| matches!(types.resolve(ty), Type::List(inner) if *inner == element);
+        let valid = match id {
+            IntrinsicId::ListSum => {
+                args.len() == 1 && list(args[0].ty) && element == T::INT64 && result == T::INT64
+            }
+            IntrinsicId::ListNew => args.is_empty() && list(result),
+            IntrinsicId::ListAppend => {
+                args.len() == 2 && list(args[0].ty) && args[1].ty == element && list(result)
+            }
+            IntrinsicId::ListLength => args.len() == 1 && list(args[0].ty) && result == T::INT64,
+            IntrinsicId::ListGetClone => {
+                args.len() == 2
+                    && list(args[0].ty)
+                    && args[1].ty == T::INT64
+                    && matches!(types.resolve(result), Type::Optional(inner) if *inner == element)
+            }
+            _ => false,
+        };
+        return if valid {
+            Ok(())
+        } else {
+            Err(format!("invalid native list signature for {id}"))
+        };
+    }
     let sum_signature = match id {
         IntrinsicId::Int64FromString => Some((vec![T::STRING], Type::Result(T::INT64, T::STRING))),
         IntrinsicId::Uint64FromString => {
@@ -198,4 +225,32 @@ pub(crate) fn bytes_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
         IntrinsicId::BytesFromHex => NativeLeaf::BytesFromHex,
         _ => return None,
     })
+}
+
+pub(crate) fn list_intrinsic(id: IntrinsicId) -> bool {
+    matches!(
+        id,
+        IntrinsicId::ListNew
+            | IntrinsicId::ListLength
+            | IntrinsicId::ListAppend
+            | IntrinsicId::ListGetClone
+            | IntrinsicId::ListSum
+    )
+}
+pub(crate) fn list_element(
+    id: IntrinsicId,
+    args: &[Expression],
+    result: TypeId,
+    types: &TypeInterner,
+) -> Option<TypeId> {
+    let ty = if id == IntrinsicId::ListNew {
+        result
+    } else {
+        args.first()?.ty
+    };
+    if let Type::List(inner) = types.resolve(ty) {
+        Some(*inner)
+    } else {
+        None
+    }
 }

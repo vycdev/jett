@@ -280,10 +280,10 @@ lowering alone never changes an execution row to complete.
 | Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
-| Strings and bytes | covered | immutable strings, formatting, and scalar Unicode kernels; bytes pending | string fixtures and cleanup covered; bytes pending |
+| Strings and bytes | covered | immutable strings and separately owned bytes storage, checked leaf operations | byte fixture functions, nested cleanup, moves/views/clones covered |
 | Structs, enums, bitfields, machines, and refinements | covered | pending | pending |
-| Lists, maps, and sets | covered | pending | pending |
-| Results, optionals, and `handle` control flow | covered, but handler bodies still require explicit MIR CFG extraction | pending | pending |
+| Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists; maps/sets pending | compiled list access, reverse/repeat, scalar iteration; projected views pending |
+| Results, optionals, and `handle` control flow | explicit statement-root handler CFG | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits and terminal bypass covered; nested-expression handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
 | Compiler intrinsics and reflection | covered with checked operands and closed `IntrinsicId` identities | pending | pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout entry and write; others pending | Stdout output covered; other providers/resources pending |
@@ -296,13 +296,13 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 19 | 182 | manifest-driven deterministic production object gate for all 19 proven fixtures |
+| Native object generation | 29 | 182 | manifest-driven deterministic production object gate for all 29 proven fixtures |
 | Successful/expected `main` execution | 8 | 30 | Linux GNU production linking and exact interpreter stdout comparison in `native_execution` and `native_values` |
-| Runtime contracts | 14 | 25 | 10 wrapping-success cases and 4 terminal failures; exact output/message plus checked native-value cleanup |
+| Runtime contracts | 19 | 25 | 15 wrapping-success cases and 4 terminal failures; exact output/message plus checked native-value cleanup |
 
 These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
-failure until all denominators pass. The manifest pins all 19 nonempty,
+failure until all denominators pass. The manifest pins all 29 nonempty,
 code-bearing objects; verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 
@@ -353,9 +353,11 @@ grapheme slicing/counting, selected Unicode operations, stdout, and numeric kern
 They consume no interpreter Value, AST, HIR, or source operation names. Exact checked
 IntrinsicId and concrete numeric type arguments select the native leaf signature.
 
-Full ownership remains open for bytes and other move-only values, capabilities
-beyond the Stdout seed, resources, aggregates, closures, and tasks. Handlers and
-iteration still require explicit MIR extraction. These types/forms remain rejected
+MoveValuePlan now models linear bytes, selected sum payloads and list owners, with
+call-bounded loans, active iteration loans and initialized owning slots. Full
+ownership remains open for capabilities beyond Stdout, resources, named aggregates,
+closures and tasks. Nested-expression handlers and move-only iteration projections
+remain pending. Unsupported types/forms remain rejected
 rather than being made nominally supported by the copyable-string plan. CLI
 packaging, other capability providers, and clean Windows MSVC execution also remain
 release gates.

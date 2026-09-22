@@ -153,3 +153,30 @@ fail and launcher exit 72; the original runtime failure diagnostic is retained.
 Named argument tests distinguish lexical evaluation from parameter order and
 prove nested views end before a later legitimate move, while same-call active
 loans reject conflicting moves.
+
+## Initial list layouts and compiled iteration
+
+Native list handles own a homogeneous vector of payload carriers plus the
+checked element ownership category. List construction owns its partially built
+list before evaluating any elements. Append mutates uniquely owned storage,
+transferring the element and returning the same owning list on success; failed
+append leaves both input owners with the caller. Get/first/last return genuine
+optional data and clone the selected element. Explicit list clone recursively
+clones owned elements. Lists have separate creation/destruction counters and
+leak checks, including lists with no owning elements. Scalar, string, bytes,
+sum and nested-list elements are supported; named structs/maps/sets are not.
+
+New/length/append/get are typed native leaves. First/last/is_empty/reverse/repeat
+and math.sum run their actual compiled Jett bodies. list.sum[int64] is a typed
+wrapping numeric leaf. No name-dispatch or loop interpreter is introduced.
+
+Before native validation, a MIR sequence pass materializes supported iterables
+in a preheader exactly once, creates a cursor and length, and replaces ForEach
+with ordinary Branch, SequenceGet, increment, and existing exit/backedge CFG.
+This first iteration slice yields copyable scalar/string elements. Iteration of
+move-only elements remains rejected until projected places and view lifetimes
+are implemented. A borrowed container has an explicit token from preheader to
+exit; ownership analysis unions active tokens across edges and preserves nested
+loans of the same owner. Moving or overwriting an actively iterated owner is
+rejected; moving after the exit is valid. Return/break/continue use ordinary
+frame cleanup and loop exit edges. Exact effects prove iterable evaluation once.

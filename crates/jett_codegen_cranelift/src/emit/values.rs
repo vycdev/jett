@@ -52,7 +52,21 @@ impl Translator<'_, '_> {
         } else {
             LoweredValue::Nothing
         };
-        let (bits, owned) = match value {
+        let (bits, owned) = self.payload_bits(value);
+        let tag = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(success));
+        let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+        let sum = self.leaf(NativeLeaf::SumNew, &[tag, bits, owns], true)?;
+        if let LoweredValue::Owned(_, slot) = value {
+            self.clear_slot(slot);
+        }
+        let _ = span;
+        self.own_linear(sum)
+    }
+    fn payload_bits(&mut self, value: LoweredValue) -> (Value, bool) {
+        match value {
             LoweredValue::Nothing => (self.builder.ins().iconst(ir::types::I64, 0), false),
             LoweredValue::Owned(v, _) => (v, true),
             LoweredValue::Scalar(v) => {
@@ -74,18 +88,7 @@ impl Translator<'_, '_> {
                 };
                 (bits, false)
             }
-        };
-        let tag = self
-            .builder
-            .ins()
-            .iconst(ir::types::I32, i64::from(success));
-        let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
-        let sum = self.leaf(NativeLeaf::SumNew, &[tag, bits, owns], true)?;
-        if let LoweredValue::Owned(_, slot) = value {
-            self.clear_slot(slot);
         }
-        let _ = span;
-        self.own_linear(sum)
     }
     pub(super) fn unpack_payload(
         &mut self,
@@ -115,6 +118,84 @@ impl Translator<'_, '_> {
         };
         let _ = span;
         Ok(LoweredValue::Scalar(value))
+    }
+    fn list_new(&mut self, ty: TypeId, span: Span) -> Result<LoweredValue, CodegenError> {
+        let Type::List(element) = self.types.resolve(ty) else {
+            return Err(self.unsupported(span, "invalid list layout"));
+        };
+        let owned = *element == TypeInterner::STRING || is_linear(self.types, *element);
+        let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+        let value = self.leaf(NativeLeaf::ListNew, &[owned], true)?;
+        self.own_linear(value)
+    }
+    fn list_append(
+        &mut self,
+        list: LoweredValue,
+        value: LoweredValue,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let handle = self.scalar(list, span)?;
+        let (bits, _) = self.payload_bits(value);
+        self.leaf(NativeLeaf::ListAppend, &[handle, bits], true)?;
+        if let LoweredValue::Owned(_, slot) = value {
+            self.clear_slot(slot);
+        }
+        Ok(())
+    }
+    pub(super) fn construct_list(
+        &mut self,
+        elements: &[Expression],
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let list = self.list_new(ty, span)?;
+        for element in elements {
+            let value = self.expression(element)?;
+            self.list_append(list, value, span)?;
+        }
+        Ok(list)
+    }
+    fn list_intrinsic(
+        &mut self,
+        id: IntrinsicId,
+        values: &[LoweredValue],
+        result_type: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        match id {
+            IntrinsicId::ListNew => self.list_new(result_type, span),
+            IntrinsicId::ListSum => {
+                let list = self.scalar(values[0], span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::ListSumInt,
+                    &[list],
+                    true,
+                )?))
+            }
+            IntrinsicId::ListLength => {
+                let list = self.scalar(values[0], span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::ListLength,
+                    &[list],
+                    true,
+                )?))
+            }
+            IntrinsicId::ListGetClone => {
+                let list = self.scalar(values[0], span)?;
+                let index = self.scalar(values[1], span)?;
+                let value = self.leaf(NativeLeaf::ListGet, &[list, index], true)?;
+                self.own_linear(value)
+            }
+            IntrinsicId::ListAppend => {
+                self.list_append(values[0], values[1], span)?;
+                let LoweredValue::Owned(value, slot) = values[0] else {
+                    return Err(self.unsupported(span, "append requires owning list"));
+                };
+                self.clear_slot(slot);
+                self.own_linear(value)
+            }
+            _ => Err(self.unsupported(span, "list intrinsic")),
+        }
     }
     pub(super) fn clear_slot(&mut self, slot: ir::StackSlot) {
         let zero = self.builder.ins().iconst(ir::types::I64, 0);
@@ -281,6 +362,7 @@ impl Translator<'_, '_> {
         id: IntrinsicId,
         args: &[Expression],
         order: &[usize],
+        result_type: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
         let mut evaluated = vec![LoweredValue::Nothing; args.len()];
@@ -289,6 +371,9 @@ impl Translator<'_, '_> {
                 &args[index],
                 jett_mir::move_values::intrinsic_borrows(id, index),
             )?;
+        }
+        if crate::values::list_intrinsic(id) {
+            return self.list_intrinsic(id, &evaluated, result_type, span);
         }
         if let Some(leaf) = crate::values::bytes_leaf(id) {
             let arguments = evaluated

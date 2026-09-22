@@ -12,6 +12,10 @@ const INVALID_HANDLE: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native string handle",
 );
+const INVALID_LIST: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native list handle",
+);
 const INVALID_SUM: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native sum handle or tag",
@@ -28,6 +32,10 @@ struct NativeString {
 /// Stable discriminants for optional and result storage (not terminal status).
 pub const SUM_FAILURE: u32 = 0;
 pub const SUM_SUCCESS: u32 = 1;
+struct NativeList {
+    elements: Vec<u64>,
+    owned: bool,
+}
 struct NativeSum {
     tag: u32,
     bits: u64,
@@ -38,6 +46,9 @@ pub(super) struct NativeValues {
     strings: HashMap<NativeHandle, NativeString>,
     bytes: HashMap<NativeHandle, Vec<u8>>,
     sums: HashMap<NativeHandle, NativeSum>,
+    lists: HashMap<NativeHandle, NativeList>,
+    lists_created: u64,
+    lists_destroyed: u64,
     sums_created: u64,
     sums_destroyed: u64,
     bytes_created: u64,
@@ -53,6 +64,8 @@ impl NativeValues {
             && self.bytes_created == self.bytes_destroyed
             && self.sums.is_empty()
             && self.sums_created == self.sums_destroyed
+            && self.lists.is_empty()
+            && self.lists_created == self.lists_destroyed
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
         let id = next_identity()?;
@@ -101,7 +114,58 @@ impl NativeValues {
             }
         }
     }
+    fn new_list(&mut self, owned: bool) -> LeafResult<u64> {
+        let id = next_identity()?;
+        self.lists.insert(
+            id,
+            NativeList {
+                elements: Vec::new(),
+                owned,
+            },
+        );
+        self.lists_created += 1;
+        Ok(id)
+    }
+    fn clone_list(&mut self, id: u64) -> LeafResult<u64> {
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        let (elements, owned) = (list.elements.clone(), list.owned);
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for bits in elements {
+            if owned {
+                match self.clone_value(bits) {
+                    Ok(value) => output.push(value),
+                    Err(error) => {
+                        for v in output {
+                            self.drop_value(v)?;
+                        }
+                        return Err(error);
+                    }
+                }
+            } else {
+                output.push(bits);
+            }
+        }
+        let id = match self.new_list(owned) {
+            Ok(id) => id,
+            Err(error) => {
+                if owned {
+                    for v in output {
+                        self.drop_value(v)?;
+                    }
+                }
+                return Err(error);
+            }
+        };
+        self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = output;
+        Ok(id)
+    }
     fn clone_value(&mut self, id: u64) -> LeafResult<u64> {
+        if self.lists.contains_key(&id) {
+            return self.clone_list(id);
+        }
         if let Some(sum) = self.sums.get(&id) {
             let (tag, bits, owned) = (sum.tag, sum.bits, sum.owned);
             let bits = if owned { self.clone_value(bits)? } else { bits };
@@ -121,6 +185,15 @@ impl NativeValues {
         self.retain(id)
     }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if let Some(list) = self.lists.remove(&id) {
+            self.lists_destroyed += 1;
+            if list.owned {
+                for value in list.elements {
+                    self.drop_value(value)?;
+                }
+            }
+            return Ok(0);
+        }
         if let Some(sum) = self.sums.remove(&id) {
             self.sums_destroyed += 1;
             if sum.owned {
@@ -254,6 +327,34 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    ListElementClone, jett_rt_v1_list_element_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let bits = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied().ok_or(INVALID_LIST)?;
+            if list.owned { s.clone_value(bits) } else { Ok(bits) } };
+
+    ListSumInt, jett_rt_v1_list_sum_int64, false, (value: u64 => I64), i64 => I64,
+        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            if list.owned { return Err(INVALID_LIST); }
+            Ok(list.elements.iter().fold(0_i64, |acc, bits| acc.wrapping_add(*bits as i64))) };
+
+    ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
+        |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
+    ListLength, jett_rt_v1_list_length, false, (value: u64 => I64), i64 => I64,
+        |s| Ok(s.lists.get(&value).ok_or(INVALID_LIST)?.elements.len() as i64);
+    ListAppend, jett_rt_v1_list_append, false, (value: u64 => I64, bits: u64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+            list.elements.push(bits); Ok(value) };
+    ListGet, jett_rt_v1_list_get_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let owned = list.owned;
+            let found = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied();
+            let Some(bits) = found else { return s.sum(SUM_FAILURE, 0, false); };
+            let bits = if owned { s.clone_value(bits)? } else { bits };
+            match s.sum(SUM_SUCCESS, bits, owned) { Ok(v) => Ok(v), Err(e) => { if owned { s.drop_value(bits)?; } Err(e) } } };
+    ListClone, jett_rt_v1_list_clone, false, (value: u64 => I64), u64 => I64,
+        |s| s.clone_list(value);
+
     ParseInt, jett_rt_v1_parse_int, false, (value: u64 => I64), u64 => I64,
         |s| { let text = s.text(value)?; let parsed = text.parse::<i64>().map(|v| v as u64).map_err(|_| format!("int64.from_string: cannot parse '{text}' as int64")); s.parsed_sum(parsed) };
     ParseUint, jett_rt_v1_parse_uint, false, (value: u64 => I64), u64 => I64,
@@ -737,5 +838,38 @@ mod tests {
             assert_ne!(jett_rt_v1_value_status(first.pointer()), 0);
         }
         first.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn lists_transfer_and_clone_nested_payloads_with_exact_destruction() {
+        let context = Context::new();
+        unsafe {
+            let payload = jett_rt_v1_bytes_new(context.pointer());
+            let list = jett_rt_v1_list_new(context.pointer(), 1);
+            assert_eq!(
+                jett_rt_v1_list_append(context.pointer(), list, payload),
+                list
+            );
+            let copy = jett_rt_v1_list_clone(context.pointer(), list);
+            let item = jett_rt_v1_list_get_clone(context.pointer(), copy, 0);
+            let taken = jett_rt_v1_sum_take(context.pointer(), item, SUM_SUCCESS);
+            assert_ne!(taken, payload);
+            jett_rt_v1_value_drop(context.pointer(), taken);
+            jett_rt_v1_value_drop(context.pointer(), list);
+            jett_rt_v1_value_drop(context.pointer(), copy);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 3));
+            assert_eq!((values.lists_created, values.lists_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn list_only_leak_fails_context_destruction() {
+        let context = Context::new();
+        unsafe {
+            jett_rt_v1_list_new(context.pointer(), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
     }
 }

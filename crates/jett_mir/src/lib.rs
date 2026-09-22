@@ -3,6 +3,8 @@
 mod analysis;
 pub mod copy_values;
 mod handlers;
+mod sequences;
+pub use sequences::prepare_native_sequences;
 pub mod move_values;
 
 pub use analysis::{AnalysisError, ControlFlowGraph};
@@ -67,6 +69,20 @@ pub struct Statement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    SequenceLength {
+        source: LocalId,
+        target: LocalId,
+    },
+    SequenceGet {
+        source: LocalId,
+        index: LocalId,
+        target: LocalId,
+    },
+    IterationBorrow {
+        source: LocalId,
+        token: LocalId,
+        start: bool,
+    },
     /// Read a sum discriminant without consuming its owner.
     SumTag {
         source: LocalId,
@@ -326,6 +342,24 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::SequenceLength { source, target } => {
+                self.check_local(*source, statement.span, "sequence source");
+                self.check_local(*target, statement.span, "sequence length");
+            }
+            StatementKind::SequenceGet {
+                source,
+                index,
+                target,
+            } => {
+                self.check_local(*source, statement.span, "sequence source");
+                self.check_local(*index, statement.span, "sequence index");
+                self.check_local(*target, statement.span, "sequence element");
+            }
+            StatementKind::IterationBorrow { source, token, .. } => {
+                self.check_local(*source, statement.span, "iteration borrow");
+                self.check_local(*token, statement.span, "iteration loan token");
+            }
+
             StatementKind::SumTag { source, target }
             | StatementKind::SumTake { source, target, .. } => {
                 self.check_local(*source, statement.span, "sum source");

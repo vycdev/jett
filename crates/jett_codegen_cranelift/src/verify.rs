@@ -18,6 +18,7 @@ pub(crate) enum ScalarKind {
     String,
     Bytes,
     Sum,
+    List,
     Stdout,
 }
 
@@ -142,6 +143,10 @@ pub(crate) fn scalar_kind(
         Type::Nothing => ScalarKind::Nothing,
         Type::String => ScalarKind::String,
         Type::Bytes => ScalarKind::Bytes,
+        Type::List(inner) => {
+            scalar_kind(types, *inner, "list element")?;
+            ScalarKind::List
+        }
         Type::Optional(inner) => {
             scalar_kind(types, *inner, "optional payload")?;
             ScalarKind::Sum
@@ -252,6 +257,58 @@ impl Verifier<'_> {
 
     fn statement(&self, function: &Function, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::IterationBorrow { source, token, .. } => {
+                if !matches!(
+                    self.types.resolve(function.local(*source).unwrap().ty),
+                    Type::List(_)
+                ) || function.local(*token).unwrap().ty != TypeInterner::INT64
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "invalid iteration loan",
+                    ));
+                }
+                Ok(())
+            }
+            StatementKind::SequenceLength { source, target }
+            | StatementKind::SequenceGet { source, target, .. } => {
+                let Type::List(element) = self.types.resolve(function.local(*source).unwrap().ty)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "sequence requires list",
+                    ));
+                };
+                let expected = if let StatementKind::SequenceGet { index, .. } = statement.kind {
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        TypeInterner::INT64,
+                        function.local(index).unwrap().ty,
+                        "sequence index must be int64",
+                    )?;
+                    if jett_mir::move_values::is_linear(self.types, *element) {
+                        return Err(self.unsupported(
+                            function,
+                            statement.span,
+                            "move-only iteration element places",
+                        ));
+                    }
+                    *element
+                } else {
+                    TypeInterner::INT64
+                };
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    expected,
+                    function.local(*target).unwrap().ty,
+                    "sequence target type mismatch",
+                )
+            }
+
             StatementKind::SumTag { source, target }
             | StatementKind::SumTake { source, target, .. } => {
                 let source = function.local(*source).ok_or_else(|| {
@@ -561,7 +618,24 @@ impl Verifier<'_> {
                         "numeric intrinsic type argument differs from operand",
                     ));
                 }
-                if !numeric_generic && !type_arguments.is_empty() {
+                let list_generic = crate::values::list_intrinsic(*intrinsic);
+                if list_generic
+                    && type_arguments.as_slice()
+                        != [crate::values::list_element(
+                            *intrinsic,
+                            args,
+                            expression.ty,
+                            self.types,
+                        )
+                        .unwrap_or(TypeInterner::ERROR)]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "list intrinsic type argument differs from element",
+                    ));
+                }
+                if !numeric_generic && !list_generic && !type_arguments.is_empty() {
                     return Err(self.unsupported(
                         function,
                         expression.span,
@@ -586,8 +660,25 @@ impl Verifier<'_> {
             ExpressionKind::MachineTransition { .. } => {
                 Err(self.unsupported(function, expression.span, "machine transition"))
             }
-            ExpressionKind::ListConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "list construction"))
+            ExpressionKind::ListConstruct { elements } => {
+                let Type::List(element) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "list construction",
+                    ));
+                };
+                for value in elements {
+                    self.expression(function, value)?;
+                    self.require_same_type(
+                        function,
+                        value.span,
+                        *element,
+                        value.ty,
+                        "list element type mismatch",
+                    )?;
+                }
+                Ok(())
             }
             ExpressionKind::MapConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "map construction"))
@@ -726,7 +817,11 @@ impl Verifier<'_> {
             BinaryOp::Equal | BinaryOp::NotEqual => {
                 !matches!(
                     operand,
-                    ScalarKind::Nothing | ScalarKind::Stdout | ScalarKind::Bytes | ScalarKind::Sum
+                    ScalarKind::Nothing
+                        | ScalarKind::Stdout
+                        | ScalarKind::Bytes
+                        | ScalarKind::Sum
+                        | ScalarKind::List
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {
