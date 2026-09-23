@@ -24,6 +24,10 @@ const INVALID_BYTES: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native bytes handle",
 );
+const INVALID_BITFIELD_LAYOUT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native bitfield layout",
+);
 const INVALID_SUM: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native sum handle or tag",
@@ -56,6 +60,215 @@ struct NativeSum {
     tag: u32,
     bits: u64,
     owned: bool,
+}
+struct NativeBitfieldLayout {
+    name: String,
+    network_order: bool,
+    fields: Vec<NativeBitfieldField>,
+}
+enum NativeBitfieldField {
+    Bits {
+        name: String,
+        width: u8,
+        enum_type: Option<(String, Vec<i64>)>,
+    },
+    Payload {
+        name: String,
+    },
+}
+enum DecodedBitfieldField {
+    Plain(u64),
+    Enum(u32),
+    Payload(Vec<u8>),
+}
+struct BitfieldLayoutCursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+impl BitfieldLayoutCursor<'_> {
+    fn take(&mut self, count: usize) -> LeafResult<&[u8]> {
+        let end = self
+            .position
+            .checked_add(count)
+            .ok_or(INVALID_BITFIELD_LAYOUT)?;
+        let value = self
+            .bytes
+            .get(self.position..end)
+            .ok_or(INVALID_BITFIELD_LAYOUT)?;
+        self.position = end;
+        Ok(value)
+    }
+    fn byte(&mut self) -> LeafResult<u8> {
+        Ok(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> LeafResult<u32> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
+    }
+    fn i64(&mut self) -> LeafResult<i64> {
+        Ok(i64::from_le_bytes(
+            self.take(8)?.try_into().expect("eight bytes"),
+        ))
+    }
+    fn name(&mut self) -> LeafResult<String> {
+        let length = usize::try_from(self.u32()?).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+        let bytes = self.take(length)?;
+        Ok(std::str::from_utf8(bytes)
+            .map_err(|_| INVALID_BITFIELD_LAYOUT)?
+            .to_owned())
+    }
+}
+impl NativeBitfieldLayout {
+    fn parse(bytes: &[u8]) -> LeafResult<Self> {
+        let mut cursor = BitfieldLayoutCursor { bytes, position: 0 };
+        if cursor.take(3)? != b"JB\x01" {
+            return Err(INVALID_BITFIELD_LAYOUT);
+        }
+        let network_order = match cursor.byte()? {
+            0 => false,
+            1 => true,
+            _ => return Err(INVALID_BITFIELD_LAYOUT),
+        };
+        let name = cursor.name()?;
+        let count = usize::try_from(cursor.u32()?).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+        if count > bytes.len() {
+            return Err(INVALID_BITFIELD_LAYOUT);
+        }
+        let mut fields = Vec::new();
+        fields.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        for _ in 0..count {
+            let kind = cursor.byte()?;
+            let width = cursor.byte()?;
+            let field_name = cursor.name()?;
+            let field = match kind {
+                0 if (1..=64).contains(&width) => NativeBitfieldField::Bits {
+                    name: field_name,
+                    width,
+                    enum_type: None,
+                },
+                1 if (1..=64).contains(&width) => {
+                    let enum_name = cursor.name()?;
+                    let variant_count =
+                        usize::try_from(cursor.u32()?).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+                    if variant_count > bytes.len() / 8 {
+                        return Err(INVALID_BITFIELD_LAYOUT);
+                    }
+                    let mut discriminants = Vec::new();
+                    discriminants
+                        .try_reserve_exact(variant_count)
+                        .map_err(|_| EXHAUSTED)?;
+                    for _ in 0..variant_count {
+                        discriminants.push(cursor.i64()?);
+                    }
+                    NativeBitfieldField::Bits {
+                        name: field_name,
+                        width,
+                        enum_type: Some((enum_name, discriminants)),
+                    }
+                }
+                2 if width == 0 => NativeBitfieldField::Payload { name: field_name },
+                _ => return Err(INVALID_BITFIELD_LAYOUT),
+            };
+            fields.push(field);
+        }
+        if cursor.position != bytes.len() {
+            return Err(INVALID_BITFIELD_LAYOUT);
+        }
+        Ok(Self {
+            name,
+            network_order,
+            fields,
+        })
+    }
+    fn decode(&self, bytes: &[u8]) -> Result<Vec<DecodedBitfieldField>, String> {
+        let mut bit_index = 0_usize;
+        let mut fields = Vec::with_capacity(self.fields.len());
+        for field in &self.fields {
+            match field {
+                NativeBitfieldField::Bits {
+                    name,
+                    width,
+                    enum_type,
+                } => {
+                    let width = *width as usize;
+                    let numeric = if width > 8
+                        && width % 8 == 0
+                        && !self.network_order
+                        && bit_index % 8 == 0
+                    {
+                        let end = bit_index / 8 + width / 8;
+                        if end > bytes.len() {
+                            return Err(format!(
+                                "bitfield '{}.from_bytes' expected at least {} byte(s), got {}",
+                                self.name,
+                                end,
+                                bytes.len()
+                            ));
+                        }
+                        let mut numeric = 0_u64;
+                        for (shift, byte) in bytes[bit_index / 8..end].iter().enumerate() {
+                            numeric |= u64::from(*byte) << (shift * 8);
+                        }
+                        bit_index += width;
+                        numeric
+                    } else {
+                        let mut numeric = 0_u64;
+                        for _ in 0..width {
+                            if bit_index / 8 >= bytes.len() {
+                                return Err(format!(
+                                    "bitfield '{}.from_bytes' expected {} bit(s), got {} byte(s)",
+                                    self.name,
+                                    bit_index + width,
+                                    bytes.len()
+                                ));
+                            }
+                            let bit = (bytes[bit_index / 8] >> (7 - bit_index % 8)) & 1;
+                            numeric = (numeric << 1) | u64::from(bit);
+                            bit_index += 1;
+                        }
+                        numeric
+                    };
+                    if let Some((enum_name, discriminants)) = enum_type {
+                        let variant = discriminants
+                            .iter()
+                            .position(|candidate| *candidate >= 0 && *candidate as u64 == numeric);
+                        let Some(variant) = variant else {
+                            return Err(format!(
+                                "bitfield '{}' field '{}': enum '{}' has no variant for value {}",
+                                self.name, name, enum_name, numeric
+                            ));
+                        };
+                        fields.push(DecodedBitfieldField::Enum(variant as u32));
+                    } else {
+                        fields.push(DecodedBitfieldField::Plain(numeric));
+                    }
+                }
+                NativeBitfieldField::Payload { name } => {
+                    if bit_index % 8 != 0 {
+                        return Err(format!(
+                            "bitfield '{}' payload field '{}' must begin on a byte boundary",
+                            self.name, name
+                        ));
+                    }
+                    fields.push(DecodedBitfieldField::Payload(
+                        bytes[bit_index / 8..].to_vec(),
+                    ));
+                    bit_index = bytes.len() * 8;
+                }
+            }
+        }
+        let consumed = bit_index.div_ceil(8);
+        if consumed != bytes.len() {
+            return Err(format!(
+                "bitfield '{}.from_bytes' expected {} byte(s), got {}",
+                self.name,
+                consumed,
+                bytes.len()
+            ));
+        }
+        Ok(fields)
+    }
 }
 #[derive(Default)]
 pub(super) struct NativeValues {
@@ -178,6 +391,72 @@ impl NativeValues {
             bytes.push(element.expect("validated payload element") as u8);
         }
         Ok(0)
+    }
+    fn decode_bitfield(&mut self, input: u64, descriptor: &[u8]) -> LeafResult<u64> {
+        let layout = NativeBitfieldLayout::parse(descriptor)?;
+        let decoded = layout.decode(self.bytes(input)?);
+        match decoded {
+            Err(message) => {
+                let text = self.insert(message)?;
+                match self.sum(SUM_FAILURE, text, true) {
+                    Ok(result) => Ok(result),
+                    Err(error) => {
+                        self.drop_value(text)?;
+                        Err(error)
+                    }
+                }
+            }
+            Ok(fields) => {
+                let record = self.new_struct(fields.len() as u64)?;
+                let materialize = (|| -> LeafResult<()> {
+                    for (index, field) in fields.into_iter().enumerate() {
+                        let value = match field {
+                            DecodedBitfieldField::Plain(bits) => NativeField { bits, owned: false },
+                            DecodedBitfieldField::Enum(variant) => {
+                                let nested = self.new_struct(1)?;
+                                self.structs.get_mut(&nested).ok_or(INVALID_STRUCT)?.fields[0] =
+                                    Some(NativeField {
+                                        bits: u64::from(variant),
+                                        owned: false,
+                                    });
+                                NativeField {
+                                    bits: nested,
+                                    owned: true,
+                                }
+                            }
+                            DecodedBitfieldField::Payload(bytes) => {
+                                let mut elements = Vec::new();
+                                elements
+                                    .try_reserve_exact(bytes.len())
+                                    .map_err(|_| EXHAUSTED)?;
+                                elements
+                                    .extend(bytes.into_iter().map(|byte| Some(u64::from(byte))));
+                                let list = self.new_list(false)?;
+                                self.lists.get_mut(&list).ok_or(INVALID_LIST)?.elements = elements;
+                                NativeField {
+                                    bits: list,
+                                    owned: true,
+                                }
+                            }
+                        };
+                        self.structs.get_mut(&record).ok_or(INVALID_STRUCT)?.fields[index] =
+                            Some(value);
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = materialize {
+                    self.drop_value(record)?;
+                    return Err(error);
+                }
+                match self.sum(SUM_SUCCESS, record, true) {
+                    Ok(result) => Ok(result),
+                    Err(error) => {
+                        self.drop_value(record)?;
+                        Err(error)
+                    }
+                }
+            }
+        }
     }
     fn sum(&mut self, tag: u32, bits: u64, owned: bool) -> LeafResult<u64> {
         #[cfg(test)]
@@ -832,6 +1111,11 @@ leaves! {
         |s| s.write_bitfield_bits(value, numeric, width, network_order, bit_offset);
     BitfieldExtendPayload, jett_rt_v1_bitfield_extend_payload, false, (value: u64 => I64, payload: u64 => I64), u32 => I32,
         |s| s.extend_bitfield_payload(value, payload);
+    BitfieldDecode, jett_rt_v1_bitfield_decode, false, (value: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 { return Err(INVALID_BITFIELD_LAYOUT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_BITFIELD_LAYOUT)?;
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.decode_bitfield(value, layout) };
     BytesClone, jett_rt_v1_bytes_clone, false, (value: u64 => I64), u64 => I64,
         |s| { let data = s.bytes(value)?.to_vec(); s.insert_bytes(data) };
     BytesLength, jett_rt_v1_bytes_length, false, (value: u64 => I64), i64 => I64,
@@ -1550,5 +1834,47 @@ mod tests {
             assert_ne!(jett_rt_v1_struct_new(context.pointer(), 0), 0);
         }
         context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn bitfield_decode_rolls_back_each_owned_allocation() {
+        fn name(descriptor: &mut Vec<u8>, value: &str) {
+            descriptor.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            descriptor.extend_from_slice(value.as_bytes());
+        }
+        let mut descriptor = b"JB\x01\x01".to_vec();
+        name(&mut descriptor, "app.Packet");
+        descriptor.extend_from_slice(&3_u32.to_le_bytes());
+        descriptor.extend_from_slice(&[0, 8]);
+        name(&mut descriptor, "kind");
+        descriptor.extend_from_slice(&[1, 8]);
+        name(&mut descriptor, "protocol");
+        name(&mut descriptor, "app.Protocol");
+        descriptor.extend_from_slice(&2_u32.to_le_bytes());
+        descriptor.extend_from_slice(&1_i64.to_le_bytes());
+        descriptor.extend_from_slice(&2_i64.to_le_bytes());
+        descriptor.extend_from_slice(&[2, 0]);
+        name(&mut descriptor, "payload");
+
+        for budget in 0..4 {
+            let mut values = NativeValues::default();
+            let input = values.insert_bytes(vec![5, 2, 7, 9]).unwrap();
+            values.allocation_budget = Some(budget);
+            assert_eq!(values.decode_bitfield(input, &descriptor), Err(EXHAUSTED));
+            assert_eq!(values.bytes(input).unwrap(), &[5, 2, 7, 9]);
+            assert_eq!(values.structs_created, values.structs_destroyed);
+            assert_eq!(values.lists_created, values.lists_destroyed);
+            assert_eq!(values.sums_created, values.sums_destroyed);
+            values.drop_value(input).unwrap();
+            assert!(values.is_empty());
+        }
+        for budget in 0..2 {
+            let mut values = NativeValues::default();
+            let input = values.insert_bytes(vec![5]).unwrap();
+            values.allocation_budget = Some(budget);
+            assert_eq!(values.decode_bitfield(input, &descriptor), Err(EXHAUSTED));
+            assert!(values.strings.is_empty());
+            values.drop_value(input).unwrap();
+            assert!(values.is_empty());
+        }
     }
 }

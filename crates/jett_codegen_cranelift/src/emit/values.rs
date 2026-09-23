@@ -158,6 +158,76 @@ impl Translator<'_, '_> {
         }
         Ok(output)
     }
+    pub(super) fn decode_bitfield(
+        &mut self,
+        value: LoweredValue,
+        result_type: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let Type::Result(bitfield_type, _) = self.types.resolve(result_type) else {
+            return Err(self.unsupported(span, "bitfield decoding result"));
+        };
+        let Type::Bitfield(id) = self.types.resolve(*bitfield_type) else {
+            return Err(self.unsupported(span, "bitfield decoding type"));
+        };
+        let layout = self.types.resolve_bitfield(*id).clone();
+        fn name(data: &mut Vec<u8>, value: &str) -> Result<(), CodegenError> {
+            let length = u32::try_from(value.len())
+                .map_err(|_| CodegenError::Backend("bitfield layout name is too long".into()))?;
+            data.extend_from_slice(&length.to_le_bytes());
+            data.extend_from_slice(value.as_bytes());
+            Ok(())
+        }
+        let mut data = vec![b'J', b'B', 1, u8::from(layout.network_order)];
+        name(&mut data, &layout.name)?;
+        let field_count = u32::try_from(layout.fields.len())
+            .map_err(|_| CodegenError::Backend("too many bitfield fields".into()))?;
+        data.extend_from_slice(&field_count.to_le_bytes());
+        for field in &layout.fields {
+            match &field.kind {
+                BitfieldFieldKind::Bits { width } => {
+                    let width = u8::try_from(*width)
+                        .map_err(|_| self.unsupported(span, "bitfield decoding width"))?;
+                    if let Type::Enum(enum_id) = self.types.resolve(field.ty) {
+                        data.extend_from_slice(&[1, width]);
+                        name(&mut data, &field.name)?;
+                        let enum_layout = self.types.resolve_enum(*enum_id);
+                        name(&mut data, &enum_layout.name)?;
+                        let variant_count = u32::try_from(enum_layout.variants.len())
+                            .map_err(|_| CodegenError::Backend("too many enum variants".into()))?;
+                        data.extend_from_slice(&variant_count.to_le_bytes());
+                        for variant in &enum_layout.variants {
+                            data.extend_from_slice(&variant.discriminant.to_le_bytes());
+                        }
+                    } else {
+                        data.extend_from_slice(&[0, width]);
+                        name(&mut data, &field.name)?;
+                    }
+                }
+                BitfieldFieldKind::Payload => {
+                    data.extend_from_slice(&[2, 0]);
+                    name(&mut data, &field.name)?;
+                }
+            }
+        }
+        let length = i64::try_from(data.len())
+            .map_err(|_| CodegenError::Backend("bitfield layout is too large".into()))?;
+        let item = self
+            .module
+            .declare_anonymous_data(false, false)
+            .map_err(|error| CodegenError::Backend(error.to_string()))?;
+        let mut description = cranelift_module::DataDescription::new();
+        description.define(data.into_boxed_slice());
+        self.module
+            .define_data(item, &description)
+            .map_err(|error| CodegenError::Backend(error.to_string()))?;
+        let reference = self.module.declare_data_in_func(item, self.builder.func);
+        let pointer = self.builder.ins().global_value(ir::types::I64, reference);
+        let length = self.builder.ins().iconst(ir::types::I64, length);
+        let value = self.scalar(value, span)?;
+        let decoded = self.leaf(NativeLeaf::BitfieldDecode, &[value, pointer, length], true)?;
+        self.own_linear(decoded)
+    }
     pub(super) fn struct_field(
         &mut self,
         base: &Expression,
@@ -566,6 +636,7 @@ impl Translator<'_, '_> {
         }
         match id {
             IntrinsicId::BitfieldToBytes => self.encode_bitfield(evaluated[0], args[0].ty, span),
+            IntrinsicId::BitfieldFromBytes => self.decode_bitfield(evaluated[0], result_type, span),
             IntrinsicId::StringFromInt64
             | IntrinsicId::StringFromUint64
             | IntrinsicId::StringFromFloat64

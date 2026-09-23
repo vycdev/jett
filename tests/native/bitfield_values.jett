@@ -11,21 +11,64 @@ bitfield network NetworkHeader:
     protocol: 8 bits as Protocol
 bitfield WideNativeHeader:
     sequence: 64 bits
+bitfield network WideNetworkHeader:
+    sequence: 64 bits
 bitfield Packet:
     kind: 8 bits
     payload: list[uint8]
+function decode_header_error(raw: bytes) returns string:
+    Header decoded = Header.from_bytes(raw) handle error:
+        return error
+    return "ok"
+function decode_protocol_error(raw: bytes) returns string:
+    NetworkHeader decoded = NetworkHeader.from_bytes(raw) handle error:
+        return error
+    return "ok"
 function main() returns nothing:
     Header original = Header(version: 4, length: 12)
     Header duplicate = clone original
     println(original.version, duplicate.length)
-    println(bytes.to_hex(Header.to_bytes(original)))
+    bytes header_raw = Header.to_bytes(original)
+    println(bytes.to_hex(view header_raw))
+    Header header_decoded = Header.from_bytes(header_raw) handle error:
+        return nothing
+    println(header_decoded.version, header_decoded.length)
     NetworkHeader network = NetworkHeader(version: 4, header_length: 5, protocol: Protocol.tcp)
-    println(bytes.to_hex(NetworkHeader.to_bytes(network)))
+    bytes network_raw = NetworkHeader.to_bytes(network)
+    println(bytes.to_hex(view network_raw))
+    NetworkHeader network_decoded = NetworkHeader.from_bytes(network_raw) handle error:
+        return nothing
+    println(network_decoded.header_length, bytes.to_hex(NetworkHeader.to_bytes(network_decoded)))
     WideNativeHeader wide = WideNativeHeader(sequence: 72623859790382856)
-    println(bytes.to_hex(WideNativeHeader.to_bytes(wide)))
+    bytes wide_raw = WideNativeHeader.to_bytes(wide)
+    println(bytes.to_hex(view wide_raw))
+    WideNativeHeader wide_decoded = WideNativeHeader.from_bytes(wide_raw) handle error:
+        return nothing
+    println(string.from_uint64(wide_decoded.sequence))
+    WideNetworkHeader network_wide = WideNetworkHeader(sequence: 18446744073709551615)
+    bytes network_wide_raw = WideNetworkHeader.to_bytes(network_wide)
+    println(bytes.to_hex(view network_wide_raw))
+    WideNetworkHeader network_wide_decoded = WideNetworkHeader.from_bytes(network_wide_raw) handle error:
+        return nothing
+    println(string.from_uint64(network_wide_decoded.sequence))
     mutable list[uint8] payload = list.new[uint8]()
     payload = list.append[uint8](payload, 7)
+    payload = list.append[uint8](payload, 127)
+    payload = list.append[uint8](payload, 255)
     Packet packet = Packet(kind: 3, payload: payload)
     Packet copied = clone packet
     println(packet.kind, list.length(view copied.payload))
-    println(bytes.to_hex(Packet.to_bytes(copied)))
+    bytes packet_raw = Packet.to_bytes(copied)
+    println(bytes.to_hex(view packet_raw))
+    Packet packet_decoded = Packet.from_bytes(packet_raw) handle error:
+        return nothing
+    println(packet_decoded.kind, list.length(view packet_decoded.payload))
+    bytes too_short = bytes.from_hex("40") handle error:
+        return nothing
+    println(decode_header_error(too_short))
+    bytes extra_byte = bytes.from_hex("40c0ff") handle error:
+        return nothing
+    println(decode_header_error(extra_byte))
+    bytes unknown_protocol = bytes.from_hex("4512") handle error:
+        return nothing
+    println(decode_protocol_error(unknown_protocol))

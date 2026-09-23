@@ -266,13 +266,16 @@ Bitfield values use the same typed record storage for fields, including owned
 payload fields. Native construction, field projection, clone and cleanup match
 the interpreter in a dedicated fixture. `to_bytes` writes checked field widths,
 network or native byte order, enum discriminants and trailing `list[uint8]`
-payloads to owned bytes. `from_bytes` and dynamic field-width validation still
-require bitfield-specific native lowering.
+payloads to owned bytes. `from_bytes` decodes checked widths, enum tags and
+trailing payloads into owned records; invalid bytes return matching error strings.
+Native/interpreter fixtures cover roundtrips and decode failures, while runtime
+allocation-boundary tests cover partial-owner cleanup. Dynamic field-width
+validation still requires bitfield-specific native lowering.
 
 This is not full aggregate parity. Refinement-validating constructors, owned
 escape of a move-only projected view (without clone), field-place assignment,
 borrowed iteration yielding compound views, payload-enum equality, bitfield
-decoding and width validation, and machines remain
+width validation, and machines remain
 unsupported. Composite explicit comptime constants still require baking. Source
 validity and interpreter field-copy behavior do not authorize native implicit
 copies of move-only fields; those unresolved ownership paths stay guarded.

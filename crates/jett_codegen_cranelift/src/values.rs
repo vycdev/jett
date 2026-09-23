@@ -65,6 +65,16 @@ pub(crate) fn verify_intrinsic(
             Err("invalid native bitfield encoding signature".into())
         };
     }
+    if id == IntrinsicId::BitfieldFromBytes {
+        return if args.len() == 1
+            && args[0].ty == T::BYTES
+            && matches!(types.resolve(result), Type::Result(ok, error) if matches!(types.resolve(*ok), Type::Bitfield(_)) && *error == T::STRING)
+        {
+            Ok(())
+        } else {
+            Err("invalid native bitfield decoding signature".into())
+        };
+    }
     if id == IntrinsicId::Range {
         return if (1..=3).contains(&args.len())
             && args.iter().all(|a| a.ty == T::INT64)
