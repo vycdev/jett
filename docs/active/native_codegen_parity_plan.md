@@ -300,15 +300,15 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 85 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
-| Successful/expected `main` execution | 21 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
+| Native object generation | 86 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Successful/expected `main` execution | 22 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 85. Four string/comptime fixtures began emitting
+unmarked row and now proves 86. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -381,6 +381,11 @@ result/optional shape. The injected snapshot fixture covers duplicate names,
 empty arguments, missing values, invalid names, and invalid Unicode values;
 `time_and_os.jett` covers a production entry. Raw platform capture details
 specified in the Environment design note still need a separate backend audit.
+Unit-enum equality borrows its operands while comparing tags, so comparisons
+of an enum field do not move that field out of its aggregate. The bitfield
+roundtrip fixture now emits an object and matches interpreter execution; the
+native bitfield fixture compares the decoded enum field twice before using its
+parent again. General owning projection of move-only fields remains guarded.
 Native arithmetic now accepts a nonzero refinement as the right operand of
 integer division or modulo when its base matches the left operand. This is
 covered by an object-emission test; `integer_nonzero_proofs.jett` still needs

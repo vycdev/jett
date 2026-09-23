@@ -1091,9 +1091,11 @@ impl Translator<'_, '_> {
                 Ok(LoweredValue::Scalar(value))
             }
             ExpressionKind::Binary { left, op, right } => {
-                let lowered_left = self.expression(left)?;
-                let left_value = self.scalar(lowered_left, left.span)?;
                 let operand_kind = scalar_kind(self.types, left.ty, "binary operand")?;
+                let enum_equality = operand_kind == ScalarKind::Enum
+                    && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual);
+                let lowered_left = self.argument(left, enum_equality)?;
+                let left_value = self.scalar(lowered_left, left.span)?;
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     let value = self.short_circuit_boolean(
                         left_value,
@@ -1104,7 +1106,7 @@ impl Translator<'_, '_> {
                     )?;
                     return Ok(LoweredValue::Scalar(value));
                 }
-                let lowered_right = self.expression(right)?;
+                let lowered_right = self.argument(right, enum_equality)?;
                 let right_value = self.scalar(lowered_right, right.span)?;
                 if operand_kind == ScalarKind::String {
                     let value = self.leaf(NativeLeaf::Equal, &[left_value, right_value], true)?;

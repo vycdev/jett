@@ -38,6 +38,7 @@ function main() returns nothing:
     println(bytes.to_hex(view network_raw))
     NetworkHeader network_decoded = NetworkHeader.from_bytes(network_raw) handle error:
         return nothing
+    println(network_decoded.protocol == Protocol.tcp, network_decoded.protocol != Protocol.udp)
     println(network_decoded.header_length, bytes.to_hex(NetworkHeader.to_bytes(network_decoded)))
     WideNativeHeader wide = WideNativeHeader(sequence: 72623859790382856)
     bytes wide_raw = WideNativeHeader.to_bytes(wide)

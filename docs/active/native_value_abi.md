@@ -360,6 +360,8 @@ and non-exhaustive arms. Native/interpreter differential fixtures cover unit,
 scalar, string and recursive owned payloads, multiple bindings and an `other`
 arm. Equality compares tags for unit enums; payload-enum equality remains
 guarded until typed field comparison is implemented.
+Tag comparison borrows unit-enum operands, including projected aggregate fields,
+so it leaves their owners available after the expression.
 
 Bitfield values use the same typed record storage for fields, including owned
 payload fields. Native construction, field projection, clone and cleanup match

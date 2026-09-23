@@ -393,9 +393,13 @@ impl Flow<'_> {
                 self.loans = saved;
             }
             ExpressionKind::Binary { left, op, right } => {
-                self.expr(left, false)?;
+                let operand_type = representation_type(self.types, left.ty);
+                let enum_equality = matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
+                    && (operand_type.index() as usize) < self.types.len()
+                    && matches!(self.types.resolve(operand_type), Type::Enum(_));
+                self.expr(left, enum_equality)?;
                 let before = self.state.clone();
-                self.expr(right, false)?;
+                self.expr(right, enum_equality)?;
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     self.state = self.state.intersection(&before).copied().collect();
                 }
