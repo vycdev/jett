@@ -131,6 +131,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("encoding", "../../tests/native/encoding.jett"),
         ("csv", "../../tests/native/csv.jett"),
         ("secret_values", "../../tests/native/secret_values.jett"),
+        ("crypto", "../../tests/native/crypto.jett"),
         (
             "numeric_conversions",
             "../../tests/native/numeric_conversions.jett",

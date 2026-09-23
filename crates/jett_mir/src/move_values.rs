@@ -64,6 +64,15 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
     if matches!(id, IntrinsicId::SecretCompare | IntrinsicId::SecretRedact) {
         return true;
     }
+    if matches!(
+        id,
+        IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoHmacSha256
+    ) {
+        return true;
+    }
     (index == 1
         && matches!(
             id,
@@ -389,7 +398,8 @@ impl Flow<'_> {
                     self.state = self.state.intersection(&before).copied().collect();
                 }
             }
-            ExpressionKind::Unary { value, .. }
+            ExpressionKind::Declassify(value)
+            | ExpressionKind::Unary { value, .. }
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value) => self.expr(value, false)?,

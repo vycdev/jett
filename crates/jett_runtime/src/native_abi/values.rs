@@ -2,6 +2,7 @@
 //! Every pointer must refer to a live stationary ABI context, except literal
 //! bytes which are borrowed for the call. No Rust value crosses this ABI.
 use super::*;
+use crate::crypto;
 use crate::csv;
 use crate::encoding;
 use std::cmp::Ordering as CompareOrdering;
@@ -1863,6 +1864,15 @@ leaves! {
     SecretCompareBytes, jett_rt_v1_secret_compare_bytes, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
         |s| { let left = s.bytes(left)?; let right = s.bytes(right)?;
             Ok(u32::from(left.len() == right.len() && bool::from(left.ct_eq(right)))) };
+
+    CryptoSha256, jett_rt_v1_crypto_sha256, false, (value: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::sha256_digest(s.bytes(value)?); s.insert_bytes(digest) };
+    CryptoSha512, jett_rt_v1_crypto_sha512, false, (value: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::sha512_digest(s.bytes(value)?); s.insert_bytes(digest) };
+    CryptoMd5, jett_rt_v1_crypto_md5, false, (value: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::md5_digest(s.bytes(value)?); s.insert_bytes(digest) };
+    CryptoHmacSha256, jett_rt_v1_crypto_hmac_sha256, false, (key: u64 => I64, message: u64 => I64), u64 => I64,
+        |s| { let digest = crypto::hmac_sha256_digest(s.bytes(key)?, s.bytes(message)?); s.insert_bytes(digest) };
 
     DropValue, jett_rt_v1_value_drop, true, (value: u64 => I64), u32 => I32,
         |s| s.drop_value(value);

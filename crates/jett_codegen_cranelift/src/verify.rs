@@ -408,6 +408,10 @@ impl Verifier<'_> {
                         ));
                     }
                 };
+                if matches!(self.types.resolve(target.ty), Type::Secret(inner) if *inner == payload)
+                {
+                    return Ok(());
+                }
                 self.require_same_type(
                     function,
                     statement.span,
@@ -1081,8 +1085,17 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
-            ExpressionKind::Declassify(_) | ExpressionKind::Coarsen(_) => {
-                Err(self.unsupported(function, expression.span, "secret operation"))
+            ExpressionKind::Declassify(value) => {
+                self.expression(function, value)?;
+                if matches!(self.types.resolve(value.ty), Type::Secret(inner) if *inner == expression.ty)
+                {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "declassification"))
+                }
+            }
+            ExpressionKind::Coarsen(_) => {
+                Err(self.unsupported(function, expression.span, "coarsen"))
             }
             ExpressionKind::StateIs { .. } => {
                 Err(self.unsupported(function, expression.span, "machine state test"))

@@ -1167,9 +1167,8 @@ impl Translator<'_, '_> {
             ExpressionKind::StringInterpolation(segments) => {
                 self.interpolate(segments, expression.span)
             }
-            ExpressionKind::Declassify(_) | ExpressionKind::Coarsen(_) => {
-                Err(self.unsupported(expression.span, "secret operation"))
-            }
+            ExpressionKind::Declassify(value) => self.expression(value),
+            ExpressionKind::Coarsen(_) => Err(self.unsupported(expression.span, "coarsen")),
             ExpressionKind::StateIs { .. } => {
                 Err(self.unsupported(expression.span, "machine state test"))
             }

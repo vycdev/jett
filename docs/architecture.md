@@ -1782,9 +1782,10 @@ Crypto has reached that boundary for its implemented initial surface. Public
 `crypto.sha256`, `crypto.sha512`, legacy-only `crypto.md5`, and key-first binary
 `crypto.hmac_sha256` declarations live in
 `stdlib/crypto.jett`; source wrappers convert exact UTF-8 through `bytes` and
-format raw fixed-size digests as lowercase hex. Only private trusted compression
-kernels remain in the interpreter, and project code cannot call them. HMAC
-borrows a secret byte key and byte message and returns a secret 32-byte tag;
+format raw fixed-size digests as lowercase hex. Private trusted compression
+kernels are shared by the interpreter and typed native runtime leaves; project
+code cannot call them. HMAC borrows a secret byte key and byte message and
+returns a secret 32-byte tag;
 HMAC-SHA-512 remains reserved and undiscoverable. Exact taint,
 security, and backend obligations are defined by the
 [Crypto hashing and security contract](completed/crypto_hashing_security_contract.md).

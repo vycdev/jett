@@ -119,6 +119,28 @@ pub(crate) fn verify_intrinsic(
     }
     if matches!(
         id,
+        IntrinsicId::CryptoSha256
+            | IntrinsicId::CryptoSha512
+            | IntrinsicId::CryptoMd5
+            | IntrinsicId::CryptoHmacSha256
+    ) {
+        let valid = if id == IntrinsicId::CryptoHmacSha256 {
+            args.len() == 2
+                && jett_mir::move_values::is_secret(types, args[0].ty)
+                && jett_mir::move_values::representation_type(types, args[0].ty) == T::BYTES
+                && args[1].ty == T::BYTES
+                && matches!(types.resolve(result), Type::Secret(inner) if *inner == T::BYTES)
+        } else {
+            args.len() == 1 && args[0].ty == T::BYTES && result == T::BYTES
+        };
+        return if valid {
+            Ok(())
+        } else {
+            Err("invalid native crypto intrinsic signature".into())
+        };
+    }
+    if matches!(
+        id,
         IntrinsicId::CsvParse | IntrinsicId::CsvParseWithHeader | IntrinsicId::CsvStringify
     ) {
         let string_rows = |ty| matches!(types.resolve(ty), Type::List(row) if matches!(types.resolve(*row), Type::List(field) if *field == T::STRING));
@@ -459,6 +481,10 @@ pub(crate) fn bytes_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
         IntrinsicId::CsvParse => NativeLeaf::CsvParse,
         IntrinsicId::CsvParseWithHeader => NativeLeaf::CsvParseWithHeader,
         IntrinsicId::CsvStringify => NativeLeaf::CsvStringify,
+        IntrinsicId::CryptoSha256 => NativeLeaf::CryptoSha256,
+        IntrinsicId::CryptoSha512 => NativeLeaf::CryptoSha512,
+        IntrinsicId::CryptoMd5 => NativeLeaf::CryptoMd5,
+        IntrinsicId::CryptoHmacSha256 => NativeLeaf::CryptoHmacSha256,
         _ => return None,
     })
 }
