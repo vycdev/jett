@@ -403,6 +403,20 @@ impl Translator<'_, '_> {
                 self.clear_slot(slot);
                 self.own_linear(value)
             }
+            IntrinsicId::ListSort => {
+                let Type::List(element) = self.types.resolve(result_type) else {
+                    return Err(self.unsupported(span, "sort requires list result"));
+                };
+                let kind = crate::values::list_sort_kind(self.types, *element)
+                    .ok_or_else(|| self.unsupported(span, "sort element type"))?;
+                let LoweredValue::Owned(list, slot) = values[0] else {
+                    return Err(self.unsupported(span, "sort requires owning list"));
+                };
+                let kind = self.builder.ins().iconst(ir::types::I32, kind as i64);
+                let sorted = self.leaf(NativeLeaf::ListSort, &[list, kind], true)?;
+                self.clear_slot(slot);
+                self.own_linear(sorted)
+            }
             _ => Err(self.unsupported(span, "list intrinsic")),
         }
     }

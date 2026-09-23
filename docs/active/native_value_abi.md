@@ -173,9 +173,13 @@ clones owned elements. Lists have separate creation/destruction counters and
 leak checks, including lists with no owning elements. Scalar, string, bytes,
 sum and nested-list elements are supported; named structs/maps/sets are not.
 
-New/length/append/get are typed native leaves. First/last/is_empty/reverse/repeat
-and math.sum run their actual compiled Jett bodies. list.sum[int64] is a typed
-wrapping numeric leaf. No name-dispatch or loop interpreter is introduced.
+New/length/append/get and primitive sort are typed native leaves. Sort reorders
+the uniquely owned list in place, comparing signed and unsigned widths,
+floating-point values, bools, and owned strings with interpreter semantics.
+First/last/is_empty/reverse/repeat and math.sum run their actual compiled Jett
+bodies. list.sum[int64] is a typed wrapping numeric leaf. Contextual conversion
+of an empty `list[never]` to an owned element layout remains guarded. No
+name-dispatch or loop interpreter is introduced.
 
 Before native validation, a MIR sequence pass materializes supported iterables
 in a preheader exactly once, creates a cursor and length, and replaces ForEach

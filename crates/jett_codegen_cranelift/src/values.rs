@@ -3,7 +3,7 @@ use cranelift_codegen::ir::{self, AbiParam};
 use cranelift_module::{FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
 use jett_hir::{Expression, IntrinsicId};
-use jett_runtime::native_abi::values::{AbiScalar, NativeLeaf};
+use jett_runtime::native_abi::values::{AbiScalar, NativeLeaf, NativeSortKind};
 use jett_types::{Type, TypeId, TypeInterner};
 
 pub(crate) fn abi_type(ty: AbiScalar) -> ir::Type {
@@ -142,6 +142,12 @@ pub(crate) fn verify_intrinsic(
                     && list(args[0].ty)
                     && args[1].ty == T::INT64
                     && matches!(types.resolve(result), Type::Optional(inner) if *inner == element)
+            }
+            IntrinsicId::ListSort => {
+                args.len() == 1
+                    && list(args[0].ty)
+                    && list(result)
+                    && list_sort_kind(types, element).is_some()
             }
             _ => false,
         };
@@ -312,7 +318,25 @@ pub(crate) fn list_intrinsic(id: IntrinsicId) -> bool {
             | IntrinsicId::ListAppend
             | IntrinsicId::ListGetClone
             | IntrinsicId::ListSum
+            | IntrinsicId::ListSort
     )
+}
+pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
+    Some(match types.resolve(element) {
+        Type::Int8 => NativeSortKind::Int8,
+        Type::Int16 => NativeSortKind::Int16,
+        Type::Int32 => NativeSortKind::Int32,
+        Type::Int64 => NativeSortKind::Int64,
+        Type::Uint8 => NativeSortKind::Uint8,
+        Type::Uint16 => NativeSortKind::Uint16,
+        Type::Uint32 => NativeSortKind::Uint32,
+        Type::Uint64 => NativeSortKind::Uint64,
+        Type::Float32 => NativeSortKind::Float32,
+        Type::Float64 => NativeSortKind::Float64,
+        Type::Bool => NativeSortKind::Bool,
+        Type::String => NativeSortKind::String,
+        _ => return None,
+    })
 }
 pub(crate) fn list_element(
     id: IntrinsicId,

@@ -2,6 +2,7 @@
 //! Every pointer must refer to a live stationary ABI context, except literal
 //! bytes which are borrowed for the call. No Rust value crosses this ABI.
 use super::*;
+use std::cmp::Ordering as CompareOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -48,6 +49,68 @@ struct NativeString {
 /// Stable discriminants for optional and result storage (not terminal status).
 pub const SUM_FAILURE: u32 = 0;
 pub const SUM_SUCCESS: u32 = 1;
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeSortKind {
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
+    Float32,
+    Float64,
+    Bool,
+    String,
+}
+impl NativeSortKind {
+    fn from_raw(value: u32) -> LeafResult<Self> {
+        Ok(match value {
+            0 => Self::Int8,
+            1 => Self::Int16,
+            2 => Self::Int32,
+            3 => Self::Int64,
+            4 => Self::Uint8,
+            5 => Self::Uint16,
+            6 => Self::Uint32,
+            7 => Self::Uint64,
+            8 => Self::Float32,
+            9 => Self::Float64,
+            10 => Self::Bool,
+            11 => Self::String,
+            _ => return Err(INVALID_LIST),
+        })
+    }
+    fn compare(self, left: u64, right: u64) -> CompareOrdering {
+        match self {
+            Self::Int8 => (left as u8 as i8).cmp(&(right as u8 as i8)),
+            Self::Int16 => (left as u16 as i16).cmp(&(right as u16 as i16)),
+            Self::Int32 => (left as u32 as i32).cmp(&(right as u32 as i32)),
+            Self::Int64 => (left as i64).cmp(&(right as i64)),
+            Self::Uint8 | Self::Uint16 | Self::Uint32 | Self::Uint64 | Self::Bool => {
+                left.cmp(&right)
+            }
+            Self::Float32 => f32::from_bits(left as u32)
+                .partial_cmp(&f32::from_bits(right as u32))
+                .unwrap_or(CompareOrdering::Equal),
+            Self::Float64 => f64::from_bits(left)
+                .partial_cmp(&f64::from_bits(right))
+                .unwrap_or(CompareOrdering::Equal),
+            Self::String => unreachable!("string ordering uses the string registry"),
+        }
+    }
+    fn valid_bits(self, bits: u64) -> bool {
+        match self {
+            Self::Int8 | Self::Uint8 => bits <= u8::MAX as u64,
+            Self::Int16 | Self::Uint16 => bits <= u16::MAX as u64,
+            Self::Int32 | Self::Uint32 | Self::Float32 => bits <= u32::MAX as u64,
+            Self::Bool => bits <= 1,
+            Self::Int64 | Self::Uint64 | Self::Float64 | Self::String => true,
+        }
+    }
+}
 #[derive(Clone, Copy)]
 struct NativeField {
     bits: u64,
@@ -500,6 +563,35 @@ impl NativeValues {
             },
         );
         self.lists_created += 1;
+        Ok(id)
+    }
+    fn sort_list(&mut self, id: u64, raw_kind: u32) -> LeafResult<u64> {
+        let kind = NativeSortKind::from_raw(raw_kind)?;
+        let list = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
+        if list.owned != (kind == NativeSortKind::String)
+            || list.elements.iter().any(|element| {
+                element.is_none_or(|bits| {
+                    !kind.valid_bits(bits)
+                        || (kind == NativeSortKind::String && !self.strings.contains_key(&bits))
+                })
+            })
+        {
+            return Err(INVALID_LIST);
+        }
+        if kind == NativeSortKind::String {
+            list.elements.sort_by(|left, right| {
+                let left = &self.strings[&left.expect("validated list element")].text;
+                let right = &self.strings[&right.expect("validated list element")].text;
+                left.cmp(right)
+            });
+        } else {
+            list.elements.sort_by(|left, right| {
+                kind.compare(
+                    left.expect("validated list element"),
+                    right.expect("validated list element"),
+                )
+            });
+        }
         Ok(id)
     }
     fn string_list(&mut self, parts: Vec<String>) -> LeafResult<u64> {
@@ -1057,6 +1149,8 @@ leaves! {
 
     ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
+    ListSort, jett_rt_v1_list_sort, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
+        |s| s.sort_list(value, kind);
     ListLength, jett_rt_v1_list_length, false, (value: u64 => I64), i64 => I64,
         |s| Ok(s.lists.get(&value).ok_or(INVALID_LIST)?.elements.len() as i64);
     ListAppend, jett_rt_v1_list_append, false, (value: u64 => I64, bits: u64 => I64), u64 => I64,
@@ -1891,5 +1985,68 @@ mod tests {
             values.drop_value(input).unwrap();
             assert!(values.is_empty());
         }
+    }
+    #[test]
+    fn list_sort_orders_all_primitive_widths_and_preserves_string_owners() {
+        let cases = [
+            (NativeSortKind::Int8, [255, 2, 253], [253, 255, 2]),
+            (NativeSortKind::Int16, [65535, 2, 65533], [65533, 65535, 2]),
+            (
+                NativeSortKind::Int32,
+                [u32::MAX as u64, 2, (u32::MAX - 2) as u64],
+                [(u32::MAX - 2) as u64, u32::MAX as u64, 2],
+            ),
+            (
+                NativeSortKind::Int64,
+                [u64::MAX, 2, u64::MAX - 2],
+                [u64::MAX - 2, u64::MAX, 2],
+            ),
+            (NativeSortKind::Uint8, [255, 2, 1], [1, 2, 255]),
+            (NativeSortKind::Uint16, [65535, 2, 1], [1, 2, 65535]),
+            (
+                NativeSortKind::Uint32,
+                [u32::MAX as u64, 2, 1],
+                [1, 2, u32::MAX as u64],
+            ),
+            (NativeSortKind::Uint64, [u64::MAX, 2, 1], [1, 2, u64::MAX]),
+            (
+                NativeSortKind::Float32,
+                [1.5_f32.to_bits() as u64, (-2.25_f32).to_bits() as u64, 0],
+                [(-2.25_f32).to_bits() as u64, 0, 1.5_f32.to_bits() as u64],
+            ),
+            (
+                NativeSortKind::Float64,
+                [1.5_f64.to_bits(), (-2.25_f64).to_bits(), 0],
+                [(-2.25_f64).to_bits(), 0, 1.5_f64.to_bits()],
+            ),
+            (NativeSortKind::Bool, [1, 0, 1], [0, 1, 1]),
+        ];
+        for (kind, input, expected) in cases {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = input.map(Some).to_vec();
+            assert_eq!(values.sort_list(list, kind as u32), Ok(list));
+            assert_eq!(values.lists[&list].elements, expected.map(Some));
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+
+        let mut values = NativeValues::default();
+        let zebra = values.insert("zebra".into()).unwrap();
+        let apple = values.insert("apple".into()).unwrap();
+        let eclair = values.insert("éclair".into()).unwrap();
+        let list = values.new_list(true).unwrap();
+        values.lists.get_mut(&list).unwrap().elements =
+            vec![Some(zebra), Some(eclair), Some(apple)];
+        assert_eq!(
+            values.sort_list(list, NativeSortKind::String as u32),
+            Ok(list)
+        );
+        assert_eq!(
+            values.lists[&list].elements,
+            [Some(apple), Some(zebra), Some(eclair)]
+        );
+        values.drop_value(list).unwrap();
+        assert!(values.is_empty());
     }
 }
