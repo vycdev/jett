@@ -133,6 +133,18 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("secret_values", "../../tests/native/secret_values.jett"),
         ("crypto", "../../tests/native/crypto.jett"),
         (
+            "nested_handle_view_call",
+            "../../tests/run_pass/uint64_checked_expression_runtime_main.jett",
+        ),
+        (
+            "nested_handler_call",
+            "../../tests/native/nested_handler_call.jett",
+        ),
+        (
+            "nested_handler_order",
+            "../../tests/native/nested_handler_order.jett",
+        ),
+        (
             "numeric_conversions",
             "../../tests/native/numeric_conversions.jett",
         ),

@@ -1,0 +1,11 @@
+namespace app
+function identity(view value: uint64) returns uint64:
+    return value
+function pick(view values: list[uint64], fallback: uint64) returns uint64:
+    return identity(view(list.get[uint64](view values, 0) handle:
+        default fallback
+    ))
+function main() returns nothing:
+    list[uint64] present = list(42)
+    list[uint64] empty = list.new[uint64]()
+    println(pick(view present, 7), pick(view empty, 99))

@@ -1,0 +1,19 @@
+namespace app
+function marked(value: int64) returns int64:
+    println(value)
+    return value
+function combine(left: int64, right: int64) returns int64:
+    return left * 10 + right
+function pick(view values: list[int64], fallback: int64) returns int64:
+    return combine(marked(1), list.get[int64](view values, 0) handle:
+        default marked(fallback)
+    )
+function pick_named(view values: list[int64], fallback: int64) returns int64:
+    return combine(right: list.get[int64](view values, 0) handle:
+        default marked(fallback)
+    , left: marked(3))
+function main() returns nothing:
+    list[int64] present = list(2)
+    list[int64] empty = list.new[int64]()
+    println(pick(view present, 8), pick(view empty, 9))
+    println(pick_named(view present, 4), pick_named(view empty, 5))

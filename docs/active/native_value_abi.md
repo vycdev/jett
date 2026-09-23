@@ -174,9 +174,13 @@ continuation; return exits the enclosing function; break/continue retain their
 enclosing loop edges. Failure branches without an error binding drop the sum
 normally. Terminal runtime failure still bypasses these language-level branches.
 The move fixed point covers the extracted edges and transferred payload places.
-Nested payloads work; handlers nested inside arbitrary expression operands,
-refinement handlers, and match/aggregate lowering remain separate prerequisites
-and are still rejected by native validation rather than executed eagerly.
+Nested payloads work. Result/optional handlers inside direct-call arguments
+also lower through `view` wrappers; preceding owned arguments are staged in
+checked evaluation order before the handler's CFG branch. A native differential
+fixture checks present/default branches and named-argument side-effect order.
+Handlers nested inside other expression operands, refinement handlers, and
+match/aggregate lowering remain separate prerequisites and are still rejected
+by native validation rather than executed eagerly.
 
 All original bytes_operations fixture functions execute in a supplemental
 native main, including binary conversion errors and borrowed observer aliases.
