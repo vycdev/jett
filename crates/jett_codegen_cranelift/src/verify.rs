@@ -21,6 +21,7 @@ pub(crate) enum ScalarKind {
     List,
     Struct,
     Enum,
+    Bitfield,
     Stdout,
 }
 
@@ -169,6 +170,14 @@ fn scalar_kind_inner(
                 }
             }
             ScalarKind::Enum
+        }
+        Type::Bitfield(id) => {
+            if seen.insert(ty) {
+                for field in &types.resolve_bitfield(*id).fields {
+                    scalar_kind_inner(types, field.ty, "bitfield field".into(), seen)?;
+                }
+            }
+            ScalarKind::Bitfield
         }
         Type::List(inner) => {
             scalar_kind_inner(types, *inner, "list element".into(), seen)?;
@@ -788,8 +797,52 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
-            ExpressionKind::BitfieldConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "bitfield construction"))
+            ExpressionKind::BitfieldConstruct {
+                bitfield_type,
+                fields,
+                validates_widths,
+                ..
+            } => {
+                if *validates_widths {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "bitfield width validation",
+                    ));
+                }
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *bitfield_type,
+                    expression.ty,
+                    "bitfield construction type mismatch",
+                )?;
+                let Type::Bitfield(id) = self.types.resolve(*bitfield_type) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "bitfield construction",
+                    ));
+                };
+                let layout = &self.types.resolve_bitfield(*id).fields;
+                if fields.len() != layout.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "bitfield field count mismatch",
+                    ));
+                }
+                for (field, definition) in fields.iter().zip(layout) {
+                    self.expression(function, field)?;
+                    self.require_same_type(
+                        function,
+                        field.span,
+                        definition.ty,
+                        field.ty,
+                        "bitfield field type mismatch",
+                    )?;
+                }
+                Ok(())
             }
             ExpressionKind::MachineConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "machine construction"))
@@ -944,25 +997,34 @@ impl Verifier<'_> {
                     *owner_type,
                     "field owner mismatch",
                 )?;
-                let Type::Struct(id) = self.types.resolve(*owner_type) else {
-                    return Err(self.unsupported(
-                        function,
-                        expression.span,
-                        "non-struct field access",
-                    ));
-                };
-                let (_, ty) = self
-                    .types
-                    .resolve_struct(*id)
-                    .fields
-                    .get(field.index() as usize)
-                    .ok_or_else(|| {
-                        self.contract_error(function, expression.span, "invalid struct field index")
-                    })?;
+                let ty = match self.types.resolve(*owner_type) {
+                    Type::Struct(id) => self
+                        .types
+                        .resolve_struct(*id)
+                        .fields
+                        .get(field.index() as usize)
+                        .map(|(_, ty)| *ty),
+                    Type::Bitfield(id) => self
+                        .types
+                        .resolve_bitfield(*id)
+                        .fields
+                        .get(field.index() as usize)
+                        .map(|field| field.ty),
+                    _ => {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "non-aggregate field access",
+                        ));
+                    }
+                }
+                .ok_or_else(|| {
+                    self.contract_error(function, expression.span, "invalid aggregate field index")
+                })?;
                 self.require_same_type(
                     function,
                     expression.span,
-                    *ty,
+                    ty,
                     expression.ty,
                     "projected field type mismatch",
                 )
@@ -1050,6 +1112,7 @@ impl Verifier<'_> {
                         | ScalarKind::Sum
                         | ScalarKind::List
                         | ScalarKind::Struct
+                        | ScalarKind::Bitfield
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {

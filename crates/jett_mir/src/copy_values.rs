@@ -308,6 +308,7 @@ fn visit(
             | ExpressionKind::ListConstruct { .. }
             | ExpressionKind::StructConstruct { .. }
             | ExpressionKind::EnumConstruct { .. } => true,
+            ExpressionKind::BitfieldConstruct { .. } => true,
             _ => false,
         });
     }
@@ -367,6 +368,11 @@ fn visit(
         ExpressionKind::EnumConstruct { payloads, .. } if program.is_some() => {
             for payload in payloads {
                 visit(payload, reads, temporaries, types, program, false)?;
+            }
+        }
+        ExpressionKind::BitfieldConstruct { fields, .. } if program.is_some() => {
+            for field in fields {
+                visit(field, reads, temporaries, types, program, false)?;
             }
         }
         ExpressionKind::Field { base, .. } if program.is_some() => {
@@ -493,6 +499,12 @@ fn plan_type_inner(
                     for (_, field) in &variant.fields {
                         plan_type_inner(types, *field, program, seen)?;
                     }
+                }
+                return Ok(());
+            }
+            Type::Bitfield(id) => {
+                for field in &types.resolve_bitfield(*id).fields {
+                    plan_type_inner(types, field.ty, program, seen)?;
                 }
                 return Ok(());
             }

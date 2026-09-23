@@ -262,9 +262,15 @@ scalar, string and recursive owned payloads, multiple bindings and an `other`
 arm. Equality compares tags for unit enums; payload-enum equality remains
 guarded until typed field comparison is implemented.
 
+Bitfield values use the same typed record storage for fields, including owned
+payload fields. Native construction, field projection, clone and cleanup match
+the interpreter in a dedicated fixture. `to_bytes`, `from_bytes`, and dynamic
+field-width validation still require bitfield-specific native lowering.
+
 This is not full aggregate parity. Refinement-validating constructors, owned
 escape of a move-only projected view (without clone), field-place assignment,
-borrowed iteration yielding compound views, payload-enum equality, bitfields and machines remain
+borrowed iteration yielding compound views, payload-enum equality, bitfield
+serialization and width validation, and machines remain
 unsupported. Composite explicit comptime constants still require baking. Source
 validity and interpreter field-copy behavior do not authorize native implicit
 copies of move-only fields; those unresolved ownership paths stay guarded.

@@ -1,0 +1,16 @@
+namespace app
+bitfield Header:
+    version: 4 bits
+    length: 8 bits
+bitfield Packet:
+    kind: 8 bits
+    payload: list[uint8]
+function main() returns nothing:
+    Header original = Header(version: 4, length: 12)
+    Header duplicate = clone original
+    println(original.version, duplicate.length)
+    mutable list[uint8] payload = list.new[uint8]()
+    payload = list.append[uint8](payload, 7)
+    Packet packet = Packet(kind: 3, payload: payload)
+    Packet copied = clone packet
+    println(packet.kind, list.length(view copied.payload))

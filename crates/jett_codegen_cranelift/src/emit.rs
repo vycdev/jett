@@ -474,6 +474,7 @@ fn clif_type(
         | ScalarKind::List
         | ScalarKind::Struct
         | ScalarKind::Enum
+        | ScalarKind::Bitfield
         | ScalarKind::Stdout => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
@@ -1032,6 +1033,7 @@ impl Translator<'_, '_> {
                     Type::List(_) => NativeLeaf::ListClone,
                     Type::Struct(_) => NativeLeaf::StructClone,
                     Type::Enum(_) => NativeLeaf::StructClone,
+                    Type::Bitfield(_) => NativeLeaf::StructClone,
                     _ => NativeLeaf::SumClone,
                 };
                 let cloned = self.leaf(leaf, &[v], true)?;
@@ -1059,9 +1061,11 @@ impl Translator<'_, '_> {
                 evaluation_order,
                 ..
             } => self.construct_struct(fields, evaluation_order, expression.span),
-            ExpressionKind::BitfieldConstruct { .. } => {
-                Err(self.unsupported(expression.span, "bitfield construction"))
-            }
+            ExpressionKind::BitfieldConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => self.construct_struct(fields, evaluation_order, expression.span),
             ExpressionKind::MachineConstruct { .. } => {
                 Err(self.unsupported(expression.span, "machine construction"))
             }
@@ -1346,6 +1350,7 @@ impl Translator<'_, '_> {
             | ScalarKind::List
             | ScalarKind::Struct
             | ScalarKind::Enum
+            | ScalarKind::Bitfield
             | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,

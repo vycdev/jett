@@ -16,6 +16,7 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::List(_)
             | Type::Struct(_)
             | Type::Enum(_)
+            | Type::Bitfield(_)
     )
 }
 
@@ -340,6 +341,15 @@ impl Flow<'_> {
             ExpressionKind::EnumConstruct { payloads, .. } => {
                 for payload in payloads {
                     self.expr(payload, false)?;
+                }
+            }
+            ExpressionKind::BitfieldConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => {
+                for &index in evaluation_order {
+                    self.expr(&fields[index], false)?;
                 }
             }
             ExpressionKind::Field { base, .. } => {
