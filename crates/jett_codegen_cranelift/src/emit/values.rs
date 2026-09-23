@@ -67,17 +67,16 @@ impl Translator<'_, '_> {
         let _ = span;
         Ok(record)
     }
-    pub(super) fn construct_unit_enum(
+    pub(super) fn construct_enum(
         &mut self,
         variant: VariantId,
         payloads: &[Expression],
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
-        if !payloads.is_empty() {
-            return Err(self.unsupported(span, "enum payload construction"));
-        }
-        let one = self.builder.ins().iconst(ir::types::I64, 1);
-        let handle = self.leaf(NativeLeaf::StructNew, &[one], true)?;
+        let count = i64::try_from(payloads.len() + 1)
+            .map_err(|_| self.unsupported(span, "enum payload count"))?;
+        let count = self.builder.ins().iconst(ir::types::I64, count);
+        let handle = self.leaf(NativeLeaf::StructNew, &[count], true)?;
         let record = self.own_linear(handle)?;
         let zero = self.builder.ins().iconst(ir::types::I64, 0);
         let tag = self
@@ -86,6 +85,16 @@ impl Translator<'_, '_> {
             .iconst(ir::types::I64, i64::from(variant.index()));
         let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
         self.leaf(NativeLeaf::StructInit, &[handle, zero, tag, borrowed], true)?;
+        for (field, payload) in payloads.iter().enumerate() {
+            let value = self.expression(payload)?;
+            let (bits, owned) = self.payload_bits(value);
+            let index = self.builder.ins().iconst(ir::types::I64, field as i64 + 1);
+            let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
+            if let LoweredValue::Owned(_, slot) = value {
+                self.clear_slot(slot);
+            }
+        }
         Ok(record)
     }
     pub(super) fn struct_field(

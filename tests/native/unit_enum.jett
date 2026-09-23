@@ -25,3 +25,4 @@ function main() returns nothing:
     Direction duplicate = clone original
     println(label(duplicate), label(original))
     println(label(opposite(Direction.south)), label(opposite(Direction.east)))
+    println(Direction.north == Direction.north, Direction.north != Direction.south)

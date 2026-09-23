@@ -495,19 +495,44 @@ impl Verifier<'_> {
                     let index = usize::try_from(variant.index()).map_err(|_| {
                         self.contract_error(function, terminator.span, "variant index overflow")
                     })?;
-                    if index >= definition.variants.len() || !seen.insert(index) {
+                    let Some(variant_definition) = definition.variants.get(index) else {
                         return Err(self.contract_error(
                             function,
                             terminator.span,
-                            "variant switch has an invalid or duplicate arm",
+                            "variant switch has an invalid arm",
                         ));
-                    }
-                    if !bindings.is_empty() {
-                        return Err(self.unsupported(
+                    };
+                    if !seen.insert(index) {
+                        return Err(self.contract_error(
                             function,
                             terminator.span,
-                            "enum payload binding",
+                            "variant switch has a duplicate arm",
                         ));
+                    }
+                    if bindings.len() != variant_definition.fields.len() && !bindings.is_empty() {
+                        return Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "variant binding count mismatch",
+                        ));
+                    }
+                    let mut unique_bindings = std::collections::BTreeSet::new();
+                    for (binding, (_, expected)) in bindings.iter().zip(&variant_definition.fields)
+                    {
+                        let Some(local) = function.local(*binding) else {
+                            return Err(self.contract_error(
+                                function,
+                                terminator.span,
+                                "variant binding is not a local",
+                            ));
+                        };
+                        if local.ty != *expected || !unique_bindings.insert(binding.index()) {
+                            return Err(self.contract_error(
+                                function,
+                                terminator.span,
+                                "variant binding has an invalid type or duplicate local",
+                            ));
+                        }
                     }
                 }
                 if otherwise.is_none() && seen.len() != definition.variants.len() {
@@ -875,13 +900,6 @@ impl Verifier<'_> {
                         "enum constructor payload type mismatch",
                     )?;
                 }
-                if !payloads.is_empty() {
-                    return Err(self.unsupported(
-                        function,
-                        expression.span,
-                        "enum payload construction",
-                    ));
-                }
                 Ok(())
             }
             ExpressionKind::StringInterpolation(segments) => {
@@ -996,6 +1014,18 @@ impl Verifier<'_> {
         )?;
         let operand = scalar_kind(self.types, left.ty, "binary operand")?;
         let result = scalar_kind(self.types, expression.ty, "binary result")?;
+        if operand == ScalarKind::Enum
+            && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
+            && let Type::Enum(id) = self.types.resolve(left.ty)
+            && self
+                .types
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .any(|variant| !variant.fields.is_empty())
+        {
+            return Err(self.unsupported(function, expression.span, "payload enum equality"));
+        }
         if matches!(op, BinaryOp::Divide | BinaryOp::Modulo)
             && operand.is_integer()
             && integer_expression_is_statically_zero(right)

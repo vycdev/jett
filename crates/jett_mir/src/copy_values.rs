@@ -95,14 +95,34 @@ impl CopyValuePlan {
                 TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
                     visit(v, &mut reads, &mut temporaries, types, program, false)?
                 }
-                TerminatorKind::Switch { scrutinee, .. } if program.is_some() => visit(
+                TerminatorKind::Switch {
                     scrutinee,
-                    &mut reads,
-                    &mut temporaries,
-                    types,
-                    program,
-                    false,
-                )?,
+                    variants,
+                    ..
+                } if program.is_some() => {
+                    visit(
+                        scrutinee,
+                        &mut reads,
+                        &mut temporaries,
+                        types,
+                        program,
+                        false,
+                    )?;
+                    temporaries += variants
+                        .iter()
+                        .map(|(_, _, bindings)| {
+                            bindings
+                                .iter()
+                                .filter(|binding| {
+                                    let ty = function.locals[binding.index() as usize].ty;
+                                    ty == TypeInterner::STRING
+                                        || crate::move_values::is_linear(types, ty)
+                                })
+                                .count()
+                        })
+                        .max()
+                        .unwrap_or(0);
+                }
                 TerminatorKind::Return(None)
                 | TerminatorKind::Goto(_)
                 | TerminatorKind::Unreachable => {}
@@ -134,10 +154,12 @@ impl CopyValuePlan {
                         .iter()
                         .filter(|p| cfg.reverse_postorder().contains(p))
                     {
-                        incoming = incoming
-                            .intersection(&initialized_out[pred.index() as usize])
+                        let edge = switch_bindings_on_edge(function, *pred, id);
+                        let produced = initialized_out[pred.index() as usize]
+                            .union(&edge)
                             .copied()
-                            .collect();
+                            .collect::<Set>();
+                        incoming = incoming.intersection(&produced).copied().collect();
                     }
                     incoming
                 };
@@ -185,7 +207,13 @@ impl CopyValuePlan {
                 let out: Set = cfg
                     .successors(id)
                     .iter()
-                    .flat_map(|s| live_in[s.index() as usize].iter().copied())
+                    .flat_map(|s| {
+                        let edge = switch_bindings_on_edge(function, id, *s);
+                        live_in[s.index() as usize]
+                            .difference(&edge)
+                            .copied()
+                            .collect::<Set>()
+                    })
                     .collect();
                 let mut live = out.union(&facts[i].1).copied().collect::<Set>();
                 for (j, (reads, definition)) in facts[i].0.iter().enumerate().rev() {
@@ -223,6 +251,40 @@ impl CopyValuePlan {
             temporary_slots: max_temporaries,
         })
     }
+}
+pub(crate) fn switch_bindings_on_edge(
+    function: &Function,
+    source: crate::BlockId,
+    target: crate::BlockId,
+) -> Set {
+    let TerminatorKind::Switch {
+        variants,
+        otherwise,
+        ..
+    } = &function.blocks[source.index() as usize].terminator.kind
+    else {
+        return Set::new();
+    };
+    let mut candidates = variants
+        .iter()
+        .filter(|(_, block, _)| *block == target)
+        .map(|(_, _, bindings)| {
+            bindings
+                .iter()
+                .map(|local| local.index() as usize)
+                .collect::<Set>()
+        })
+        .collect::<Vec<_>>();
+    if *otherwise == Some(target) {
+        candidates.push(Set::new());
+    }
+    let Some(mut common) = candidates.pop() else {
+        return Set::new();
+    };
+    for candidate in candidates {
+        common = common.intersection(&candidate).copied().collect();
+    }
+    common
 }
 fn visit(
     value: &Expression,

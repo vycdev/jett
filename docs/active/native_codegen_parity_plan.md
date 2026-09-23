@@ -281,7 +281,7 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics and separately owned bytes storage, checked leaf operations | string search/replace, Unicode case changes, byte fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs with typed fields and unit enums; payload enums and other families pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; unit-enum construction, clone, match and cleanup covered; payload enums and other aggregate kinds pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfields and other families pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality covered; payload-enum equality and other aggregate kinds pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists; maps/sets pending | compiled list access, reverse/repeat, scalar iteration; projected views pending |
 | Results, optionals, and `handle` control flow | explicit statement-root handler CFG | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits and terminal bypass covered; nested-expression handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
@@ -296,7 +296,7 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 44 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 45 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 10 | 30 | Linux GNU production linking and exact interpreter stdout comparison in `native_execution` and `native_values` |
 | Runtime contracts | 20 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
@@ -304,13 +304,11 @@ These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 44. Four string/comptime fixtures began emitting
-objects after the remaining string intrinsics were implemented. Fixture
-membership and denominators are unchanged.
-Unit-enum construction and switching also pass a dedicated native/interpreter
-differential fixture. Existing run-pass enum fixtures require payload binding,
-bitfields, reflection, or JSON, so this slice does not raise the exhaustive
-object count.
+unmarked row and now proves 45. Four string/comptime fixtures began emitting
+objects after the remaining string intrinsics were implemented; the payload
+enum and unit-equality slice adds `enum_advanced.jett`. Fixture membership and
+denominators are unchanged. Unit and payload enums also pass dedicated
+native/interpreter differential fixtures, including recursive owned payloads.
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

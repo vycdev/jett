@@ -1,6 +1,6 @@
 //! Linear native places. Views are call-bounded loans, never owning aliases.
 //! Definite availability is an intersection fixed point over actual CFG edges.
-use crate::copy_values::CopyValuePlan;
+use crate::copy_values::{CopyValuePlan, switch_bindings_on_edge};
 use crate::{ControlFlowGraph, Function, ParamMode, Program, StatementKind, TerminatorKind};
 use jett_hir::{BinaryOp, Expression, ExpressionKind, IntrinsicId, StringSegment};
 use jett_types::{Type, TypeId, TypeInterner};
@@ -80,10 +80,12 @@ impl MoveValuePlan {
                 .iter()
                 .filter(|p| cfg.reverse_postorder().contains(p))
             {
-                state = state
-                    .intersection(&outgoing[pred.index() as usize])
+                let edge = switch_bindings_on_edge(function, *pred, id);
+                let produced = outgoing[pred.index() as usize]
+                    .union(&edge)
                     .copied()
-                    .collect();
+                    .collect::<Set>();
+                state = state.intersection(&produced).copied().collect();
             }
             state
         };

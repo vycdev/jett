@@ -1,0 +1,32 @@
+namespace app
+enum Item:
+    empty
+    number(value: int64)
+    text(value: string)
+    pair(left: string, right: string)
+    wrapped(inner: Item)
+function describe(item: Item) returns string:
+    match item:
+        empty:
+            return "empty"
+        number(value):
+            return "number {value}"
+        text(value):
+            return value
+        pair(left, right):
+            return "{left}/{right}"
+        wrapped(inner):
+            return describe(inner)
+function classify(item: Item) returns string:
+    match item:
+        empty:
+            return "empty"
+        other:
+            return "present"
+function main() returns nothing:
+    Item original = Item.text("hello")
+    Item duplicate = clone original
+    println(describe(original), describe(duplicate))
+    println(describe(Item.number(42)), describe(Item.pair("a", "b")))
+    println(describe(Item.wrapped(Item.text("nested"))))
+    println(classify(Item.empty), classify(Item.number(1)))

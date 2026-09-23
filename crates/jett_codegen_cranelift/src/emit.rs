@@ -853,18 +853,31 @@ impl Translator<'_, '_> {
                 let handle = self.scalar(lowered, scrutinee.span)?;
                 let zero = self.builder.ins().iconst(ir::types::I64, 0);
                 let tag = self.leaf(NativeLeaf::StructField, &[handle, zero], true)?;
-                self.drop_temporaries()?;
-                for (variant, target, _) in variants {
+                let switch_temporaries = self.next_temporary;
+                for (variant, target, bindings) in variants {
                     let match_tag =
                         self.builder
                             .ins()
                             .icmp_imm(IntCC::Equal, tag, i64::from(variant.index()));
                     let target =
                         block_for(self.blocks, target.index(), terminator.span, self.symbol)?;
+                    let selected = self.builder.create_block();
                     let next = self.builder.create_block();
-                    self.builder.ins().brif(match_tag, target, &[], next, &[]);
+                    self.builder.ins().brif(match_tag, selected, &[], next, &[]);
+                    self.builder.switch_to_block(selected);
+                    for (index, binding) in bindings.iter().enumerate() {
+                        let field = self.builder.ins().iconst(ir::types::I64, index as i64 + 1);
+                        let bits = self.leaf(NativeLeaf::StructTake, &[handle, field], true)?;
+                        let ty = self.local_types[binding.index() as usize].ty;
+                        let value = self.unpack_payload(bits, ty, terminator.span)?;
+                        self.define_local(*binding, value, terminator.span)?;
+                    }
+                    self.drop_temporaries()?;
+                    self.builder.ins().jump(target, &[]);
+                    self.next_temporary = switch_temporaries;
                     self.builder.switch_to_block(next);
                 }
+                self.drop_temporaries()?;
                 if let Some(otherwise) = otherwise {
                     let target =
                         block_for(self.blocks, otherwise.index(), terminator.span, self.symbol)?;
@@ -985,6 +998,19 @@ impl Translator<'_, '_> {
                     };
                     return Ok(LoweredValue::Scalar(value));
                 }
+                if operand_kind == ScalarKind::Enum {
+                    let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                    let left_tag = self.leaf(NativeLeaf::StructField, &[left_value, zero], true)?;
+                    let right_tag =
+                        self.leaf(NativeLeaf::StructField, &[right_value, zero], true)?;
+                    let condition = if *op == BinaryOp::Equal {
+                        IntCC::Equal
+                    } else {
+                        IntCC::NotEqual
+                    };
+                    let value = self.builder.ins().icmp(condition, left_tag, right_tag);
+                    return Ok(LoweredValue::Scalar(value));
+                }
                 let value =
                     self.binary(left_value, *op, right_value, operand_kind, expression.span)?;
                 Ok(LoweredValue::Scalar(value))
@@ -1060,7 +1086,7 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::EnumConstruct {
                 variant, payloads, ..
-            } => self.construct_unit_enum(*variant, payloads, expression.span),
+            } => self.construct_enum(*variant, payloads, expression.span),
             ExpressionKind::StringInterpolation(segments) => {
                 self.interpolate(segments, expression.span)
             }

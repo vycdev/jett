@@ -123,6 +123,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/string_intrinsics.jett",
         ),
         ("unit_enum", "../../tests/native/unit_enum.jett"),
+        ("payload_enum", "../../tests/native/payload_enum.jett"),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");

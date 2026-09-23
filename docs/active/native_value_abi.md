@@ -252,15 +252,19 @@ compiled call with its two view parameters; inequality negates its result.
 Native primitive comparison rejects raw struct operands. No structural equality,
 handle equality or method-name dispatcher is used.
 
-Unit enums use the same owned record handle with a dense variant tag in slot
-zero. Construction, cloning, cleanup and a switch without payload bindings are
-covered by a native/interpreter differential fixture. Switch validation rejects
-duplicate, invalid and non-exhaustive arms; payload construction and binding
-remain guarded.
+Enums use the same owned record handle with a dense variant tag in slot zero.
+Payloads occupy subsequent typed slots. Construction owns the partial record
+before evaluating payloads; a matched arm transfers bound fields out, then
+drops the remaining record. Clone and cleanup recursively handle owned
+payloads, including nested enums. Switch validation rejects duplicate, invalid
+and non-exhaustive arms. Native/interpreter differential fixtures cover unit,
+scalar, string and recursive owned payloads, multiple bindings and an `other`
+arm. Equality compares tags for unit enums; payload-enum equality remains
+guarded until typed field comparison is implemented.
 
 This is not full aggregate parity. Refinement-validating constructors, owned
 escape of a move-only projected view (without clone), field-place assignment,
-borrowed iteration yielding compound views, payload enums, bitfields and machines remain
+borrowed iteration yielding compound views, payload-enum equality, bitfields and machines remain
 unsupported. Composite explicit comptime constants still require baking. Source
 validity and interpreter field-copy behavior do not authorize native implicit
 copies of move-only fields; those unresolved ownership paths stay guarded.

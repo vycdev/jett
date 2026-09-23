@@ -304,6 +304,17 @@ impl NativeValues {
             .flatten()
             .ok_or(INVALID_STRUCT)
     }
+    fn take_struct_field(&mut self, id: u64, index: u64) -> LeafResult<NativeField> {
+        self.structs
+            .get_mut(&id)
+            .and_then(|s| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| s.fields.get_mut(i))
+            })
+            .and_then(Option::take)
+            .ok_or(INVALID_STRUCT)
+    }
     fn clone_struct(&mut self, id: u64) -> LeafResult<u64> {
         let fields = self.structs.get(&id).ok_or(INVALID_STRUCT)?.fields.clone();
         let output = self.new_struct(fields.len() as u64)?;
@@ -672,6 +683,8 @@ leaves! {
             *slot = Some(NativeField { bits, owned: owned != 0 }); Ok(0) };
     StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.struct_field(value, index)?.bits);
+    StructTake, jett_rt_v1_struct_take, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
+        |s| Ok(s.take_struct_field(value, index)?.bits);
     StructClone, jett_rt_v1_struct_clone, false, (value: u64 => I64), u64 => I64,
         |s| s.clone_struct(value);
     StringChars, jett_rt_v1_string_chars, false, (value: u64 => I64), u64 => I64,
@@ -1382,6 +1395,29 @@ mod tests {
             assert_eq!((values.structs_created, values.structs_destroyed), (4, 4));
             assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
             assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn struct_take_transfers_a_field_without_dropping_it_with_the_record() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let text = context.text("payload");
+            let record = jett_rt_v1_struct_new(p, 2);
+            assert_eq!(jett_rt_v1_struct_init(p, record, 0, 7, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(p, record, 1, text, 1), 0);
+            assert_eq!(jett_rt_v1_struct_take(p, record, 1), text);
+            jett_rt_v1_value_drop(p, record);
+            let lease = acquire_context(context_key(p).unwrap()).unwrap();
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!(values.text(text).unwrap(), "payload");
+                assert_eq!((values.structs_created, values.structs_destroyed), (1, 1));
+            }
+            jett_rt_v1_value_drop(p, text);
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert!(state.as_ref().unwrap().values.is_empty());
         }
     }
     #[test]
