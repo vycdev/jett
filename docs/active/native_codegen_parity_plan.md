@@ -300,23 +300,26 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 98 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 100 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 22 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. They provide
 a stable progress measure toward the stated native parity goal.
-Active `type.variant_value` selection now matches native/interpreter output for
-payload and empty variants. The exhaustive checkpoint stays at 98 object gates:
-`json_tree_reflection_variant_metadata.jett` advances to the next unsupported
-intrinsic, `type.variant_field_value`, before its object can pass.
+Active `type.variant_value` selection matches native/interpreter output for
+payload and empty variants. `json_tree_reflection_variant_metadata.jett` now
+advances to the next unsupported intrinsic, `type.variant_field_value`.
+Owned struct-field reads deep-clone the selected value while projected views
+remain borrowed. This adds `generic_reflection_branch_specialization.jett` and
+`generic_reflection_match_specialization.jett` to the object gate; other affected
+reflection fixtures advance to later unsupported intrinsics.
 
 The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 98. Four string/comptime fixtures began emitting
+unmarked row and now proves 100. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield

@@ -389,12 +389,10 @@ covers construction, transition, two- and three-state branches, payload reads,
 and bare-machine narrowing; the runtime guard test rejects a mismatched tag
 while preserving cleanup.
 
-This is not full aggregate parity. Refinement-validating constructors, owned
-escape of a move-only projected view (without clone), field-place assignment,
-borrowed iteration yielding compound views, payload-enum equality, and bitfield
-width validation remain unsupported. Composite explicit comptime constants still require baking. Source
-validity and interpreter field-copy behavior do not authorize native implicit
-copies of move-only fields; those unresolved ownership paths stay guarded.
+This is not full aggregate parity. Refinement-validating constructors,
+field-place assignment, borrowed iteration yielding compound views,
+payload-enum equality, and bitfield width validation remain unsupported.
+Composite explicit comptime constants still require baking.
 
 Borrowed native list and map iteration over move-only elements materializes an
 owned deep clone for each loop binding; the source collection retains its
@@ -402,8 +400,9 @@ owner through the loop. A switch over a borrowed enum likewise matches an
 owned clone, preserving the caller's value and existing payload-transfer
 semantics. An explicit `view` passed to an owned direct-call parameter is
 cloned at that call boundary. MIR ownership analysis and temporary capacity
-account for the clone; an ordinary move-only field projection into an owner
-still requires an explicit source `clone`.
+account for the clone. An ordinary owned read of a move-only struct field also
+deep-clones that field, matching the interpreter's field-copy behavior; a
+projected view keeps the parent loan active instead.
 Iteration over a list, set, or map projected through struct fields also borrows
 the root struct for the loop and clones each binding. The projected collection
 is never placed in an owning temporary, and the parent remains available after

@@ -1196,23 +1196,7 @@ impl Translator<'_, '_> {
             ExpressionKind::View(value) => self.argument(value, true),
             ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
                 let borrowed = self.argument(value, true)?;
-                let v = self.scalar(borrowed, value.span)?;
-                let leaf = match self
-                    .types
-                    .resolve(representation_type(self.types, value.ty))
-                {
-                    Type::Bytes => NativeLeaf::BytesClone,
-                    Type::List(_) => NativeLeaf::ListClone,
-                    Type::Set(_) => NativeLeaf::SetClone,
-                    Type::Map(..) => NativeLeaf::MapClone,
-                    Type::Struct(_) => NativeLeaf::StructClone,
-                    Type::Enum(_) => NativeLeaf::StructClone,
-                    Type::Bitfield(_) => NativeLeaf::StructClone,
-                    Type::Machine(_) | Type::MachineState { .. } => NativeLeaf::StructClone,
-                    _ => NativeLeaf::SumClone,
-                };
-                let cloned = self.leaf(leaf, &[v], true)?;
-                self.own_linear(cloned)
+                self.clone_linear(borrowed, value.ty, value.span)
             }
             ExpressionKind::Clone(value) => self.expression(value),
             ExpressionKind::String(text) => self.literal(text),
@@ -1306,15 +1290,7 @@ impl Translator<'_, '_> {
                 Err(self.unsupported(expression.span, "actor operation"))
             }
             ExpressionKind::Field { base, field, .. } => {
-                let index = if matches!(
-                    self.types.resolve(representation_type(self.types, base.ty)),
-                    Type::MachineState { .. }
-                ) {
-                    field.index() + 1
-                } else {
-                    field.index()
-                };
-                self.struct_field(base, index, expression.ty, expression.span)
+                self.project_field(base, *field, expression.ty, expression.span, false)
             }
         }
     }

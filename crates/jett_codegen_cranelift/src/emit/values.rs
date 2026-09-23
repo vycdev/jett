@@ -225,20 +225,64 @@ impl Translator<'_, '_> {
         let decoded = self.leaf(NativeLeaf::BitfieldDecode, &[value, pointer, length], true)?;
         self.own_linear(decoded)
     }
-    pub(super) fn struct_field(
+    pub(super) fn project_field(
+        &mut self,
+        base: &Expression,
+        field: jett_hir::FieldId,
+        ty: TypeId,
+        span: Span,
+        borrowed: bool,
+    ) -> Result<LoweredValue, CodegenError> {
+        let index = if matches!(
+            self.types.resolve(representation_type(self.types, base.ty)),
+            Type::MachineState { .. }
+        ) {
+            field.index() + 1
+        } else {
+            field.index()
+        };
+        self.struct_field(base, index, ty, span, borrowed)
+    }
+    pub(super) fn clone_linear(
+        &mut self,
+        borrowed: LoweredValue,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let value = self.scalar(borrowed, span)?;
+        let leaf = match self.types.resolve(representation_type(self.types, ty)) {
+            Type::Bytes => NativeLeaf::BytesClone,
+            Type::List(_) => NativeLeaf::ListClone,
+            Type::Set(_) => NativeLeaf::SetClone,
+            Type::Map(..) => NativeLeaf::MapClone,
+            Type::Struct(_) | Type::Enum(_) | Type::Bitfield(_) => NativeLeaf::StructClone,
+            Type::Machine(_) | Type::MachineState { .. } => NativeLeaf::StructClone,
+            _ => NativeLeaf::SumClone,
+        };
+        let cloned = self.leaf(leaf, &[value], true)?;
+        self.own_linear(cloned)
+    }
+    fn struct_field(
         &mut self,
         base: &Expression,
         index: u32,
         ty: TypeId,
         span: Span,
+        borrowed: bool,
     ) -> Result<LoweredValue, CodegenError> {
         let parent = self.argument(base, true)?;
         let parent = self.scalar(parent, span)?;
         let index = self.builder.ins().iconst(ir::types::I64, i64::from(index));
         let bits = self.leaf(NativeLeaf::StructField, &[parent, index], true)?;
         if is_linear(self.types, ty) {
-            // The owning root/temporary stays live through the bounded loan.
-            return Ok(LoweredValue::Scalar(bits));
+            // A view keeps the owning root live; an owned read deep-clones the
+            // field before full-expression cleanup releases the root.
+            let value = LoweredValue::Scalar(bits);
+            return if borrowed {
+                Ok(value)
+            } else {
+                self.clone_linear(value, ty, span)
+            };
         }
         let bits = if is_string(self.types, ty) {
             self.leaf(NativeLeaf::Retain, &[bits], true)?
@@ -670,6 +714,9 @@ impl Translator<'_, '_> {
         if borrowed && is_linear(self.types, expression.ty) {
             match &expression.kind {
                 ExpressionKind::View(inner) => return self.argument(inner, true),
+                ExpressionKind::Field { base, field, .. } => {
+                    return self.project_field(base, *field, expression.ty, expression.span, true);
+                }
                 ExpressionKind::Local(local) => {
                     let index = local.index() as usize;
                     let v =

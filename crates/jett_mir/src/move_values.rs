@@ -470,14 +470,10 @@ impl Flow<'_> {
                 }
             }
             ExpressionKind::Field { base, .. } => {
-                if !borrowed && is_linear(self.types, value.ty) {
-                    return Err(
-                        "move-only field projection requires a view or explicit clone".into(),
-                    );
-                }
                 let saved = self.loans.clone();
                 self.expr(base, true)?;
-                // A copied scalar/string cannot keep a parent loan alive.
+                // An owned field read clones the selected value before ending
+                // the parent loan; a projected view retains the loan.
                 if !borrowed || !is_linear(self.types, value.ty) {
                     self.loans = saved;
                 }

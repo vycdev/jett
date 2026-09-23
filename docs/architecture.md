@@ -2664,6 +2664,8 @@ projection and all user control flow. Typed runtime leaves only manage storage.
 Native sequence loops can borrow a checked struct-field collection directly:
 MIR records the root owner and field path, keeps the root loan active through
 the loop, and clones each loop binding without owning the projected collection.
+An owned field read clones the selected value, including nested move-only
+payloads, while a field view borrows the parent through the call boundary.
 The checker exports exact Equatable method identities for comparison expressions;
 HIR turns them into ordinary direct calls (and negation for inequality), never
 structural or handle equality. See `active/native_value_abi.md` for the supported

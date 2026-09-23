@@ -4,6 +4,8 @@ struct Collections:
     tags: set[int64]
     scores: map[string, int64]
     label: string
+struct Nested:
+    value: Collections
 function main() returns nothing:
     mutable set[int64] tags = set.new[int64]()
     tags = set.add[int64](tags, 3)
@@ -18,3 +20,14 @@ function main() returns nothing:
         println(key, score)
         total = total + score
     println(total, value.label, list.length[int64](view value.items), set.length[int64](view value.tags), map.length[string, int64](view value.scores))
+    mutable list[int64] copied_items = value.items
+    copied_items = list.append[int64](copied_items, 6)
+    mutable set[int64] copied_tags = value.tags
+    copied_tags = set.add[int64](copied_tags, 12)
+    mutable map[string, int64] copied_scores = value.scores
+    copied_scores = map.insert[string, int64](copied_scores, "c", 11)
+    println(list.length[int64](view copied_items), set.length[int64](view copied_tags), map.length[string, int64](view copied_scores))
+    println(list.length[int64](view value.items), set.length[int64](view value.tags), map.length[string, int64](view value.scores))
+    Nested nested = Nested(value: value)
+    list[int64] nested_items = nested.value.items
+    println(list.length[int64](view nested_items), nested.value.label)

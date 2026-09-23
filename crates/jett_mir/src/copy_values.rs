@@ -319,6 +319,7 @@ fn visit(
             | ExpressionKind::MapConstruct { .. }
             | ExpressionKind::StructConstruct { .. }
             | ExpressionKind::EnumConstruct { .. } => true,
+            ExpressionKind::Field { .. } => !borrowed,
             ExpressionKind::MachineConstruct { .. } | ExpressionKind::MachineTransition { .. } => {
                 true
             }
