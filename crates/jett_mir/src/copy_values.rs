@@ -95,6 +95,14 @@ impl CopyValuePlan {
                 TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
                     visit(v, &mut reads, &mut temporaries, types, program, false)?
                 }
+                TerminatorKind::Switch { scrutinee, .. } if program.is_some() => visit(
+                    scrutinee,
+                    &mut reads,
+                    &mut temporaries,
+                    types,
+                    program,
+                    false,
+                )?,
                 TerminatorKind::Return(None)
                 | TerminatorKind::Goto(_)
                 | TerminatorKind::Unreachable => {}
@@ -236,7 +244,8 @@ fn visit(
             | ExpressionKind::OptionalSome(_)
             | ExpressionKind::OptionalNone
             | ExpressionKind::ListConstruct { .. }
-            | ExpressionKind::StructConstruct { .. } => true,
+            | ExpressionKind::StructConstruct { .. }
+            | ExpressionKind::EnumConstruct { .. } => true,
             _ => false,
         });
     }
@@ -291,6 +300,11 @@ fn visit(
         ExpressionKind::StructConstruct { fields, .. } if program.is_some() => {
             for field in fields {
                 visit(field, reads, temporaries, types, program, false)?;
+            }
+        }
+        ExpressionKind::EnumConstruct { payloads, .. } if program.is_some() => {
+            for payload in payloads {
+                visit(payload, reads, temporaries, types, program, false)?;
             }
         }
         ExpressionKind::Field { base, .. } if program.is_some() => {
@@ -409,6 +423,14 @@ fn plan_type_inner(
             Type::Struct(id) => {
                 for (_, field) in &types.resolve_struct(*id).fields {
                     plan_type_inner(types, *field, program, seen)?;
+                }
+                return Ok(());
+            }
+            Type::Enum(id) => {
+                for variant in &types.resolve_enum(*id).variants {
+                    for (_, field) in &variant.fields {
+                        plan_type_inner(types, *field, program, seen)?;
+                    }
                 }
                 return Ok(());
             }

@@ -473,6 +473,7 @@ fn clif_type(
         | ScalarKind::Sum
         | ScalarKind::List
         | ScalarKind::Struct
+        | ScalarKind::Enum
         | ScalarKind::Stdout => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
@@ -843,8 +844,35 @@ impl Translator<'_, '_> {
                 Ok(())
             }
             TerminatorKind::Respond(_) => Err(self.unsupported(terminator.span, "actor response")),
-            TerminatorKind::Switch { .. } => {
-                Err(self.unsupported(terminator.span, "variant switch"))
+            TerminatorKind::Switch {
+                scrutinee,
+                variants,
+                otherwise,
+            } => {
+                let lowered = self.expression(scrutinee)?;
+                let handle = self.scalar(lowered, scrutinee.span)?;
+                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                let tag = self.leaf(NativeLeaf::StructField, &[handle, zero], true)?;
+                self.drop_temporaries()?;
+                for (variant, target, _) in variants {
+                    let match_tag =
+                        self.builder
+                            .ins()
+                            .icmp_imm(IntCC::Equal, tag, i64::from(variant.index()));
+                    let target =
+                        block_for(self.blocks, target.index(), terminator.span, self.symbol)?;
+                    let next = self.builder.create_block();
+                    self.builder.ins().brif(match_tag, target, &[], next, &[]);
+                    self.builder.switch_to_block(next);
+                }
+                if let Some(otherwise) = otherwise {
+                    let target =
+                        block_for(self.blocks, otherwise.index(), terminator.span, self.symbol)?;
+                    self.builder.ins().jump(target, &[]);
+                } else {
+                    self.builder.ins().trap(TrapCode::unwrap_user(1));
+                }
+                Ok(())
             }
             TerminatorKind::ForEach { .. } => {
                 Err(self.unsupported(terminator.span, "for-each loop"))
@@ -977,6 +1005,7 @@ impl Translator<'_, '_> {
                     Type::Bytes => NativeLeaf::BytesClone,
                     Type::List(_) => NativeLeaf::ListClone,
                     Type::Struct(_) => NativeLeaf::StructClone,
+                    Type::Enum(_) => NativeLeaf::StructClone,
                     _ => NativeLeaf::SumClone,
                 };
                 let cloned = self.leaf(leaf, &[v], true)?;
@@ -1029,9 +1058,9 @@ impl Translator<'_, '_> {
             ExpressionKind::Handle { .. } => {
                 Err(self.unsupported(expression.span, "failure handler"))
             }
-            ExpressionKind::EnumConstruct { .. } => {
-                Err(self.unsupported(expression.span, "enum construction"))
-            }
+            ExpressionKind::EnumConstruct {
+                variant, payloads, ..
+            } => self.construct_unit_enum(*variant, payloads, expression.span),
             ExpressionKind::StringInterpolation(segments) => {
                 self.interpolate(segments, expression.span)
             }
@@ -1290,6 +1319,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Sum
             | ScalarKind::List
             | ScalarKind::Struct
+            | ScalarKind::Enum
             | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,

@@ -1,0 +1,27 @@
+namespace app
+enum Direction:
+    north
+    south
+    east
+    west
+function opposite(value: Direction) returns Direction:
+    match value:
+        north:
+            return Direction.south
+        south:
+            return Direction.north
+        east:
+            return Direction.west
+        west:
+            return Direction.east
+function label(value: Direction) returns string:
+    match value:
+        north:
+            return "north"
+        other:
+            return "other"
+function main() returns nothing:
+    Direction original = Direction.north
+    Direction duplicate = clone original
+    println(label(duplicate), label(original))
+    println(label(opposite(Direction.south)), label(opposite(Direction.east)))

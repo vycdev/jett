@@ -1,5 +1,5 @@
 use super::*;
-use jett_hir::{IntrinsicId, StringSegment};
+use jett_hir::{IntrinsicId, StringSegment, VariantId};
 use std::collections::BTreeSet;
 
 impl Translator<'_, '_> {
@@ -65,6 +65,27 @@ impl Translator<'_, '_> {
             }
         }
         let _ = span;
+        Ok(record)
+    }
+    pub(super) fn construct_unit_enum(
+        &mut self,
+        variant: VariantId,
+        payloads: &[Expression],
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        if !payloads.is_empty() {
+            return Err(self.unsupported(span, "enum payload construction"));
+        }
+        let one = self.builder.ins().iconst(ir::types::I64, 1);
+        let handle = self.leaf(NativeLeaf::StructNew, &[one], true)?;
+        let record = self.own_linear(handle)?;
+        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+        let tag = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, i64::from(variant.index()));
+        let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
+        self.leaf(NativeLeaf::StructInit, &[handle, zero, tag, borrowed], true)?;
         Ok(record)
     }
     pub(super) fn struct_field(

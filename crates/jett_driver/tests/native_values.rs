@@ -136,6 +136,19 @@ fn native_remaining_string_intrinsics_match_interpreter() {
     assert!(actual.stderr.is_empty(), "{actual:?}");
 }
 
+#[test]
+fn native_unit_enums_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/unit_enum.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("enum oracle");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("program");
+    build_host_executable(&fixture, &launcher(), &binary).expect("compile native enum");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
 fn run_source(source: &str) -> std::process::Output {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("values.jett");

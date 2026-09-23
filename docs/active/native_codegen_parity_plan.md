@@ -281,7 +281,7 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics and separately owned bytes storage, checked leaf operations | string search/replace, Unicode case changes, byte fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs with typed fields; other families pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup covered; refinement validation and other aggregate kinds pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs with typed fields and unit enums; payload enums and other families pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; unit-enum construction, clone, match and cleanup covered; payload enums and other aggregate kinds pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists; maps/sets pending | compiled list access, reverse/repeat, scalar iteration; projected views pending |
 | Results, optionals, and `handle` control flow | explicit statement-root handler CFG | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits and terminal bypass covered; nested-expression handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
@@ -307,6 +307,10 @@ code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
 unmarked row and now proves 44. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented. Fixture
 membership and denominators are unchanged.
+Unit-enum construction and switching also pass a dedicated native/interpreter
+differential fixture. Existing run-pass enum fixtures require payload binding,
+bitfields, reflection, or JSON, so this slice does not raise the exhaustive
+object count.
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

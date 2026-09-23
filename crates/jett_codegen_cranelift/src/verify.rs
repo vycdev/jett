@@ -20,6 +20,7 @@ pub(crate) enum ScalarKind {
     Sum,
     List,
     Struct,
+    Enum,
     Stdout,
 }
 
@@ -158,6 +159,16 @@ fn scalar_kind_inner(
                 }
             }
             ScalarKind::Struct
+        }
+        Type::Enum(id) => {
+            if seen.insert(ty) {
+                for variant in &types.resolve_enum(*id).variants {
+                    for (_, field) in &variant.fields {
+                        scalar_kind_inner(types, *field, "enum payload".into(), seen)?;
+                    }
+                }
+            }
+            ScalarKind::Enum
         }
         Type::List(inner) => {
             scalar_kind_inner(types, *inner, "list element".into(), seen)?;
@@ -465,8 +476,48 @@ impl Verifier<'_> {
             TerminatorKind::Respond(_) => {
                 Err(self.unsupported(function, terminator.span, "actor response"))
             }
-            TerminatorKind::Switch { .. } => {
-                Err(self.unsupported(function, terminator.span, "variant switch"))
+            TerminatorKind::Switch {
+                scrutinee,
+                variants,
+                otherwise,
+            } => {
+                self.expression(function, scrutinee)?;
+                let Type::Enum(enum_id) = self.types.resolve(scrutinee.ty) else {
+                    return Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "variant switch scrutinee is not an enum",
+                    ));
+                };
+                let definition = self.types.resolve_enum(*enum_id);
+                let mut seen = std::collections::BTreeSet::new();
+                for (variant, _, bindings) in variants {
+                    let index = usize::try_from(variant.index()).map_err(|_| {
+                        self.contract_error(function, terminator.span, "variant index overflow")
+                    })?;
+                    if index >= definition.variants.len() || !seen.insert(index) {
+                        return Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "variant switch has an invalid or duplicate arm",
+                        ));
+                    }
+                    if !bindings.is_empty() {
+                        return Err(self.unsupported(
+                            function,
+                            terminator.span,
+                            "enum payload binding",
+                        ));
+                    }
+                }
+                if otherwise.is_none() && seen.len() != definition.variants.len() {
+                    return Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "variant switch is not exhaustive",
+                    ));
+                }
+                Ok(())
             }
             TerminatorKind::ForEach { .. } => {
                 Err(self.unsupported(function, terminator.span, "for-each loop"))
@@ -778,8 +829,60 @@ impl Verifier<'_> {
             ExpressionKind::Handle { .. } => {
                 Err(self.unsupported(function, expression.span, "failure handler"))
             }
-            ExpressionKind::EnumConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "enum construction"))
+            ExpressionKind::EnumConstruct {
+                enum_type,
+                variant,
+                payloads,
+            } => {
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    expression.ty,
+                    *enum_type,
+                    "enum construction type mismatch",
+                )?;
+                let Type::Enum(enum_id) = self.types.resolve(*enum_type) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "enum construction",
+                    ));
+                };
+                let index = usize::try_from(variant.index()).map_err(|_| {
+                    self.contract_error(function, expression.span, "variant index overflow")
+                })?;
+                let Some(definition) = self.types.resolve_enum(*enum_id).variants.get(index) else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "enum constructor variant is missing",
+                    ));
+                };
+                if payloads.len() != definition.fields.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "enum constructor payload count mismatch",
+                    ));
+                }
+                for (payload, (_, expected)) in payloads.iter().zip(&definition.fields) {
+                    self.expression(function, payload)?;
+                    self.require_same_type(
+                        function,
+                        payload.span,
+                        *expected,
+                        payload.ty,
+                        "enum constructor payload type mismatch",
+                    )?;
+                }
+                if !payloads.is_empty() {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "enum payload construction",
+                    ));
+                }
+                Ok(())
             }
             ExpressionKind::StringInterpolation(segments) => {
                 if kind != ScalarKind::String {

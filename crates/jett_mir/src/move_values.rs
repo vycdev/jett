@@ -10,7 +10,12 @@ type Set = BTreeSet<usize>;
 pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
     matches!(
         types.resolve(ty),
-        Type::Bytes | Type::Result(..) | Type::Optional(_) | Type::List(_) | Type::Struct(_)
+        Type::Bytes
+            | Type::Result(..)
+            | Type::Optional(_)
+            | Type::List(_)
+            | Type::Struct(_)
+            | Type::Enum(_)
     )
 }
 
@@ -233,6 +238,7 @@ impl Flow<'_> {
             TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
                 self.expr(v, false)?
             }
+            TerminatorKind::Switch { scrutinee, .. } => self.expr(scrutinee, false)?,
             TerminatorKind::Return(None)
             | TerminatorKind::Goto(_)
             | TerminatorKind::Unreachable => {}
@@ -327,6 +333,11 @@ impl Flow<'_> {
             } => {
                 for &index in evaluation_order {
                     self.expr(&fields[index], false)?;
+                }
+            }
+            ExpressionKind::EnumConstruct { payloads, .. } => {
+                for payload in payloads {
+                    self.expr(payload, false)?;
                 }
             }
             ExpressionKind::Field { base, .. } => {
