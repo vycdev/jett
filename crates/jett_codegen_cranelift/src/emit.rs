@@ -710,10 +710,18 @@ impl Translator<'_, '_> {
                     ty,
                     span: statement.span,
                 };
-                let value = self.argument(&source_expr, true)?;
-                let value = self.scalar(value, statement.span)?;
                 let set = matches!(self.types.resolve(ty), Type::Set(_));
                 let map = matches!(self.types.resolve(ty), Type::Map(..));
+                let string = matches!(self.types.resolve(ty), Type::String);
+                let value = if string {
+                    let slot = self.local_slots[source.index() as usize].ok_or_else(|| {
+                        self.unsupported(statement.span, "string iteration source")
+                    })?;
+                    self.builder.ins().stack_load(ir::types::I64, slot, 0)
+                } else {
+                    let value = self.argument(&source_expr, true)?;
+                    self.scalar(value, statement.span)?
+                };
                 let output = if let StatementKind::SequenceGet {
                     index,
                     consume,
@@ -724,7 +732,9 @@ impl Translator<'_, '_> {
                     let index = self
                         .builder
                         .use_var(self.variables[index.index() as usize].unwrap());
-                    let leaf = if map {
+                    let leaf = if string {
+                        NativeLeaf::StringScalarAt
+                    } else if map {
                         match (part, consume) {
                             (jett_mir::SequencePart::Key, true) => NativeLeaf::MapKeyTake,
                             (jett_mir::SequencePart::Key, false) => NativeLeaf::MapKeyClone,
@@ -754,7 +764,9 @@ impl Translator<'_, '_> {
                         statement.span,
                     )?
                 } else {
-                    let leaf = if map {
+                    let leaf = if string {
+                        NativeLeaf::StringScalarCount
+                    } else if map {
                         NativeLeaf::MapLength
                     } else if set {
                         NativeLeaf::SetLength

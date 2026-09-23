@@ -18,6 +18,10 @@ const INVALID_HANDLE: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native string handle",
 );
+const INVALID_STRING_SCALAR_INDEX: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native string scalar index",
+);
 const INVALID_STRUCT: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native struct handle or field",
@@ -1724,6 +1728,12 @@ leaves! {
         |s| s.clone_struct(value);
     StringChars, jett_rt_v1_string_chars, false, (value: u64 => I64), u64 => I64,
         |s| { let parts = s.text(value)?.graphemes(true).map(str::to_owned).collect(); s.string_list(parts) };
+    StringScalarCount, jett_rt_v1_string_scalar_count, false, (value: u64 => I64), i64 => I64,
+        |s| Ok(s.text(value)?.chars().count() as i64);
+    StringScalarAt, jett_rt_v1_string_scalar_at, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let index = usize::try_from(index).map_err(|_| INVALID_STRING_SCALAR_INDEX)?;
+            let scalar = s.text(value)?.chars().nth(index).ok_or(INVALID_STRING_SCALAR_INDEX)?;
+            s.insert(scalar.to_string()) };
     StringWords, jett_rt_v1_string_words, false, (value: u64 => I64), u64 => I64,
         |s| { let parts = s.text(value)?.split_whitespace().map(str::to_owned).collect(); s.string_list(parts) };
     StringLines, jett_rt_v1_string_lines, false, (value: u64 => I64), u64 => I64,

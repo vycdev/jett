@@ -355,6 +355,17 @@ impl Verifier<'_> {
                             ));
                         }
                     },
+                    Type::String => {
+                        if matches!(statement.kind, StatementKind::SequenceGet { part, .. } if part != jett_mir::SequencePart::Element)
+                        {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "invalid string iteration projection",
+                            ));
+                        }
+                        TypeInterner::STRING
+                    }
                     _ => {
                         return Err(self.contract_error(
                             function,

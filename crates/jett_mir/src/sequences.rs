@@ -1,4 +1,4 @@
-//! Materialize native list, set, and map iterables once, before the loop backedge.
+//! Materialize native string, list, set, and map iterables once, before the loop backedge.
 //! Consuming iteration takes initialized element places. Borrowed iteration
 //! clones each element into a loop-local owner without moving the collection.
 use super::*;
@@ -46,6 +46,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     (*element, None)
                 }
                 Type::Map(key, map_value) if value_binding.is_some() => (*key, Some(*map_value)),
+                Type::String if value_binding.is_none() => (TypeInterner::STRING, None),
                 _ => continue,
             };
             if element.index() as usize >= types.len()

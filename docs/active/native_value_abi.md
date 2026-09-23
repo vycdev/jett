@@ -218,6 +218,11 @@ name-dispatch or loop interpreter is introduced.
 Before native validation, a MIR sequence pass materializes supported iterables
 in a preheader exactly once, creates a cursor and length, and replaces ForEach
 with ordinary Branch, SequenceGet, increment, and existing exit/backedge CFG.
+Direct string iteration uses typed scalar-count and scalar-at leaves, so each
+loop item matches the interpreter's Unicode scalar `for` semantics. This is
+distinct from `string.chars`, which returns grapheme clusters. The string
+source remains owned by its frame slot while each yielded scalar is a new
+owned string handle.
 Consuming iteration transfers scalar/string and move-only elements from initialized
 element places. Each list slot has an independent initialized flag; a take clears
 only that slot after bounds/initialization checks. Partial-list destruction visits
