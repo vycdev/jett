@@ -320,6 +320,15 @@ unsupported. Composite explicit comptime constants still require baking. Source
 validity and interpreter field-copy behavior do not authorize native implicit
 copies of move-only fields; those unresolved ownership paths stay guarded.
 
+Borrowed native list and map iteration over move-only elements materializes an
+owned deep clone for each loop binding; the source collection retains its
+owner through the loop. A switch over a borrowed enum likewise matches an
+owned clone, preserving the caller's value and existing payload-transfer
+semantics. An explicit `view` passed to an owned direct-call parameter is
+cloned at that call boundary. MIR ownership analysis and temporary capacity
+account for the clone; an ordinary move-only field projection into an owner
+still requires an explicit source `clone`.
+
 Borrowed sequence tokens now end on each CFG edge leaving the loop region,
 including handler default edges that bypass the ordinary loop exit. Split edges
 end only that loop token, preserving outer loans. Nested iterable element IDs

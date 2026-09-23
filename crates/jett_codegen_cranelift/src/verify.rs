@@ -360,26 +360,18 @@ impl Verifier<'_> {
                         ));
                     }
                 };
-                let expected =
-                    if let StatementKind::SequenceGet { index, consume, .. } = statement.kind {
-                        self.require_same_type(
-                            function,
-                            statement.span,
-                            TypeInterner::INT64,
-                            function.local(index).unwrap().ty,
-                            "sequence index must be int64",
-                        )?;
-                        if !consume && jett_mir::move_values::is_linear(self.types, element) {
-                            return Err(self.unsupported(
-                                function,
-                                statement.span,
-                                "move-only iteration element places",
-                            ));
-                        }
-                        element
-                    } else {
-                        TypeInterner::INT64
-                    };
+                let expected = if let StatementKind::SequenceGet { index, .. } = statement.kind {
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        TypeInterner::INT64,
+                        function.local(index).unwrap().ty,
+                        "sequence index must be int64",
+                    )?;
+                    element
+                } else {
+                    TypeInterner::INT64
+                };
                 self.require_same_type(
                     function,
                     statement.span,

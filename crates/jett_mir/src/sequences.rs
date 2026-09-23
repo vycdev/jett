@@ -1,6 +1,6 @@
-//! Materialize native list and set iterables once, before the loop backedge.
-//! Consuming iteration takes initialized element places. Move-only views need
-//! projected-place loans and are deliberately left unsupported.
+//! Materialize native list, set, and map iterables once, before the loop backedge.
+//! Consuming iteration takes initialized element places. Borrowed iteration
+//! clones each element into a loop-local owner without moving the collection.
 use super::*;
 use jett_hir::{BinaryOp, ExpressionKind};
 use jett_types::{Type, TypeInterner};
@@ -51,27 +51,6 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             if element.index() as usize >= types.len()
                 || map_value.is_some_and(|ty| ty.index() as usize >= types.len())
             {
-                continue;
-            }
-            let viewable = |ty| {
-                matches!(
-                    types.resolve(ty),
-                    Type::Int8
-                        | Type::Int16
-                        | Type::Int32
-                        | Type::Int64
-                        | Type::Uint8
-                        | Type::Uint16
-                        | Type::Uint32
-                        | Type::Uint64
-                        | Type::Float32
-                        | Type::Float64
-                        | Type::Bool
-                        | Type::String
-                        | Type::Nothing
-                )
-            };
-            if by_view && (!viewable(element) || map_value.is_some_and(|ty| !viewable(ty))) {
                 continue;
             }
             // A preheader is the unique predecessor reachable from entry

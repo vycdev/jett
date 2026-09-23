@@ -23,6 +23,14 @@ function classify(item: Item) returns string:
             return "empty"
         other:
             return "present"
+function borrowed_description(view item: Item) returns string:
+    match item:
+        text(value):
+            return value
+        pair(left, right):
+            return "{left}/{right}"
+        other:
+            return "other"
 function main() returns nothing:
     Item original = Item.text("hello")
     Item duplicate = clone original
@@ -30,3 +38,14 @@ function main() returns nothing:
     println(describe(Item.number(42)), describe(Item.pair("a", "b")))
     println(describe(Item.wrapped(Item.text("nested"))))
     println(classify(Item.empty), classify(Item.number(1)))
+    Item borrowed = Item.pair("read", "again")
+    println(borrowed_description(view borrowed), borrowed_description(view borrowed))
+    println(describe(borrowed))
+    list[Item] collection = list(Item.text("first"), Item.text("second"))
+    for item in view collection:
+        println(borrowed_description(view item))
+    println(list.length[Item](collection))
+    map[string, Item] keyed = map("one": Item.text("value"))
+    for key, item in view keyed:
+        println(key, borrowed_description(view item))
+    println(map.length[string, Item](keyed))

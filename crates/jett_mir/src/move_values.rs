@@ -47,6 +47,7 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                     | IntrinsicId::SetContains
                     | IntrinsicId::MapLength
                     | IntrinsicId::MapHas
+                    | IntrinsicId::MapGet
             ))
 }
 
@@ -320,7 +321,9 @@ impl Flow<'_> {
                 for &index in evaluation_order {
                     let view = self.program.functions[function.index() as usize].params[index].mode
                         == ParamMode::View;
-                    self.expr(&args[index], view)?;
+                    let explicit_view = matches!(args[index].kind, ExpressionKind::View(_))
+                        && is_linear(self.types, args[index].ty);
+                    self.expr(&args[index], view || explicit_view)?;
                 }
                 self.loans = saved;
             }

@@ -87,7 +87,7 @@ function json_tree_top_level_segments(view input: bytes, start: int64, end: int6
             segments = list.append[JsonTreeSegment](segments, JsonTreeSegment(start: segment_start, end: index))
             segment_start = index + 1
         else:
-            scan = step.scan
+            scan = clone step.scan
         index = index + 1
     nothing checked = json_tree_finish_scan(view scan) handle error:
         return fail(error)
@@ -99,7 +99,7 @@ function json_tree_insert_object_segment(view input: bytes, fields: map[string, 
         return fail(error)
     if map.has[string, JsonTree](view fields, field.key) == true:
         return fail("duplicate object field '{field.key}'")
-    return ok(map.insert[string, JsonTree](fields, field.key, field.value))
+    return ok(map.insert[string, JsonTree](fields, field.key, clone field.value))
 function json_tree_parse_object_field_span(view input: bytes, start: int64, end: int64) returns result[JsonTreeObjectField, string]:
     int64 colon = json_tree_find_top_level_colon(view input, start, end) handle error:
         return fail(error)
@@ -124,7 +124,7 @@ function json_tree_find_top_level_colon(view input: bytes, start: int64, end: in
             return fail(error)
         if step.separated == true:
             return ok(index)
-        scan = step.scan
+        scan = clone step.scan
         index = index + 1
     return fail("expected object field separator")
 function json_tree_top_level_separator_step(view scan: JsonTreeScan, byte: int64, separator: int64) returns result[JsonTreeTopLevelSeparatorStep, string]:
@@ -150,21 +150,21 @@ function json_tree_segment_value_scan_start() returns JsonTreeSegmentValueScan:
     return JsonTreeSegmentValueScan(tree_scan: json_tree_scan_start(), started: false, scalar: false, complete: false)
 function json_tree_segment_value_scan_step(view scan: JsonTreeSegmentValueScan, byte: int64) returns result[JsonTreeSegmentValueScan, string]:
     if scan.complete == true:
-        return ok(JsonTreeSegmentValueScan(tree_scan: scan.tree_scan, started: scan.started, scalar: scan.scalar, complete: scan.complete))
+        return ok(JsonTreeSegmentValueScan(tree_scan: clone scan.tree_scan, started: scan.started, scalar: scan.scalar, complete: scan.complete))
     if scan.started == false:
         return json_tree_segment_value_scan_start_value(view scan, byte)
     return json_tree_segment_value_scan_continue(view scan, byte)
 function json_tree_segment_value_scan_start_value(view scan: JsonTreeSegmentValueScan, byte: int64) returns result[JsonTreeSegmentValueScan, string]:
     if json_tree_is_whitespace_byte(byte) == true:
-        return ok(JsonTreeSegmentValueScan(tree_scan: scan.tree_scan, started: scan.started, scalar: scan.scalar, complete: scan.complete))
+        return ok(JsonTreeSegmentValueScan(tree_scan: clone scan.tree_scan, started: scan.started, scalar: scan.scalar, complete: scan.complete))
     bool scalar = byte != 34 and byte != 91 and byte != 123
     JsonTreeScan tree_scan = json_tree_scan_step(view scan.tree_scan, byte) handle error:
         return fail(error)
     return ok(JsonTreeSegmentValueScan(tree_scan: tree_scan, started: true, scalar: scalar, complete: false))
 function json_tree_segment_value_scan_continue(view scan: JsonTreeSegmentValueScan, byte: int64) returns result[JsonTreeSegmentValueScan, string]:
     if scan.tree_scan.in_string == false and scan.tree_scan.depth == 0 and scan.scalar == true and json_tree_is_whitespace_byte(byte) == true:
-        return ok(JsonTreeSegmentValueScan(tree_scan: scan.tree_scan, started: scan.started, scalar: scan.scalar, complete: true))
-    JsonTreeScan before = scan.tree_scan
+        return ok(JsonTreeSegmentValueScan(tree_scan: clone scan.tree_scan, started: scan.started, scalar: scan.scalar, complete: true))
+    JsonTreeScan before = clone scan.tree_scan
     JsonTreeScan tree_scan = json_tree_scan_step(view scan.tree_scan, byte) handle error:
         return fail(error)
     bool complete = json_tree_segment_value_finished(scan.scalar, view before, view tree_scan)

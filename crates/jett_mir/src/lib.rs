@@ -766,6 +766,12 @@ pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
 fn lower_function(function: &hir::Function) -> Function {
     let mut builder = Builder::new(function.body.span);
     builder.locals = function.locals.clone();
+    builder.view_params = function
+        .params
+        .iter()
+        .filter(|param| param.mode == ParamMode::View)
+        .map(|param| param.local)
+        .collect();
     builder.lower_block(&function.body);
     if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
         builder.terminate(TerminatorKind::Return(None), function.body.span);
@@ -788,6 +794,7 @@ struct Builder {
     loops: Vec<(BlockId, BlockId)>,
     locals: Vec<Local>,
     handlers: Vec<(LocalId, BlockId)>,
+    view_params: Vec<LocalId>,
 }
 
 impl Builder {
@@ -805,6 +812,7 @@ impl Builder {
             loops: Vec::new(),
             locals: Vec::new(),
             handlers: Vec::new(),
+            view_params: Vec::new(),
         }
     }
 
@@ -1054,6 +1062,20 @@ impl Builder {
                 otherwise = Some(*block);
             }
         }
+        let borrowed = match &scrutinee.kind {
+            hir::ExpressionKind::View(_) | hir::ExpressionKind::Field { .. } => true,
+            hir::ExpressionKind::Local(local) => self.view_params.contains(local),
+            _ => false,
+        };
+        let scrutinee = if borrowed {
+            Expression {
+                kind: hir::ExpressionKind::Clone(Box::new(scrutinee.clone())),
+                ty: scrutinee.ty,
+                span: scrutinee.span,
+            }
+        } else {
+            scrutinee.clone()
+        };
         self.terminate(
             TerminatorKind::Switch {
                 scrutinee: scrutinee.clone(),

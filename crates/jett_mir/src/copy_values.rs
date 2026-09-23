@@ -418,6 +418,12 @@ fn visit(
                         == crate::ParamMode::View
                 });
                 visit(v, reads, temporaries, types, program, borrowed)?;
+                if !borrowed
+                    && matches!(v.kind, ExpressionKind::View(_))
+                    && crate::move_values::is_linear(types, v.ty)
+                {
+                    *temporaries += 1;
+                }
             }
         }
         ExpressionKind::Intrinsic {

@@ -1209,7 +1209,21 @@ impl Translator<'_, '_> {
         let evaluated = reordered_map(
             &indexed,
             evaluation_order,
-            |(index, argument)| self.argument(argument, modes[*index] == jett_mir::ParamMode::View),
+            |(index, argument)| {
+                if modes[*index] == jett_mir::ParamMode::Owned
+                    && is_linear(self.types, argument.ty)
+                    && matches!(argument.kind, ExpressionKind::View(_))
+                {
+                    let cloned = Expression {
+                        kind: ExpressionKind::Clone(Box::new((*argument).clone())),
+                        ty: argument.ty,
+                        span: argument.span,
+                    };
+                    self.expression(&cloned)
+                } else {
+                    self.argument(argument, modes[*index] == jett_mir::ParamMode::View)
+                }
+            },
             invalid_order,
         )?;
         let runtime_context = self
