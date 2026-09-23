@@ -16,7 +16,7 @@ use jett_typecheck::{
     CheckedGenericSpecialization, CheckedMethodCall, CheckedMethodDefinition,
     CheckedStaticSelection, CheckedStructConstruction,
 };
-use jett_types::{ReflectionTypeInfo, Type, TypeId};
+use jett_types::{ReflectionFieldInfo, ReflectionTypeInfo, Type, TypeId};
 
 mod type_validation;
 
@@ -2371,14 +2371,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .unwrap_or_default();
             if matches!(
                 intrinsic,
-                IntrinsicId::TypeInfo | IntrinsicId::TypeKindTag | IntrinsicId::TypePrimitiveTag
+                IntrinsicId::TypeInfo
+                    | IntrinsicId::TypeKindTag
+                    | IntrinsicId::TypePrimitiveTag
+                    | IntrinsicId::TypeFields
             ) {
                 if !lowered_args.is_empty()
                     || type_arguments.len() != 1
                     || reflection_arguments.len() != 1
                 {
-                    self.parent
-                        .error(call_span, "type.info has no checked reflection operand");
+                    self.parent.error(
+                        call_span,
+                        "reflection intrinsic has no checked type operand",
+                    );
                     return None;
                 }
                 let ty = self.expression_types.get(&call_span).copied()?;
@@ -2394,6 +2399,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         .map(|value| value.kind),
                     IntrinsicId::TypePrimitiveTag => self.lower_reflection_primitive_tag(
                         info.primitive_tag.as_deref(),
+                        ty,
+                        call_span,
+                    ),
+                    IntrinsicId::TypeFields => self.lower_reflection_type_fields(
+                        type_arguments[0],
+                        &info.type_name,
+                        &info.kind,
                         ty,
                         call_span,
                     ),
@@ -2557,6 +2569,149 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expression {
                 kind: ExpressionKind::ListConstruct { elements: args },
                 ty: field_types[5],
+                span,
+            },
+        ];
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields,
+            evaluation_order: (0..expected.len()).collect(),
+            validates_refinements: false,
+        })
+    }
+
+    fn lower_reflection_type_fields(
+        &mut self,
+        owner_ty: TypeId,
+        owner_name: &str,
+        owner_kind: &str,
+        list_ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::List(field_ty) = self.parent.check.interner.resolve(list_ty) else {
+            self.parent.error(span, "type.fields result is not a list");
+            return None;
+        };
+        let field_ty = *field_ty;
+        if !matches!(owner_kind, "struct" | "bitfield") {
+            return Some(ExpressionKind::ListConstruct {
+                elements: Vec::new(),
+            });
+        }
+        let fields = self
+            .parent
+            .check
+            .reflection_metadata
+            .get_type_fields_for_id(owner_ty)
+            .map(<[_]>::to_vec);
+        let fields = match fields {
+            Some(fields) => fields,
+            None if matches!(
+                self.parent.check.interner.resolve(owner_ty),
+                Type::Struct(_) | Type::Bitfield(_)
+            ) =>
+            {
+                self.parent
+                    .error(span, "type.fields has no checked field metadata");
+                return None;
+            }
+            None => Vec::new(),
+        };
+        let elements = fields
+            .iter()
+            .map(|field| {
+                Some(Expression {
+                    kind: self.lower_reflection_type_field(field, owner_name, field_ty, span)?,
+                    ty: field_ty,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::ListConstruct { elements })
+    }
+
+    fn lower_reflection_type_field(
+        &mut self,
+        field: &ReflectionFieldInfo,
+        owner_name: &str,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent
+                .error(span, "type.fields element is not TypeField");
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = [
+            "index",
+            "owner_type",
+            "owner_member",
+            "name",
+            "type_name",
+            "kind",
+            "kind_tag",
+            "serialize_name",
+            "has_secret",
+            "type_info",
+        ];
+        if definition.name != "TypeField"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent
+                .error(span, "type.fields has no checked TypeField layout");
+            return None;
+        }
+        let field_types = definition
+            .fields
+            .iter()
+            .map(|(_, field_ty)| *field_ty)
+            .collect::<Vec<_>>();
+        let Ok(index) = i128::try_from(field.index) else {
+            self.parent
+                .error(span, "reflected field index is too large");
+            return None;
+        };
+        let string_field = |value: &str, ty| Expression {
+            kind: ExpressionKind::String(value.to_string()),
+            ty,
+            span,
+        };
+        let kind_tag = self.reflected_enum_value(
+            field_types[6],
+            ReflectionTypeInfo::kind_tag_variant(&field.kind),
+            span,
+        )?;
+        let type_info = self.lower_reflection_type_info(&field.type_info, field_types[9], span)?;
+        let fields = vec![
+            Expression {
+                kind: ExpressionKind::Int(index),
+                ty: field_types[0],
+                span,
+            },
+            string_field(owner_name, field_types[1]),
+            Expression {
+                kind: ExpressionKind::OptionalNone,
+                ty: field_types[2],
+                span,
+            },
+            string_field(&field.name, field_types[3]),
+            string_field(&field.type_name, field_types[4]),
+            string_field(&field.kind, field_types[5]),
+            kind_tag,
+            string_field(&field.serialize_name, field_types[7]),
+            Expression {
+                kind: ExpressionKind::Bool(field.has_secret),
+                ty: field_types[8],
+                span,
+            },
+            Expression {
+                kind: type_info,
+                ty: field_types[9],
                 span,
             },
         ];

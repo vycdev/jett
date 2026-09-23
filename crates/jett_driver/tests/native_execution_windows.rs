@@ -280,6 +280,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/reflection_scalars.jett",
         ),
         ("type_info", "../../tests/native/type_info.jett"),
+        ("type_fields", "../../tests/native/type_fields.jett"),
         ("crypto", "../../tests/native/crypto.jett"),
         ("math_aggregate", "../../tests/native/math_aggregate.jett"),
         (

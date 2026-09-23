@@ -1,0 +1,13 @@
+namespace app
+struct User:
+    id: string serialize "userId"
+    token: secret[string]
+type UserAlias = User
+function main() returns nothing:
+    list[TypeField] fields = type.fields[app.User]()
+    println("field count", list.length[TypeField](view fields))
+    for field in fields:
+        println(field.owner_type, field.name, field.type_name, field.kind_tag == TypeKind.primitive_type, field.serialize_name, field.type_info.type_name, field.has_secret)
+    list[TypeField] aliases = type.fields[app.UserAlias]()
+    for field in aliases:
+        println(field.owner_type, field.name)

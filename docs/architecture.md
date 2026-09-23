@@ -855,6 +855,8 @@ Checked reflection operands also carry source-aware names, kinds, secret flags,
 and nested arguments into HIR and MIR. Scalar reflection and recursive
 `TypeInfo` construction use those facts instead of reconstructing aliases from
 canonical `TypeId`.
+`type.fields` lowers checked field snapshots into ordinary `TypeField` values
+only for struct and bitfield kinds; an alias remains a distinct total probe.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 
