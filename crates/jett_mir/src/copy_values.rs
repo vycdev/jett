@@ -41,12 +41,12 @@ impl CopyValuePlan {
                 let mut temporaries = 0;
                 let definition = match &statement.kind {
                     StatementKind::IterationBorrow { source, .. } => {
-                        reads.insert(source.index() as usize);
+                        reads.insert(source.root().index() as usize);
                         None
                     }
                     StatementKind::SequenceLength { source, target }
                     | StatementKind::SequenceGet { source, target, .. } => {
-                        reads.insert(source.index() as usize);
+                        reads.insert(source.root().index() as usize);
                         if let StatementKind::SequenceGet { index, .. } = statement.kind {
                             reads.insert(index.index() as usize);
                             temporaries += usize::from(

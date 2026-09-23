@@ -22,6 +22,42 @@ fn temporary(function: &mut Function, ty: TypeId, span: Span) -> LocalId {
     });
     id
 }
+fn projected_source(
+    value: &Expression,
+    function: &Function,
+    types: &TypeInterner,
+) -> Option<SequenceSource> {
+    let mut path = Vec::new();
+    let mut current = value;
+    loop {
+        match &current.kind {
+            ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } if matches!(types.resolve(*owner_type), Type::Struct(_)) => {
+                path.push(SequenceField {
+                    owner_type: *owner_type,
+                    field: *field,
+                });
+                current = base;
+            }
+            ExpressionKind::View(inner) => current = inner,
+            ExpressionKind::Local(owner) if !path.is_empty() => {
+                path.reverse();
+                if function.local(*owner)?.ty != path[0].owner_type {
+                    return None;
+                }
+                return Some(SequenceSource::Projected {
+                    owner: *owner,
+                    path,
+                    ty: value.ty,
+                });
+            }
+            _ => return None,
+        }
+    }
+}
 pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
     for function in &mut program.functions {
         let count = function.blocks.len();
@@ -91,6 +127,17 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             } else {
                 iterable.clone()
             };
+            let projected = if matches!(
+                types.resolve(iterable.ty),
+                Type::List(_) | Type::Set(_) | Type::Map(..)
+            ) {
+                projected_source(&value, function, types)
+            } else {
+                None
+            };
+            // Field access implicitly views its parent. Iterate over that
+            // bounded projection and clone each loop binding as for `for view`.
+            let by_view = by_view || projected.is_some();
             let borrowed_local = if by_view {
                 if let ExpressionKind::Local(id) = value.kind {
                     Some(id)
@@ -101,20 +148,22 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 None
             };
             let mut init = Vec::new();
-            let source = if let Some(id) = borrowed_local {
-                id
+            let source = if let Some(source) = projected {
+                source
+            } else if let Some(id) = borrowed_local {
+                SequenceSource::Local(id)
             } else {
                 let id = temporary(function, iterable.ty, span);
                 init.push(Statement {
                     kind: StatementKind::Let { local: id, value },
                     span,
                 });
-                id
+                SequenceSource::Local(id)
             };
             if by_view {
                 init.push(Statement {
                     kind: StatementKind::IterationBorrow {
-                        source,
+                        source: source.clone(),
                         token: cursor,
                         start: true,
                     },
@@ -134,7 +183,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             });
             init.push(Statement {
                 kind: StatementKind::SequenceLength {
-                    source,
+                    source: source.clone(),
                     target: length,
                 },
                 span,
@@ -157,7 +206,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 Statement {
                     kind: StatementKind::SequenceGet {
                         consume: !by_view,
-                        source,
+                        source: source.clone(),
                         index: cursor,
                         target: key,
                         part: if map_value.is_some() {
@@ -194,7 +243,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     Statement {
                         kind: StatementKind::SequenceGet {
                             consume: !by_view,
-                            source,
+                            source: source.clone(),
                             index: cursor,
                             target: value,
                             part: SequencePart::Value,
@@ -239,7 +288,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                             id: end,
                             statements: vec![Statement {
                                 kind: StatementKind::IterationBorrow {
-                                    source,
+                                    source: source.clone(),
                                     token: cursor,
                                     start: false,
                                 },

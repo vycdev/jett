@@ -128,12 +128,12 @@ impl MoveValuePlan {
             .blocks
             .iter()
             .flat_map(|b| &b.statements)
-            .filter_map(|s| match s.kind {
+            .filter_map(|s| match &s.kind {
                 StatementKind::IterationBorrow {
                     source,
                     token,
                     start: true,
-                } => Some((token.index() as usize, source.index() as usize)),
+                } => Some((token.index() as usize, source.root().index() as usize)),
                 _ => None,
             })
             .collect::<BTreeMap<_, _>>();
@@ -222,7 +222,7 @@ impl Flow<'_> {
                     token,
                     start,
                 } => {
-                    if self.validate && !self.state.contains(&(source.index() as usize)) {
+                    if self.validate && !self.state.contains(&(source.root().index() as usize)) {
                         return Err("iteration source is moved or uninitialized".into());
                     }
                     if *start {
@@ -233,7 +233,7 @@ impl Flow<'_> {
                 }
                 StatementKind::SequenceLength { source, target }
                 | StatementKind::SequenceGet { source, target, .. } => {
-                    if self.validate && !self.state.contains(&(source.index() as usize)) {
+                    if self.validate && !self.state.contains(&(source.root().index() as usize)) {
                         return Err("sequence source is moved or uninitialized".into());
                     }
                     if let StatementKind::SequenceGet { index, .. } = statement.kind
@@ -243,16 +243,20 @@ impl Flow<'_> {
                         return Err("sequence index uninitialized".into());
                     }
                     if let StatementKind::SequenceGet { consume: true, .. } = statement.kind {
+                        if matches!(source, crate::SequenceSource::Projected { .. }) {
+                            return Err("cannot consume a projected sequence field".into());
+                        }
                         if self
                             .function
-                            .parameter_for_local(*source)
+                            .parameter_for_local(source.root())
                             .is_some_and(|p| p.mode == ParamMode::View)
                         {
                             return Err("cannot take element from borrowed sequence".into());
                         }
                         if self.validate
                             && self.active.iter().any(|token| {
-                                self.borrow_sources.get(token) == Some(&(source.index() as usize))
+                                self.borrow_sources.get(token)
+                                    == Some(&(source.root().index() as usize))
                             })
                         {
                             return Err("cannot take element while sequence is borrowed".into());

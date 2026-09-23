@@ -743,23 +743,49 @@ impl Translator<'_, '_> {
             StatementKind::IterationBorrow { .. } => Ok(()),
             StatementKind::SequenceLength { source, target }
             | StatementKind::SequenceGet { source, target, .. } => {
-                let ty = self.local_types[source.index() as usize].ty;
-                let source_expr = Expression {
-                    kind: ExpressionKind::Local(*source),
-                    ty,
-                    span: statement.span,
+                let ty = match source {
+                    jett_mir::SequenceSource::Local(local) => {
+                        self.local_types[local.index() as usize].ty
+                    }
+                    jett_mir::SequenceSource::Projected { ty, .. } => *ty,
                 };
                 let set = matches!(self.types.resolve(ty), Type::Set(_));
                 let map = matches!(self.types.resolve(ty), Type::Map(..));
                 let string = matches!(self.types.resolve(ty), Type::String);
-                let value = if string {
-                    let slot = self.local_slots[source.index() as usize].ok_or_else(|| {
-                        self.unsupported(statement.span, "string iteration source")
-                    })?;
-                    self.builder.ins().stack_load(ir::types::I64, slot, 0)
-                } else {
-                    let value = self.argument(&source_expr, true)?;
-                    self.scalar(value, statement.span)?
+                let value = match source {
+                    jett_mir::SequenceSource::Local(local) if string => {
+                        let slot = self.local_slots[local.index() as usize].ok_or_else(|| {
+                            self.unsupported(statement.span, "string iteration source")
+                        })?;
+                        self.builder.ins().stack_load(ir::types::I64, slot, 0)
+                    }
+                    jett_mir::SequenceSource::Local(local) => {
+                        let source_expr = Expression {
+                            kind: ExpressionKind::Local(*local),
+                            ty,
+                            span: statement.span,
+                        };
+                        let value = self.argument(&source_expr, true)?;
+                        self.scalar(value, statement.span)?
+                    }
+                    jett_mir::SequenceSource::Projected { owner, path, .. } => {
+                        let owner_ty = self.local_types[owner.index() as usize].ty;
+                        let owner_expr = Expression {
+                            kind: ExpressionKind::Local(*owner),
+                            ty: owner_ty,
+                            span: statement.span,
+                        };
+                        let borrowed = self.argument(&owner_expr, true)?;
+                        let mut value = self.scalar(borrowed, statement.span)?;
+                        for step in path {
+                            let index = self
+                                .builder
+                                .ins()
+                                .iconst(ir::types::I64, i64::from(step.field.index()));
+                            value = self.leaf(NativeLeaf::StructField, &[value, index], true)?;
+                        }
+                        value
+                    }
                 };
                 let output = if let StatementKind::SequenceGet {
                     index,

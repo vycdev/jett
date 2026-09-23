@@ -1,0 +1,20 @@
+namespace app
+struct Collections:
+    items: list[int64]
+    tags: set[int64]
+    scores: map[string, int64]
+    label: string
+function main() returns nothing:
+    mutable set[int64] tags = set.new[int64]()
+    tags = set.add[int64](tags, 3)
+    tags = set.add[int64](tags, 9)
+    Collections value = Collections(items: list(2, 4), tags: tags, scores: map("a": 5, "b": 7), label: "alive")
+    mutable int64 total = 0
+    for item in value.items:
+        total = total + item
+    for tag in value.tags:
+        total = total + tag
+    for key, score in value.scores:
+        println(key, score)
+        total = total + score
+    println(total, value.label, list.length[int64](view value.items), set.length[int64](view value.tags), map.length[string, int64](view value.scores))

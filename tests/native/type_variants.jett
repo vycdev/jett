@@ -8,11 +8,13 @@ function main() returns nothing:
     list[TypeVariant] variants = type.variants[Choice]()
     for variant in variants:
         println(variant.index, variant.owner_type, variant.name, variant.discriminant, variant.has_secret)
-        list[TypeField] fields = clone variant.fields
-        for field in fields:
+        for field in variant.fields:
             string member = clone field.owner_member handle:
                 default "missing"
             println(field.index, field.owner_type, member, field.name, field.type_name, field.type_info.type_name)
+            for arg in field.type_info.args:
+                println(arg.type_name)
+        println(variant.name)
     list[TypeVariant] aliases = type.variants[ChoiceAlias]()
     println(list.length[TypeVariant](view aliases))
     list[TypeVariant] primitive = type.variants[int64]()

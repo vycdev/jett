@@ -404,6 +404,10 @@ semantics. An explicit `view` passed to an owned direct-call parameter is
 cloned at that call boundary. MIR ownership analysis and temporary capacity
 account for the clone; an ordinary move-only field projection into an owner
 still requires an explicit source `clone`.
+Iteration over a list, set, or map projected through struct fields also borrows
+the root struct for the loop and clones each binding. The projected collection
+is never placed in an owning temporary, and the parent remains available after
+the loop. This does not permit an owning assignment from the projected field.
 
 Named function values use a native function address in the scalar carrier.
 Indirect calls use the checked signature plus the hidden runtime context,

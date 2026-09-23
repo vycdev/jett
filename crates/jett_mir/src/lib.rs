@@ -11,7 +11,7 @@ pub use analysis::{AnalysisError, ControlFlowGraph};
 pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};
 
 use jett_common::Span;
-use jett_hir::{self as hir, Expression, FunctionIdentity, VariantId};
+use jett_hir::{self as hir, Expression, FieldId, FunctionIdentity, VariantId};
 use jett_types::TypeId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,23 +72,56 @@ pub enum SequencePart {
     Key,
     Value,
 }
+/// One checked struct-field step in a borrowed sequence projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SequenceField {
+    pub owner_type: TypeId,
+    pub field: FieldId,
+}
+
+/// A sequence owned by a local, or borrowed through a checked struct-field path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SequenceSource {
+    Local(LocalId),
+    Projected {
+        owner: LocalId,
+        path: Vec<SequenceField>,
+        ty: TypeId,
+    },
+}
+
+impl SequenceSource {
+    pub fn root(&self) -> LocalId {
+        match self {
+            Self::Local(local) => *local,
+            Self::Projected { owner, .. } => *owner,
+        }
+    }
+
+    pub fn ty(&self, function: &Function) -> Option<TypeId> {
+        match self {
+            Self::Local(local) => function.local(*local).map(|local| local.ty),
+            Self::Projected { ty, .. } => Some(*ty),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
     SequenceLength {
-        source: LocalId,
+        source: SequenceSource,
         target: LocalId,
     },
     SequenceGet {
         /// Transfer an initialized element from an exclusively owned iterator.
         consume: bool,
-        source: LocalId,
+        source: SequenceSource,
         index: LocalId,
         target: LocalId,
         part: SequencePart,
     },
     IterationBorrow {
-        source: LocalId,
+        source: SequenceSource,
         token: LocalId,
         start: bool,
     },
@@ -313,6 +346,25 @@ impl FunctionValidator<'_, '_> {
         }
     }
 
+    fn check_sequence_source(&mut self, source: &SequenceSource, span: Span) {
+        let root = source.root();
+        self.check_local(root, span, "sequence source");
+        if let SequenceSource::Projected { path, .. } = source {
+            if path.is_empty() {
+                self.error(span, "projected sequence has no field path");
+            } else if self
+                .function
+                .local(root)
+                .is_some_and(|local| local.ty != path[0].owner_type)
+            {
+                self.error(
+                    span,
+                    "projected sequence owner type does not match its local",
+                );
+            }
+        }
+    }
+
     fn check_target(&mut self, target: BlockId, edge: &str) {
         if target.index() as usize >= self.function.blocks.len() {
             self.error(
@@ -352,7 +404,7 @@ impl FunctionValidator<'_, '_> {
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
             StatementKind::SequenceLength { source, target } => {
-                self.check_local(*source, statement.span, "sequence source");
+                self.check_sequence_source(source, statement.span);
                 self.check_local(*target, statement.span, "sequence length");
             }
             StatementKind::SequenceGet {
@@ -361,12 +413,12 @@ impl FunctionValidator<'_, '_> {
                 target,
                 ..
             } => {
-                self.check_local(*source, statement.span, "sequence source");
+                self.check_sequence_source(source, statement.span);
                 self.check_local(*index, statement.span, "sequence index");
                 self.check_local(*target, statement.span, "sequence element");
             }
             StatementKind::IterationBorrow { source, token, .. } => {
-                self.check_local(*source, statement.span, "iteration borrow");
+                self.check_sequence_source(source, statement.span);
                 self.check_local(*token, statement.span, "iteration loan token");
             }
 

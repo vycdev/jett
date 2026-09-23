@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use jett_common::Span;
 use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
-use jett_mir::{Function, Program, Statement, StatementKind, Terminator, TerminatorKind};
+use jett_mir::{
+    Function, Program, SequenceSource, Statement, StatementKind, Terminator, TerminatorKind,
+};
 use jett_types::{Type, TypeId, TypeInterner};
 
 use crate::reachability::reachable_function_ids;
@@ -341,7 +343,11 @@ impl Verifier<'_> {
         match &statement.kind {
             StatementKind::IterationBorrow { source, token, .. } => {
                 if !matches!(
-                    self.types.resolve(function.local(*source).unwrap().ty),
+                    self.types.resolve(self.sequence_source_type(
+                        function,
+                        source,
+                        statement.span
+                    )?),
                     Type::List(_) | Type::Set(_) | Type::Map(..)
                 ) || function.local(*token).unwrap().ty != TypeInterner::INT64
                 {
@@ -355,7 +361,19 @@ impl Verifier<'_> {
             }
             StatementKind::SequenceLength { source, target }
             | StatementKind::SequenceGet { source, target, .. } => {
-                let element = match self.types.resolve(function.local(*source).unwrap().ty) {
+                if matches!(
+                    statement.kind,
+                    StatementKind::SequenceGet { consume: true, .. }
+                ) && matches!(source, SequenceSource::Projected { .. })
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "cannot consume a projected sequence field",
+                    ));
+                }
+                let sequence_ty = self.sequence_source_type(function, source, statement.span)?;
+                let element = match self.types.resolve(sequence_ty) {
                     Type::List(element) | Type::Set(element) => {
                         if matches!(statement.kind, StatementKind::SequenceGet { part, .. } if part != jett_mir::SequencePart::Element)
                         {
@@ -538,6 +556,73 @@ impl Verifier<'_> {
             }
             StatementKind::Breakpoint(_) => {
                 Err(self.unsupported(function, statement.span, "breakpoint"))
+            }
+        }
+    }
+
+    fn sequence_source_type(
+        &self,
+        function: &Function,
+        source: &SequenceSource,
+        span: Span,
+    ) -> Result<TypeId, CodegenError> {
+        match source {
+            SequenceSource::Local(local) => function
+                .local(*local)
+                .map(|local| local.ty)
+                .ok_or_else(|| self.contract_error(function, span, "missing sequence source")),
+            SequenceSource::Projected { owner, path, ty } => {
+                if path.is_empty() {
+                    return Err(self.contract_error(
+                        function,
+                        span,
+                        "projected sequence has no field path",
+                    ));
+                }
+                let mut current =
+                    function
+                        .local(*owner)
+                        .map(|local| local.ty)
+                        .ok_or_else(|| {
+                            self.contract_error(function, span, "missing projected sequence owner")
+                        })?;
+                for step in path {
+                    if current != step.owner_type {
+                        return Err(self.contract_error(
+                            function,
+                            span,
+                            "projected sequence owner type mismatch",
+                        ));
+                    }
+                    let Type::Struct(struct_id) = self.types.resolve(current) else {
+                        return Err(self.contract_error(
+                            function,
+                            span,
+                            "projected sequence owner is not a struct",
+                        ));
+                    };
+                    current = self
+                        .types
+                        .resolve_struct(*struct_id)
+                        .fields
+                        .get(step.field.index() as usize)
+                        .map(|(_, field_ty)| *field_ty)
+                        .ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                span,
+                                "projected sequence field is absent",
+                            )
+                        })?;
+                }
+                if current != *ty {
+                    return Err(self.contract_error(
+                        function,
+                        span,
+                        "projected sequence field type mismatch",
+                    ));
+                }
+                Ok(*ty)
             }
         }
     }
