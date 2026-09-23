@@ -263,6 +263,14 @@ pub(crate) fn verify_intrinsic(
                     && list(result)
                     && list_sort_kind(types, element).is_some()
             }
+            IntrinsicId::ListSortByIndex => {
+                args.len() == 2
+                    && matches!(types.resolve(element), Type::List(_))
+                    && list(args[0].ty)
+                    && args[1].ty == T::INT64
+                    && list(result)
+            }
+            IntrinsicId::ListIsSorted => args.len() == 1 && list(args[0].ty) && result == T::BOOL,
             IntrinsicId::ListSwap => {
                 args.len() == 3
                     && list(args[0].ty)
@@ -542,6 +550,8 @@ pub(crate) fn list_intrinsic(id: IntrinsicId) -> bool {
             | IntrinsicId::ListGetClone
             | IntrinsicId::ListSum
             | IntrinsicId::ListSort
+            | IntrinsicId::ListSortByIndex
+            | IntrinsicId::ListIsSorted
             | IntrinsicId::ListSwap
     )
 }
@@ -632,6 +642,22 @@ pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<Na
         Type::String => NativeSortKind::String,
         _ => return None,
     })
+}
+
+// The interpreter only orders these five row-key/value shapes. Other types
+// compare equal in sort_by_index and are considered sorted by is_sorted.
+pub(crate) fn list_comparison_kind(
+    types: &TypeInterner,
+    element: TypeId,
+) -> Option<NativeSortKind> {
+    match types.resolve(jett_mir::move_values::representation_type(types, element)) {
+        Type::Int64 => Some(NativeSortKind::Int64),
+        Type::Uint64 => Some(NativeSortKind::Uint64),
+        Type::Float64 => Some(NativeSortKind::Float64),
+        Type::Bool => Some(NativeSortKind::Bool),
+        Type::String => Some(NativeSortKind::String),
+        _ => None,
+    }
 }
 
 pub(crate) fn math_aggregate_kind(types: &TypeInterner, list: TypeId) -> Option<NativeSortKind> {

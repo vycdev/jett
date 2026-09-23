@@ -171,7 +171,14 @@ export function count[T](view items: list[T], predicate: function(T) returns boo
 export function sum[T](view items: list[T]) returns T:
     return list.__sum[T](view items)
 export function group_by[T](items: list[T], key_function: function(T) returns string) returns map[string, list[T]]:
-    return list.__group_by[T](items, key_function)
+    mutable map[string, list[T]] groups = map.__new[string, list[T]]()
+    for item in items:
+        string key = key_function(clone item)
+        mutable list[T] bucket = map.__get[string, list[T]](view groups, view key) handle:
+            default list.new[T]()
+        bucket = list.append[T](bucket, item)
+        groups = map.__insert[string, list[T]](groups, key, bucket)
+    return groups
 export function reduce[T, U](items: list[T], initial: U, reducer: function(U, T) returns U) returns U:
     mutable U accumulator = initial
     for item in items:

@@ -415,6 +415,15 @@ item lists. This avoids invoking Jett callbacks while a runtime collection
 lock is held. The current implementation uses quadratic comparisons and swaps;
 larger-list performance remains a follow-up.
 
+Indexed-row list sorting uses a stable runtime sort over borrowed row keys and
+keeps the owning outer list intact until validation succeeds. Sortedness checks
+borrow the list. Both match the interpreter's current ordering cases:
+`int64`, `uint64`, `float64`, `bool`, and `string`; the checker also accepts
+other numeric types, for which the interpreter currently treats comparisons
+as equal. `list.group_by` now invokes its named key callback in `.jett` and
+builds the map through trusted collection intrinsics. Its current map lookup
+clones accumulated groups, so larger-input performance remains a follow-up.
+
 Borrowed sequence tokens now end on each CFG edge leaving the loop region,
 including handler default edges that bypass the ordinary loop exit. Split edges
 end only that loop token, preserving outer loans. Nested iterable element IDs

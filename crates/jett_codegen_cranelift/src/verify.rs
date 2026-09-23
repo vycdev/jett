@@ -912,16 +912,18 @@ impl Verifier<'_> {
                         "numeric list intrinsic type argument differs from element",
                     ));
                 }
-                if list_generic
-                    && type_arguments.as_slice()
-                        != [crate::values::list_element(
-                            *intrinsic,
-                            args,
-                            expression.ty,
-                            self.types,
-                        )
-                        .unwrap_or(TypeInterner::ERROR)]
-                {
+                let list_element =
+                    crate::values::list_element(*intrinsic, args, expression.ty, self.types)
+                        .unwrap_or(TypeInterner::ERROR);
+                let list_type_argument = if *intrinsic == jett_hir::IntrinsicId::ListSortByIndex {
+                    match self.types.resolve(list_element) {
+                        Type::List(inner) => *inner,
+                        _ => TypeInterner::ERROR,
+                    }
+                } else {
+                    list_element
+                };
+                if list_generic && type_arguments.as_slice() != [list_type_argument] {
                     return Err(self.contract_error(
                         function,
                         expression.span,

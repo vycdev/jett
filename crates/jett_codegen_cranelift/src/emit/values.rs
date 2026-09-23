@@ -501,6 +501,7 @@ impl Translator<'_, '_> {
     fn list_intrinsic(
         &mut self,
         id: IntrinsicId,
+        args: &[Expression],
         values: &[LoweredValue],
         result_type: TypeId,
         span: Span,
@@ -550,6 +551,37 @@ impl Translator<'_, '_> {
                 let sorted = self.leaf(NativeLeaf::ListSort, &[list, kind], true)?;
                 self.clear_slot(slot);
                 self.own_linear(sorted)
+            }
+            IntrinsicId::ListSortByIndex => {
+                let Type::List(row) = self.types.resolve(result_type) else {
+                    return Err(self.unsupported(span, "indexed sort requires list result"));
+                };
+                let Type::List(element) = self.types.resolve(*row) else {
+                    return Err(self.unsupported(span, "indexed sort requires row lists"));
+                };
+                let kind = crate::values::list_comparison_kind(self.types, *element)
+                    .map_or(-1, |kind| kind as i64);
+                let LoweredValue::Owned(list, slot) = values[0] else {
+                    return Err(self.unsupported(span, "indexed sort requires owning list"));
+                };
+                let index = self.scalar(values[1], span)?;
+                let kind = self.builder.ins().iconst(ir::types::I32, kind);
+                let sorted = self.leaf(NativeLeaf::ListSortByIndex, &[list, index, kind], true)?;
+                self.clear_slot(slot);
+                self.own_linear(sorted)
+            }
+            IntrinsicId::ListIsSorted => {
+                let Type::List(element) = self.types.resolve(args[0].ty) else {
+                    return Err(self.unsupported(span, "sortedness requires a list"));
+                };
+                let kind = crate::values::list_comparison_kind(self.types, *element)
+                    .map_or(-1, |kind| kind as i64);
+                let list = self.scalar(values[0], span)?;
+                let kind = self.builder.ins().iconst(ir::types::I32, kind);
+                let sorted = self.leaf(NativeLeaf::ListIsSorted, &[list, kind], true)?;
+                Ok(LoweredValue::Scalar(
+                    self.builder.ins().ireduce(ir::types::I8, sorted),
+                ))
             }
             IntrinsicId::ListSwap => {
                 let LoweredValue::Owned(list, slot) = values[0] else {
@@ -839,7 +871,7 @@ impl Translator<'_, '_> {
             return self.own_linear(value);
         }
         if crate::values::list_intrinsic(id) {
-            return self.list_intrinsic(id, &evaluated, result_type, span);
+            return self.list_intrinsic(id, args, &evaluated, result_type, span);
         }
         if crate::values::set_intrinsic(id) {
             return self.set_intrinsic(id, &evaluated, result_type, span);

@@ -103,6 +103,20 @@ impl NativeSortKind {
             _ => return Err(INVALID_LIST),
         })
     }
+    fn from_comparison_raw(value: u32) -> LeafResult<Option<Self>> {
+        if value == u32::MAX {
+            return Ok(None);
+        }
+        let kind = Self::from_raw(value)?;
+        if matches!(
+            kind,
+            Self::Int64 | Self::Uint64 | Self::Float64 | Self::Bool | Self::String
+        ) {
+            Ok(Some(kind))
+        } else {
+            Err(INVALID_LIST)
+        }
+    }
     fn compare(self, left: u64, right: u64) -> CompareOrdering {
         match self {
             Self::Int8 => (left as u8 as i8).cmp(&(right as u8 as i8)),
@@ -1153,6 +1167,90 @@ impl NativeValues {
         Ok(id)
     }
 
+    fn list_is_sorted(&self, id: u64, raw_kind: u32) -> LeafResult<bool> {
+        let kind = NativeSortKind::from_comparison_raw(raw_kind)?;
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        let Some(kind) = kind else {
+            return Ok(true);
+        };
+        if list.owned != (kind == NativeSortKind::String) {
+            return Err(INVALID_LIST);
+        }
+        let mut previous = None;
+        for element in &list.elements {
+            let bits = element.ok_or(INVALID_LIST)?;
+            if !kind.valid_bits(bits)
+                || (kind == NativeSortKind::String && !self.strings.contains_key(&bits))
+            {
+                return Err(INVALID_LIST);
+            }
+            if let Some(left) = previous {
+                let ordering = if kind == NativeSortKind::String {
+                    self.strings[&left].text.cmp(&self.strings[&bits].text)
+                } else {
+                    kind.compare(left, bits)
+                };
+                if ordering == CompareOrdering::Greater {
+                    return Ok(false);
+                }
+            }
+            previous = Some(bits);
+        }
+        Ok(true)
+    }
+
+    fn sort_list_by_index(&mut self, id: u64, index: i64, raw_kind: u32) -> LeafResult<u64> {
+        let kind = NativeSortKind::from_comparison_raw(raw_kind)?;
+        let outer = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        if !outer.owned {
+            return Err(INVALID_LIST);
+        }
+        let mut keyed = Vec::new();
+        keyed
+            .try_reserve_exact(outer.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        let index = usize::try_from(index).ok();
+        for element in &outer.elements {
+            let row_id = element.ok_or(INVALID_LIST)?;
+            let row = self.lists.get(&row_id).ok_or(INVALID_LIST)?;
+            if let Some(kind) = kind
+                && row.owned != (kind == NativeSortKind::String)
+            {
+                return Err(INVALID_LIST);
+            }
+            let key = index.and_then(|index| row.elements.get(index)).copied();
+            let key = match key {
+                Some(Some(bits)) => {
+                    if let Some(kind) = kind
+                        && (!kind.valid_bits(bits)
+                            || (kind == NativeSortKind::String
+                                && !self.strings.contains_key(&bits)))
+                    {
+                        return Err(INVALID_LIST);
+                    }
+                    Some(bits)
+                }
+                Some(None) => return Err(INVALID_LIST),
+                None => None,
+            };
+            keyed.push((row_id, key));
+        }
+        if let Some(kind) = kind {
+            keyed.sort_by(|(_, left), (_, right)| match (left, right) {
+                (Some(left), Some(right)) if kind == NativeSortKind::String => {
+                    self.strings[left].text.cmp(&self.strings[right].text)
+                }
+                (Some(left), Some(right)) => kind.compare(*left, *right),
+                _ => CompareOrdering::Equal,
+            });
+        }
+        let outer = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
+        for (slot, (row_id, _)) in outer.elements.iter_mut().zip(keyed) {
+            *slot = Some(row_id);
+        }
+        Ok(id)
+    }
+
     fn math_numbers(&self, id: u64, raw_kind: u32, empty: Failure) -> LeafResult<Vec<f64>> {
         let kind = NativeSortKind::from_raw(raw_kind)?;
         if !matches!(
@@ -1892,6 +1990,10 @@ leaves! {
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
     ListSort, jett_rt_v1_list_sort, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
         |s| s.sort_list(value, kind);
+    ListSortByIndex, jett_rt_v1_list_sort_by_index, false, (value: u64 => I64, index: i64 => I64, kind: u32 => I32), u64 => I64,
+        |s| s.sort_list_by_index(value, index, kind);
+    ListIsSorted, jett_rt_v1_list_is_sorted, false, (value: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| s.list_is_sorted(value, kind).map(u32::from);
     ListSwap, jett_rt_v1_list_swap, false, (value: u64 => I64, first: i64 => I64, second: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__swap: index out of bounds".as_slice());
@@ -3145,6 +3247,58 @@ mod tests {
             [Some(apple), Some(zebra), Some(eclair)]
         );
         values.drop_value(list).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn indexed_list_sort_preserves_rows_and_missing_keys() {
+        let mut values = NativeValues::default();
+        let outer = values.new_list(true).unwrap();
+        let mut rows = Vec::new();
+        for text in ["b", "a", "a"] {
+            let key = values.insert(text.into()).unwrap();
+            let row = values.new_list(true).unwrap();
+            values.lists.get_mut(&row).unwrap().elements.push(Some(key));
+            values
+                .lists
+                .get_mut(&outer)
+                .unwrap()
+                .elements
+                .push(Some(row));
+            rows.push(row);
+        }
+        assert_eq!(
+            values.sort_list_by_index(outer, -1, NativeSortKind::String as u32),
+            Ok(outer)
+        );
+        assert_eq!(
+            values.lists[&outer].elements,
+            rows.iter().copied().map(Some).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            values.sort_list_by_index(outer, 0, NativeSortKind::String as u32),
+            Ok(outer)
+        );
+        assert_eq!(
+            values.lists[&outer].elements,
+            [Some(rows[1]), Some(rows[2]), Some(rows[0])]
+        );
+        assert!(
+            values
+                .list_is_sorted(rows[1], NativeSortKind::String as u32)
+                .unwrap()
+        );
+        values.drop_value(outer).unwrap();
+        assert!(values.is_empty());
+
+        let mut values = NativeValues::default();
+        let flags = values.new_list(false).unwrap();
+        values.lists.get_mut(&flags).unwrap().elements = vec![Some(1), Some(0)];
+        assert_eq!(
+            values.list_is_sorted(flags, NativeSortKind::Bool as u32),
+            Ok(false)
+        );
+        assert_eq!(values.list_is_sorted(flags, u32::MAX), Ok(true));
+        values.drop_value(flags).unwrap();
         assert!(values.is_empty());
     }
     #[test]
