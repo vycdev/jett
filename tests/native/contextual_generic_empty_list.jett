@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    list[list[int64]] chunks = list.chunk(list(), 3)
+    list[list[int64]] filled = list.append[list[int64]](chunks, list(7, 8))
+    println(list.length(filled))

@@ -258,6 +258,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("unit_enum", "../../tests/native/unit_enum.jett"),
         ("payload_enum", "../../tests/native/payload_enum.jett"),
         ("bitfield_values", "../../tests/native/bitfield_values.jett"),
+        (
+            "contextual_generic_empty_list",
+            "../../tests/native/contextual_generic_empty_list.jett",
+        ),
         ("list_sort", "../../tests/native/list_sort.jett"),
         ("set_values", "../../tests/native/set_values.jett"),
         ("map_values", "../../tests/native/map_values.jett"),

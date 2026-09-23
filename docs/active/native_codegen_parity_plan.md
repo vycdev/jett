@@ -282,7 +282,7 @@ lowering alone never changes an execution row to complete.
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics, direct Unicode-scalar string iteration, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, scalar `for` loops, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
 | Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; transparent secret/refinement representation; machines and validating refinements pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte roundtrip covered; width validation, payload-enum equality and other aggregate kinds pending |
-| Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive list sorting and sets, and primitive-key maps with owned values | compiled list access, reverse/repeat, scalar iteration and sort; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; projected views, contextual empty-list conversion, refinements, and callback helpers pending |
+| Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive list sorting and sets, and primitive-key maps with owned values | compiled list access, reverse/repeat, scalar iteration and sort; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; one contextual generic empty-list path covered; other projected views, collection shape conversions, refinements, and callback helpers pending |
 | Numeric aggregates | covered | `math.average` and `math.median` for `list[int64]`, `list[uint64]`, and `list[float64]` | native/interpreter differential fixtures cover all three element types and overflow-safe floating-point extremes; empty-list error contract covered |
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
@@ -300,7 +300,7 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 86 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 87 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 22 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
@@ -308,7 +308,7 @@ These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 86. Four string/comptime fixtures began emitting
+unmarked row and now proves 87. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -394,9 +394,11 @@ Fixed-width bitfield values, collection payload ownership and byte roundtrips
 also pass a dedicated native/interpreter fixture, including network order,
 native order, enum discriminants, trailing payload bytes, decode errors and
 allocation cleanup. Dynamic field-width validation remains outside this slice.
-An unconstrained empty `list[never]` has a native empty-list layout, but
-converting it to a contextually typed list still needs ownership metadata
-conversion. `list_shape_helpers.jett` remains guarded at that mismatch.
+An unconstrained empty `list[never]` has a native empty-list layout. Expected
+result types now refine an argument-inferred `never` before specializing a
+generic call, so `list_shape_helpers.jett` emits an object; a dedicated native
+main executes the resulting nested-list ownership path. Other collection
+shape conversions still need explicit ownership metadata conversion.
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

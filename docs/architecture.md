@@ -539,6 +539,12 @@ Bottom-up type checking of every expression:
   primitive type, such as a small integer literal inside a `uint64` argument or
   `list[uint64]` element, the expression type map records the checked type
   rather than the literal's default carrier.
+- **Empty generic arguments:** an empty collection initially infers `never`.
+  For a direct inferred generic call whose arguments account for every type
+  parameter, the expected result shape refines only `never` parameters before
+  the arguments are rechecked against the resulting concrete signature.
+  Value-derived types are not overridden, and a result-only parameter remains
+  uninferable.
 - **Refinement type assignments:** wrapping a base type in a refinement type is fallible → must have `handle error:`.
 - **Handle blocks:** verify that `handle error:` is used on `result[T, E]` and `handle:` on `optional[T]`. Verify handle blocks end with `return` or `default`. The `default` keyword inside a handle block is part of the `HandleExpr` structure — it provides a fallback value and resumes normal execution.
 - **Coarsen expressions:** `coarsen value` converts a refinement type to an ancestor type. The target type is determined by the variable declaration's type annotation on the left side. The type checker walks the refinement chain to verify the target is a valid ancestor.

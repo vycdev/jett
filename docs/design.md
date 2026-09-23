@@ -7082,6 +7082,13 @@ Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with
 
 Generic type parameters may be inferred when argument types uniquely determine every parameter, including direct and pipeline calls to source-owned stdlib functions such as `list.length(items)`. Calls with no inferable value argument, an ambiguous result-only parameter, or an explicit reflection target write the type arguments. When type arguments are written, their count must exactly match the callable's generic arity.
 
+An empty collection initially contributes the uninhabited element type `never`.
+When arguments have supplied every generic parameter, an expected result type
+may refine an inferred `never` to a concrete type. It does not introduce a
+parameter absent from all arguments or replace a type inferred from an actual
+element. For example, `list[list[int64]] chunks = list.chunk(list(), 3)`
+specializes `chunk` for `int64`.
+
 A bare generic function template is not a concrete function value. To pass one
 as a callback, use a concrete named wrapper or inline function containing an
 ordinary generic call. Contextual specialization of generic function values is

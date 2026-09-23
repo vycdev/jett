@@ -8004,7 +8004,12 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             _ => {
-                let actual_ty = self.check_expr(expr);
+                let actual_ty = match expr {
+                    Expr::Call(callee, args, span) => {
+                        self.check_call(callee, &[], args, *span, Some(expected_ty))
+                    }
+                    _ => self.check_expr(expr),
+                };
                 if actual_ty != TypeInterner::ERROR
                     && self.type_requires_handle_error(expected_ty, actual_ty)
                 {
@@ -8961,9 +8966,9 @@ impl<'a> TypeChecker<'a> {
             Expr::Ident(ident) => self.check_ident(ident),
             Expr::Binary(lhs, op, rhs, span) => self.check_binary(lhs, *op, rhs, *span),
             Expr::Unary(op, operand, span) => self.check_unary(*op, operand, *span),
-            Expr::Call(callee, args, span) => self.check_call(callee, &[], args, *span),
+            Expr::Call(callee, args, span) => self.check_call(callee, &[], args, *span, None),
             Expr::GenericCall(callee, type_args, args, span) => {
-                self.check_call(callee, type_args, args, *span)
+                self.check_call(callee, type_args, args, *span, None)
             }
             Expr::Paren(inner, _) => self.check_expr(inner),
             Expr::FieldAccess(base, field, span) => self.check_field_access(base, field, *span),
@@ -9209,7 +9214,7 @@ impl<'a> TypeChecker<'a> {
                 value: authority,
             }];
             args.extend_from_slice(extra_args);
-            self.check_call(function, type_args, &args, step.span)
+            self.check_call(function, type_args, &args, step.span, None)
         } else {
             self.check_pipeline_step_call(current_ty, step)
         };
@@ -9493,7 +9498,7 @@ impl<'a> TypeChecker<'a> {
                 }
             })
             .collect::<Vec<_>>();
-        let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
+        let Some(inferred) = self.infer_generic_signature(&template, &actual_types, None) else {
             self.emit_cannot_infer_generic(function_name, &template, span);
             return Some(TypeInterner::ERROR);
         };
@@ -10761,6 +10766,7 @@ impl<'a> TypeChecker<'a> {
         type_args: &[TypeExpr],
         args: &[ast::CallArg],
         span: Span,
+        expected_return_type: Option<TypeId>,
     ) -> TypeId {
         let callee_name = self.resolved_expr_name(callee);
         let callee_is_pure = callee_name
@@ -10901,7 +10907,12 @@ impl<'a> TypeChecker<'a> {
             && let Some(function_name) = callee_name.as_deref()
             && self.generic_function_templates.contains_key(function_name)
         {
-            return self.check_inferred_generic_function_call(function_name, args, span);
+            return self.check_inferred_generic_function_call(
+                function_name,
+                args,
+                span,
+                expected_return_type,
+            );
         }
 
         // Check for generic function call: `name[T](args...)`.
@@ -11711,6 +11722,7 @@ impl<'a> TypeChecker<'a> {
         function_name: &str,
         args: &[ast::CallArg],
         span: Span,
+        expected_return_type: Option<TypeId>,
     ) -> TypeId {
         let template = self
             .generic_function_templates
@@ -11737,7 +11749,9 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|&source_index| self.check_expr(&args[source_index].value))
             .collect::<Vec<_>>();
-        let Some(inferred) = self.infer_generic_signature(&template, &actual_types) else {
+        let Some(inferred) =
+            self.infer_generic_signature(&template, &actual_types, expected_return_type)
+        else {
             self.emit_cannot_infer_generic(function_name, &template, span);
             return TypeInterner::ERROR;
         };
@@ -11801,6 +11815,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         template: &FunctionDef,
         actual_types: &[TypeId],
+        expected_return_type: Option<TypeId>,
     ) -> Option<InferredGenericSignature> {
         let type_params = template
             .type_params
@@ -11810,6 +11825,19 @@ impl<'a> TypeChecker<'a> {
         let mut subst = HashMap::new();
         for (param, &actual) in template.params.iter().zip(actual_types) {
             self.infer_type_params_from_type(&param.ty, actual, &type_params, &mut subst);
+        }
+        if let (Some(return_type), Some(expected)) =
+            (template.return_type.as_ref(), expected_return_type)
+            && template
+                .type_params
+                .iter()
+                .all(|param| subst.contains_key(&param.name))
+        {
+            // An empty argument may infer `never`. The result context can
+            // supply the concrete element type without replacing any type
+            // argument already established by a value-bearing argument. It
+            // cannot infer a previously unknown type argument by itself.
+            self.infer_type_params_from_type(return_type, expected, &type_params, &mut subst);
         }
         let concrete_args = template
             .type_params
@@ -17897,6 +17925,69 @@ function main() returns bool:
         };
         assert_eq!(instantiation.concrete_args, vec![TypeInterner::NEVER]);
         assert_ne!(instantiation.concrete_args[0], TypeInterner::ERROR);
+    }
+
+    #[test]
+    fn expected_result_specializes_empty_generic_argument_without_overriding_values() {
+        let source = r#"function wrap[T](items: list[T]) returns list[list[T]]:
+    return list(items)
+function main() returns list[list[int64]]:
+    list[list[int64]] wrapped = wrap(list())
+    return wrapped
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let [instantiation] = result.generic_function_instantiations.as_slice() else {
+            panic!("wrap[int64] should have one checked manifest entry");
+        };
+        assert_eq!(instantiation.concrete_args, vec![TypeInterner::INT64]);
+        let start = source.rfind("list()").expect("empty argument") as u32;
+        let argument_type = result
+            .type_map
+            .get(&Span::new(FileId::new(0), start, start + 6))
+            .copied()
+            .expect("contextual argument type");
+        assert_eq!(
+            result.interner.resolve(argument_type),
+            &Type::List(TypeInterner::INT64)
+        );
+
+        let mismatch = check_source_result(
+            r#"function wrap[T](items: list[T]) returns list[list[T]]:
+    return list(items)
+function main() returns nothing:
+    list[list[string]] wrapped = wrap(list(1))
+"#,
+        );
+        assert!(
+            mismatch
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error),
+            "value-bearing int64 inference must not be replaced by string context"
+        );
+
+        let unknown = check_source_result(
+            r#"function empty[T]() returns list[T]:
+    return list()
+function main() returns list[int64]:
+    return empty()
+"#,
+        );
+        assert!(
+            unknown
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error),
+            "result context must not infer a type argument absent from all inputs"
+        );
     }
 
     #[test]
