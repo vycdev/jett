@@ -72,6 +72,15 @@ fn task_control_requires_pending(operation: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0404: Rebinding requires an explicitly mutable local.
+fn cannot_rebind_immutable(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        404,
+        format!("cannot reassign `{name}` because it is not mutable"),
+        span,
+    )
+}
+
 /// E0402: Closures may capture only implicitly copyable values.
 pub(crate) fn cannot_capture_move_only(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
@@ -321,6 +330,9 @@ impl<'a> OwnershipChecker<'a> {
                     // Rebinding may start a fresh pending task.
                     info.state = initial_state;
                     info.consumed_span = None;
+                } else {
+                    self.diagnostics
+                        .push(cannot_rebind_immutable(&ident.name, ident.span));
                 }
             }
         } else {

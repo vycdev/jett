@@ -3,7 +3,7 @@
 namespace test
 
 function bad(index: int64) returns string:
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Arg = type.arg[list[string]](index):
         found = type.name[Arg]()
     return found

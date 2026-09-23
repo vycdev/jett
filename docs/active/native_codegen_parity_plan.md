@@ -299,7 +299,7 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 74 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 77 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 15 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison in `native_execution_windows` |
 | Runtime contracts | 22 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
@@ -307,7 +307,7 @@ These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 74. Four string/comptime fixtures began emitting
+unmarked row and now proves 77. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -342,8 +342,11 @@ Nested result/optional handlers in direct-call arguments add
 execution. Differential mains cover both handler branches and named-argument
 evaluation order; arbitrary expression nesting and refinement handlers remain
 open.
-Fixture membership and
-denominators are unchanged. Unit and payload enums also pass dedicated
+Enforcing immutable-local rebinding in the frontend and correcting affected
+fixtures adds native objects for `string_iteration.jett`, `set_operations.jett`,
+and `uint64_checked_expression_runtime_types.jett`. The last also passes a
+supplemental native/interpreter dispatch execution check. Fixture membership
+and denominators are unchanged. Unit and payload enums also pass dedicated
 native/interpreter differential fixtures, including recursive owned payloads.
 Fixed-width bitfield values, collection payload ownership and byte roundtrips
 also pass a dedicated native/interpreter fixture, including network order,
@@ -352,9 +355,6 @@ allocation cleanup. Dynamic field-width validation remains outside this slice.
 An unconstrained empty `list[never]` has a native empty-list layout, but
 converting it to a contextually typed list still needs ownership metadata
 conversion. `list_shape_helpers.jett` remains guarded at that mismatch.
-`set_operations.jett` now passes its set operations and reaches an existing
-immutable-local reassignment mismatch between accepted source and native MIR
-verification; that policy discrepancy remains unresolved.
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

@@ -194,6 +194,29 @@ fn native_generic_struct_fields_match_interpreter() {
 }
 
 #[test]
+fn native_uint64_checked_expression_dispatch_matches_interpreter() {
+    let source =
+        include_str!("../../../tests/run_pass/uint64_checked_expression_runtime_types.jett");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let source_path = directory.path().join("uint64_dispatch.jett");
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\nfunction main() returns nothing:\n    println(constructed_list_uint64_dispatch(), appended_list_uint64_dispatch(), map_value_uint64_dispatch(), set_to_list_uint64_dispatch(), optional_uint64_dispatch(), result_uint64_dispatch())\n"
+        ),
+    )
+    .expect("write uint64 dispatch fixture with an executable entry");
+    let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&source_path, launcher(), &binary)
+        .expect("compile uint64 dispatch fixture");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_int64_trace_matches_interpreter_debug_output() {
     for relative_path in [
         "../../tests/run_pass/trace_basic.jett",

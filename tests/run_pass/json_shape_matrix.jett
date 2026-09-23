@@ -22,7 +22,7 @@ function parse_matrix_summary() returns string:
     Matrix matrix = json.parse[Matrix](raw) handle error:
         return error
     float64 ratio = matrix.ratio
-    int64 percent = 0
+    mutable int64 percent = 0
     match matrix.state:
         idle:
             percent = -1

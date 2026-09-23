@@ -8,7 +8,7 @@ machine Session:
 function bad_machine_field_value_requested_type() returns int64:
     Session at logged_in session = Session(logged_in, "user-1")
     TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
-    int64 found = 0
+    mutable int64 found = 0
     for field in state.fields:
         found = type.machine_field_value[Session at logged_in, int64](view session, view field)
     return found

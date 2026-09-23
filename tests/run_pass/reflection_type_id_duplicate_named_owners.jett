@@ -27,7 +27,7 @@ function accounts_named_owner_summary() returns string:
     TypeBitfieldField status_field = list.get[TypeBitfieldField](type.bitfield_fields[a.Header](), 1) handle:
         return "missing account status field"
     a.Header header = a.Header(version: 4, status: a.Status.active)
-    bool reflected_active = false
+    mutable bool reflected_active = false
     for field in type.fields[a.Header]():
         if field.name == "status":
             a.Status reflected = type.field_value[a.Header, a.Status](view header, view field)
@@ -48,7 +48,7 @@ function audit_named_owner_summary() returns string:
     TypeBitfieldField status_field = list.get[TypeBitfieldField](type.bitfield_fields[a.Header](), 1) handle:
         return "missing audit status field"
     a.Header header = a.Header(level: 3, status: a.Status.active)
-    bool reflected_active = false
+    mutable bool reflected_active = false
     for field in type.fields[a.Header]():
         if field.name == "status":
             a.Status reflected = type.field_value[a.Header, a.Status](view header, view field)

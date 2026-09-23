@@ -10,7 +10,7 @@ struct Other:
 function bad_field_value_metadata() returns string:
     User user = User(id: "u1")
     list[TypeField] fields = type.fields[Other]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         found = type.field_value[User, string](view user, view field)
     return found

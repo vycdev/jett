@@ -4,7 +4,7 @@ namespace test
 
 function bad() returns string:
     TypeInfo info = type.info[int64]()
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Bound = info:
         found = type.name[Bound]()
     return found

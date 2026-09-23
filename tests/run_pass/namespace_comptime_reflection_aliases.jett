@@ -12,20 +12,20 @@ export machine Session:
 namespace app
 function bound_namespaced_alias_base() returns string:
     use data as d
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Base = type.arg[d.NameList](0):
         found = type.name[Base]()
     return found
 function bound_namespaced_refinement_base() returns string:
     use data as d
-    string found = "missing"
+    mutable string found = "missing"
     comptime type Base = type.arg[d.NonEmpty](0):
         found = type.name[Base]()
     return found
 function bound_namespaced_generic_field() returns string:
     use data as d
     d.Box[list[int64]] box = d.Box[list[int64]](value: list(1, 2, 3))
-    string found = "missing"
+    mutable string found = "missing"
     for field in type.fields[d.Box[list[int64]]]():
         comptime type Field = field.type_info:
             Field value = type.field_value[d.Box[list[int64]], Field](view box, view field)
@@ -34,13 +34,13 @@ function bound_namespaced_generic_field() returns string:
 function bound_namespaced_machine_layout() returns string:
     use data as d
     TypeMachine layout = type.machine_layout[d.Session at logged_in]()
-    string field_type = "missing"
+    mutable string field_type = "missing"
     for state in type.machine_states[d.Session at logged_in]():
         if state.name == "logged_in":
             for field in state.fields:
                 if field.name == "user_id":
                     field_type = field.type_info.type_name
-    string edge = "missing"
+    mutable string edge = "missing"
     for item in type.machine_transitions[d.Session]():
         if item.source == "guest":
             edge = "{item.source}->{item.target}"

@@ -3,7 +3,7 @@ namespace app
 function authority_selection_is_forbidden(view rng: Random, view items: list[Random]) returns nothing:
     random.choice[Random](view rng, view items) handle:
         return nothing
-    list[Random] shuffled = random.shuffle[Random](view rng, view items)
+    mutable list[Random] shuffled = random.shuffle[Random](view rng, view items)
     random.choice(view rng, view items) handle:
         return nothing
     shuffled = random.shuffle(view rng, view items)

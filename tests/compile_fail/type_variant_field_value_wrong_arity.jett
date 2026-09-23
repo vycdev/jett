@@ -7,7 +7,7 @@ enum Shape:
 
 function bad_variant_field_value_arity() returns string:
     Shape shape = Shape.circle(2.5)
-    string found = "missing"
+    mutable string found = "missing"
     for field in type.variant_value[Shape](view shape).fields:
         found = type.variant_field_value[Shape](view shape, view field)
     return found

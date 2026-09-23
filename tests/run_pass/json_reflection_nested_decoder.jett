@@ -53,7 +53,7 @@ function decoded_nested_summary() returns string:
         return error
     bool south = user.direction == Direction.south
     bool tcp = user.header.protocol == Protocol.tcp
-    int64 shape_total = 0
+    mutable int64 shape_total = 0
     match user.shape:
         empty:
             shape_total = -1

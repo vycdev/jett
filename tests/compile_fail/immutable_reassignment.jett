@@ -1,0 +1,5 @@
+# ERROR: E0404
+function main() returns nothing:
+    int64 value = 1
+    value = 2
+    return nothing

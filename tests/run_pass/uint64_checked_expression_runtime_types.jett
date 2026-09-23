@@ -13,7 +13,7 @@ function constructed_list_uint64_dispatch() returns string:
         default fallback
     ))
 function appended_list_uint64_dispatch() returns string:
-    list[uint64] values = list.new[uint64]()
+    mutable list[uint64] values = list.new[uint64]()
     values = list.append[uint64](view values, 7)
     uint64 fallback = 0
     return Show.show(view(list.get[uint64](view values, 0) handle:

@@ -2,7 +2,7 @@ namespace test
 function json_tree_variant_count() returns int64:
     return list.length[TypeVariant](type.variants[json.JsonTree]())
 function json_tree_variant_names() returns string:
-    string names = ""
+    mutable string names = ""
     for variant in type.variants[json.JsonTree]():
         names = "{names}{variant.name}|"
     return names
@@ -32,7 +32,7 @@ function json_tree_variant_field_arg_shape(variant_name: string, field_name: str
         for field in variant.fields:
             if field.name != field_name:
                 continue
-            int64 index = 0
+            mutable int64 index = 0
             for arg in field.type_info.args:
                 if index == target:
                     return "{arg.kind}:{arg.type_name}"

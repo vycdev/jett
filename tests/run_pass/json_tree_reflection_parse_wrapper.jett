@@ -79,7 +79,7 @@ function tree_reflected_full_summary() returns string:
     TreeFull item = json.parse[TreeFull]("{{\"header\":{{\"version\":4,\"header_length\":5,\"protocol\":\"tcp\"}},\"shape\":{{\"point\":[3,4]}},\"lucky\":[11,13],\"display\":\"ready\",\"outcome\":{{\"ok\":7}},\"failed\":{{\"fail\":\"bad\"}},\"credential\":{{\"name\":\"svc\",\"token\":\"secret-token\"}},\"data\":\"0x4869\"}}") handle error:
         return error
     bool tcp = item.header.protocol == TreeProtocol.tcp
-    int64 shape_total = 0
+    mutable int64 shape_total = 0
     match item.shape:
         empty:
             shape_total = -1

@@ -56,7 +56,7 @@ function test_difference() returns int64:
 verify test_difference:
     assert test_difference() == 1
 function sum_set(s: set[int64]) returns int64:
-    int64 total = 0
+    mutable int64 total = 0
     for item in s:
         total = total + item
     return total

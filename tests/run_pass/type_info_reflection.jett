@@ -68,8 +68,8 @@ function type_info_has_no_primitive_tag[T]() returns bool:
     return primitive == TypePrimitive.unknown_type
 function type_info_arg_primitive_tag_is[T](target: int64, expected: TypePrimitive) returns bool:
     TypeInfo info = type.info[T]()
-    bool found = false
-    int64 index = 0
+    mutable bool found = false
+    mutable int64 index = 0
     for arg in info.args:
         if index == target:
             TypePrimitive primitive = arg.primitive_tag handle:
@@ -82,8 +82,8 @@ function type_info_arg_count[T]() returns int64:
     return list.length[TypeInfo](info.args)
 function type_info_arg_kind[T](target: int64) returns string:
     TypeInfo info = type.info[T]()
-    string found = "missing"
-    int64 index = 0
+    mutable string found = "missing"
+    mutable int64 index = 0
     for arg in info.args:
         if index == target:
             found = arg.kind
@@ -91,8 +91,8 @@ function type_info_arg_kind[T](target: int64) returns string:
     return found
 function type_info_arg_type_name[T](target: int64) returns string:
     TypeInfo info = type.info[T]()
-    string found = "missing"
-    int64 index = 0
+    mutable string found = "missing"
+    mutable int64 index = 0
     for arg in info.args:
         if index == target:
             found = arg.type_name
@@ -100,11 +100,11 @@ function type_info_arg_type_name[T](target: int64) returns string:
     return found
 function type_info_nested_arg_kind[T](outer_target: int64, inner_target: int64) returns string:
     TypeInfo info = type.info[T]()
-    string found = "missing"
-    int64 outer_index = 0
+    mutable string found = "missing"
+    mutable int64 outer_index = 0
     for outer in info.args:
         if outer_index == outer_target:
-            int64 inner_index = 0
+            mutable int64 inner_index = 0
             for inner in outer.args:
                 if inner_index == inner_target:
                     found = inner.kind
@@ -113,11 +113,11 @@ function type_info_nested_arg_kind[T](outer_target: int64, inner_target: int64) 
     return found
 function type_info_nested_arg_type_name[T](outer_target: int64, inner_target: int64) returns string:
     TypeInfo info = type.info[T]()
-    string found = "missing"
-    int64 outer_index = 0
+    mutable string found = "missing"
+    mutable int64 outer_index = 0
     for outer in info.args:
         if outer_index == outer_target:
-            int64 inner_index = 0
+            mutable int64 inner_index = 0
             for inner in outer.args:
                 if inner_index == inner_target:
                     found = inner.type_name
@@ -126,7 +126,7 @@ function type_info_nested_arg_type_name[T](outer_target: int64, inner_target: in
     return found
 function complex_field_arg_count(field_name: string) returns int64:
     list[TypeField] fields = type.fields[Complex]()
-    int64 found = -1
+    mutable int64 found = -1
     for field in fields:
         if field.name == field_name:
             found = list.length[TypeInfo](field.type_info.args)
@@ -136,35 +136,35 @@ function field_count[T]() returns int64:
     return list.length[TypeField](fields)
 function field_kind[T](field_name: string) returns string:
     list[TypeField] fields = type.fields[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.kind
     return found
 function field_kind_tag_is[T](field_name: string, expected: TypeKind) returns bool:
     list[TypeField] fields = type.fields[T]()
-    bool found = false
+    mutable bool found = false
     for field in fields:
         if field.name == field_name:
             found = field.kind_tag == expected
     return found
 function complex_field_arg_kind(field_name: string, target: int64) returns string:
     list[TypeField] fields = type.fields[Complex]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
-            int64 index = 0
+            mutable int64 index = 0
             for arg in field.type_info.args:
                 if index == target:
                     found = arg.kind
                 index = index + 1
     return found
 function nested_arg_kind_from_info(info: TypeInfo, outer_target: int64, inner_target: int64) returns string:
-    string found = "missing"
-    int64 outer_index = 0
+    mutable string found = "missing"
+    mutable int64 outer_index = 0
     for outer in info.args:
         if outer_index == outer_target:
-            int64 inner_index = 0
+            mutable int64 inner_index = 0
             for inner in outer.args:
                 if inner_index == inner_target:
                     found = inner.kind
@@ -173,31 +173,31 @@ function nested_arg_kind_from_info(info: TypeInfo, outer_target: int64, inner_ta
     return found
 function complex_field_nested_arg_kind(field_name: string, outer_target: int64, inner_target: int64) returns string:
     list[TypeField] fields = type.fields[Complex]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = nested_arg_kind_from_info(field.type_info, outer_target, inner_target)
     return found
 function complex_field_type_info_secret(field_name: string) returns bool:
     list[TypeField] fields = type.fields[Complex]()
-    bool found = false
+    mutable bool found = false
     for field in fields:
         if field.name == field_name:
             found = field.type_info.has_secret
     return found
 function complex_field_type_info_matches_legacy(field_name: string) returns bool:
     list[TypeField] fields = type.fields[Complex]()
-    bool found = false
+    mutable bool found = false
     for field in fields:
         if field.name == field_name:
             found = field.type_info.type_name == field.type_name and field.type_info.kind == field.kind and field.type_info.has_secret == field.has_secret
     return found
 function pair_field_arg_type_name(field_name: string, target: int64) returns string:
     list[TypeField] fields = type.fields[Pair[list[int64], optional[string]]]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
-            int64 index = 0
+            mutable int64 index = 0
             for arg in field.type_info.args:
                 if index == target:
                     found = arg.type_name
@@ -206,7 +206,7 @@ function pair_field_arg_type_name(field_name: string, target: int64) returns str
 function header_version_by_reflection() returns int64:
     Header header = Header(version: 4)
     list[TypeField] fields = type.fields[Header]()
-    int64 found = -1
+    mutable int64 found = -1
     for field in fields:
         if field.name == "version":
             found = type.field_value[Header, int64](view header, view field)
@@ -222,42 +222,42 @@ function bitfield_metadata_network_order[T]() returns bool:
     return info.network_order
 function bitfield_field_shape[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.shape
     return found
 function bitfield_field_shape_tag_is[T](field_name: string, expected: TypeBitfieldFieldShape) returns bool:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    bool found = false
+    mutable bool found = false
     for field in fields:
         if field.name == field_name:
             found = field.shape_tag == expected
     return found
 function bitfield_field_width[T](field_name: string) returns int64:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    int64 found = -1
+    mutable int64 found = -1
     for field in fields:
         if field.name == field_name:
             found = field.width
     return found
 function bitfield_field_type_name[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.type_info.type_name
     return found
 function bitfield_field_type_kind[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             found = field.type_info.kind
     return found
 function bitfield_field_enum_kind[T](field_name: string) returns string:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for field in fields:
         if field.name == field_name:
             TypeInfo info = field.enum_type handle:
@@ -272,17 +272,17 @@ function machine_state_count[T]() returns int64:
     return list.length[TypeMachineState](states)
 function machine_state_field_count[T](state_name: string) returns int64:
     list[TypeMachineState] states = type.machine_states[T]()
-    int64 found = -1
+    mutable int64 found = -1
     for state in states:
         if state.name == state_name:
             found = list.length[TypeField](state.fields)
     return found
 function machine_state_field_type_name[T](state_name: string, target: int64) returns string:
     list[TypeMachineState] states = type.machine_states[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for state in states:
         if state.name == state_name:
-            int64 index = 0
+            mutable int64 index = 0
             for field in state.fields:
                 if index == target:
                     found = field.type_info.type_name
@@ -290,7 +290,7 @@ function machine_state_field_type_name[T](state_name: string, target: int64) ret
     return found
 function machine_state_has_secret[T](state_name: string) returns bool:
     list[TypeMachineState] states = type.machine_states[T]()
-    bool found = false
+    mutable bool found = false
     for state in states:
         if state.name == state_name:
             found = state.has_secret
@@ -300,14 +300,14 @@ function machine_transition_count[T]() returns int64:
     return list.length[TypeMachineTransition](edges)
 function machine_transition_target[T](source_name: string) returns string:
     list[TypeMachineTransition] edges = type.machine_transitions[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for edge in edges:
         if edge.source == source_name:
             found = edge.target
     return found
 function machine_transition_source_index[T](source_name: string) returns int64:
     list[TypeMachineTransition] edges = type.machine_transitions[T]()
-    int64 found = -1
+    mutable int64 found = -1
     for edge in edges:
         if edge.source == source_name:
             found = edge.source_index
@@ -320,13 +320,13 @@ function active_machine_state_summary_precise(view session: Session at logged_in
     return "{state.index}:{state.name}:{list.length[TypeField](state.fields)}:{state.has_secret}"
 function active_machine_logged_in_user_id(view session: Session at logged_in) returns string:
     TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
-    string found = "missing"
+    mutable string found = "missing"
     for field in state.fields:
         if field.name == "user_id":
             found = type.machine_field_value[Session at logged_in, string](view session, view field)
     return found
 function active_machine_logged_in_user_id_direct_loop(view session: Session at logged_in) returns string:
-    string found = "missing"
+    mutable string found = "missing"
     for field in type.machine_state_value[Session at logged_in](view session).fields:
         comptime type Field = field.type_info:
             Field item = type.machine_field_value[Session at logged_in, Field](view session, view field)
@@ -349,31 +349,31 @@ function variant_count[T]() returns int64:
     return list.length[TypeVariant](variants)
 function variant_field_count[T](variant_name: string) returns int64:
     list[TypeVariant] variants = type.variants[T]()
-    int64 found = -1
+    mutable int64 found = -1
     for variant in variants:
         if variant.name == variant_name:
             found = list.length[TypeField](variant.fields)
     return found
 function variant_discriminant[T](variant_name: string) returns int64:
     list[TypeVariant] variants = type.variants[T]()
-    int64 found = -1
+    mutable int64 found = -1
     for variant in variants:
         if variant.name == variant_name:
             found = variant.discriminant
     return found
 function variant_has_secret[T](variant_name: string) returns bool:
     list[TypeVariant] variants = type.variants[T]()
-    bool found = false
+    mutable bool found = false
     for variant in variants:
         if variant.name == variant_name:
             found = variant.has_secret
     return found
 function variant_field_kind[T](variant_name: string, target: int64) returns string:
     list[TypeVariant] variants = type.variants[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for variant in variants:
         if variant.name == variant_name:
-            int64 index = 0
+            mutable int64 index = 0
             for field in variant.fields:
                 if index == target:
                     found = field.kind
@@ -381,10 +381,10 @@ function variant_field_kind[T](variant_name: string, target: int64) returns stri
     return found
 function variant_field_type_name[T](variant_name: string, target: int64) returns string:
     list[TypeVariant] variants = type.variants[T]()
-    string found = "missing"
+    mutable string found = "missing"
     for variant in variants:
         if variant.name == variant_name:
-            int64 index = 0
+            mutable int64 index = 0
             for field in variant.fields:
                 if index == target:
                     found = field.type_name

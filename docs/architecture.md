@@ -594,7 +594,8 @@ This sub-phase tracks the ownership state of every variable through the control 
 - `view` values cannot be returned, stored in structs, or sent to actors.
 - For types that support duplication, `clone` creates an owned duplicate from
   an owned or viewed value. Clone support is type-specific rather than universal.
-- `mutable` variables can be rebound after their value is consumed.
+- Assigning to an immutable local is rejected during ownership analysis
+  (`E0404`). A `mutable` local can be rebound after its value is consumed.
 - **For loops:** `for item in items` consumes `items`; `for item in view items` borrows `items`.
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
