@@ -219,6 +219,18 @@ byte matches. Empty delimiters preserve endpoint empty strings. CR/LF/CRLF line
 segmentation matches the interpreter. split_max, reverse and list.skip remain
 compiled Jett control flow, not runtime implementations of their source bodies.
 
+Primitive sets have distinct context-associated owner handles. Integer and bool
+elements compare their checked scalar bits; string elements compare UTF-8 content
+while retaining separate owner references. Add preserves insertion order, drops a
+consumed duplicate string, and leaves both inputs owned by the caller if capacity
+allocation fails. Remove drops only the removed owner. Clone retains each string
+and rolls back partial construction on failure. Native sequence lowering uses
+initialized element slots for consuming iteration, so an early exit drops only
+the elements still in the set. Borrowed iteration clones strings without moving
+the source set. The native/interpreter fixture covers these paths, including
+duplicate content and cleanup at context destruction. Primitive-backed
+refinement elements and map ownership remain guarded.
+
 The remaining string intrinsics now have typed native leaves. Replace reuses
 the grapheme split matcher and checks output capacity before assembly; empty
 needles preserve the interpreter's leading, between-grapheme and trailing

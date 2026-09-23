@@ -19,6 +19,7 @@ pub(crate) enum ScalarKind {
     Bytes,
     Sum,
     List,
+    Set,
     Struct,
     Enum,
     Bitfield,
@@ -183,6 +184,10 @@ fn scalar_kind_inner(
             scalar_kind_inner(types, *inner, "list element".into(), seen)?;
             ScalarKind::List
         }
+        Type::Set(inner) => {
+            scalar_kind_inner(types, *inner, "set element".into(), seen)?;
+            ScalarKind::Set
+        }
         Type::Optional(inner) => {
             scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
             ScalarKind::Sum
@@ -296,7 +301,7 @@ impl Verifier<'_> {
             StatementKind::IterationBorrow { source, token, .. } => {
                 if !matches!(
                     self.types.resolve(function.local(*source).unwrap().ty),
-                    Type::List(_)
+                    Type::List(_) | Type::Set(_)
                 ) || function.local(*token).unwrap().ty != TypeInterner::INT64
                 {
                     return Err(self.contract_error(
@@ -309,13 +314,15 @@ impl Verifier<'_> {
             }
             StatementKind::SequenceLength { source, target }
             | StatementKind::SequenceGet { source, target, .. } => {
-                let Type::List(element) = self.types.resolve(function.local(*source).unwrap().ty)
-                else {
-                    return Err(self.contract_error(
-                        function,
-                        statement.span,
-                        "sequence requires list",
-                    ));
+                let element = match self.types.resolve(function.local(*source).unwrap().ty) {
+                    Type::List(element) | Type::Set(element) => *element,
+                    _ => {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "sequence requires list or set",
+                        ));
+                    }
                 };
                 let expected =
                     if let StatementKind::SequenceGet { index, consume, .. } = statement.kind {
@@ -326,14 +333,14 @@ impl Verifier<'_> {
                             function.local(index).unwrap().ty,
                             "sequence index must be int64",
                         )?;
-                        if !consume && jett_mir::move_values::is_linear(self.types, *element) {
+                        if !consume && jett_mir::move_values::is_linear(self.types, element) {
                             return Err(self.unsupported(
                                 function,
                                 statement.span,
                                 "move-only iteration element places",
                             ));
                         }
-                        *element
+                        element
                     } else {
                         TypeInterner::INT64
                     };
@@ -750,7 +757,21 @@ impl Verifier<'_> {
                         "list intrinsic type argument differs from element",
                     ));
                 }
-                if !numeric_generic && !list_generic && !type_arguments.is_empty() {
+                let set_generic = crate::values::set_intrinsic(*intrinsic);
+                if set_generic
+                    && type_arguments.as_slice()
+                        != [
+                            crate::values::set_element(*intrinsic, args, expression.ty, self.types)
+                                .unwrap_or(TypeInterner::ERROR),
+                        ]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "set intrinsic type argument differs from element",
+                    ));
+                }
+                if !numeric_generic && !list_generic && !set_generic && !type_arguments.is_empty() {
                     return Err(self.unsupported(
                         function,
                         expression.span,

@@ -157,6 +157,30 @@ pub(crate) fn verify_intrinsic(
             Err(format!("invalid native list signature for {id}"))
         };
     }
+    if set_intrinsic(id) {
+        let element = set_element(id, args, result, types)
+            .ok_or_else(|| "invalid native set type".to_string())?;
+        if !set_element_supported(types, element) {
+            return Err("unsupported native set element".into());
+        }
+        let set = |ty| matches!(types.resolve(ty), Type::Set(inner) if *inner == element);
+        let valid = match id {
+            IntrinsicId::SetNew => args.is_empty() && set(result),
+            IntrinsicId::SetAdd | IntrinsicId::SetRemove => {
+                args.len() == 2 && set(args[0].ty) && args[1].ty == element && set(result)
+            }
+            IntrinsicId::SetContains => {
+                args.len() == 2 && set(args[0].ty) && args[1].ty == element && result == T::BOOL
+            }
+            IntrinsicId::SetLength => args.len() == 1 && set(args[0].ty) && result == T::INT64,
+            _ => false,
+        };
+        return if valid {
+            Ok(())
+        } else {
+            Err(format!("invalid native set signature for {id}"))
+        };
+    }
     let sum_signature = match id {
         IntrinsicId::Int64FromString => Some((vec![T::STRING], Type::Result(T::INT64, T::STRING))),
         IntrinsicId::Uint64FromString => {
@@ -319,6 +343,48 @@ pub(crate) fn list_intrinsic(id: IntrinsicId) -> bool {
             | IntrinsicId::ListGetClone
             | IntrinsicId::ListSum
             | IntrinsicId::ListSort
+    )
+}
+pub(crate) fn set_intrinsic(id: IntrinsicId) -> bool {
+    matches!(
+        id,
+        IntrinsicId::SetNew
+            | IntrinsicId::SetAdd
+            | IntrinsicId::SetRemove
+            | IntrinsicId::SetContains
+            | IntrinsicId::SetLength
+    )
+}
+pub(crate) fn set_element(
+    id: IntrinsicId,
+    args: &[Expression],
+    result: TypeId,
+    types: &TypeInterner,
+) -> Option<TypeId> {
+    let ty = if id == IntrinsicId::SetNew {
+        result
+    } else {
+        args.first()?.ty
+    };
+    if let Type::Set(inner) = types.resolve(ty) {
+        Some(*inner)
+    } else {
+        None
+    }
+}
+fn set_element_supported(types: &TypeInterner, element: TypeId) -> bool {
+    matches!(
+        types.resolve(element),
+        Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Bool
+            | Type::String
     )
 }
 pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {

@@ -21,6 +21,10 @@ const INVALID_LIST: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native list handle",
 );
+const INVALID_SET: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native set handle or element",
+);
 const INVALID_BYTES: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native bytes handle",
@@ -122,6 +126,10 @@ struct NativeStruct {
 struct NativeList {
     elements: Vec<Option<u64>>,
     owned: bool,
+}
+struct NativeSet {
+    elements: Vec<Option<u64>>,
+    strings: bool,
 }
 struct NativeSum {
     tag: u32,
@@ -345,11 +353,14 @@ pub(super) struct NativeValues {
     bytes: HashMap<NativeHandle, Vec<u8>>,
     sums: HashMap<NativeHandle, NativeSum>,
     lists: HashMap<NativeHandle, NativeList>,
+    sets: HashMap<NativeHandle, NativeSet>,
     structs: HashMap<NativeHandle, NativeStruct>,
     structs_created: u64,
     structs_destroyed: u64,
     lists_created: u64,
     lists_destroyed: u64,
+    sets_created: u64,
+    sets_destroyed: u64,
     sums_created: u64,
     sums_destroyed: u64,
     bytes_created: u64,
@@ -376,6 +387,8 @@ impl NativeValues {
             && self.sums_created == self.sums_destroyed
             && self.lists.is_empty()
             && self.lists_created == self.lists_destroyed
+            && self.sets.is_empty()
+            && self.sets_created == self.sets_destroyed
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
         #[cfg(test)]
@@ -564,6 +577,100 @@ impl NativeValues {
         );
         self.lists_created += 1;
         Ok(id)
+    }
+    fn new_set(&mut self, strings: u32) -> LeafResult<u64> {
+        if strings > 1 {
+            return Err(INVALID_SET);
+        }
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let id = next_identity()?;
+        self.sets.insert(
+            id,
+            NativeSet {
+                elements: Vec::new(),
+                strings: strings != 0,
+            },
+        );
+        self.sets_created += 1;
+        Ok(id)
+    }
+    fn set_position(&self, id: u64, key: u64) -> LeafResult<Option<usize>> {
+        let set = self.sets.get(&id).ok_or(INVALID_SET)?;
+        if set.strings {
+            let key_text = self.text(key)?;
+            for (index, &element) in set.elements.iter().enumerate() {
+                if let Some(element) = element {
+                    if self.text(element)? == key_text {
+                        return Ok(Some(index));
+                    }
+                }
+            }
+            Ok(None)
+        } else {
+            Ok(set
+                .elements
+                .iter()
+                .position(|element| *element == Some(key)))
+        }
+    }
+    fn set_add(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        let duplicate = self.set_position(id, key)?.is_some();
+        if duplicate {
+            if self.sets.get(&id).ok_or(INVALID_SET)?.strings {
+                self.drop_value(key)?;
+            }
+            return Ok(id);
+        }
+        let set = self.sets.get_mut(&id).ok_or(INVALID_SET)?;
+        set.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        set.elements.push(Some(key));
+        Ok(id)
+    }
+    fn set_remove(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        if let Some(index) = self.set_position(id, key)? {
+            let set = self.sets.get_mut(&id).ok_or(INVALID_SET)?;
+            let old = set.elements.remove(index);
+            if set.strings {
+                self.drop_value(old.ok_or(INVALID_SET)?)?;
+            }
+        }
+        Ok(id)
+    }
+    fn clone_set(&mut self, id: u64) -> LeafResult<u64> {
+        let set = self.sets.get(&id).ok_or(INVALID_SET)?;
+        let (elements, strings) = (set.elements.clone(), set.strings);
+        let output = self.new_set(u32::from(strings))?;
+        if let Err(error) = self
+            .sets
+            .get_mut(&output)
+            .ok_or(INVALID_SET)?
+            .elements
+            .try_reserve_exact(elements.len())
+            .map_err(|_| EXHAUSTED)
+        {
+            self.drop_value(output)?;
+            return Err(error);
+        }
+        for element in elements {
+            let value = if strings {
+                match element.map(|element| self.clone_value(element)).transpose() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                element
+            };
+            self.sets
+                .get_mut(&output)
+                .ok_or(INVALID_SET)?
+                .elements
+                .push(value);
+        }
+        Ok(output)
     }
     fn sort_list(&mut self, id: u64, raw_kind: u32) -> LeafResult<u64> {
         let kind = NativeSortKind::from_raw(raw_kind)?;
@@ -776,6 +883,9 @@ impl NativeValues {
         if self.lists.contains_key(&id) {
             return self.clone_list(id);
         }
+        if self.sets.contains_key(&id) {
+            return self.clone_set(id);
+        }
         if let Some(sum) = self.sums.get(&id) {
             let (tag, bits, owned) = (sum.tag, sum.bits, sum.owned);
             let bits = if owned { self.clone_value(bits)? } else { bits };
@@ -808,6 +918,15 @@ impl NativeValues {
             self.lists_destroyed += 1;
             if list.owned {
                 for value in list.elements.into_iter().flatten() {
+                    self.drop_value(value)?;
+                }
+            }
+            return Ok(0);
+        }
+        if let Some(set) = self.sets.remove(&id) {
+            self.sets_destroyed += 1;
+            if set.strings {
+                for value in set.elements.into_iter().flatten() {
                     self.drop_value(value)?;
                 }
             }
@@ -1151,6 +1270,27 @@ leaves! {
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
     ListSort, jett_rt_v1_list_sort, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
         |s| s.sort_list(value, kind);
+    SetNew, jett_rt_v1_set_new, false, (strings: u32 => I32), u64 => I64,
+        |s| s.new_set(strings);
+    SetAdd, jett_rt_v1_set_add, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.set_add(value, key);
+    SetRemove, jett_rt_v1_set_remove, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.set_remove(value, key);
+    SetContains, jett_rt_v1_set_contains, false, (value: u64 => I64, key: u64 => I64), u32 => I32,
+        |s| Ok(u32::from(s.set_position(value, key)?.is_some()));
+    SetLength, jett_rt_v1_set_length, false, (value: u64 => I64), i64 => I64,
+        |s| Ok(s.sets.get(&value).ok_or(INVALID_SET)?.elements.len() as i64);
+    SetClone, jett_rt_v1_set_clone, false, (value: u64 => I64), u64 => I64,
+        |s| s.clone_set(value);
+    SetElementTake, jett_rt_v1_set_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.sets.get_mut(&value).ok_or(INVALID_SET)?
+            .elements.get_mut(usize::try_from(index).map_err(|_| INVALID_SET)?)
+            .and_then(Option::take).ok_or(INVALID_SET);
+    SetElementClone, jett_rt_v1_set_element_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let set = s.sets.get(&value).ok_or(INVALID_SET)?;
+            let element = set.elements.get(usize::try_from(index).map_err(|_| INVALID_SET)?)
+                .copied().flatten().ok_or(INVALID_SET)?;
+            if set.strings { s.retain(element) } else { Ok(element) } };
     ListLength, jett_rt_v1_list_length, false, (value: u64 => I64), i64 => I64,
         |s| Ok(s.lists.get(&value).ok_or(INVALID_LIST)?.elements.len() as i64);
     ListAppend, jett_rt_v1_list_append, false, (value: u64 => I64, bits: u64 => I64), u64 => I64,
@@ -2047,6 +2187,53 @@ mod tests {
             [Some(apple), Some(zebra), Some(eclair)]
         );
         values.drop_value(list).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn set_duplicate_strings_and_clones_release_exactly_one_owner_each() {
+        let mut values = NativeValues::default();
+        let first = values.insert("ada".into()).unwrap();
+        let duplicate = values.insert("ada".into()).unwrap();
+        let set = values.new_set(1).unwrap();
+        assert_eq!(values.set_add(set, first), Ok(set));
+        assert_eq!(values.set_add(set, duplicate), Ok(set));
+        assert_eq!(values.sets[&set].elements, [Some(first)]);
+        assert!(!values.strings.contains_key(&duplicate));
+
+        let copy = values.clone_set(set).unwrap();
+        assert_eq!(values.strings[&first].references, 2);
+        assert_eq!(values.set_remove(set, first), Ok(set));
+        assert!(values.sets[&set].elements.is_empty());
+        assert_eq!(values.strings[&first].references, 1);
+        assert_eq!(values.set_position(copy, first), Ok(Some(0)));
+        values.drop_value(set).unwrap();
+        values.drop_value(copy).unwrap();
+        assert_eq!((values.sets_created, values.sets_destroyed), (2, 2));
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn partial_set_iteration_drops_only_remaining_owned_elements() {
+        let mut values = NativeValues::default();
+        let first = values.insert("first".into()).unwrap();
+        let second = values.insert("second".into()).unwrap();
+        let set = values.new_set(1).unwrap();
+        values.set_add(set, first).unwrap();
+        values.set_add(set, second).unwrap();
+        let borrowed = values.retain(first).unwrap();
+        let taken = values
+            .sets
+            .get_mut(&set)
+            .unwrap()
+            .elements
+            .get_mut(0)
+            .and_then(Option::take)
+            .unwrap();
+        assert_eq!(taken, first);
+        values.drop_value(set).unwrap();
+        assert!(!values.strings.contains_key(&second));
+        assert_eq!(values.strings[&first].references, 2);
+        values.drop_value(taken).unwrap();
+        values.drop_value(borrowed).unwrap();
         assert!(values.is_empty());
     }
 }

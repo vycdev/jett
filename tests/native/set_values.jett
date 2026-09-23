@@ -1,0 +1,25 @@
+namespace app
+function main() returns nothing:
+    mutable set[int64] numbers = set.new[int64]()
+    numbers = set.add[int64](numbers, -2)
+    numbers = set.add[int64](numbers, 7)
+    numbers = set.add[int64](numbers, -2)
+    println(set.length[int64](numbers), set.contains[int64](numbers, 7))
+    numbers = set.remove[int64](numbers, -2)
+    println(set.length[int64](numbers), set.contains[int64](numbers, -2))
+    mutable int64 total = 0
+    for item in numbers:
+        total = total + item
+    println(total)
+    mutable set[string] names = set.new[string]()
+    names = set.add[string](names, "ada")
+    names = set.add[string](names, "bob")
+    names = set.add[string](names, "ada")
+    set[string] copy = clone names
+    names = set.remove[string](names, "ada")
+    println(set.length[string](names), set.contains[string](names, "ada"))
+    println(set.length[string](copy), set.contains[string](copy, "ada"))
+    for item in view names:
+        println(item)
+    for item in copy:
+        println(item)

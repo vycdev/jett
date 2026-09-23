@@ -1,4 +1,4 @@
-//! Materialize native list iterables once, before the loop backedge.
+//! Materialize native list and set iterables once, before the loop backedge.
 //! Consuming iteration takes initialized element places. Move-only views need
 //! projected-place loans and are deliberately left unsupported.
 use super::*;
@@ -41,10 +41,10 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             if iterable.ty.index() as usize >= types.len() {
                 continue;
             }
-            let Type::List(element) = types.resolve(iterable.ty) else {
-                continue;
+            let element = match types.resolve(iterable.ty) {
+                Type::List(element) | Type::Set(element) => *element,
+                _ => continue,
             };
-            let element = *element;
             if element.index() as usize >= types.len() {
                 continue;
             }

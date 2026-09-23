@@ -512,7 +512,7 @@ fn plan_type_inner(
                 }
                 return Ok(());
             }
-            Type::Optional(inner) | Type::List(inner) => {
+            Type::Optional(inner) | Type::List(inner) | Type::Set(inner) => {
                 return plan_type_inner(types, *inner, program, seen);
             }
             Type::Result(ok, error) => {

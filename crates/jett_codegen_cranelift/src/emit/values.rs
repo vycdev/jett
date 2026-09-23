@@ -420,6 +420,63 @@ impl Translator<'_, '_> {
             _ => Err(self.unsupported(span, "list intrinsic")),
         }
     }
+    fn set_intrinsic(
+        &mut self,
+        id: IntrinsicId,
+        values: &[LoweredValue],
+        result_type: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        match id {
+            IntrinsicId::SetNew => {
+                let Type::Set(element) = self.types.resolve(result_type) else {
+                    return Err(self.unsupported(span, "set result layout"));
+                };
+                let strings = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(*element == TypeInterner::STRING));
+                let value = self.leaf(NativeLeaf::SetNew, &[strings], true)?;
+                self.own_linear(value)
+            }
+            IntrinsicId::SetLength => {
+                let value = self.scalar(values[0], span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::SetLength,
+                    &[value],
+                    true,
+                )?))
+            }
+            IntrinsicId::SetContains => {
+                let value = self.scalar(values[0], span)?;
+                let key = self.scalar(values[1], span)?;
+                let found = self.leaf(NativeLeaf::SetContains, &[value, key], true)?;
+                Ok(LoweredValue::Scalar(
+                    self.builder.ins().ireduce(ir::types::I8, found),
+                ))
+            }
+            IntrinsicId::SetAdd | IntrinsicId::SetRemove => {
+                let LoweredValue::Owned(set, slot) = values[0] else {
+                    return Err(self.unsupported(span, "set mutation requires owner"));
+                };
+                let (key, _) = self.payload_bits(values[1]);
+                let leaf = if id == IntrinsicId::SetAdd {
+                    NativeLeaf::SetAdd
+                } else {
+                    NativeLeaf::SetRemove
+                };
+                let value = self.leaf(leaf, &[set, key], true)?;
+                self.clear_slot(slot);
+                if id == IntrinsicId::SetAdd {
+                    if let LoweredValue::Owned(_, key_slot) = values[1] {
+                        self.clear_slot(key_slot);
+                    }
+                }
+                self.own_linear(value)
+            }
+            _ => Err(self.unsupported(span, "set intrinsic")),
+        }
+    }
     pub(super) fn clear_slot(&mut self, slot: ir::StackSlot) {
         let zero = self.builder.ins().iconst(ir::types::I64, 0);
         self.builder.ins().stack_store(zero, slot, 0);
@@ -613,6 +670,9 @@ impl Translator<'_, '_> {
         }
         if crate::values::list_intrinsic(id) {
             return self.list_intrinsic(id, &evaluated, result_type, span);
+        }
+        if crate::values::set_intrinsic(id) {
+            return self.set_intrinsic(id, &evaluated, result_type, span);
         }
         if let Some(leaf) = crate::values::bytes_leaf(id) {
             let arguments = evaluated

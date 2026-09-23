@@ -14,6 +14,7 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::Result(..)
             | Type::Optional(_)
             | Type::List(_)
+            | Type::Set(_)
             | Type::Struct(_)
             | Type::Enum(_)
             | Type::Bitfield(_)
@@ -21,18 +22,21 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
 }
 
 pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
-    index == 0
-        && matches!(
-            id,
-            IntrinsicId::BytesLength
-                | IntrinsicId::BytesSlice
-                | IntrinsicId::BytesToHex
-                | IntrinsicId::BytesToString
-                | IntrinsicId::BytesGet
-                | IntrinsicId::ListLength
-                | IntrinsicId::ListGetClone
-                | IntrinsicId::ListSum
-        )
+    (index == 1 && matches!(id, IntrinsicId::SetRemove | IntrinsicId::SetContains))
+        || (index == 0
+            && matches!(
+                id,
+                IntrinsicId::BytesLength
+                    | IntrinsicId::BytesSlice
+                    | IntrinsicId::BytesToHex
+                    | IntrinsicId::BytesToString
+                    | IntrinsicId::BytesGet
+                    | IntrinsicId::ListLength
+                    | IntrinsicId::ListGetClone
+                    | IntrinsicId::ListSum
+                    | IntrinsicId::SetLength
+                    | IntrinsicId::SetContains
+            ))
 }
 
 pub struct MoveValuePlan;

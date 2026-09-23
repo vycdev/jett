@@ -472,6 +472,7 @@ fn clif_type(
         | ScalarKind::Bytes
         | ScalarKind::Sum
         | ScalarKind::List
+        | ScalarKind::Set
         | ScalarKind::Struct
         | ScalarKind::Enum
         | ScalarKind::Bitfield
@@ -710,12 +711,19 @@ impl Translator<'_, '_> {
                 };
                 let value = self.argument(&source_expr, true)?;
                 let value = self.scalar(value, statement.span)?;
+                let set = matches!(self.types.resolve(ty), Type::Set(_));
                 let output =
                     if let StatementKind::SequenceGet { index, consume, .. } = statement.kind {
                         let index = self
                             .builder
                             .use_var(self.variables[index.index() as usize].unwrap());
-                        let leaf = if consume {
+                        let leaf = if set {
+                            if consume {
+                                NativeLeaf::SetElementTake
+                            } else {
+                                NativeLeaf::SetElementClone
+                            }
+                        } else if consume {
                             NativeLeaf::ListElementTake
                         } else {
                             NativeLeaf::ListElementClone
@@ -727,7 +735,12 @@ impl Translator<'_, '_> {
                             statement.span,
                         )?
                     } else {
-                        LoweredValue::Scalar(self.leaf(NativeLeaf::ListLength, &[value], true)?)
+                        let leaf = if set {
+                            NativeLeaf::SetLength
+                        } else {
+                            NativeLeaf::ListLength
+                        };
+                        LoweredValue::Scalar(self.leaf(leaf, &[value], true)?)
                     };
                 self.define_local(*target, output, statement.span)
             }
@@ -1065,6 +1078,7 @@ impl Translator<'_, '_> {
                 let leaf = match self.types.resolve(value.ty) {
                     Type::Bytes => NativeLeaf::BytesClone,
                     Type::List(_) => NativeLeaf::ListClone,
+                    Type::Set(_) => NativeLeaf::SetClone,
                     Type::Struct(_) => NativeLeaf::StructClone,
                     Type::Enum(_) => NativeLeaf::StructClone,
                     Type::Bitfield(_) => NativeLeaf::StructClone,
@@ -1382,6 +1396,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Bytes
             | ScalarKind::Sum
             | ScalarKind::List
+            | ScalarKind::Set
             | ScalarKind::Struct
             | ScalarKind::Enum
             | ScalarKind::Bitfield
