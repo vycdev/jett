@@ -85,6 +85,34 @@ pub(crate) fn verify_intrinsic(
             Err("invalid native range signature".into())
         };
     }
+    if matches!(
+        id,
+        IntrinsicId::CsvParse | IntrinsicId::CsvParseWithHeader | IntrinsicId::CsvStringify
+    ) {
+        let string_rows = |ty| matches!(types.resolve(ty), Type::List(row) if matches!(types.resolve(*row), Type::List(field) if *field == T::STRING));
+        let map_rows = |ty| matches!(types.resolve(ty), Type::List(row) if matches!(types.resolve(*row), Type::Map(key, value) if *key == T::STRING && *value == T::STRING));
+        let valid = match id {
+            IntrinsicId::CsvParse => {
+                args.len() == 1
+                    && args[0].ty == T::STRING
+                    && matches!(types.resolve(result), Type::Result(rows, error) if *error == T::STRING && string_rows(*rows))
+            }
+            IntrinsicId::CsvParseWithHeader => {
+                args.len() == 1
+                    && args[0].ty == T::STRING
+                    && matches!(types.resolve(result), Type::Result(rows, error) if *error == T::STRING && map_rows(*rows))
+            }
+            IntrinsicId::CsvStringify => {
+                args.len() == 1 && string_rows(args[0].ty) && result == T::STRING
+            }
+            _ => false,
+        };
+        return if valid {
+            Ok(())
+        } else {
+            Err("invalid native CSV intrinsic signature".into())
+        };
+    }
     if let Some(leaf) = math_leaf(id, args.first().map(|a| a.ty)) {
         let parameters = &leaf.parameters()[1..];
         let native_type = |ty| match ty {
@@ -396,6 +424,9 @@ pub(crate) fn bytes_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
         IntrinsicId::EncodingUrlDecode => NativeLeaf::EncodingUrlDecode,
         IntrinsicId::EncodingFormEncode => NativeLeaf::EncodingFormEncode,
         IntrinsicId::EncodingFormDecode => NativeLeaf::EncodingFormDecode,
+        IntrinsicId::CsvParse => NativeLeaf::CsvParse,
+        IntrinsicId::CsvParseWithHeader => NativeLeaf::CsvParseWithHeader,
+        IntrinsicId::CsvStringify => NativeLeaf::CsvStringify,
         _ => return None,
     })
 }

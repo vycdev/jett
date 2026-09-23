@@ -2,6 +2,7 @@
 //! Every pointer must refer to a live stationary ABI context, except literal
 //! bytes which are borrowed for the call. No Rust value crosses this ABI.
 use super::*;
+use crate::csv;
 use crate::encoding;
 use std::cmp::Ordering as CompareOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -610,6 +611,113 @@ impl NativeValues {
                 Err(error)
             }
         }
+    }
+    fn owned_sum(&mut self, tag: u32, payload: u64) -> LeafResult<u64> {
+        match self.sum(tag, payload, true) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.drop_value(payload)?;
+                Err(error)
+            }
+        }
+    }
+    fn push_owned_list_element(&mut self, id: u64, element: u64) -> LeafResult<()> {
+        let result = self
+            .lists
+            .get_mut(&id)
+            .ok_or(INVALID_LIST)
+            .and_then(|list| {
+                if !list.owned {
+                    return Err(INVALID_LIST);
+                }
+                list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+                list.elements.push(Some(element));
+                Ok(())
+            });
+        if result.is_err() {
+            self.drop_value(element)?;
+        }
+        result
+    }
+    fn csv_rows(&mut self, rows: Vec<Vec<String>>) -> LeafResult<u64> {
+        let outer = self.new_list(true)?;
+        for row in rows {
+            let result = self
+                .string_list(row)
+                .and_then(|inner| self.push_owned_list_element(outer, inner));
+            if let Err(error) = result {
+                self.drop_value(outer)?;
+                return Err(error);
+            }
+        }
+        Ok(outer)
+    }
+    fn csv_string_pairs(&mut self, entries: Vec<(String, String)>) -> LeafResult<u64> {
+        let map = self.new_map(1, 1)?;
+        for (key, value) in entries {
+            let pair = (|| {
+                let key = self.insert(key)?;
+                let value = match self.insert(value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.drop_value(key)?;
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = self.map_append_literal(map, key, value) {
+                    self.drop_value(key)?;
+                    self.drop_value(value)?;
+                    return Err(error);
+                }
+                Ok(())
+            })();
+            if let Err(error) = pair {
+                self.drop_value(map)?;
+                return Err(error);
+            }
+        }
+        Ok(map)
+    }
+    fn csv_header_rows(&mut self, rows: Vec<Vec<(String, String)>>) -> LeafResult<u64> {
+        let outer = self.new_list(true)?;
+        for entries in rows {
+            let result = self
+                .csv_string_pairs(entries)
+                .and_then(|map| self.push_owned_list_element(outer, map));
+            if let Err(error) = result {
+                self.drop_value(outer)?;
+                return Err(error);
+            }
+        }
+        Ok(outer)
+    }
+    fn csv_records(&self, rows: u64) -> LeafResult<Vec<Vec<String>>> {
+        let outer = self.lists.get(&rows).ok_or(INVALID_LIST)?;
+        if !outer.owned {
+            return Err(INVALID_LIST);
+        }
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(outer.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for row in &outer.elements {
+            let inner = self
+                .lists
+                .get(&row.ok_or(INVALID_LIST)?)
+                .ok_or(INVALID_LIST)?;
+            if !inner.owned {
+                return Err(INVALID_LIST);
+            }
+            let mut fields = Vec::new();
+            fields
+                .try_reserve_exact(inner.elements.len())
+                .map_err(|_| EXHAUSTED)?;
+            for field in &inner.elements {
+                fields.push(self.text(field.ok_or(INVALID_LIST)?)?.to_owned());
+            }
+            records.push(fields);
+        }
+        Ok(records)
     }
     fn new_list(&mut self, owned: bool) -> LeafResult<u64> {
         #[cfg(test)]
@@ -1735,6 +1843,19 @@ leaves! {
     EncodingFormDecode, jett_rt_v1_encoding_form_decode, false, (value: u64 => I64), u64 => I64,
         |s| { let decoded = encoding::percent_decode(s.text(value)?, true).map_err(str::to_owned); s.string_result(decoded) };
 
+    CsvParse, jett_rt_v1_csv_parse, false, (value: u64 => I64), u64 => I64,
+        |s| { match csv::parse_csv_records(s.text(value)?) {
+            Ok(rows) => { let payload = s.csv_rows(rows)?; s.owned_sum(SUM_SUCCESS, payload) },
+            Err(error) => { let payload = s.insert(error)?; s.owned_sum(SUM_FAILURE, payload) }
+        } };
+    CsvParseWithHeader, jett_rt_v1_csv_parse_with_header, false, (value: u64 => I64), u64 => I64,
+        |s| { match csv::parse_csv_with_header(s.text(value)?) {
+            Ok(rows) => { let payload = s.csv_header_rows(rows)?; s.owned_sum(SUM_SUCCESS, payload) },
+            Err(error) => { let payload = s.insert(error)?; s.owned_sum(SUM_FAILURE, payload) }
+        } };
+    CsvStringify, jett_rt_v1_csv_stringify, false, (value: u64 => I64), u64 => I64,
+        |s| { let rows = s.csv_records(value)?; s.insert(csv::stringify_csv_records(&rows)) };
+
     DropValue, jett_rt_v1_value_drop, true, (value: u64 => I64), u32 => I32,
         |s| s.drop_value(value);
     BytesNew, jett_rt_v1_bytes_new, false, (), u64 => I64,
@@ -2670,6 +2791,42 @@ mod tests {
         assert!(!values.strings.contains_key(&value));
         assert!(values.strings.contains_key(&taken_key));
         values.drop_value(taken_key).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn csv_nested_values_roll_back_each_allocation_boundary() {
+        for budget in 0..10 {
+            let mut values = NativeValues::default();
+            values.allocation_budget = Some(budget);
+            match values.csv_rows(vec![vec!["a".into(), "b".into()], vec!["c".into()]]) {
+                Ok(rows) => {
+                    values.drop_value(rows).unwrap();
+                }
+                Err(error) => assert_eq!(error, EXHAUSTED),
+            }
+            assert!(values.is_empty(), "CSV rows leaked at budget {budget}");
+        }
+        for budget in 0..12 {
+            let mut values = NativeValues::default();
+            values.allocation_budget = Some(budget);
+            match values.csv_header_rows(vec![vec![
+                ("name".into(), "Ada".into()),
+                ("age".into(), "30".into()),
+            ]]) {
+                Ok(rows) => {
+                    values.drop_value(rows).unwrap();
+                }
+                Err(error) => assert_eq!(error, EXHAUSTED),
+            }
+            assert!(
+                values.is_empty(),
+                "CSV header rows leaked at budget {budget}"
+            );
+        }
+        let mut values = NativeValues::default();
+        let rows = values.csv_rows(vec![vec!["value".into()]]).unwrap();
+        values.allocation_budget = Some(0);
+        assert_eq!(values.owned_sum(SUM_SUCCESS, rows), Err(EXHAUSTED));
         assert!(values.is_empty());
     }
 }

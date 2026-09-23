@@ -826,6 +826,7 @@ impl Translator<'_, '_> {
                 | NativeLeaf::EncodingBase64Encode
                 | NativeLeaf::EncodingUrlEncode
                 | NativeLeaf::EncodingFormEncode => self.own(v),
+                NativeLeaf::CsvStringify => self.own(v),
                 _ => self.own_linear(v),
             };
         }

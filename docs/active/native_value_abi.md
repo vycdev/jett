@@ -134,6 +134,12 @@ call the same base64, strict hex, URL, and form kernels, including validation
 precedence and UTF-8 errors. Failed sum allocation drops the newly created
 payload before propagating terminal failure.
 
+CSV leaves parse strict records into nested owned string lists or header maps,
+and stringify checked nested string lists. The interpreter and native runtime
+share the parser, quoting, and header-validation rules. Native construction
+releases partial rows, fields, maps, and result payloads if an allocation
+boundary fails; the runtime fault-injection test checks each boundary.
+
 ## Result and optional ownership and handlers
 
 Native sums have separate context-associated, move-only handles. Their internal
