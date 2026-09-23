@@ -2,6 +2,7 @@
 #![cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
 
 use jett_driver::native::{NativeLauncherBundle, build_host_executable, host_target};
+use jett_runtime::{clock, random};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -70,19 +71,28 @@ impl Drop for ExecutionChild {
 }
 
 fn run_bounded(executable: &Path, directory: &Path) -> std::process::Output {
+    run_bounded_with_env(executable, directory, None)
+}
+
+fn run_bounded_with_env(
+    executable: &Path,
+    directory: &Path,
+    scripted_provider: Option<(&str, &str)>,
+) -> std::process::Output {
     // File-backed output also bounds the wait if a child process inherits a handle.
     let mut stdout = tempfile::NamedTempFile::new().unwrap();
     let mut stderr = tempfile::NamedTempFile::new().unwrap();
-    let mut child = ExecutionChild(
-        Command::new(executable)
-            .current_dir(directory)
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(stdout.reopen().unwrap())
-            .stderr(stderr.reopen().unwrap())
-            .spawn()
-            .expect("execute native artifact"),
-    );
+    let mut command = Command::new(executable);
+    command
+        .current_dir(directory)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(stdout.reopen().unwrap())
+        .stderr(stderr.reopen().unwrap());
+    if let Some((name, value)) = scripted_provider {
+        command.env(name, value);
+    }
+    let mut child = ExecutionChild(command.spawn().expect("execute native artifact"));
     let start = Instant::now();
     let status = loop {
         if let Some(status) = child.0.try_wait().expect("poll native artifact") {
@@ -106,6 +116,88 @@ fn run_bounded(executable: &Path, directory: &Path) -> std::process::Output {
         stdout: snapshot(stdout.as_file_mut()),
         stderr: snapshot(stderr.as_file_mut()),
     }
+}
+
+#[test]
+fn native_scripted_clock_and_random_match_interpreter() {
+    let clock_samples = vec![
+        clock::ClockTestSample::Wall {
+            unix_seconds: 0,
+            subsecond_nanoseconds: 0,
+        },
+        clock::ClockTestSample::Wall {
+            unix_seconds: 0,
+            subsecond_nanoseconds: 0,
+        },
+        clock::ClockTestSample::Wall {
+            unix_seconds: -1,
+            subsecond_nanoseconds: 999_999_999,
+        },
+        clock::ClockTestSample::Wall {
+            unix_seconds: 42,
+            subsecond_nanoseconds: 123_456_789,
+        },
+        clock::ClockTestSample::Wall {
+            unix_seconds: 40,
+            subsecond_nanoseconds: 0,
+        },
+    ];
+    let clock_fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/clock_scripted.jett");
+    let clock_expected = jett_driver::run_file_capture_stdout_with_clock_test_samples(
+        &clock_fixture,
+        clock_samples.clone(),
+    )
+    .expect("scripted Clock interpreter oracle");
+    let clock_script = clock::encode_test_script(&clock_samples);
+    assert_scripted_fixture(
+        &clock_fixture,
+        clock::TEST_SCRIPT_ENV,
+        &clock_script,
+        &clock_expected,
+    );
+
+    let random_samples = vec![
+        random::RandomTestSample::Bounded(0),
+        random::RandomTestSample::Bounded(u64::MAX - 1),
+        random::RandomTestSample::Unit53(0),
+        random::RandomTestSample::Unit53((1_u64 << 53) - 1),
+        random::RandomTestSample::Boolean(false),
+        random::RandomTestSample::Boolean(true),
+        random::RandomTestSample::Bounded(0),
+        random::RandomTestSample::Bounded(2),
+        random::RandomTestSample::Bounded(0),
+        random::RandomTestSample::Bounded(1),
+        random::RandomTestSample::Bounded(0),
+    ];
+    let random_fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/random_scripted.jett");
+    let random_expected = jett_driver::run_file_capture_stdout_with_random_test_samples(
+        &random_fixture,
+        random_samples.clone(),
+    )
+    .expect("scripted Random interpreter oracle");
+    let random_script = random::encode_test_script(&random_samples);
+    assert_scripted_fixture(
+        &random_fixture,
+        random::TEST_SCRIPT_ENV,
+        &random_script,
+        &random_expected,
+    );
+}
+
+fn assert_scripted_fixture(fixture: &Path, env: &str, script: &str, expected: &str) {
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(fixture, launcher(), &binary).expect("compile scripted fixture");
+    let actual = run_bounded_with_env(&binary, directory.path(), Some((env, script)));
+    assert!(actual.status.success(), "{}: {actual:?}", fixture.display());
+    assert_eq!(actual.stdout, expected.as_bytes(), "{}", fixture.display());
+    assert!(
+        actual.stderr.is_empty(),
+        "{}: {actual:?}",
+        fixture.display()
+    );
 }
 
 #[test]

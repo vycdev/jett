@@ -19,6 +19,13 @@ deterministic parity runs. An empty script means an exhausted provider; absent
 configuration keeps the production wall clock. Native Clock reads match the
 interpreter's sample conversion, unavailability, and exhaustion failures.
 Checking for leftover scripted samples after a successful run remains pending.
+Random authority is a separate context-bound token. Its provider is seeded once
+from OS entropy when the native entry grants Random, or configured before entry
+from `JETT_NATIVE_TEST_RANDOM_SCRIPT_V1` for deterministic parity runs. The
+bounded-integer, unit-float, and boolean leaves share their provider logic with
+the interpreter, including rejection sampling and invalid/exhausted script
+failures. Collection algorithms remain in `stdlib/random.jett`. Exact
+consumption of a successful native test script remains pending.
 
 Generated functions and all source control flow remain Cranelift machine code.
 Copyable string arguments are borrowed by the native call ABI; callee owning

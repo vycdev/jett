@@ -554,6 +554,16 @@ impl Translator<'_, '_> {
                 self.clear_slot(slot);
                 self.own_linear(sorted)
             }
+            IntrinsicId::ListSwap => {
+                let LoweredValue::Owned(list, slot) = values[0] else {
+                    return Err(self.unsupported(span, "swap requires owning list"));
+                };
+                let first = self.scalar(values[1], span)?;
+                let second = self.scalar(values[2], span)?;
+                let swapped = self.leaf(NativeLeaf::ListSwap, &[list, first, second], true)?;
+                self.clear_slot(slot);
+                self.own_linear(swapped)
+            }
             _ => Err(self.unsupported(span, "list intrinsic")),
         }
     }
@@ -879,6 +889,32 @@ impl Translator<'_, '_> {
                     &[authority],
                     true,
                 )?))
+            }
+            IntrinsicId::RandomBounded => {
+                let arguments = evaluated
+                    .iter()
+                    .map(|value| self.scalar(*value, span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::RandomBounded,
+                    &arguments,
+                    true,
+                )?))
+            }
+            IntrinsicId::RandomUnitFloat64 => {
+                let authority = self.scalar(evaluated[0], span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::RandomUnit53,
+                    &[authority],
+                    true,
+                )?))
+            }
+            IntrinsicId::RandomBool => {
+                let authority = self.scalar(evaluated[0], span)?;
+                let value = self.leaf(NativeLeaf::RandomBool, &[authority], true)?;
+                Ok(LoweredValue::Scalar(
+                    self.builder.ins().ireduce(ir::types::I8, value),
+                ))
             }
             IntrinsicId::SecretCompare => {
                 let left = self.scalar(evaluated[0], span)?;

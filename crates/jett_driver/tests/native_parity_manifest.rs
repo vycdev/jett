@@ -129,7 +129,13 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
     if object.contains_key("clock_test_samples") {
         fields.push("clock_test_samples");
     }
+    if object.contains_key("random_test_samples") {
+        fields.push("random_test_samples");
+    }
     require_exact_fields(object, &fields, &context)?;
+    if object.contains_key("clock_test_samples") && object.contains_key("random_test_samples") {
+        return Err(format!("{context} cannot script Clock and Random together"));
+    }
 
     if let Some(samples) = object.get("clock_test_samples") {
         let samples = samples
@@ -160,6 +166,39 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
                 .ok_or_else(|| {
                     format!("{sample_context}.wall.nanoseconds must be a u32 integer")
                 })?;
+        }
+    }
+    if let Some(samples) = object.get("random_test_samples") {
+        let samples = samples
+            .as_array()
+            .ok_or_else(|| format!("{context}.random_test_samples must be an array"))?;
+        for (sample_index, sample) in samples.iter().enumerate() {
+            let sample_context = format!("{context}.random_test_samples[{sample_index}]");
+            let sample = sample
+                .as_object()
+                .ok_or_else(|| format!("{sample_context} must be a Random sample object"))?;
+            if sample.contains_key("bounded") {
+                require_exact_fields(sample, &["bounded"], &sample_context)?;
+                sample["bounded"]
+                    .as_str()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .ok_or_else(|| {
+                        format!("{sample_context}.bounded must be a u64 decimal string")
+                    })?;
+            } else if sample.contains_key("unit53") {
+                require_exact_fields(sample, &["unit53"], &sample_context)?;
+                sample["unit53"]
+                    .as_str()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .ok_or_else(|| {
+                        format!("{sample_context}.unit53 must be a u64 decimal string")
+                    })?;
+            } else {
+                require_exact_fields(sample, &["boolean"], &sample_context)?;
+                sample["boolean"]
+                    .as_bool()
+                    .ok_or_else(|| format!("{sample_context}.boolean must be a bool"))?;
+            }
         }
     }
 
@@ -516,6 +555,14 @@ fn native_parity_manifest_parser_rejects_malformed_entries() {
         (
             "unknown Clock sample field",
             r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only","clock_test_samples":[{"wall":{"unix_seconds":"0","nanoseconds":0,"extra":true}}]}]}"#,
+        ),
+        (
+            "malformed Random sample",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only","random_test_samples":[{"bounded":"-1"}]}]}"#,
+        ),
+        (
+            "ambiguous Random sample",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only","random_test_samples":[{"bounded":"0","boolean":true}]}]}"#,
         ),
         (
             "unknown obligation",

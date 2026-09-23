@@ -3,6 +3,10 @@
 //! Every inventory row is attempted, irrespective of staged object_emit markers.
 use jett_driver::native::{self, NativeLauncherBundle};
 use jett_runtime::clock::{ClockTestSample, TEST_SCRIPT_ENV, encode_test_script};
+use jett_runtime::random::{
+    RandomTestSample, TEST_SCRIPT_ENV as RANDOM_TEST_SCRIPT_ENV,
+    encode_test_script as encode_random_test_script,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
@@ -15,6 +19,7 @@ fn execute(
     binary: &Path,
     directory: &Path,
     clock_samples: Option<&[ClockTestSample]>,
+    random_samples: Option<&[RandomTestSample]>,
 ) -> Result<Output, String> {
     let mut command = Command::new(binary);
     command
@@ -25,6 +30,9 @@ fn execute(
         .stderr(Stdio::piped());
     if let Some(samples) = clock_samples {
         command.env(TEST_SCRIPT_ENV, encode_test_script(samples));
+    }
+    if let Some(samples) = random_samples {
+        command.env(RANDOM_TEST_SCRIPT_ENV, encode_random_test_script(samples));
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut stdout = child.stdout.take().unwrap();
@@ -74,15 +82,22 @@ fn behavior(
     directory: &Path,
     expected_failure: bool,
     clock_samples: Option<&[ClockTestSample]>,
+    random_samples: Option<&[RandomTestSample]>,
 ) -> Result<Value, String> {
-    let actual = execute(binary, directory, clock_samples)?;
+    let actual = execute(binary, directory, clock_samples, random_samples)?;
     let stdout = String::from_utf8(actual.stdout).map_err(|e| e.to_string())?;
     let stderr = String::from_utf8(actual.stderr).map_err(|e| e.to_string())?;
-    let oracle_result = match clock_samples {
-        Some(samples) => {
+    let oracle_result = match (clock_samples, random_samples) {
+        (Some(samples), None) => {
             jett_driver::run_file_capture_outcome_with_clock_test_samples(source, samples.to_vec())
         }
-        None => jett_driver::run_file_capture_outcome(source),
+        (None, Some(samples)) => {
+            jett_driver::run_file_capture_outcome_with_random_test_samples(source, samples.to_vec())
+        }
+        (None, None) => jett_driver::run_file_capture_outcome(source),
+        (Some(_), Some(_)) => {
+            return Err("multiple scripted capability providers in one fixture".into());
+        }
     };
     let (oracle, failure) = match oracle_result {
         Ok(output) => (output, None),
@@ -145,6 +160,46 @@ fn clock_samples(fixture: &Value) -> Result<Option<Vec<ClockTestSample>>, String
                 unix_seconds,
                 subsecond_nanoseconds,
             })
+        })
+        .collect::<Result<Vec<_>, &str>>()
+        .map(Some)
+        .map_err(str::to_owned)
+}
+
+fn random_samples(fixture: &Value) -> Result<Option<Vec<RandomTestSample>>, String> {
+    let Some(samples) = fixture.get("random_test_samples") else {
+        return Ok(None);
+    };
+    let samples = samples
+        .as_array()
+        .ok_or("random_test_samples must be an array")?;
+    samples
+        .iter()
+        .map(|sample| {
+            let object = sample.as_object().ok_or("invalid Random sample")?;
+            if let Some(value) = object.get("bounded") {
+                return value
+                    .as_str()
+                    .ok_or("bounded Random sample must be a decimal string")?
+                    .parse::<u64>()
+                    .map(RandomTestSample::Bounded)
+                    .map_err(|_| "invalid bounded Random sample");
+            }
+            if let Some(value) = object.get("unit53") {
+                return value
+                    .as_str()
+                    .ok_or("unit53 Random sample must be a decimal string")?
+                    .parse::<u64>()
+                    .map(RandomTestSample::Unit53)
+                    .map_err(|_| "invalid unit53 Random sample");
+            }
+            if let Some(value) = object.get("boolean") {
+                return value
+                    .as_bool()
+                    .map(RandomTestSample::Boolean)
+                    .ok_or("invalid boolean Random sample");
+            }
+            Err("invalid Random sample")
         })
         .collect::<Result<Vec<_>, &str>>()
         .map(Some)
@@ -229,12 +284,15 @@ fn main() -> ExitCode {
                     row["linked"] = json!(true);
                     let failure = fixture["expected_outcome"] == "expected_failure";
                     let samples = clock_samples(fixture).expect("valid Clock sample manifest");
+                    let random_samples =
+                        random_samples(fixture).expect("valid Random sample manifest");
                     match behavior(
                         &source,
                         &output,
                         directory.path(),
                         failure,
                         samples.as_deref(),
+                        random_samples.as_deref(),
                     ) {
                         Err(error) => row["execution_error"] = json!(error),
                         Ok(result) => {

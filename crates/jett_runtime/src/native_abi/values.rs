@@ -7,6 +7,7 @@ use crate::crypto;
 use crate::csv;
 use crate::encoding;
 use crate::math;
+use crate::random::{self, RandomProvider};
 use std::cmp::Ordering as CompareOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
 use subtle::ConstantTimeEq;
@@ -398,6 +399,8 @@ pub(super) struct NativeValues {
     stdout: Option<u64>,
     clock: Option<u64>,
     clock_script: Option<std::collections::VecDeque<clock::ClockTestSample>>,
+    random: Option<u64>,
+    random_provider: Option<RandomProvider>,
 }
 impl NativeValues {
     #[cfg(test)]
@@ -1721,6 +1724,42 @@ pub unsafe extern "C" fn jett_rt_v1_clock_configure_scripted(
     })
 }
 
+/// Configure a deterministic Random provider before the capability is granted.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_random_configure_scripted(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            random::INVALID_SCRIPT.as_bytes(),
+        );
+        if s.random.is_some() || s.random_provider.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        s.random_provider = Some(RandomProvider::scripted(
+            random::decode_test_script(script).map_err(|_| invalid)?,
+        ));
+        Ok(0)
+    })
+}
+
 /// Scalar signature schema consumed by Cranelift, never inferred from names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbiScalar {
@@ -1809,6 +1848,13 @@ leaves! {
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
     ListSort, jett_rt_v1_list_sort, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
         |s| s.sort_list(value, kind);
+    ListSwap, jett_rt_v1_list_swap, false, (value: u64 => I64, first: i64 => I64, second: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__swap: index out of bounds".as_slice());
+            let first = usize::try_from(first).map_err(|_| invalid)?;
+            let second = usize::try_from(second).map_err(|_| invalid)?;
+            if first >= list.elements.len() || second >= list.elements.len() { return Err(invalid); }
+            list.elements.swap(first, second); Ok(value) };
     SetNew, jett_rt_v1_set_new, false, (strings: u32 => I32), u64 => I64,
         |s| s.new_set(strings);
     SetAdd, jett_rt_v1_set_add, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
@@ -2175,6 +2221,31 @@ leaves! {
                 let (seconds, nanoseconds) = clock::production_wall_clock_sample();
                 clock::checked_clock_milliseconds(seconds, nanoseconds).map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))
             } };
+    GrantRandom, jett_rt_v1_grant_random, false, (), u64 => I64,
+        |s| { if let Some(token) = s.random { return Ok(token); }
+            if s.random_provider.is_none() {
+                s.random_provider = Some(RandomProvider::production().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?);
+            }
+            let token = next_identity()?; s.random = Some(token); Ok(token) };
+    RandomBounded, jett_rt_v1_random_bounded, false, (authority: u64 => I64, lower: i64 => I64, upper: i64 => I64), i64 => I64,
+        |s| { if s.random != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Random authority")); }
+            let width = u64::try_from(i128::from(upper) - i128::from(lower))
+                .ok().filter(|width| *width > 0)
+                .ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"random.__bounded received invalid bounds".as_slice()))?;
+            let offset = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
+                .bounded_offset(width).map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            i64::try_from(i128::from(lower) + i128::from(offset))
+                .map_err(|_| (JettRuntimeStatusV1::INVALID_ARGUMENT, b"random.__bounded received invalid bounds".as_slice())) };
+    RandomUnit53, jett_rt_v1_random_unit53, false, (authority: u64 => I64), f64 => F64,
+        |s| { if s.random != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Random authority")); }
+            let bits = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
+                .unit53().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            Ok(bits as f64 / 9_007_199_254_740_992.0) };
+    RandomBool, jett_rt_v1_random_bool, false, (authority: u64 => I64), u32 => I32,
+        |s| { if s.random != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Random authority")); }
+            let value = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
+                .boolean().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            Ok(u32::from(value)) };
     Stdout, jett_rt_v1_string_stdout, false, (authority: u64 => I64, value: u64 => I64), u32 => I32,
         |s| {
             if s.stdout != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority")); }
@@ -2416,6 +2487,50 @@ mod tests {
                 Some((
                     JettRuntimeStatusV1::INVALID_ARGUMENT,
                     b"Clock.now: test clock exhausted".as_slice()
+                ))
+            );
+        }
+    }
+    #[test]
+    fn scripted_random_samples_match_scalar_kernels_and_exhaustion() {
+        let context = Context::new();
+        let samples = [
+            random::RandomTestSample::Bounded(u64::MAX - 1),
+            random::RandomTestSample::Unit53((1_u64 << 53) - 1),
+            random::RandomTestSample::Boolean(true),
+        ];
+        let script = random::encode_test_script(&samples);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_random_configure_scripted(
+                    context.pointer(),
+                    script.as_ptr(),
+                    script.len() as u64,
+                ),
+                0
+            );
+            let token = jett_rt_v1_grant_random(context.pointer());
+            assert_ne!(token, 0);
+            assert_eq!(
+                jett_rt_v1_random_bounded(context.pointer(), token, i64::MIN, i64::MAX),
+                i64::MAX - 1
+            );
+            assert_eq!(
+                jett_rt_v1_random_unit53(context.pointer(), token),
+                0.9999999999999999
+            );
+            assert_eq!(jett_rt_v1_random_bool(context.pointer(), token), 1);
+            assert_eq!(
+                jett_rt_v1_random_bool(context.pointer(), token),
+                JettRuntimeStatusV1::INVALID_CONTEXT.code()
+            );
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state.as_ref().unwrap().values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    random::TEST_EXHAUSTED.as_bytes()
                 ))
             );
         }

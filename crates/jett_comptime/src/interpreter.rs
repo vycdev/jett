@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use rand::{RngCore, SeedableRng, rngs::StdRng};
 use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -23,6 +22,10 @@ use jett_runtime::encoding::{
     base64_decode, base64_encode, encoding_hex_decode, percent_decode, percent_encode,
 };
 use jett_runtime::math::{float_average, float_midpoint};
+use jett_runtime::random::RandomProvider;
+pub use jett_runtime::random::RandomTestSample;
+#[cfg(test)]
+use jett_runtime::random::unbiased_bounded_offset;
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
     ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,
@@ -642,18 +645,6 @@ pub struct Interpreter {
     graphics_session_active: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RandomTestSample {
-    Bounded(u64),
-    Unit53(u64),
-    Boolean(bool),
-}
-
-enum RandomProvider {
-    Production(StdRng),
-    Scripted(std::collections::VecDeque<RandomTestSample>),
-}
-
 enum ClockProvider {
     Production,
     Scripted(std::collections::VecDeque<ClockTestSample>),
@@ -805,17 +796,6 @@ fn environment_names_equal(captured: &str, requested: &str) -> bool {
     }
 }
 
-fn unbiased_bounded_offset(width: u64, mut next_word: impl FnMut() -> u64) -> u64 {
-    debug_assert!(width > 0);
-    let rejection_threshold = width.wrapping_neg() % width;
-    loop {
-        let word = next_word();
-        if word >= rejection_threshold {
-            return word % width;
-        }
-    }
-}
-
 /// Runtime state of a spawned actor instance.
 struct ActorInstance {
     /// Name of the actor type (e.g. `"Counter"`).
@@ -875,24 +855,19 @@ impl Interpreter {
 
     /// Initialize one production generator for this runtime context.
     pub fn initialize_random_provider(&mut self) -> Result<(), String> {
-        let mut seed = <StdRng as SeedableRng>::Seed::default();
-        rand::rngs::OsRng
-            .try_fill_bytes(seed.as_mut())
-            .map_err(|_| "Random: entropy unavailable".to_string())?;
-        self.random_provider = Some(RandomProvider::Production(StdRng::from_seed(seed)));
+        self.random_provider = Some(RandomProvider::production().map_err(str::to_owned)?);
         Ok(())
     }
 
     /// Install deterministic normalized samples for runtime conformance tests.
     pub fn set_random_test_samples(&mut self, samples: Vec<RandomTestSample>) {
-        self.random_provider = Some(RandomProvider::Scripted(samples.into()));
+        self.random_provider = Some(RandomProvider::scripted(samples.into()));
     }
 
     pub fn random_test_samples_remaining(&self) -> Option<usize> {
-        match &self.random_provider {
-            Some(RandomProvider::Scripted(samples)) => Some(samples.len()),
-            _ => None,
-        }
+        self.random_provider
+            .as_ref()
+            .and_then(RandomProvider::scripted_samples_remaining)
     }
 
     /// Install the system wall clock for this runtime context.
@@ -8552,53 +8527,21 @@ impl Interpreter {
         let Some(provider) = self.random_provider.as_mut() else {
             return Err("Random: entropy unavailable".to_string());
         };
-        match provider {
-            RandomProvider::Production(rng) => {
-                Ok(unbiased_bounded_offset(width, || rng.next_u64()))
-            }
-            RandomProvider::Scripted(samples) => match samples.front().copied() {
-                None => Err("Random: test provider exhausted".to_string()),
-                Some(RandomTestSample::Bounded(offset)) if offset < width => {
-                    samples.pop_front();
-                    Ok(offset)
-                }
-                Some(_) => Err("Random: invalid test sample".to_string()),
-            },
-        }
+        provider.bounded_offset(width).map_err(str::to_owned)
     }
 
     fn random_unit53(&mut self) -> Result<u64, String> {
         let Some(provider) = self.random_provider.as_mut() else {
             return Err("Random: entropy unavailable".to_string());
         };
-        match provider {
-            RandomProvider::Production(rng) => Ok(rng.next_u64() >> 11),
-            RandomProvider::Scripted(samples) => match samples.front().copied() {
-                None => Err("Random: test provider exhausted".to_string()),
-                Some(RandomTestSample::Unit53(bits)) if bits < (1_u64 << 53) => {
-                    samples.pop_front();
-                    Ok(bits)
-                }
-                Some(_) => Err("Random: invalid test sample".to_string()),
-            },
-        }
+        provider.unit53().map_err(str::to_owned)
     }
 
     fn random_boolean(&mut self) -> Result<bool, String> {
         let Some(provider) = self.random_provider.as_mut() else {
             return Err("Random: entropy unavailable".to_string());
         };
-        match provider {
-            RandomProvider::Production(rng) => Ok(rng.next_u32() & 1 == 1),
-            RandomProvider::Scripted(samples) => match samples.front().copied() {
-                None => Err("Random: test provider exhausted".to_string()),
-                Some(RandomTestSample::Boolean(value)) => {
-                    samples.pop_front();
-                    Ok(value)
-                }
-                Some(_) => Err("Random: invalid test sample".to_string()),
-            },
-        }
+        provider.boolean().map_err(str::to_owned)
     }
 
     fn clock_now_milliseconds(&mut self) -> Result<i64, String> {

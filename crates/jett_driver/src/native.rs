@@ -47,6 +47,8 @@ pub const DEFAULT_NATIVE_LINK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Canonical ordered native-link inputs required by the static-CRT launcher.
 pub const WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES: &[&str] = &[
+    "advapi32.lib",
+    "bcrypt.lib",
     "gdi32.lib",
     "kernel32.lib",
     "msimg32.lib",

@@ -118,7 +118,7 @@ pub fn emit_host_object(
 /// `entry` is an exact checked MIR identity; this API never selects an entry by
 /// source name. The wrapper has the target C ABI `uint32_t(void *context)`,
 /// forwards its opaque runtime context to a `nothing`-returning Jett function,
-/// supplies explicit tokens for checked Stdout and Clock parameters, and returns the
+/// supplies explicit tokens for checked Stdout, Clock, and Random parameters, and returns the
 /// terminal failure status (or [`JETT_AOT_ENTRY_SUCCESS_V1`]).
 pub fn emit_host_program_object(
     program: &Program,
@@ -324,7 +324,12 @@ fn validate_program_entry_contract(
     let unsupported = function
         .params
         .iter()
-        .filter(|p| !matches!(p.ty, TypeInterner::STDOUT | TypeInterner::CLOCK))
+        .filter(|p| {
+            !matches!(
+                p.ty,
+                TypeInterner::STDOUT | TypeInterner::CLOCK | TypeInterner::RANDOM
+            )
+        })
         .map(|p| {
             if p.ty.index() < type_count {
                 types.type_name(p.ty)
@@ -435,6 +440,7 @@ fn translate_program_entry_wrapper(
         let grant = match *parameter {
             TypeInterner::STDOUT => NativeLeaf::GrantStdout,
             TypeInterner::CLOCK => NativeLeaf::GrantClock,
+            TypeInterner::RANDOM => NativeLeaf::GrantRandom,
             _ => {
                 return Err(CodegenError::IncompatibleProgramEntry {
                     function_id: entry.index(),
@@ -502,7 +508,8 @@ fn clif_type(
         | ScalarKind::Enum
         | ScalarKind::Bitfield
         | ScalarKind::Stdout
-        | ScalarKind::Clock => Some(ir::types::I64),
+        | ScalarKind::Clock
+        | ScalarKind::Random => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -1477,7 +1484,8 @@ impl Translator<'_, '_> {
             | ScalarKind::Enum
             | ScalarKind::Bitfield
             | ScalarKind::Stdout
-            | ScalarKind::Clock => {
+            | ScalarKind::Clock
+            | ScalarKind::Random => {
                 return Err(contract_error(
                     self.symbol,
                     span,

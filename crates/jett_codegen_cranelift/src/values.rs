@@ -241,6 +241,13 @@ pub(crate) fn verify_intrinsic(
                     && list(result)
                     && list_sort_kind(types, element).is_some()
             }
+            IntrinsicId::ListSwap => {
+                args.len() == 3
+                    && list(args[0].ty)
+                    && args[1].ty == T::INT64
+                    && args[2].ty == T::INT64
+                    && list(result)
+            }
             _ => false,
         };
         return if valid {
@@ -383,6 +390,9 @@ pub(crate) fn verify_intrinsic(
         IntrinsicId::StringRepeat => (&[T::STRING, T::INT64], T::STRING),
         IntrinsicId::StdoutWrite => (&[T::STDOUT, T::STRING], T::NOTHING),
         IntrinsicId::ClockNow => (&[T::CLOCK], T::INT64),
+        IntrinsicId::RandomBounded => (&[T::RANDOM, T::INT64, T::INT64], T::INT64),
+        IntrinsicId::RandomUnitFloat64 => (&[T::RANDOM], T::FLOAT64),
+        IntrinsicId::RandomBool => (&[T::RANDOM], T::BOOL),
         IntrinsicId::StringFromInt64 => (&[T::INT64], T::STRING),
         IntrinsicId::StringFromUint64 => (&[T::UINT64], T::STRING),
         IntrinsicId::StringFromFloat64 => (&[T::FLOAT64], T::STRING),
@@ -509,6 +519,7 @@ pub(crate) fn list_intrinsic(id: IntrinsicId) -> bool {
             | IntrinsicId::ListGetClone
             | IntrinsicId::ListSum
             | IntrinsicId::ListSort
+            | IntrinsicId::ListSwap
     )
 }
 pub(crate) fn set_intrinsic(id: IntrinsicId) -> bool {
