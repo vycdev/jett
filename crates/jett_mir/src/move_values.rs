@@ -233,6 +233,11 @@ impl Flow<'_> {
                     self.state.insert(local.index() as usize);
                 }
                 StatementKind::Evaluate(value) => self.expr(value, false)?,
+                StatementKind::Trace(local) => {
+                    if self.validate && !self.state.contains(&(local.index() as usize)) {
+                        return Err("trace target is moved or uninitialized".into());
+                    }
+                }
                 _ => return Err("statement needs explicit native ownership lowering".into()),
             }
             self.loans.clear();

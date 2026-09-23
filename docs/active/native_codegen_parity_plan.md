@@ -289,26 +289,27 @@ lowering alone never changes an execution row to complete.
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout entry and write; others pending | Stdout output covered; other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
-| Trace, breakpoint, assert, and failure reporting | covered | pending | pending |
+| Trace, breakpoint, assert, and failure reporting | covered | `int64` trace statements covered; other trace types and breakpoint/assert pending | `int64` trace debug lines match interpreter stderr; other instrumentation pending |
 
 The current fixture gates are therefore:
 
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 49 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
-| Successful/expected `main` execution | 12 | 30 | Windows MSVC production linking and exact interpreter stdout comparison in `native_execution_windows` |
+| Native object generation | 50 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Successful/expected `main` execution | 13 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison in `native_execution_windows` |
 | Runtime contracts | 20 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
 These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 49. Four string/comptime fixtures began emitting
+unmarked row and now proves 50. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
-roundtrip objects, two of which also execute native `main`. Fixture membership and
+roundtrip objects, two of which also execute native `main`; `trace_basic.jett`
+adds one object and native `main`. Fixture membership and
 denominators are unchanged. Unit and payload enums also pass dedicated
 native/interpreter differential fixtures, including recursive owned payloads.
 Fixed-width bitfield values, collection payload ownership and byte roundtrips

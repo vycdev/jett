@@ -28,6 +28,10 @@ const INVALID_BITFIELD_LAYOUT: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native bitfield layout",
 );
+const INVALID_TRACE_LABEL: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native trace label",
+);
 const INVALID_SUM: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native sum handle or tag",
@@ -1302,6 +1306,17 @@ leaves! {
         };
     DebugPrint, jett_rt_v1_string_debug_print, false, (value: u64 => I64), u32 => I32,
         |s| { { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, s.text(value)?.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0) };
+    TraceInt64, jett_rt_v1_trace_int64, false, (prefix_pointer: u64 => I64, prefix_length: u64 => I64, value: i64 => I64), u32 => I32,
+        |_s| { if prefix_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(prefix_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let prefix = unsafe { std::slice::from_raw_parts(prefix_pointer as *const u8, length) };
+            let mut stderr = io::stderr().lock();
+            write_all_bytes(&mut stderr, prefix)
+                .and_then(|_| write_all_bytes(&mut stderr, value.to_string().as_bytes()))
+                .and_then(|_| write_all_bytes(&mut stderr, b"\n"))
+                .and_then(|_| stderr.flush())
+                .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+            Ok(0) };
 }
 
 /// Read the first terminal failure without clearing it. Static message storage

@@ -1,0 +1,7 @@
+namespace app
+function main() returns nothing:
+    mutable int64 total = -7
+    trace total
+    total = total * -2
+    trace total
+    println("done")

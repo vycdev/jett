@@ -778,7 +778,41 @@ impl Translator<'_, '_> {
                 Err(self.unsupported(statement.span, "handle default"))
             }
             StatementKind::Assert { .. } => Err(self.unsupported(statement.span, "assert")),
-            StatementKind::Trace(_) => Err(self.unsupported(statement.span, "trace")),
+            StatementKind::Trace(local) => {
+                let id = local.index() as usize;
+                let local = &self.local_types[id];
+                let variable = variable_for(
+                    self.variables,
+                    local.id.index(),
+                    statement.span,
+                    self.symbol,
+                )?
+                .ok_or_else(|| self.unsupported(statement.span, "trace without a scalar local"))?;
+                let value = self.builder.try_use_var(variable).map_err(|error| {
+                    contract_error(
+                        self.symbol,
+                        statement.span,
+                        format!("cannot trace native local: {error}"),
+                    )
+                })?;
+                let prefix = format!("trace {}: int64 = ", local.name);
+                let length = i64::try_from(prefix.len())
+                    .map_err(|_| self.unsupported(statement.span, "trace label length"))?;
+                let item = self
+                    .module
+                    .declare_anonymous_data(false, false)
+                    .map_err(|error| CodegenError::Backend(error.to_string()))?;
+                let mut description = cranelift_module::DataDescription::new();
+                description.define(prefix.into_bytes().into_boxed_slice());
+                self.module
+                    .define_data(item, &description)
+                    .map_err(|error| CodegenError::Backend(error.to_string()))?;
+                let reference = self.module.declare_data_in_func(item, self.builder.func);
+                let pointer = self.builder.ins().global_value(ir::types::I64, reference);
+                let length = self.builder.ins().iconst(ir::types::I64, length);
+                self.leaf(NativeLeaf::TraceInt64, &[pointer, length, value], true)?;
+                Ok(())
+            }
             StatementKind::Breakpoint(_) => Err(self.unsupported(statement.span, "breakpoint")),
         }
     }

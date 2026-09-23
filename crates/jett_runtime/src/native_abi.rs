@@ -71,6 +71,7 @@ const STRING_NULL_MESSAGE: &[u8] = b"string data pointer is null";
 const STRING_LENGTH_MESSAGE: &[u8] = b"string byte length exceeds host address space";
 const STRING_UTF8_MESSAGE: &[u8] = b"string data is not valid UTF-8";
 const STDOUT_WRITE_MESSAGE: &[u8] = b"stdout write failed";
+const STDERR_WRITE_MESSAGE: &[u8] = b"stderr write failed";
 const PANIC_MESSAGE: &[u8] = b"runtime operation panicked";
 
 /// A stable, fixed-width status code returned by native runtime operations.

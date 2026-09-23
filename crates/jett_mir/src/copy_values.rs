@@ -84,6 +84,10 @@ impl CopyValuePlan {
                         visit(value, &mut reads, &mut temporaries, types, program, false)?;
                         None
                     }
+                    StatementKind::Trace(local) => {
+                        reads.insert(local.index() as usize);
+                        None
+                    }
                     _ => return Err("statement needs explicit ownership lowering".into()),
                 };
                 max_temporaries = max_temporaries.max(temporaries);

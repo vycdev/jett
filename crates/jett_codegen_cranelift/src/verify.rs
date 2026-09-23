@@ -435,7 +435,20 @@ impl Verifier<'_> {
             StatementKind::Assert { .. } => {
                 Err(self.unsupported(function, statement.span, "assert"))
             }
-            StatementKind::Trace(_) => Err(self.unsupported(function, statement.span, "trace")),
+            StatementKind::Trace(local) => {
+                let Some(local) = function.local(*local) else {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "trace target is absent from the local table",
+                    ));
+                };
+                if local.ty == TypeInterner::INT64 {
+                    Ok(())
+                } else {
+                    Err(self.unsupported(function, statement.span, "non-int64 trace"))
+                }
+            }
             StatementKind::Breakpoint(_) => {
                 Err(self.unsupported(function, statement.span, "breakpoint"))
             }
