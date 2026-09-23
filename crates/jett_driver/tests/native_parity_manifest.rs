@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use jett_common::FileId;
 use jett_parser::ast::Item;
+use jett_runtime::environment;
 use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -132,9 +133,26 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
     if object.contains_key("random_test_samples") {
         fields.push("random_test_samples");
     }
+    if object.contains_key("environment_test_snapshot") {
+        fields.push("environment_test_snapshot");
+    }
     require_exact_fields(object, &fields, &context)?;
-    if object.contains_key("clock_test_samples") && object.contains_key("random_test_samples") {
-        return Err(format!("{context} cannot script Clock and Random together"));
+    let scripted_count = [
+        "clock_test_samples",
+        "random_test_samples",
+        "environment_test_snapshot",
+    ]
+    .into_iter()
+    .filter(|field| object.contains_key(*field))
+    .count();
+    if scripted_count > 1 {
+        return Err(format!(
+            "{context} cannot script multiple capabilities together"
+        ));
+    }
+    if let Some(snapshot) = object.get("environment_test_snapshot") {
+        environment::decode_test_snapshot(&snapshot.to_string())
+            .map_err(|error| format!("{context}.environment_test_snapshot: {error}"))?;
     }
 
     if let Some(samples) = object.get("clock_test_samples") {

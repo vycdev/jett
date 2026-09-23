@@ -251,6 +251,7 @@ fn run_native_launcher<W: Write>(stderr: &mut W) -> c_int {
     let mut runtime = NativeRuntime;
     let clock_script = std::env::var(jett_runtime::clock::TEST_SCRIPT_ENV).ok();
     let random_script = std::env::var(jett_runtime::random::TEST_SCRIPT_ENV).ok();
+    let environment_snapshot = std::env::var(jett_runtime::environment::TEST_SNAPSHOT_ENV).ok();
     launch_with(
         &mut runtime,
         |context| {
@@ -276,6 +277,20 @@ fn run_native_launcher<W: Write>(stderr: &mut W) -> c_int {
                         context.cast(),
                         script.as_ptr(),
                         script.len() as u64,
+                    )
+                };
+                if status != JETT_AOT_ENTRY_SUCCESS_V1 {
+                    return status;
+                }
+            }
+            if let Some(snapshot) = &environment_snapshot {
+                // SAFETY: the context is live and `snapshot` is readable for
+                // the duration of this configuration call.
+                let status = unsafe {
+                    jett_runtime::native_abi::values::jett_rt_v1_environment_configure_snapshot(
+                        context.cast(),
+                        snapshot.as_ptr(),
+                        snapshot.len() as u64,
                     )
                 };
                 if status != JETT_AOT_ENTRY_SUCCESS_V1 {

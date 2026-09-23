@@ -488,6 +488,7 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
             | Type::Capability(CapabilityKind::Stdout)
             | Type::Capability(CapabilityKind::Clock)
             | Type::Capability(CapabilityKind::Random)
+            | Type::Capability(CapabilityKind::Environment)
     ) {
         return Ok(());
     }

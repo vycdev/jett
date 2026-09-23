@@ -26,6 +26,14 @@ bounded-integer, unit-float, and boolean leaves share their provider logic with
 the interpreter, including rejection sampling and invalid/exhausted script
 failures. Collection algorithms remain in `stdlib/random.jett`. Exact
 consumption of a successful native test script remains pending.
+Environment authority is another context-bound token. The shared runtime
+captures immutable user arguments and environment entries before entering
+`main`; a test-only `JETT_NATIVE_TEST_ENVIRONMENT_SNAPSHOT_V1` channel can
+replace that snapshot without changing the host process. `Environment.__args`
+returns a fresh owned string list. `Environment.__get` returns an owned
+`result[optional[string], string]`, preserving missing, invalid-name, and
+invalid-Unicode outcomes. The two native Environment fixtures pass, while
+platform-raw capture details remain to be audited against the design note.
 
 Generated functions and all source control flow remain Cranelift machine code.
 Copyable string arguments are borrowed by the native call ABI; callee owning

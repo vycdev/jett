@@ -916,6 +916,17 @@ impl Translator<'_, '_> {
                     self.builder.ins().ireduce(ir::types::I8, value),
                 ))
             }
+            IntrinsicId::EnvironmentGet => {
+                let authority = self.scalar(evaluated[0], span)?;
+                let key = self.scalar(evaluated[1], span)?;
+                let value = self.leaf(NativeLeaf::EnvironmentGet, &[authority, key], true)?;
+                self.own_linear(value)
+            }
+            IntrinsicId::EnvironmentArgs => {
+                let authority = self.scalar(evaluated[0], span)?;
+                let value = self.leaf(NativeLeaf::EnvironmentArgs, &[authority], true)?;
+                self.own_linear(value)
+            }
             IntrinsicId::SecretCompare => {
                 let left = self.scalar(evaluated[0], span)?;
                 let right = self.scalar(evaluated[1], span)?;

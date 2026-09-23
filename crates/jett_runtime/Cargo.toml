@@ -11,6 +11,10 @@ crate-type = ["rlib", "staticlib"]
 unicode-segmentation.workspace = true
 subtle.workspace = true
 rand.workspace = true
+serde_json.workspace = true
 font8x8 = "0.3.1"
 # Keep the macOS focus-reporting adapter in graphics.rs aligned with this version.
 minifb = "=0.28.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Globalization"] }

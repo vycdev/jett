@@ -3354,6 +3354,24 @@ pub fn run_file_capture_outcome_with_random_test_samples(
     )
 }
 
+/// Capture an injected Environment launch snapshot with partial failure output.
+pub fn run_file_capture_outcome_with_environment_test_snapshot(
+    path: &Path,
+    snapshot: EnvironmentTestSnapshot,
+) -> Result<RunOutput, RunFailure> {
+    run_file_with_captured_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: Some(snapshot),
+            graphics_test_events: None,
+        },
+    )
+}
+
 /// Capture a scripted Clock run, retaining partial output on runtime failure.
 pub fn run_file_capture_outcome_with_clock_test_samples(
     path: &Path,

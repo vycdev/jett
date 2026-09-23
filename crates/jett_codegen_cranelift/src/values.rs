@@ -55,6 +55,28 @@ pub(crate) fn verify_intrinsic(
     types: &TypeInterner,
 ) -> Result<(), String> {
     use TypeInterner as T;
+    if id == IntrinsicId::EnvironmentGet {
+        return if args.len() == 2
+            && args[0].ty == T::ENVIRONMENT
+            && args[1].ty == T::STRING
+            && matches!(types.resolve(result), Type::Result(ok, error)
+                if *error == T::STRING && matches!(types.resolve(*ok), Type::Optional(inner) if *inner == T::STRING))
+        {
+            Ok(())
+        } else {
+            Err("invalid native Environment.get signature".into())
+        };
+    }
+    if id == IntrinsicId::EnvironmentArgs {
+        return if args.len() == 1
+            && args[0].ty == T::ENVIRONMENT
+            && matches!(types.resolve(result), Type::List(inner) if *inner == T::STRING)
+        {
+            Ok(())
+        } else {
+            Err("invalid native Environment.args signature".into())
+        };
+    }
     if id == IntrinsicId::BitfieldToBytes {
         return if args.len() == 1
             && matches!(types.resolve(args[0].ty), Type::Bitfield(_))

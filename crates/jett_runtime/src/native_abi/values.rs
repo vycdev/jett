@@ -6,6 +6,7 @@ use crate::clock;
 use crate::crypto;
 use crate::csv;
 use crate::encoding;
+use crate::environment::{self, LaunchEnvironmentSnapshot};
 use crate::math;
 use crate::random::{self, RandomProvider};
 use std::cmp::Ordering as CompareOrdering;
@@ -401,6 +402,8 @@ pub(super) struct NativeValues {
     clock_script: Option<std::collections::VecDeque<clock::ClockTestSample>>,
     random: Option<u64>,
     random_provider: Option<RandomProvider>,
+    environment: Option<u64>,
+    environment_snapshot: Option<LaunchEnvironmentSnapshot>,
 }
 impl NativeValues {
     #[cfg(test)]
@@ -1760,6 +1763,44 @@ pub unsafe extern "C" fn jett_rt_v1_random_configure_scripted(
     })
 }
 
+/// Configure an isolated Environment launch snapshot before program entry.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_environment_configure_snapshot(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            environment::INVALID_SNAPSHOT.as_bytes(),
+        );
+        if s.environment.is_some() || s.environment_snapshot.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        let snapshot = environment::decode_test_snapshot(script).map_err(|_| invalid)?;
+        s.environment_snapshot = Some(
+            LaunchEnvironmentSnapshot::injected(snapshot)
+                .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?,
+        );
+        Ok(0)
+    })
+}
+
 /// Scalar signature schema consumed by Cranelift, never inferred from names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbiScalar {
@@ -2246,6 +2287,31 @@ leaves! {
             let value = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
                 .boolean().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
             Ok(u32::from(value)) };
+    GrantEnvironment, jett_rt_v1_grant_environment, false, (), u64 => I64,
+        |s| { if let Some(token) = s.environment { return Ok(token); }
+            if s.environment_snapshot.is_none() {
+                s.environment_snapshot = Some(LaunchEnvironmentSnapshot::production()
+                    .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?);
+            }
+            let token = next_identity()?; s.environment = Some(token); Ok(token) };
+    EnvironmentArgs, jett_rt_v1_environment_args, false, (authority: u64 => I64), u64 => I64,
+        |s| { if s.environment != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Environment authority")); }
+            let arguments = s.environment_snapshot.as_ref().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Environment: launch data unavailable".as_slice()))?
+                .arguments().to_vec();
+            s.string_list(arguments) };
+    EnvironmentGet, jett_rt_v1_environment_get, false, (authority: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| { if s.environment != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Environment authority")); }
+            let found = s.environment_snapshot.as_ref().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Environment: launch data unavailable".as_slice()))?
+                .get(s.text(key)?);
+            match found {
+                Ok(Some(value)) => { let text = s.insert(value)?;
+                    let optional = s.owned_sum(SUM_SUCCESS, text)?;
+                    s.owned_sum(SUM_SUCCESS, optional) },
+                Ok(None) => { let optional = s.sum(SUM_FAILURE, 0, false)?;
+                    s.owned_sum(SUM_SUCCESS, optional) },
+                Err(message) => { let text = s.insert(message.to_owned())?;
+                    s.owned_sum(SUM_FAILURE, text) },
+            } };
     Stdout, jett_rt_v1_string_stdout, false, (authority: u64 => I64, value: u64 => I64), u32 => I32,
         |s| {
             if s.stdout != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority")); }

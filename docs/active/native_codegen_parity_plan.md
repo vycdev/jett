@@ -290,7 +290,7 @@ lowering alone never changes an execution row to complete.
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
 | Compiler intrinsics and reflection | covered with checked operands and closed `IntrinsicId` identities | pending | pending |
-| Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, and Random entry grants; others pending | Stdout output, production and scripted Clock/Random sampling covered; exact-consumption checks and other providers/resources pending |
+| Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace statements covered; other trace types and breakpoint/assert pending | `int64` trace debug lines match interpreter stderr; other instrumentation pending |
@@ -300,15 +300,15 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 83 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
-| Successful/expected `main` execution | 19 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock and Random samples |
+| Native object generation | 85 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Successful/expected `main` execution | 21 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 83. Four string/comptime fixtures began emitting
+unmarked row and now proves 85. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -374,6 +374,13 @@ normalized bounded, unit-float, and boolean samples. The two Random runtime
 failure fixtures check invalid and exhausted scripts with exact messages and
 clean native teardown. `stdlib/random.jett` retains the public collection
 algorithms; native `list.__swap` supports the scripted shuffle path.
+Environment now freezes the same launch snapshot type in the shared runtime.
+Native entry grants a context-bound token, and the `Environment.__args` and
+`Environment.__get` leaves return independently owned lists and the exact
+result/optional shape. The injected snapshot fixture covers duplicate names,
+empty arguments, missing values, invalid names, and invalid Unicode values;
+`time_and_os.jett` covers a production entry. Raw platform capture details
+specified in the Environment design note still need a separate backend audit.
 Native arithmetic now accepts a nonzero refinement as the right operand of
 integer division or modulo when its base matches the left operand. This is
 covered by an object-emission test; `integer_nonzero_proofs.jett` still needs

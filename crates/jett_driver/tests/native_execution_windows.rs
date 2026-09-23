@@ -2,7 +2,7 @@
 #![cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
 
 use jett_driver::native::{NativeLauncherBundle, build_host_executable, host_target};
-use jett_runtime::{clock, random};
+use jett_runtime::{clock, environment, random};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -119,7 +119,7 @@ fn run_bounded_with_env(
 }
 
 #[test]
-fn native_scripted_clock_and_random_match_interpreter() {
+fn native_scripted_capabilities_match_interpreter() {
     let clock_samples = vec![
         clock::ClockTestSample::Wall {
             unix_seconds: 0,
@@ -183,6 +183,47 @@ fn native_scripted_clock_and_random_match_interpreter() {
         random::TEST_SCRIPT_ENV,
         &random_script,
         &random_expected,
+    );
+
+    let text = |value: &str| environment::EnvironmentTestText::Unicode(value.to_owned());
+    let environment_snapshot = environment::EnvironmentTestSnapshot {
+        arguments: vec![text("first"), text(""), text("third")],
+        entries: vec![
+            environment::EnvironmentTestEntry {
+                name: text("PRESENT"),
+                value: text("value"),
+            },
+            environment::EnvironmentTestEntry {
+                name: text("DUPLICATE"),
+                value: text("first"),
+            },
+            environment::EnvironmentTestEntry {
+                name: text("DUPLICATE"),
+                value: text("second"),
+            },
+            environment::EnvironmentTestEntry {
+                name: text("BROKEN"),
+                value: environment::EnvironmentTestText::InvalidUnicode,
+            },
+            environment::EnvironmentTestEntry {
+                name: environment::EnvironmentTestText::InvalidUnicode,
+                value: text("ignored"),
+            },
+        ],
+    };
+    let environment_fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/run_pass/environment_snapshot.jett");
+    let environment_expected = jett_driver::run_file_capture_stdout_with_environment_test_snapshot(
+        &environment_fixture,
+        environment_snapshot.clone(),
+    )
+    .expect("injected Environment interpreter oracle");
+    let environment_script = environment::encode_test_snapshot(&environment_snapshot);
+    assert_scripted_fixture(
+        &environment_fixture,
+        environment::TEST_SNAPSHOT_ENV,
+        &environment_script,
+        &environment_expected,
     );
 }
 

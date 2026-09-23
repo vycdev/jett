@@ -23,7 +23,7 @@
     {"path": "tests/run_pass/csv_operations.jett", "obligations": ["lower"], "expected_outcome": "lower_only"},
     {"path": "tests/run_pass/encoding.jett", "obligations": ["lower"], "expected_outcome": "lower_only"},
     {"path": "tests/run_pass/enum_advanced.jett", "obligations": ["lower"], "expected_outcome": "lower_only"},
-    {"path": "tests/run_pass/environment_snapshot.jett", "obligations": ["lower", "main_execute"], "expected_outcome": "success"},
+    {"path": "tests/run_pass/environment_snapshot.jett", "obligations": ["lower", "main_execute"], "expected_outcome": "success", "environment_test_snapshot": {"arguments": [{"unicode":"first"},{"unicode":""},{"unicode":"third"}], "entries": [{"name":{"unicode":"PRESENT"},"value":{"unicode":"value"}},{"name":{"unicode":"DUPLICATE"},"value":{"unicode":"first"}},{"name":{"unicode":"DUPLICATE"},"value":{"unicode":"second"}},{"name":{"unicode":"BROKEN"},"value":{"invalid_unicode":true}},{"name":{"invalid_unicode":true},"value":{"unicode":"ignored"}}]}},
     {"path": "tests/run_pass/error_handling.jett", "obligations": ["lower", "object_emit"], "expected_outcome": "lower_only"},
     {"path": "tests/run_pass/escape_sequences.jett", "obligations": ["lower", "object_emit", "main_execute"], "expected_outcome": "success"},
     {"path": "tests/run_pass/explicit_comptime_expression.jett", "obligations": ["lower", "object_emit", "main_execute"], "expected_outcome": "success"},

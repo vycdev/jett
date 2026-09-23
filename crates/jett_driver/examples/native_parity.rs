@@ -3,6 +3,7 @@
 //! Every inventory row is attempted, irrespective of staged object_emit markers.
 use jett_driver::native::{self, NativeLauncherBundle};
 use jett_runtime::clock::{ClockTestSample, TEST_SCRIPT_ENV, encode_test_script};
+use jett_runtime::environment::{self, EnvironmentTestSnapshot};
 use jett_runtime::random::{
     RandomTestSample, TEST_SCRIPT_ENV as RANDOM_TEST_SCRIPT_ENV,
     encode_test_script as encode_random_test_script,
@@ -20,6 +21,7 @@ fn execute(
     directory: &Path,
     clock_samples: Option<&[ClockTestSample]>,
     random_samples: Option<&[RandomTestSample]>,
+    environment_snapshot: Option<&EnvironmentTestSnapshot>,
 ) -> Result<Output, String> {
     let mut command = Command::new(binary);
     command
@@ -33,6 +35,12 @@ fn execute(
     }
     if let Some(samples) = random_samples {
         command.env(RANDOM_TEST_SCRIPT_ENV, encode_random_test_script(samples));
+    }
+    if let Some(snapshot) = environment_snapshot {
+        command.env(
+            environment::TEST_SNAPSHOT_ENV,
+            environment::encode_test_snapshot(snapshot),
+        );
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut stdout = child.stdout.take().unwrap();
@@ -83,21 +91,35 @@ fn behavior(
     expected_failure: bool,
     clock_samples: Option<&[ClockTestSample]>,
     random_samples: Option<&[RandomTestSample]>,
+    environment_snapshot: Option<&EnvironmentTestSnapshot>,
 ) -> Result<Value, String> {
-    let actual = execute(binary, directory, clock_samples, random_samples)?;
+    let actual = execute(
+        binary,
+        directory,
+        clock_samples,
+        random_samples,
+        environment_snapshot,
+    )?;
     let stdout = String::from_utf8(actual.stdout).map_err(|e| e.to_string())?;
     let stderr = String::from_utf8(actual.stderr).map_err(|e| e.to_string())?;
-    let oracle_result = match (clock_samples, random_samples) {
-        (Some(samples), None) => {
-            jett_driver::run_file_capture_outcome_with_clock_test_samples(source, samples.to_vec())
-        }
-        (None, Some(samples)) => {
-            jett_driver::run_file_capture_outcome_with_random_test_samples(source, samples.to_vec())
-        }
-        (None, None) => jett_driver::run_file_capture_outcome(source),
-        (Some(_), Some(_)) => {
-            return Err("multiple scripted capability providers in one fixture".into());
-        }
+    if usize::from(clock_samples.is_some())
+        + usize::from(random_samples.is_some())
+        + usize::from(environment_snapshot.is_some())
+        > 1
+    {
+        return Err("multiple scripted capability providers in one fixture".into());
+    }
+    let oracle_result = if let Some(samples) = clock_samples {
+        jett_driver::run_file_capture_outcome_with_clock_test_samples(source, samples.to_vec())
+    } else if let Some(samples) = random_samples {
+        jett_driver::run_file_capture_outcome_with_random_test_samples(source, samples.to_vec())
+    } else if let Some(snapshot) = environment_snapshot {
+        jett_driver::run_file_capture_outcome_with_environment_test_snapshot(
+            source,
+            snapshot.clone(),
+        )
+    } else {
+        jett_driver::run_file_capture_outcome(source)
     };
     let (oracle, failure) = match oracle_result {
         Ok(output) => (output, None),
@@ -206,6 +228,13 @@ fn random_samples(fixture: &Value) -> Result<Option<Vec<RandomTestSample>>, Stri
         .map_err(str::to_owned)
 }
 
+fn environment_snapshot(fixture: &Value) -> Result<Option<EnvironmentTestSnapshot>, String> {
+    fixture
+        .get("environment_test_snapshot")
+        .map(|value| environment::decode_test_snapshot(&value.to_string()).map_err(str::to_owned))
+        .transpose()
+}
+
 fn main() -> ExitCode {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     assert_eq!(args.len(), 2, "usage: native_parity LAUNCHER REPORT.json");
@@ -286,6 +315,8 @@ fn main() -> ExitCode {
                     let samples = clock_samples(fixture).expect("valid Clock sample manifest");
                     let random_samples =
                         random_samples(fixture).expect("valid Random sample manifest");
+                    let environment_snapshot =
+                        environment_snapshot(fixture).expect("valid Environment snapshot manifest");
                     match behavior(
                         &source,
                         &output,
@@ -293,6 +324,7 @@ fn main() -> ExitCode {
                         failure,
                         samples.as_deref(),
                         random_samples.as_deref(),
+                        environment_snapshot.as_ref(),
                     ) {
                         Err(error) => row["execution_error"] = json!(error),
                         Ok(result) => {

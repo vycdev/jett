@@ -118,7 +118,7 @@ pub fn emit_host_object(
 /// `entry` is an exact checked MIR identity; this API never selects an entry by
 /// source name. The wrapper has the target C ABI `uint32_t(void *context)`,
 /// forwards its opaque runtime context to a `nothing`-returning Jett function,
-/// supplies explicit tokens for checked Stdout, Clock, and Random parameters, and returns the
+/// supplies explicit tokens for checked Stdout, Clock, Random, and Environment parameters, and returns the
 /// terminal failure status (or [`JETT_AOT_ENTRY_SUCCESS_V1`]).
 pub fn emit_host_program_object(
     program: &Program,
@@ -327,7 +327,10 @@ fn validate_program_entry_contract(
         .filter(|p| {
             !matches!(
                 p.ty,
-                TypeInterner::STDOUT | TypeInterner::CLOCK | TypeInterner::RANDOM
+                TypeInterner::STDOUT
+                    | TypeInterner::CLOCK
+                    | TypeInterner::RANDOM
+                    | TypeInterner::ENVIRONMENT
             )
         })
         .map(|p| {
@@ -441,6 +444,7 @@ fn translate_program_entry_wrapper(
             TypeInterner::STDOUT => NativeLeaf::GrantStdout,
             TypeInterner::CLOCK => NativeLeaf::GrantClock,
             TypeInterner::RANDOM => NativeLeaf::GrantRandom,
+            TypeInterner::ENVIRONMENT => NativeLeaf::GrantEnvironment,
             _ => {
                 return Err(CodegenError::IncompatibleProgramEntry {
                     function_id: entry.index(),
@@ -509,7 +513,8 @@ fn clif_type(
         | ScalarKind::Bitfield
         | ScalarKind::Stdout
         | ScalarKind::Clock
-        | ScalarKind::Random => Some(ir::types::I64),
+        | ScalarKind::Random
+        | ScalarKind::Environment => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -1485,7 +1490,8 @@ impl Translator<'_, '_> {
             | ScalarKind::Bitfield
             | ScalarKind::Stdout
             | ScalarKind::Clock
-            | ScalarKind::Random => {
+            | ScalarKind::Random
+            | ScalarKind::Environment => {
                 return Err(contract_error(
                     self.symbol,
                     span,
