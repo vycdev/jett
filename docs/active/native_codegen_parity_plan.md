@@ -323,7 +323,10 @@ static launcher archive, ABI v1, dynamic GNU CRT, and ordered system libraries.
 `cc` (or the literal executable path in `JETT_NATIVE_CC`) links the Cranelift
 object without a shell. Cross-target bundles are rejected before linking.
 Windows MSVC retains its static CRT, SDK discovery, library order, and atomic
-publication contract; Windows execution has not been verified on Linux.
+publication contract. A Windows MSVC host test now builds its matching launcher
+archive, links native executables, and compares scalar entry, stdout, owned
+bytes, and generic struct fixtures with interpreter output. This is a host-local
+execution gate; the full parity denominators still require the exhaustive audit.
 
 `cargo test -p jett_driver --test native_execution` builds the target-matched
 launcher archive and executes the scalar-entry fixture in an empty directory
