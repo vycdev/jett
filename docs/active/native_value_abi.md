@@ -10,6 +10,11 @@ Borrowed inputs are valid only for a call. Handles cannot cross contexts and are
 never reused. No interpreter Value, source, AST or HIR enters the runtime.
 Stdout authority is a separate context-bound token, supplied only for checked
 Stdout entry parameters and passed explicitly to printing leaf operations.
+Clock authority is likewise a distinct context-bound token. The native entry
+grants it only for checked Clock parameters; `Clock.__now` validates the token
+and samples the wall clock through the same pre-epoch flooring and int64
+millisecond-range kernel as the interpreter. Scripted Clock injection and its
+failure contracts still need native launcher support.
 
 Generated functions and all source control flow remain Cranelift machine code.
 Copyable string arguments are borrowed by the native call ABI; callee owning

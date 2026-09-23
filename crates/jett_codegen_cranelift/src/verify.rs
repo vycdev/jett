@@ -25,6 +25,7 @@ pub(crate) enum ScalarKind {
     Enum,
     Bitfield,
     Stdout,
+    Clock,
 }
 
 impl ScalarKind {
@@ -209,6 +210,7 @@ fn scalar_kind_inner(
             ScalarKind::Sum
         }
         Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
+        Type::Capability(jett_types::CapabilityKind::Clock) => ScalarKind::Clock,
         unsupported => {
             return Err(CodegenError::UnsupportedType {
                 type_name: types.type_name(ty),
@@ -1273,6 +1275,7 @@ impl Verifier<'_> {
                     operand,
                     ScalarKind::Nothing
                         | ScalarKind::Stdout
+                        | ScalarKind::Clock
                         | ScalarKind::Bytes
                         | ScalarKind::Sum
                         | ScalarKind::List

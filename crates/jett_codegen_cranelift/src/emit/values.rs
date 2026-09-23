@@ -872,6 +872,14 @@ impl Translator<'_, '_> {
             };
         }
         match id {
+            IntrinsicId::ClockNow => {
+                let authority = self.scalar(evaluated[0], span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::ClockNow,
+                    &[authority],
+                    true,
+                )?))
+            }
             IntrinsicId::SecretCompare => {
                 let left = self.scalar(evaluated[0], span)?;
                 let right = self.scalar(evaluated[1], span)?;

@@ -353,7 +353,7 @@ fn rejects_incompatible_program_entry_signatures() {
 function entry(value: int64) returns nothing:
     return nothing
 "#,
-            "expected no parameters",
+            "unsupported native entry capability parameter(s): int64",
         ),
         (
             r#"namespace app

@@ -134,6 +134,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("crypto", "../../tests/native/crypto.jett"),
         ("math_aggregate", "../../tests/native/math_aggregate.jett"),
         (
+            "clock_production",
+            "../../tests/native/clock_production.jett",
+        ),
+        (
             "string_scalar_iteration",
             "../../tests/native/string_scalar_iteration.jett",
         ),

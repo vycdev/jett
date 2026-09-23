@@ -1,0 +1,8 @@
+namespace app
+
+function main(clock: Clock, stdout: Stdout) returns nothing:
+    time.Timestamp now = Clock.now(view clock)
+    if time.to_unix_milliseconds(now) == 0:
+        Stdout.write(view stdout, "zero")
+    else:
+        Stdout.write(view stdout, "clock-ok")

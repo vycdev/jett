@@ -41,6 +41,7 @@ struct DeclaredFunction {
     symbol: String,
     signature: ir::Signature,
     modes: Vec<jett_mir::ParamMode>,
+    parameter_types: Vec<TypeId>,
 }
 
 /// Sparse original-MIR-index mapping. Only backend-reachable functions have a
@@ -117,7 +118,7 @@ pub fn emit_host_object(
 /// `entry` is an exact checked MIR identity; this API never selects an entry by
 /// source name. The wrapper has the target C ABI `uint32_t(void *context)`,
 /// forwards its opaque runtime context to a `nothing`-returning Jett function,
-/// supplies explicit tokens for checked Stdout parameters, and returns the
+/// supplies explicit tokens for checked Stdout and Clock parameters, and returns the
 /// terminal failure status (or [`JETT_AOT_ENTRY_SUCCESS_V1`]).
 pub fn emit_host_program_object(
     program: &Program,
@@ -279,6 +280,7 @@ fn declare_reachable_functions(
             symbol: verified_function.symbol.clone(),
             signature,
             modes: function.params.iter().map(|p| p.mode).collect(),
+            parameter_types: function.params.iter().map(|p| p.ty).collect(),
         })?;
     }
     Ok(declarations)
@@ -318,14 +320,29 @@ fn validate_program_entry_contract(
             function_id: entry.index(),
         });
     }
-    if function.params.iter().any(|p| p.ty != TypeInterner::STDOUT) {
+    let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
+    let unsupported = function
+        .params
+        .iter()
+        .filter(|p| !matches!(p.ty, TypeInterner::STDOUT | TypeInterner::CLOCK))
+        .map(|p| {
+            if p.ty.index() < type_count {
+                types.type_name(p.ty)
+            } else {
+                format!("<invalid type {}>", p.ty.index())
+            }
+        })
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
         return Err(CodegenError::IncompatibleProgramEntry {
             function_id: entry.index(),
-            message: format!("expected no parameters, found {}", function.params.len()),
+            message: format!(
+                "unsupported native entry capability parameter(s): {}",
+                unsupported.join(", ")
+            ),
         });
     }
 
-    let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
     let returns_nothing = function.return_type.index() < type_count
         && matches!(types.resolve(function.return_type), Type::Nothing);
     if !returns_nothing {
@@ -414,15 +431,22 @@ fn translate_program_entry_wrapper(
         })?;
     let entry_reference = module.declare_func_in_func(entry_function.native_id, builder.func);
     let mut args = vec![runtime_context];
-    if entry_function.signature.params.len() > 1 {
-        let leaf = crate::values::declare_leaf(module, NativeLeaf::GrantStdout)?;
+    for parameter in &entry_function.parameter_types {
+        let grant = match *parameter {
+            TypeInterner::STDOUT => NativeLeaf::GrantStdout,
+            TypeInterner::CLOCK => NativeLeaf::GrantClock,
+            _ => {
+                return Err(CodegenError::IncompatibleProgramEntry {
+                    function_id: entry.index(),
+                    message: "unsupported native entry capability".to_string(),
+                });
+            }
+        };
+        let leaf = crate::values::declare_leaf(module, grant)?;
         let leaf = module.declare_func_in_func(leaf, builder.func);
         let call = builder.ins().call(leaf, &[runtime_context]);
         let authority = builder.func.dfg.inst_results(call)[0];
-        args.extend(std::iter::repeat_n(
-            authority,
-            entry_function.signature.params.len() - 1,
-        ));
+        args.push(authority);
     }
     builder.ins().call(entry_reference, &args);
     let leaf = crate::values::declare_leaf(module, NativeLeaf::Status)?;
@@ -477,7 +501,8 @@ fn clif_type(
         | ScalarKind::Struct
         | ScalarKind::Enum
         | ScalarKind::Bitfield
-        | ScalarKind::Stdout => Some(ir::types::I64),
+        | ScalarKind::Stdout
+        | ScalarKind::Clock => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -1451,7 +1476,8 @@ impl Translator<'_, '_> {
             | ScalarKind::Struct
             | ScalarKind::Enum
             | ScalarKind::Bitfield
-            | ScalarKind::Stdout => {
+            | ScalarKind::Stdout
+            | ScalarKind::Clock => {
                 return Err(contract_error(
                     self.symbol,
                     span,

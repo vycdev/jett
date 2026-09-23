@@ -151,6 +151,20 @@ fn native_string_scalar_iteration_matches_interpreter() {
 }
 
 #[test]
+fn native_clock_and_stdout_capabilities_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/clock_production.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("clock oracle");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("program");
+    build_host_executable(&fixture, &launcher(), &binary).expect("compile native clock");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_unit_enums_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/unit_enum.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("enum oracle");

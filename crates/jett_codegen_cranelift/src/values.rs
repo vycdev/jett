@@ -382,6 +382,7 @@ pub(crate) fn verify_intrinsic(
         IntrinsicId::StringIsAlpha | IntrinsicId::StringIsNumeric => (&[T::STRING], T::BOOL),
         IntrinsicId::StringRepeat => (&[T::STRING, T::INT64], T::STRING),
         IntrinsicId::StdoutWrite => (&[T::STDOUT, T::STRING], T::NOTHING),
+        IntrinsicId::ClockNow => (&[T::CLOCK], T::INT64),
         IntrinsicId::StringFromInt64 => (&[T::INT64], T::STRING),
         IntrinsicId::StringFromUint64 => (&[T::UINT64], T::STRING),
         IntrinsicId::StringFromFloat64 => (&[T::FLOAT64], T::STRING),

@@ -13,6 +13,9 @@ use jett_parser::ast::{
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Param, Pattern, PipelineStep,
     PipelineStepHandle, Stmt, StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
+#[cfg(test)]
+use jett_runtime::clock::raw_wall_clock_sample;
+use jett_runtime::clock::{checked_clock_milliseconds, production_wall_clock_sample};
 use jett_runtime::crypto::{hmac_sha256_digest, md5_digest, sha256_digest, sha512_digest};
 use jett_runtime::csv::{csv_quote_field, parse_csv_records, parse_csv_with_header};
 use jett_runtime::encoding::{
@@ -819,38 +822,6 @@ fn unbiased_bounded_offset(width: u64, mut next_word: impl FnMut() -> u64) -> u6
             return word % width;
         }
     }
-}
-
-fn checked_clock_milliseconds(unix_seconds: i128, nanoseconds: u32) -> Result<i64, String> {
-    if nanoseconds >= 1_000_000_000 {
-        return Err("Clock.now: invalid test sample".to_string());
-    }
-    let milliseconds = unix_seconds
-        .checked_mul(1_000)
-        .and_then(|value| value.checked_add(i128::from(nanoseconds / 1_000_000)))
-        .ok_or_else(|| "Clock.now: timestamp is outside int64 millisecond range".to_string())?;
-    i64::try_from(milliseconds)
-        .map_err(|_| "Clock.now: timestamp is outside int64 millisecond range".to_string())
-}
-
-fn raw_wall_clock_sample(value: std::time::SystemTime) -> (i128, u32) {
-    match value.duration_since(std::time::UNIX_EPOCH) {
-        Ok(duration) => (i128::from(duration.as_secs()), duration.subsec_nanos()),
-        Err(error) => {
-            let duration = error.duration();
-            let seconds = i128::from(duration.as_secs());
-            let nanoseconds = duration.subsec_nanos();
-            if nanoseconds == 0 {
-                (-seconds, 0)
-            } else {
-                (-seconds - 1, 1_000_000_000 - nanoseconds)
-            }
-        }
-    }
-}
-
-fn production_wall_clock_sample() -> (i128, u32) {
-    raw_wall_clock_sample(std::time::SystemTime::now())
 }
 
 /// Runtime state of a spawned actor instance.
@@ -8654,13 +8625,14 @@ impl Interpreter {
                     unix_seconds,
                     subsecond_nanoseconds,
                 }) => {
-                    checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)?;
+                    checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)
+                        .map_err(str::to_owned)?;
                     samples.pop_front();
                     (unix_seconds, subsecond_nanoseconds)
                 }
             },
         };
-        checked_clock_milliseconds(seconds, nanoseconds)
+        checked_clock_milliseconds(seconds, nanoseconds).map_err(str::to_owned)
     }
 
     fn call_builtin(&mut self, name: &str, args: &[Value]) -> Option<Result<Value, String>> {
@@ -17543,19 +17515,19 @@ mod builtin_tests {
         );
         assert_eq!(
             checked_clock_milliseconds(9_223_372_036_854_775, 808_000_000),
-            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+            Err("Clock.now: timestamp is outside int64 millisecond range")
         );
         assert_eq!(
             checked_clock_milliseconds(-9_223_372_036_854_776, 191_000_000),
-            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+            Err("Clock.now: timestamp is outside int64 millisecond range")
         );
         assert_eq!(
             checked_clock_milliseconds(i128::MAX, 0),
-            Err("Clock.now: timestamp is outside int64 millisecond range".to_string())
+            Err("Clock.now: timestamp is outside int64 millisecond range")
         );
         assert_eq!(
             checked_clock_milliseconds(0, 1_000_000_000),
-            Err("Clock.now: invalid test sample".to_string())
+            Err("Clock.now: invalid test sample")
         );
     }
 

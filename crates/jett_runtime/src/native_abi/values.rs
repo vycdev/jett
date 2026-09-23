@@ -2,6 +2,7 @@
 //! Every pointer must refer to a live stationary ABI context, except literal
 //! bytes which are borrowed for the call. No Rust value crosses this ABI.
 use super::*;
+use crate::clock;
 use crate::crypto;
 use crate::csv;
 use crate::encoding;
@@ -395,6 +396,7 @@ pub(super) struct NativeValues {
     failure: Option<Failure>,
     pub(super) cleanup_failed: bool,
     stdout: Option<u64>,
+    clock: Option<u64>,
 }
 impl NativeValues {
     #[cfg(test)]
@@ -2115,6 +2117,12 @@ leaves! {
         |s| if value > 1 { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid native bool")) } else { s.insert((value != 0).to_string()) };
     GrantStdout, jett_rt_v1_grant_stdout, false, (), u64 => I64,
         |s| { if let Some(token) = s.stdout { return Ok(token); } let token = next_identity()?; s.stdout = Some(token); Ok(token) };
+    GrantClock, jett_rt_v1_grant_clock, false, (), u64 => I64,
+        |s| { if let Some(token) = s.clock { return Ok(token); } let token = next_identity()?; s.clock = Some(token); Ok(token) };
+    ClockNow, jett_rt_v1_clock_now, false, (authority: u64 => I64), i64 => I64,
+        |s| { if s.clock != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Clock authority")); }
+            let (seconds, nanoseconds) = clock::production_wall_clock_sample();
+            clock::checked_clock_milliseconds(seconds, nanoseconds).map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes())) };
     Stdout, jett_rt_v1_string_stdout, false, (authority: u64 => I64, value: u64 => I64), u32 => I32,
         |s| {
             if s.stdout != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority")); }
@@ -2288,6 +2296,34 @@ mod tests {
             assert_eq!(jett_rt_v1_string_release(second.pointer(), empty), 0);
         }
         second.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn clock_authority_is_context_bound_and_samples_wall_time() {
+        let first = Context::new();
+        let second = Context::new();
+        unsafe {
+            let token = jett_rt_v1_grant_clock(first.pointer());
+            let other = jett_rt_v1_grant_clock(second.pointer());
+            assert_ne!(token, other);
+            assert_eq!(token, jett_rt_v1_grant_clock(first.pointer()));
+            let before = clock::production_wall_clock_sample();
+            let now = jett_rt_v1_clock_now(first.pointer(), token);
+            let after = clock::production_wall_clock_sample();
+            let before = clock::checked_clock_milliseconds(before.0, before.1).unwrap();
+            let after = clock::checked_clock_milliseconds(after.0, after.1).unwrap();
+            assert!((before..=after).contains(&now));
+            assert_eq!(jett_rt_v1_value_status(first.pointer()), 0);
+            assert_eq!(jett_rt_v1_clock_now(second.pointer(), token), 0);
+            let lease = acquire_context(context_key(second.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state.as_ref().unwrap().values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"invalid Clock authority".as_slice()
+                ))
+            );
+        }
     }
     #[test]
     fn context_destruction_reports_owned_value_leaks() {
