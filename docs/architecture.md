@@ -852,8 +852,9 @@ type identities and encode those specialization facts deterministically so an
 alias-specialized body cannot collide with its underlying-type body. Lowering
 never infers source authority from `FileId` ranges or trusted-looking names.
 Checked reflection operands also carry source-aware names, kinds, secret flags,
-and nested arguments into HIR and MIR; native codegen uses those facts for
-scalar reflection instead of reconstructing aliases from canonical `TypeId`.
+and nested arguments into HIR and MIR. Scalar reflection and recursive
+`TypeInfo` construction use those facts instead of reconstructing aliases from
+canonical `TypeId`.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 

@@ -2361,19 +2361,211 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 evaluation_order,
             })
         } else {
+            let intrinsic = self.checked_intrinsic_id(call_span)?;
+            let type_arguments =
+                self.checked_intrinsic_type_arguments(call_span, has_explicit_type_arguments)?;
+            let reflection_arguments = self
+                .intrinsic_reflection_arguments
+                .get(&call_span)
+                .cloned()
+                .unwrap_or_default();
+            if matches!(
+                intrinsic,
+                IntrinsicId::TypeInfo | IntrinsicId::TypeKindTag | IntrinsicId::TypePrimitiveTag
+            ) {
+                if !lowered_args.is_empty()
+                    || type_arguments.len() != 1
+                    || reflection_arguments.len() != 1
+                {
+                    self.parent
+                        .error(call_span, "type.info has no checked reflection operand");
+                    return None;
+                }
+                let ty = self.expression_types.get(&call_span).copied()?;
+                let info = &reflection_arguments[0];
+                return match intrinsic {
+                    IntrinsicId::TypeInfo => self.lower_reflection_type_info(info, ty, call_span),
+                    IntrinsicId::TypeKindTag => self
+                        .reflected_enum_value(
+                            ty,
+                            ReflectionTypeInfo::kind_tag_variant(&info.kind),
+                            call_span,
+                        )
+                        .map(|value| value.kind),
+                    IntrinsicId::TypePrimitiveTag => self.lower_reflection_primitive_tag(
+                        info.primitive_tag.as_deref(),
+                        ty,
+                        call_span,
+                    ),
+                    _ => unreachable!(),
+                };
+            }
             Some(ExpressionKind::Intrinsic {
-                intrinsic: self.checked_intrinsic_id(call_span)?,
-                type_arguments: self
-                    .checked_intrinsic_type_arguments(call_span, has_explicit_type_arguments)?,
-                reflection_arguments: self
-                    .intrinsic_reflection_arguments
-                    .get(&call_span)
-                    .cloned()
-                    .unwrap_or_default(),
+                intrinsic,
+                type_arguments,
+                reflection_arguments,
                 args: lowered_args,
                 evaluation_order,
             })
         }
+    }
+
+    fn reflected_enum_value(
+        &mut self,
+        ty: TypeId,
+        variant: &str,
+        span: Span,
+    ) -> Option<Expression> {
+        let Type::Enum(enum_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent
+                .error(span, "reflected metadata tag is not an enum");
+            return None;
+        };
+        let Some(index) = self
+            .parent
+            .check
+            .interner
+            .resolve_enum(*enum_id)
+            .variants
+            .iter()
+            .position(|candidate| candidate.name == variant && candidate.fields.is_empty())
+        else {
+            self.parent
+                .error(span, "reflected metadata tag has no checked variant");
+            return None;
+        };
+        Some(Expression {
+            kind: ExpressionKind::EnumConstruct {
+                enum_type: ty,
+                variant: VariantId(index as u32),
+                payloads: Vec::new(),
+            },
+            ty,
+            span,
+        })
+    }
+
+    fn lower_reflection_primitive_tag(
+        &mut self,
+        variant: Option<&str>,
+        optional_ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Optional(primitive_ty) = self.parent.check.interner.resolve(optional_ty) else {
+            self.parent
+                .error(span, "reflected primitive tag is not optional");
+            return None;
+        };
+        let primitive_ty = *primitive_ty;
+        match variant {
+            Some(variant) => Some(ExpressionKind::OptionalSome(Box::new(
+                self.reflected_enum_value(primitive_ty, variant, span)?,
+            ))),
+            None => Some(ExpressionKind::OptionalNone),
+        }
+    }
+
+    fn lower_reflection_type_info(
+        &mut self,
+        info: &ReflectionTypeInfo,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent.error(span, "type.info result is not TypeInfo");
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = [
+            "type_name",
+            "kind",
+            "kind_tag",
+            "primitive_tag",
+            "has_secret",
+            "args",
+        ];
+        if definition.name != "TypeInfo"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent
+                .error(span, "type.info has no checked TypeInfo layout");
+            return None;
+        }
+        let field_types = definition
+            .fields
+            .iter()
+            .map(|(_, field_ty)| *field_ty)
+            .collect::<Vec<_>>();
+        let Type::List(arg_type) = self.parent.check.interner.resolve(field_types[5]) else {
+            self.parent.error(span, "TypeInfo arguments are not a list");
+            return None;
+        };
+        let arg_type = *arg_type;
+        if arg_type != ty {
+            self.parent
+                .error(span, "TypeInfo argument type is inconsistent");
+            return None;
+        }
+        let string_field = |value: &str| Expression {
+            kind: ExpressionKind::String(value.to_string()),
+            ty: field_types[0],
+            span,
+        };
+        let kind_tag = self.reflected_enum_value(
+            field_types[2],
+            ReflectionTypeInfo::kind_tag_variant(&info.kind),
+            span,
+        )?;
+        let primitive_tag = self.lower_reflection_primitive_tag(
+            info.primitive_tag.as_deref(),
+            field_types[3],
+            span,
+        )?;
+        let args = info
+            .args
+            .iter()
+            .map(|arg| {
+                Some(Expression {
+                    kind: self.lower_reflection_type_info(arg, arg_type, span)?,
+                    ty: arg_type,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let fields = vec![
+            string_field(&info.type_name),
+            Expression {
+                kind: ExpressionKind::String(info.kind.clone()),
+                ty: field_types[1],
+                span,
+            },
+            kind_tag,
+            Expression {
+                kind: primitive_tag,
+                ty: field_types[3],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::Bool(info.has_secret),
+                ty: field_types[4],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::ListConstruct { elements: args },
+                ty: field_types[5],
+                span,
+            },
+        ];
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields,
+            evaluation_order: (0..expected.len()).collect(),
+            validates_refinements: false,
+        })
     }
 
     fn checked_intrinsic_type_arguments(

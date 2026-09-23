@@ -220,6 +220,27 @@ pub struct ReflectionTypeInfo {
 }
 
 impl ReflectionTypeInfo {
+    pub fn kind_tag_variant(kind: &str) -> &'static str {
+        match kind {
+            "primitive" => "primitive_type",
+            "alias" => "alias_type",
+            "refinement" => "refinement_type",
+            "struct" => "struct_type",
+            "bitfield" => "bitfield_type",
+            "enum" => "enum_type",
+            "list" => "list_type",
+            "set" => "set_type",
+            "map" => "map_type",
+            "optional" => "optional_type",
+            "result" => "result_type",
+            "secret" => "secret_type",
+            "function" => "function_type",
+            "machine" => "machine_type",
+            "machine_state" => "machine_state_type",
+            _ => "unknown_type",
+        }
+    }
+
     pub fn new(
         type_name: impl Into<String>,
         kind: impl Into<String>,

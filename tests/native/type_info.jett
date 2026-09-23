@@ -1,0 +1,25 @@
+namespace app
+type Alias = int64
+function primitive_tag_matches() returns bool:
+    TypeInfo info = type.info[int64]()
+    TypePrimitive primitive = clone info.primitive_tag handle:
+        return false
+    return primitive == TypePrimitive.int64_type
+function direct_primitive_tag_matches() returns bool:
+    TypePrimitive primitive = type.primitive_tag[int64]() handle:
+        return false
+    return primitive == TypePrimitive.int64_type
+function alias_has_no_primitive_tag() returns bool:
+    TypeInfo info = type.info[Alias]()
+    TypePrimitive primitive = clone info.primitive_tag handle:
+        return true
+    return primitive == TypePrimitive.unknown_type
+function nested_arg_name() returns string:
+    TypeInfo nested = type.info[list[Alias]]()
+    TypeInfo arg = list.get[TypeInfo](view nested.args, 0) handle:
+        return "missing"
+    return arg.type_name
+function main() returns nothing:
+    TypeInfo direct = type.info[Alias]()
+    TypeInfo nested = type.info[list[Alias]]()
+    println(direct.type_name, direct.kind, direct.kind_tag == TypeKind.alias_type, direct.has_secret, nested.type_name, list.length[TypeInfo](view nested.args), primitive_tag_matches(), type.kind_tag[Alias]() == TypeKind.alias_type, direct_primitive_tag_matches(), alias_has_no_primitive_tag(), nested_arg_name())

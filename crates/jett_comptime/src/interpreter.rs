@@ -4579,24 +4579,7 @@ impl Interpreter {
     }
 
     fn type_kind_tag_value(kind: &str) -> Value {
-        let variant = match kind {
-            "primitive" => "primitive_type",
-            "alias" => "alias_type",
-            "refinement" => "refinement_type",
-            "struct" => "struct_type",
-            "bitfield" => "bitfield_type",
-            "enum" => "enum_type",
-            "list" => "list_type",
-            "set" => "set_type",
-            "map" => "map_type",
-            "optional" => "optional_type",
-            "result" => "result_type",
-            "secret" => "secret_type",
-            "function" => "function_type",
-            "machine" => "machine_type",
-            "machine_state" => "machine_state_type",
-            _ => "unknown_type",
-        };
+        let variant = ReflectionTypeInfo::kind_tag_variant(kind);
         Value::Enum {
             type_name: "TypeKind".to_string(),
             variant: variant.to_string(),
