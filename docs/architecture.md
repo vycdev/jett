@@ -704,12 +704,12 @@ Track `secret[T]` values through the program:
   payloads. Strings compare as UTF-8 bytes. The interpreter treats length as
   observable, rejects length mismatches directly, and passes equal-length
   payloads to a vetted constant-time byte comparison with no content-dependent
-  early exit. Unsupported payloads are rejected by the checker. Future
-  HIR/MIR/native lowering must use a vetted
-  constant-time primitive or otherwise preserve this no-short-circuit contract;
-  [#33](https://github.com/vycdev/jett/issues/33) defines the boundary, while
-  [#20](https://github.com/vycdev/jett/issues/20) and
-  [#22](https://github.com/vycdev/jett/issues/22) own future lowering.
+  early exit. Unsupported payloads are rejected by the checker. HIR/MIR/native
+  lowering must preserve this no-short-circuit contract; the Cranelift native
+  path uses the same constant-time byte primitive for supported string and
+  byte secrets. [#33](https://github.com/vycdev/jett/issues/33) defines the
+  boundary, while [#20](https://github.com/vycdev/jett/issues/20) and
+  [#22](https://github.com/vycdev/jett/issues/22) cover remaining native work.
 - `json.serialize` on a struct with secret fields is a compile error -> use `json.serialize_public`. Public JSON serialization omits secret-bearing record fields; it may descend through containers to project nested records, but rejects secret wrappers and secret-bearing enums when their secret data cannot be projected away through record fields. A future explicit full-serialization path can require a declassification token.
 - **Secret refinement types:** For `type ApiKey = secret[string] where string.char_count(value) == 40`, the `where` clause operates on the inner `string` value — the constraint function implicitly receives the unwrapped value for validation purposes only.
 

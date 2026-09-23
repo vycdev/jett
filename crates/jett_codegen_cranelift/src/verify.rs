@@ -155,6 +155,9 @@ fn scalar_kind_inner(
         Type::Nothing => ScalarKind::Nothing,
         Type::String => ScalarKind::String,
         Type::Bytes => ScalarKind::Bytes,
+        Type::Secret(inner) | Type::Refinement { base: inner, .. } => {
+            return scalar_kind_inner(types, *inner, context, seen);
+        }
         Type::Struct(id) => {
             if seen.insert(ty) {
                 for (_, field) in &types.resolve_struct(*id).fields {
@@ -717,6 +720,10 @@ impl Verifier<'_> {
                         argument.ty,
                         "direct call argument type does not match its parameter",
                     )?;
+                }
+                if matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == callee.return_type)
+                {
+                    return Ok(());
                 }
                 self.require_same_type(
                     function,

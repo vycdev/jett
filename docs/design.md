@@ -3111,10 +3111,12 @@ Payload length is observable under this initial contract, so a length mismatch
 may return `false` immediately. Equal-length payloads use a vetted constant-time
 byte comparison with no content-dependent early exit. This gives constant work
 for fixed public lengths; it does not claim to hide length.
-Future HIR, MIR, and native backends must preserve those semantics with a
-vetted constant-time primitive or lowering that cannot be changed into
-content-short-circuiting equality by optimization. This boundary was resolved
-by [#33](https://github.com/vycdev/jett/issues/33); native lowering remains part
+HIR, MIR, and native backends must preserve those semantics with a vetted
+constant-time primitive or lowering that cannot be changed into
+content-short-circuiting equality by optimization. The Cranelift native path
+uses the same constant-time byte primitive as the interpreter for supported
+string and byte secrets. This boundary was resolved by
+[#33](https://github.com/vycdev/jett/issues/33); full native parity remains part
 of [#20](https://github.com/vycdev/jett/issues/20) and
 [#22](https://github.com/vycdev/jett/issues/22).
 

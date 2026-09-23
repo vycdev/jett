@@ -50,11 +50,13 @@ impl CopyValuePlan {
                         if let StatementKind::SequenceGet { index, .. } = statement.kind {
                             reads.insert(index.index() as usize);
                             temporaries += usize::from(
-                                function.locals[target.index() as usize].ty == TypeInterner::STRING
-                                    || crate::move_values::is_linear(
-                                        types,
-                                        function.locals[target.index() as usize].ty,
-                                    ),
+                                crate::move_values::is_string(
+                                    types,
+                                    function.locals[target.index() as usize].ty,
+                                ) || crate::move_values::is_linear(
+                                    types,
+                                    function.locals[target.index() as usize].ty,
+                                ),
                             );
                         }
                         Some(target.index() as usize)
@@ -67,7 +69,7 @@ impl CopyValuePlan {
                         if matches!(statement.kind, StatementKind::SumTake { .. }) {
                             let ty = function.locals[target.index() as usize].ty;
                             temporaries += usize::from(
-                                ty == TypeInterner::STRING
+                                crate::move_values::is_string(types, ty)
                                     || crate::move_values::is_linear(types, ty),
                             );
                         }
@@ -123,7 +125,7 @@ impl CopyValuePlan {
                                 .iter()
                                 .filter(|binding| {
                                     let ty = function.locals[binding.index() as usize].ty;
-                                    ty == TypeInterner::STRING
+                                    crate::move_values::is_string(types, ty)
                                         || crate::move_values::is_linear(types, ty)
                                 })
                                 .count()
@@ -244,7 +246,7 @@ impl CopyValuePlan {
                 .locals
                 .iter()
                 .filter(|l| {
-                    matches!(types.resolve(l.ty), Type::String)
+                    crate::move_values::is_string(types, l.ty)
                         || (program.is_some()
                             && crate::move_values::is_linear(types, l.ty)
                             && !function
@@ -329,7 +331,7 @@ fn visit(
         | ExpressionKind::Local(_)
         | ExpressionKind::Call { .. }
         | ExpressionKind::Field { .. }
-            if value.ty == TypeInterner::STRING =>
+            if crate::move_values::is_string(types, value.ty) =>
         {
             *temporaries += 1
         }
@@ -343,8 +345,11 @@ fn visit(
                 // (literal + concat), and the optional newline (literal + concat).
                 *temporaries += 1 + args.len() + 2 * args.len().saturating_sub(1);
                 *temporaries += usize::from(*id == IntrinsicId::Println) * 2;
-                *temporaries += args.iter().filter(|a| a.ty != TypeInterner::STRING).count();
-            } else if value.ty == TypeInterner::STRING {
+                *temporaries += args
+                    .iter()
+                    .filter(|a| !crate::move_values::is_string(types, a.ty))
+                    .count();
+            } else if crate::move_values::is_string(types, value.ty) {
                 // String-returning leaves and scalar conversion each own once.
                 *temporaries += 1;
             }
@@ -447,7 +452,7 @@ fn visit(
                         visit(v, reads, temporaries, types, program, false)?;
                         // Scalar formatting owns a new string; string formatting
                         // passes through the ownership already counted in v.
-                        *temporaries += usize::from(v.ty != TypeInterner::STRING);
+                        *temporaries += usize::from(!crate::move_values::is_string(types, v.ty));
                     }
                     StringSegment::Text(_) => *temporaries += 1,
                 }
@@ -461,6 +466,9 @@ fn visit(
 fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
     if ty.index() as usize >= types.len() {
         return Err("invalid type in native ownership plan".into());
+    }
+    if let Type::Secret(inner) | Type::Refinement { base: inner, .. } = types.resolve(ty) {
+        return copy_plan_type(types, *inner);
     }
     if matches!(
         types.resolve(ty),
@@ -508,6 +516,9 @@ fn plan_type_inner(
     }
     if program.is_some() {
         match types.resolve(ty) {
+            Type::Secret(inner) | Type::Refinement { base: inner, .. } => {
+                return plan_type_inner(types, *inner, program, seen);
+            }
             Type::Bytes => return Ok(()),
             Type::Struct(id) => {
                 for (_, field) in &types.resolve_struct(*id).fields {

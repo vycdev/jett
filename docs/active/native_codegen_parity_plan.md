@@ -281,9 +281,10 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machines and refinements pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte roundtrip covered; width validation, payload-enum equality and other aggregate kinds pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; transparent secret/refinement representation; machines and validating refinements pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte roundtrip covered; width validation, payload-enum equality and other aggregate kinds pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive list sorting and sets, and primitive-key maps with owned values | compiled list access, reverse/repeat, scalar iteration and sort; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; projected views, contextual empty-list conversion, refinements, and callback helpers pending |
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
+| Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit statement-root handler CFG | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits and terminal bypass covered; nested-expression handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
 | Compiler intrinsics and reflection | covered with checked operands and closed `IntrinsicId` identities | pending | pending |
@@ -297,15 +298,15 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 70 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 71 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 14 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison in `native_execution_windows` |
-| Runtime contracts | 20 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
+| Runtime contracts | 22 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
 These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 70. Four string/comptime fixtures began emitting
+unmarked row and now proves 71. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -328,6 +329,10 @@ Shared strict CSV parsing and header validation add `csv_operations.jett` and
 `csv_escaping_helpers.jett` objects. A dedicated native main checks parsed
 values, canonical quoting, malformed input, and header errors; allocation
 fault tests verify nested list/map rollback.
+Transparent secret/refinement representation and constant-time native secret
+comparison add `secret_compare_boundary.jett` object emission; the two secret
+integer wrapping fixtures now pass their runtime contracts. The remaining
+runtime-contract gaps require Clock and Random capability providers.
 Fixture membership and
 denominators are unchanged. Unit and payload enums also pass dedicated
 native/interpreter differential fixtures, including recursive owned payloads.

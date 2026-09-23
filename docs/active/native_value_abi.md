@@ -140,6 +140,15 @@ share the parser, quoting, and header-validation rules. Native construction
 releases partial rows, fields, maps, and result payloads if an allocation
 boundary fails; the runtime fault-injection test checks each boundary.
 
+Secret and refinement wrappers retain their underlying native representation.
+The checked base-to-secret lift is recorded in expression types before MIR
+lowering, so local storage, calls, and aggregate fields agree on the wrapper.
+Native redaction returns the fixed `***` string after evaluating its operand.
+Native secret comparison accepts the checked string and bytes payload shapes,
+returns false on a public length mismatch, and uses constant-time byte
+comparison for equal lengths. Wrapper-aware ownership retains and releases
+strings and transfers or clones owned bytes and aggregates as their base types.
+
 ## Result and optional ownership and handlers
 
 Native sums have separate context-associated, move-only handles. Their internal

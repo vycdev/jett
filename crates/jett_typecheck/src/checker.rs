@@ -8035,6 +8035,14 @@ impl<'a> TypeChecker<'a> {
             }
         };
 
+        let ty = if let Type::Secret(inner) = self.interner.resolve(expected_ty)
+            && *inner != TypeInterner::ERROR
+            && ty == *inner
+        {
+            expected_ty
+        } else {
+            ty
+        };
         self.record_expression_type(expr.span(), ty);
         ty
     }

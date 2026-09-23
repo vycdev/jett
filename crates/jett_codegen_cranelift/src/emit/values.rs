@@ -243,7 +243,7 @@ impl Translator<'_, '_> {
             // The owning root/temporary stays live through the bounded loan.
             return Ok(LoweredValue::Scalar(bits));
         }
-        let bits = if ty == TypeInterner::STRING {
+        let bits = if is_string(self.types, ty) {
             self.leaf(NativeLeaf::Retain, &[bits], true)?
         } else {
             bits
@@ -305,7 +305,7 @@ impl Translator<'_, '_> {
         ty: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
-        if ty == TypeInterner::STRING || is_linear(self.types, ty) {
+        if is_string(self.types, ty) || is_linear(self.types, ty) {
             return self.own(bits);
         }
         let Some(native) = clif_type(self.types, ty, "sum payload")? else {
@@ -332,7 +332,7 @@ impl Translator<'_, '_> {
         let Type::List(element) = self.types.resolve(ty) else {
             return Err(self.unsupported(span, "invalid list layout"));
         };
-        let owned = *element == TypeInterner::STRING || is_linear(self.types, *element);
+        let owned = is_string(self.types, *element) || is_linear(self.types, *element);
         let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
         let value = self.leaf(NativeLeaf::ListNew, &[owned], true)?;
         self.own_linear(value)
@@ -371,10 +371,10 @@ impl Translator<'_, '_> {
         let key_strings = self
             .builder
             .ins()
-            .iconst(ir::types::I32, i64::from(*key == TypeInterner::STRING));
+            .iconst(ir::types::I32, i64::from(is_string(self.types, *key)));
         let value_owned = self.builder.ins().iconst(
             ir::types::I32,
-            i64::from(*value == TypeInterner::STRING || is_linear(self.types, *value)),
+            i64::from(is_string(self.types, *value) || is_linear(self.types, *value)),
         );
         let result = self.leaf(NativeLeaf::MapNew, &[key_strings, value_owned], true)?;
         self.own_linear(result)
@@ -473,8 +473,8 @@ impl Translator<'_, '_> {
                 let Type::Map(key, value) = self.types.resolve(result_type) else {
                     return Err(self.unsupported(span, "invalid map result layout"));
                 };
-                let key_strings = *key == TypeInterner::STRING;
-                let value_owned = *value == TypeInterner::STRING || is_linear(self.types, *value);
+                let key_strings = is_string(self.types, *key);
+                let value_owned = is_string(self.types, *value) || is_linear(self.types, *value);
                 let LoweredValue::Owned(keys, key_slot) = values[0] else {
                     return Err(self.unsupported(span, "map keys require owning list"));
                 };
@@ -572,7 +572,7 @@ impl Translator<'_, '_> {
                 let strings = self
                     .builder
                     .ins()
-                    .iconst(ir::types::I32, i64::from(*element == TypeInterner::STRING));
+                    .iconst(ir::types::I32, i64::from(is_string(self.types, *element)));
                 let value = self.leaf(NativeLeaf::SetNew, &[strings], true)?;
                 self.own_linear(value)
             }
@@ -853,6 +853,20 @@ impl Translator<'_, '_> {
             };
         }
         match id {
+            IntrinsicId::SecretCompare => {
+                let left = self.scalar(evaluated[0], span)?;
+                let right = self.scalar(evaluated[1], span)?;
+                let leaf = if is_string(self.types, args[0].ty) {
+                    NativeLeaf::SecretCompareString
+                } else {
+                    NativeLeaf::SecretCompareBytes
+                };
+                let result = self.leaf(leaf, &[left, right], true)?;
+                Ok(LoweredValue::Scalar(
+                    self.builder.ins().ireduce(ir::types::I8, result),
+                ))
+            }
+            IntrinsicId::SecretRedact => self.literal("***"),
             IntrinsicId::BitfieldToBytes => self.encode_bitfield(evaluated[0], args[0].ty, span),
             IntrinsicId::BitfieldFromBytes => self.decode_bitfield(evaluated[0], result_type, span),
             IntrinsicId::Float64FromInt64 | IntrinsicId::Int64FromFloat64 => {

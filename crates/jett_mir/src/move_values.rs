@@ -7,7 +7,45 @@ use jett_types::{Type, TypeId, TypeInterner};
 use std::collections::{BTreeMap, BTreeSet};
 type Set = BTreeSet<usize>;
 
+pub fn representation_type(types: &TypeInterner, ty: TypeId) -> TypeId {
+    let mut current = ty;
+    for _ in 0..types.len() {
+        if current.index() as usize >= types.len() {
+            break;
+        }
+        current = match types.resolve(current) {
+            Type::Secret(inner) | Type::Refinement { base: inner, .. } => *inner,
+            _ => break,
+        };
+    }
+    current
+}
+
+pub fn is_string(types: &TypeInterner, ty: TypeId) -> bool {
+    let underlying = representation_type(types, ty);
+    (underlying.index() as usize) < types.len() && matches!(types.resolve(underlying), Type::String)
+}
+
+pub fn is_secret(types: &TypeInterner, ty: TypeId) -> bool {
+    let mut current = ty;
+    for _ in 0..types.len() {
+        if current.index() as usize >= types.len() {
+            break;
+        }
+        current = match types.resolve(current) {
+            Type::Secret(_) => return true,
+            Type::Refinement { base, .. } => *base,
+            _ => break,
+        };
+    }
+    false
+}
+
 pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
+    let ty = representation_type(types, ty);
+    if ty.index() as usize >= types.len() {
+        return false;
+    }
     matches!(
         types.resolve(ty),
         Type::Bytes
@@ -23,6 +61,9 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
 }
 
 pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
+    if matches!(id, IntrinsicId::SecretCompare | IntrinsicId::SecretRedact) {
+        return true;
+    }
     (index == 1
         && matches!(
             id,

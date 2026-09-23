@@ -85,6 +85,38 @@ pub(crate) fn verify_intrinsic(
             Err("invalid native range signature".into())
         };
     }
+    if id == IntrinsicId::SecretRedact {
+        return if args.len() == 1
+            && jett_mir::move_values::is_secret(types, args[0].ty)
+            && result == T::STRING
+        {
+            Ok(())
+        } else {
+            Err("invalid native secret redaction signature".into())
+        };
+    }
+    if id == IntrinsicId::SecretCompare {
+        let same_payload = args.len() == 2
+            && jett_mir::move_values::representation_type(types, args[0].ty)
+                == jett_mir::move_values::representation_type(types, args[1].ty);
+        let supported_payload = args.first().is_some_and(|arg| {
+            matches!(
+                types.resolve(jett_mir::move_values::representation_type(types, arg.ty)),
+                Type::String | Type::Bytes
+            )
+        });
+        return if same_payload
+            && supported_payload
+            && args
+                .iter()
+                .all(|arg| jett_mir::move_values::is_secret(types, arg.ty))
+            && result == T::BOOL
+        {
+            Ok(())
+        } else {
+            Err("invalid native secret comparison signature".into())
+        };
+    }
     if matches!(
         id,
         IntrinsicId::CsvParse | IntrinsicId::CsvParseWithHeader | IntrinsicId::CsvStringify

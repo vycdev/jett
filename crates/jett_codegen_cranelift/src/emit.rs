@@ -1,5 +1,5 @@
 mod values;
-use jett_mir::move_values::{MoveValuePlan, is_linear};
+use jett_mir::move_values::{MoveValuePlan, is_linear, is_string, representation_type};
 use jett_runtime::native_abi::values::NativeLeaf;
 use std::str::FromStr;
 
@@ -858,7 +858,7 @@ impl Translator<'_, '_> {
                     Some(v) => self.expression(v)?,
                     None => LoweredValue::Nothing,
                 };
-                if value.as_ref().is_some_and(|v| v.ty == TypeInterner::STRING) {
+                if value.as_ref().is_some_and(|v| is_string(self.types, v.ty)) {
                     let v = self.scalar(result, terminator.span)?;
                     result = LoweredValue::Scalar(self.leaf(NativeLeaf::Retain, &[v], true)?);
                 }
@@ -1096,7 +1096,10 @@ impl Translator<'_, '_> {
             ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
                 let borrowed = self.argument(value, true)?;
                 let v = self.scalar(borrowed, value.span)?;
-                let leaf = match self.types.resolve(value.ty) {
+                let leaf = match self
+                    .types
+                    .resolve(representation_type(self.types, value.ty))
+                {
                     Type::Bytes => NativeLeaf::BytesClone,
                     Type::List(_) => NativeLeaf::ListClone,
                     Type::Set(_) => NativeLeaf::SetClone,
@@ -1299,7 +1302,7 @@ impl Translator<'_, '_> {
             })?;
             if is_linear(self.types, expression.ty) {
                 self.own_linear(value)
-            } else if expression.ty == TypeInterner::STRING {
+            } else if is_string(self.types, expression.ty) {
                 self.own(value)
             } else {
                 Ok(LoweredValue::Scalar(value))

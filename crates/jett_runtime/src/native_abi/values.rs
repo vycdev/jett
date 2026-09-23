@@ -6,6 +6,7 @@ use crate::csv;
 use crate::encoding;
 use std::cmp::Ordering as CompareOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
+use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub type NativeHandle = u64;
@@ -1855,6 +1856,13 @@ leaves! {
         } };
     CsvStringify, jett_rt_v1_csv_stringify, false, (value: u64 => I64), u64 => I64,
         |s| { let rows = s.csv_records(value)?; s.insert(csv::stringify_csv_records(&rows)) };
+
+    SecretCompareString, jett_rt_v1_secret_compare_string, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| { let left = s.text(left)?.as_bytes(); let right = s.text(right)?.as_bytes();
+            Ok(u32::from(left.len() == right.len() && bool::from(left.ct_eq(right)))) };
+    SecretCompareBytes, jett_rt_v1_secret_compare_bytes, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| { let left = s.bytes(left)?; let right = s.bytes(right)?;
+            Ok(u32::from(left.len() == right.len() && bool::from(left.ct_eq(right)))) };
 
     DropValue, jett_rt_v1_value_drop, true, (value: u64 => I64), u32 => I32,
         |s| s.drop_value(value);
