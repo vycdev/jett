@@ -348,6 +348,10 @@ and `uint64_checked_expression_runtime_types.jett`. The last also passes a
 supplemental native/interpreter dispatch execution check. Fixture membership
 and denominators are unchanged. Unit and payload enums also pass dedicated
 native/interpreter differential fixtures, including recursive owned payloads.
+Native arithmetic now accepts a nonzero refinement as the right operand of
+integer division or modulo when its base matches the left operand. This is
+covered by an object-emission test; `integer_nonzero_proofs.jett` still needs
+native refinement-handler control flow before its full object can emit.
 Fixed-width bitfield values, collection payload ownership and byte roundtrips
 also pass a dedicated native/interpreter fixture, including network order,
 native order, enum discriminants, trailing payload bytes, decode errors and

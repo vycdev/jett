@@ -42,6 +42,22 @@ fn lower_source(source: &str) -> (Program, TypeInterner) {
 }
 
 #[test]
+fn emits_arithmetic_with_a_refined_integer_operand() {
+    let (program, types) = lower_source(
+        r#"namespace app
+type NonZeroInt = int64 where value != 0
+function quotient(value: int64, divisor: NonZeroInt) returns int64:
+    return value / divisor
+function remainder(value: int64, divisor: NonZeroInt) returns int64:
+    return value modulo divisor
+"#,
+    );
+
+    let object = emit_host_object(&program, &types).expect("refined integer object emission");
+    assert_eq!(object.symbols.len(), 2);
+}
+
+#[test]
 fn emits_a_deterministic_host_object_for_scalar_control_flow() {
     let (program, types) = lower_source(
         r#"namespace app

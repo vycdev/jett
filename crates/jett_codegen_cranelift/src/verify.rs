@@ -1192,14 +1192,22 @@ impl Verifier<'_> {
     ) -> Result<(), CodegenError> {
         self.expression(function, left)?;
         self.expression(function, right)?;
-        self.require_same_type(
-            function,
-            expression.span,
-            left.ty,
-            right.ty,
-            "binary operand types differ",
-        )?;
         let operand = scalar_kind(self.types, left.ty, "binary operand")?;
+        let right_operand = scalar_kind(self.types, right.ty, "binary operand")?;
+        let refined_divisor = operand.is_integer()
+            && matches!(op, BinaryOp::Divide | BinaryOp::Modulo)
+            && matches!(
+                self.types.resolve(right.ty),
+                Type::Refinement { base, .. } if *base == left.ty
+            )
+            && operand == right_operand;
+        if left.ty != right.ty && !refined_divisor {
+            return Err(self.contract_error(
+                function,
+                expression.span,
+                "binary operand types differ",
+            ));
+        }
         let result = scalar_kind(self.types, expression.ty, "binary result")?;
         if operand == ScalarKind::Enum
             && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
