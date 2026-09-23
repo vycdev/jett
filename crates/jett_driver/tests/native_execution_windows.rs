@@ -281,6 +281,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ),
         ("type_info", "../../tests/native/type_info.jett"),
         ("type_fields", "../../tests/native/type_fields.jett"),
+        (
+            "bitfield_reflection",
+            "../../tests/native/bitfield_reflection.jett",
+        ),
         ("crypto", "../../tests/native/crypto.jett"),
         ("math_aggregate", "../../tests/native/math_aggregate.jett"),
         (

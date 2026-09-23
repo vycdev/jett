@@ -16,7 +16,10 @@ use jett_typecheck::{
     CheckedGenericSpecialization, CheckedMethodCall, CheckedMethodDefinition,
     CheckedStaticSelection, CheckedStructConstruction,
 };
-use jett_types::{ReflectionFieldInfo, ReflectionTypeInfo, Type, TypeId};
+use jett_types::{
+    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionTypeInfo,
+    Type, TypeId,
+};
 
 mod type_validation;
 
@@ -2375,6 +2378,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     | IntrinsicId::TypeKindTag
                     | IntrinsicId::TypePrimitiveTag
                     | IntrinsicId::TypeFields
+                    | IntrinsicId::TypeBitfieldFields
+                    | IntrinsicId::TypeBitfieldLayout
             ) {
                 if !lowered_args.is_empty()
                     || type_arguments.len() != 1
@@ -2405,6 +2410,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     IntrinsicId::TypeFields => self.lower_reflection_type_fields(
                         type_arguments[0],
                         &info.type_name,
+                        &info.kind,
+                        ty,
+                        call_span,
+                    ),
+                    IntrinsicId::TypeBitfieldFields => self.lower_reflection_bitfield_fields(
+                        type_arguments[0],
+                        &info.kind,
+                        ty,
+                        call_span,
+                    ),
+                    IntrinsicId::TypeBitfieldLayout => self.lower_reflection_bitfield_layout(
+                        type_arguments[0],
                         &info.kind,
                         ty,
                         call_span,
@@ -2712,6 +2729,223 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expression {
                 kind: type_info,
                 ty: field_types[9],
+                span,
+            },
+        ];
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields,
+            evaluation_order: (0..expected.len()).collect(),
+            validates_refinements: false,
+        })
+    }
+
+    fn checked_reflection_bitfield(
+        &mut self,
+        owner_ty: TypeId,
+        owner_kind: &str,
+        span: Span,
+    ) -> Option<ReflectionBitfieldInfo> {
+        if owner_kind != "bitfield" {
+            return Some(ReflectionBitfieldInfo::new(false, Vec::new()));
+        }
+        self.parent
+            .check
+            .reflection_metadata
+            .get_bitfield_for_id(owner_ty)
+            .cloned()
+            .or_else(|| {
+                self.parent
+                    .error(span, "bitfield reflection has no checked layout metadata");
+                None
+            })
+    }
+
+    fn lower_reflection_bitfield_fields(
+        &mut self,
+        owner_ty: TypeId,
+        owner_kind: &str,
+        list_ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::List(field_ty) = self.parent.check.interner.resolve(list_ty) else {
+            self.parent
+                .error(span, "type.bitfield_fields result is not a list");
+            return None;
+        };
+        let field_ty = *field_ty;
+        let bitfield = self.checked_reflection_bitfield(owner_ty, owner_kind, span)?;
+        let elements = bitfield
+            .fields
+            .iter()
+            .map(|field| {
+                Some(Expression {
+                    kind: self.lower_reflection_bitfield_field(field, field_ty, span)?,
+                    ty: field_ty,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::ListConstruct { elements })
+    }
+
+    fn lower_reflection_bitfield_layout(
+        &mut self,
+        owner_ty: TypeId,
+        owner_kind: &str,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent
+                .error(span, "type.bitfield_layout result is not TypeBitfield");
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = ["network_order", "fields"];
+        if definition.name != "TypeBitfield"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent.error(
+                span,
+                "type.bitfield_layout has no checked TypeBitfield layout",
+            );
+            return None;
+        }
+        let field_types = definition
+            .fields
+            .iter()
+            .map(|(_, field_ty)| *field_ty)
+            .collect::<Vec<_>>();
+        let bitfield = self.checked_reflection_bitfield(owner_ty, owner_kind, span)?;
+        let fields = vec![
+            Expression {
+                kind: ExpressionKind::Bool(bitfield.network_order),
+                ty: field_types[0],
+                span,
+            },
+            Expression {
+                kind: self.lower_reflection_bitfield_fields(
+                    owner_ty,
+                    owner_kind,
+                    field_types[1],
+                    span,
+                )?,
+                ty: field_types[1],
+                span,
+            },
+        ];
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields,
+            evaluation_order: (0..expected.len()).collect(),
+            validates_refinements: false,
+        })
+    }
+
+    fn lower_reflection_bitfield_field(
+        &mut self,
+        field: &ReflectionBitfieldFieldInfo,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent
+                .error(span, "bitfield reflection element is not TypeBitfieldField");
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = [
+            "index",
+            "name",
+            "shape",
+            "shape_tag",
+            "width",
+            "type_info",
+            "enum_type",
+        ];
+        if definition.name != "TypeBitfieldField"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent.error(
+                span,
+                "bitfield reflection has no checked TypeBitfieldField layout",
+            );
+            return None;
+        }
+        let field_types = definition
+            .fields
+            .iter()
+            .map(|(_, field_ty)| *field_ty)
+            .collect::<Vec<_>>();
+        let Ok(index) = i128::try_from(field.index) else {
+            self.parent
+                .error(span, "reflected bitfield field index is too large");
+            return None;
+        };
+        let shape_variant = if field.shape == "payload" {
+            "payload_field"
+        } else {
+            "bits_field"
+        };
+        let shape_tag = self.reflected_enum_value(field_types[3], shape_variant, span)?;
+        let type_info = self.lower_reflection_type_info(&field.type_info, field_types[5], span)?;
+        let enum_type = match &field.enum_type {
+            Some(info) => {
+                let Type::Optional(info_ty) = self.parent.check.interner.resolve(field_types[6])
+                else {
+                    self.parent
+                        .error(span, "bitfield enum metadata is not optional TypeInfo");
+                    return None;
+                };
+                let info_ty = *info_ty;
+                let value = Expression {
+                    kind: self.lower_reflection_type_info(info, info_ty, span)?,
+                    ty: info_ty,
+                    span,
+                };
+                ExpressionKind::OptionalSome(Box::new(value))
+            }
+            None => ExpressionKind::OptionalNone,
+        };
+        let fields = vec![
+            Expression {
+                kind: ExpressionKind::Int(index),
+                ty: field_types[0],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::String(field.name.clone()),
+                ty: field_types[1],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::String(field.shape.clone()),
+                ty: field_types[2],
+                span,
+            },
+            shape_tag,
+            Expression {
+                kind: ExpressionKind::Int(field.width.into()),
+                ty: field_types[4],
+                span,
+            },
+            Expression {
+                kind: type_info,
+                ty: field_types[5],
+                span,
+            },
+            Expression {
+                kind: enum_type,
+                ty: field_types[6],
                 span,
             },
         ];

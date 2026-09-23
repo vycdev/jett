@@ -857,6 +857,9 @@ and nested arguments into HIR and MIR. Scalar reflection and recursive
 canonical `TypeId`.
 `type.fields` lowers checked field snapshots into ordinary `TypeField` values
 only for struct and bitfield kinds; an alias remains a distinct total probe.
+`type.bitfield_layout` and `type.bitfield_fields` likewise lower checked
+bitfield layout snapshots into `TypeBitfield` and `TypeBitfieldField` values;
+other kinds produce an empty layout, including source aliases.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 
