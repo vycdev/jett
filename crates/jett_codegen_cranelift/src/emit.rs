@@ -472,6 +472,7 @@ fn clif_type(
         | ScalarKind::Bytes
         | ScalarKind::Sum
         | ScalarKind::List
+        | ScalarKind::Struct
         | ScalarKind::Stdout => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
@@ -975,6 +976,7 @@ impl Translator<'_, '_> {
                 let leaf = match self.types.resolve(value.ty) {
                     Type::Bytes => NativeLeaf::BytesClone,
                     Type::List(_) => NativeLeaf::ListClone,
+                    Type::Struct(_) => NativeLeaf::StructClone,
                     _ => NativeLeaf::SumClone,
                 };
                 let cloned = self.leaf(leaf, &[v], true)?;
@@ -997,9 +999,11 @@ impl Translator<'_, '_> {
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(expression.span, "indirect call"))
             }
-            ExpressionKind::StructConstruct { .. } => {
-                Err(self.unsupported(expression.span, "struct construction"))
-            }
+            ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => self.construct_struct(fields, evaluation_order, expression.span),
             ExpressionKind::BitfieldConstruct { .. } => {
                 Err(self.unsupported(expression.span, "bitfield construction"))
             }
@@ -1046,7 +1050,9 @@ impl Translator<'_, '_> {
             ExpressionKind::ActorSpawn { .. } | ExpressionKind::ActorMessage { .. } => {
                 Err(self.unsupported(expression.span, "actor operation"))
             }
-            ExpressionKind::Field { .. } => Err(self.unsupported(expression.span, "field access")),
+            ExpressionKind::Field { base, field, .. } => {
+                self.struct_field(base, field.index(), expression.ty, expression.span)
+            }
         }
     }
 
@@ -1283,6 +1289,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Bytes
             | ScalarKind::Sum
             | ScalarKind::List
+            | ScalarKind::Struct
             | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,

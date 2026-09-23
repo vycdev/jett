@@ -12,6 +12,10 @@ const INVALID_HANDLE: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native string handle",
 );
+const INVALID_STRUCT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native struct handle or field",
+);
 const INVALID_LIST: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native list handle",
@@ -32,6 +36,14 @@ struct NativeString {
 /// Stable discriminants for optional and result storage (not terminal status).
 pub const SUM_FAILURE: u32 = 0;
 pub const SUM_SUCCESS: u32 = 1;
+#[derive(Clone, Copy)]
+struct NativeField {
+    bits: u64,
+    owned: bool,
+}
+struct NativeStruct {
+    fields: Vec<Option<NativeField>>,
+}
 struct NativeList {
     elements: Vec<Option<u64>>,
     owned: bool,
@@ -49,6 +61,9 @@ pub(super) struct NativeValues {
     bytes: HashMap<NativeHandle, Vec<u8>>,
     sums: HashMap<NativeHandle, NativeSum>,
     lists: HashMap<NativeHandle, NativeList>,
+    structs: HashMap<NativeHandle, NativeStruct>,
+    structs_created: u64,
+    structs_destroyed: u64,
     lists_created: u64,
     lists_destroyed: u64,
     sums_created: u64,
@@ -68,7 +83,9 @@ impl NativeValues {
         Ok(())
     }
     pub(super) fn is_empty(&self) -> bool {
-        self.strings.is_empty()
+        self.structs.is_empty()
+            && self.structs_created == self.structs_destroyed
+            && self.strings.is_empty()
             && self.bytes.is_empty()
             && self.bytes_created == self.bytes_destroyed
             && self.sums.is_empty()
@@ -267,7 +284,50 @@ impl NativeValues {
         self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = output;
         Ok(id)
     }
+    fn new_struct(&mut self, count: u64) -> LeafResult<u64> {
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let count = usize::try_from(count).map_err(|_| EXHAUSTED)?;
+        let mut fields = Vec::new();
+        fields.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        fields.resize(count, None);
+        let id = next_identity()?;
+        self.structs.insert(id, NativeStruct { fields });
+        self.structs_created += 1;
+        Ok(id)
+    }
+    fn struct_field(&self, id: u64, index: u64) -> LeafResult<NativeField> {
+        self.structs
+            .get(&id)
+            .and_then(|s| usize::try_from(index).ok().and_then(|i| s.fields.get(i)))
+            .copied()
+            .flatten()
+            .ok_or(INVALID_STRUCT)
+    }
+    fn clone_struct(&mut self, id: u64) -> LeafResult<u64> {
+        let fields = self.structs.get(&id).ok_or(INVALID_STRUCT)?.fields.clone();
+        let output = self.new_struct(fields.len() as u64)?;
+        for (index, field) in fields.into_iter().enumerate() {
+            let Some(mut field) = field else {
+                continue;
+            };
+            if field.owned {
+                match self.clone_value(field.bits) {
+                    Ok(bits) => field.bits = bits,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            }
+            self.structs.get_mut(&output).ok_or(INVALID_STRUCT)?.fields[index] = Some(field);
+        }
+        Ok(output)
+    }
     fn clone_value(&mut self, id: u64) -> LeafResult<u64> {
+        if self.structs.contains_key(&id) {
+            return self.clone_struct(id);
+        }
         if self.lists.contains_key(&id) {
             return self.clone_list(id);
         }
@@ -290,6 +350,15 @@ impl NativeValues {
         self.retain(id)
     }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if let Some(value) = self.structs.remove(&id) {
+            self.structs_destroyed += 1;
+            for field in value.fields.into_iter().flatten() {
+                if field.owned {
+                    self.drop_value(field.bits)?;
+                }
+            }
+            return Ok(0);
+        }
         if let Some(list) = self.lists.remove(&id) {
             self.lists_destroyed += 1;
             if list.owned {
@@ -534,6 +603,17 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    StructNew, jett_rt_v1_struct_new, false, (count: u64 => I64), u64 => I64,
+        |s| s.new_struct(count);
+    StructInit, jett_rt_v1_struct_init, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
+        |s| { if owned > 1 { return Err(INVALID_STRUCT); }
+            let slot = s.structs.get_mut(&value).and_then(|v| usize::try_from(index).ok().and_then(|i| v.fields.get_mut(i))).ok_or(INVALID_STRUCT)?;
+            if slot.is_some() { return Err(INVALID_STRUCT); }
+            *slot = Some(NativeField { bits, owned: owned != 0 }); Ok(0) };
+    StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
+        |s| Ok(s.struct_field(value, index)?.bits);
+    StructClone, jett_rt_v1_struct_clone, false, (value: u64 => I64), u64 => I64,
+        |s| s.clone_struct(value);
     StringChars, jett_rt_v1_string_chars, false, (value: u64 => I64), u64 => I64,
         |s| { let parts = s.text(value)?.graphemes(true).map(str::to_owned).collect(); s.string_list(parts) };
     StringWords, jett_rt_v1_string_words, false, (value: u64 => I64), u64 => I64,
@@ -1183,5 +1263,104 @@ mod tests {
             }
             jett_rt_v1_value_drop(context.pointer(), text);
         }
+    }
+    #[test]
+    fn structs_borrow_fields_and_clone_nested_owners_with_exact_destruction() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let text = context.text("shared");
+            let bytes = jett_rt_v1_bytes_from_string(p, text);
+            let inner = jett_rt_v1_struct_new(p, 3);
+            assert_eq!(jett_rt_v1_struct_init(p, inner, 2, bytes, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(p, inner, 0, text, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(p, inner, 1, u64::MAX, 0), 0);
+            let outer = jett_rt_v1_struct_new(p, 1);
+            jett_rt_v1_struct_init(p, outer, 0, inner, 1);
+            let copy = jett_rt_v1_struct_clone(p, outer);
+            let copied_inner = jett_rt_v1_struct_field(p, copy, 0);
+            assert_ne!(inner, copied_inner);
+            assert_eq!(jett_rt_v1_struct_field(p, inner, 2), bytes);
+            assert_ne!(jett_rt_v1_struct_field(p, copied_inner, 2), bytes);
+            assert_eq!(jett_rt_v1_struct_field(p, copied_inner, 0), text);
+            assert_eq!(jett_rt_v1_struct_field(p, copied_inner, 1), u64::MAX);
+            jett_rt_v1_value_drop(p, outer);
+            assert_ne!(jett_rt_v1_struct_field(p, copied_inner, 2), 0);
+            jett_rt_v1_value_drop(p, copy);
+            let lease = acquire_context(context_key(p).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.structs_created, values.structs_destroyed), (4, 4));
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn structs_partial_clone_rolls_back_each_allocation_boundary() {
+        for budget in 0..4 {
+            let context = Context::new();
+            unsafe {
+                let p = context.pointer();
+                let outer = jett_rt_v1_struct_new(p, 2);
+                let child = jett_rt_v1_struct_new(p, 1);
+                let a = jett_rt_v1_bytes_new(p);
+                let b = jett_rt_v1_bytes_new(p);
+                jett_rt_v1_struct_init(p, child, 0, a, 1);
+                jett_rt_v1_struct_init(p, outer, 0, child, 1);
+                jett_rt_v1_struct_init(p, outer, 1, b, 1);
+                let lease = acquire_context(context_key(p).unwrap()).unwrap();
+                lock_unpoisoned(&lease.entry.state)
+                    .as_mut()
+                    .unwrap()
+                    .values
+                    .allocation_budget = Some(budget);
+                assert_eq!(jett_rt_v1_struct_clone(p, outer), 0);
+                assert_eq!(
+                    jett_rt_v1_value_status(p),
+                    JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+                );
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(values.structs.len(), 2);
+                    assert_eq!(values.bytes.len(), 2);
+                    assert!(values.bytes.contains_key(&a) && values.bytes.contains_key(&b));
+                }
+                jett_rt_v1_value_drop(p, outer);
+                let state = lock_unpoisoned(&lease.entry.state);
+                assert!(state.as_ref().unwrap().values.is_empty());
+                assert!(!state.as_ref().unwrap().values.cleanup_failed);
+            }
+        }
+    }
+    #[test]
+    fn structs_invalid_projection_and_double_drop_preserve_first_failure() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let value = jett_rt_v1_struct_new(p, 2);
+            let bytes = jett_rt_v1_bytes_new(p);
+            jett_rt_v1_struct_init(p, value, 0, bytes, 1);
+            assert_eq!(jett_rt_v1_struct_field(p, value, 1), 0);
+            assert_ne!(jett_rt_v1_value_status(p), 0);
+            jett_rt_v1_value_drop(p, value);
+            jett_rt_v1_value_drop(p, value);
+            let lease = acquire_context(context_key(p).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.failure, Some(INVALID_STRUCT));
+            assert!(values.cleanup_failed);
+            assert!(values.is_empty());
+            assert_eq!((values.structs_created, values.structs_destroyed), (1, 1));
+        }
+        context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn structs_empty_record_is_an_owner_and_leak_fails_destruction() {
+        let context = Context::new();
+        unsafe {
+            assert_ne!(jett_rt_v1_struct_new(context.pointer(), 0), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
     }
 }

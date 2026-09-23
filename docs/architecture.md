@@ -2630,3 +2630,17 @@ main outcomes, and 14/25 runtime contracts, with 182/182 typed lowering. See
 move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
 reflection/JSON, actors/tasks, other capabilities, and clean Windows release
 verification are not established by this slice.
+
+
+### Native user struct slice
+
+Checked concrete struct layouts now reach native fixed field-slot records with
+explicit initialization and recursive ownership. MIR plans moves, call-bounded
+projected views, clone temporaries and drop slots; codegen emits construction,
+projection and all user control flow. Typed runtime leaves only manage storage.
+The checker exports exact Equatable method identities for comparison expressions;
+HIR turns them into ordinary direct calls (and negation for inequality), never
+structural or handle equality. See `active/native_value_abi.md` for the supported
+ownership subset and remaining projected-place/refinement/enum boundaries.
+Earlier native coverage figures above describe historical slices, not the current
+release gate. The exhaustive checkpoint is recorded in the active parity plan.

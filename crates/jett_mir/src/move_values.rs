@@ -10,7 +10,7 @@ type Set = BTreeSet<usize>;
 pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
     matches!(
         types.resolve(ty),
-        Type::Bytes | Type::Result(..) | Type::Optional(_) | Type::List(_)
+        Type::Bytes | Type::Result(..) | Type::Optional(_) | Type::List(_) | Type::Struct(_)
     )
 }
 
@@ -320,6 +320,28 @@ impl Flow<'_> {
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value) => self.expr(value, false)?,
             ExpressionKind::OptionalNone => {}
+            ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => {
+                for &index in evaluation_order {
+                    self.expr(&fields[index], false)?;
+                }
+            }
+            ExpressionKind::Field { base, .. } => {
+                if !borrowed && is_linear(self.types, value.ty) {
+                    return Err(
+                        "move-only field projection requires a view or explicit clone".into(),
+                    );
+                }
+                let saved = self.loans.clone();
+                self.expr(base, true)?;
+                // A copied scalar/string cannot keep a parent loan alive.
+                if !borrowed || !is_linear(self.types, value.ty) {
+                    self.loans = saved;
+                }
+            }
             ExpressionKind::ListConstruct { elements } => {
                 for element in elements {
                     self.expr(element, false)?;

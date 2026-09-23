@@ -19,8 +19,8 @@ slot. Full-expression temporaries have zero-initialized frame slots; all are
 released at expression completion and on terminal failure. MIR liveness and
 initialization analysis defines local cleanup points, including loop backedges
 and early exits. Zero slots permit conditional initialization without releasing
-an uninitialized value. This slice does not establish move-only resource or
-aggregate ownership, and those types remain rejected.
+an uninitialized value. The initial string slice did not establish move-only ownership. Later sections
+describe bytes, sums, lists and user structs; resource ownership remains unproven.
 
 A context-local first terminal failure (fixed status plus static message) is
 separate from Jett result.fail. Fallible leaf and compiled calls are followed
@@ -207,3 +207,51 @@ of every delimiter match to be grapheme boundaries, including overlapping reject
 byte matches. Empty delimiters preserve endpoint empty strings. CR/LF/CRLF line
 segmentation matches the interpreter. split_max, reverse and list.skip remain
 compiled Jett control flow, not runtime implementations of their source bodies.
+
+## Native user struct ownership (phase 4)
+
+User structs, including concrete generic instances, use distinct context-bound
+move-only handles. A record has fixed indexed field slots, each with a payload
+carrier, ownership category and initialized flag. The compiler validates field
+count, exact field types, owner type and lexical evaluation permutation against
+the checked type table. Native code owns the empty record before evaluating
+fields, initializes slots in source order, and transfers each field owner only
+after the typed initialization leaf succeeds. Partial-construction failure drops
+only initialized fields and the still-owned expression temporaries.
+
+Scalar field bits use the existing exact payload packing (including float32,
+float64 and narrow integers). Field access implicitly borrows its parent.
+Scalar fields copy and string fields retain; move-only fields remain bounded
+views, not implicit deep copies or partial moves. A nested projection keeps its
+root owner live. Call loans prevent moving that root during evaluation of a
+later argument. Explicit clone recursively copies the selected owned field or
+whole record, and leaves the source intact. A failed deep clone destroys its
+initialized cloned prefix. Whole-record calls, returns, rebindings and cleanup
+use the same materialized owner slots and transfer rules as bytes/sums/lists.
+Struct owners also work inside sums and consuming lists. The runtime checks
+record creation/destruction counts independently, even for empty records.
+
+The checker records the exact Equatable.equals method identity for struct
+comparison operators in per-body facts. HIR lowers equality to that direct
+compiled call with its two view parameters; inequality negates its result.
+Native primitive comparison rejects raw struct operands. No structural equality,
+handle equality or method-name dispatcher is used.
+
+This is not full aggregate parity. Refinement-validating constructors, owned
+escape of a move-only projected view (without clone), field-place assignment,
+borrowed iteration yielding compound views, enums, bitfields and machines remain
+unsupported. Composite explicit comptime constants still require baking. Source
+validity and interpreter field-copy behavior do not authorize native implicit
+copies of move-only fields; those unresolved ownership paths stay guarded.
+
+Borrowed sequence tokens now end on each CFG edge leaving the loop region,
+including handler default edges that bypass the ordinary loop exit. Split edges
+end only that loop token, preserving outer loans. Nested iterable element IDs
+are checked before sequence preprocessing resolves them.
+
+Evidence includes existing generic_struct and explicit_struct_equality fixture
+bodies executed with supplemental mains, nested owners and early returns,
+partial construction terminal cleanup (exit 71), runtime clone fault boundaries,
+malformed MIR rejection, and one generated object executed with four distinct
+process inputs through a test-only scalar input adapter. Allocation tests cover
+returned leaf failures, not allocator abort, OS termination or resource finalizers.

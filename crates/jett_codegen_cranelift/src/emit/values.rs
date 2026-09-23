@@ -41,6 +41,54 @@ impl Translator<'_, '_> {
         self.builder.ins().stack_store(value, *slot, 0);
         Ok(LoweredValue::Owned(value, *slot))
     }
+    pub(super) fn construct_struct(
+        &mut self,
+        fields: &[Expression],
+        evaluation_order: &[usize],
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let count = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, fields.len() as i64);
+        let handle = self.leaf(NativeLeaf::StructNew, &[count], true)?;
+        // Own the partially initialized record before evaluating any field.
+        let record = self.own_linear(handle)?;
+        for &index in evaluation_order {
+            let value = self.expression(&fields[index])?;
+            let (bits, owned) = self.payload_bits(value);
+            let index = self.builder.ins().iconst(ir::types::I64, index as i64);
+            let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
+            if let LoweredValue::Owned(_, slot) = value {
+                self.clear_slot(slot);
+            }
+        }
+        let _ = span;
+        Ok(record)
+    }
+    pub(super) fn struct_field(
+        &mut self,
+        base: &Expression,
+        index: u32,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let parent = self.argument(base, true)?;
+        let parent = self.scalar(parent, span)?;
+        let index = self.builder.ins().iconst(ir::types::I64, i64::from(index));
+        let bits = self.leaf(NativeLeaf::StructField, &[parent, index], true)?;
+        if is_linear(self.types, ty) {
+            // The owning root/temporary stays live through the bounded loan.
+            return Ok(LoweredValue::Scalar(bits));
+        }
+        let bits = if ty == TypeInterner::STRING {
+            self.leaf(NativeLeaf::Retain, &[bits], true)?
+        } else {
+            bits
+        };
+        self.unpack_payload(bits, ty, span)
+    }
     pub(super) fn construct_sum(
         &mut self,
         success: bool,

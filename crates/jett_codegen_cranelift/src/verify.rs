@@ -19,6 +19,7 @@ pub(crate) enum ScalarKind {
     Bytes,
     Sum,
     List,
+    Struct,
     Stdout,
 }
 
@@ -120,7 +121,14 @@ pub(crate) fn scalar_kind(
     ty: TypeId,
     context: impl Into<String>,
 ) -> Result<ScalarKind, CodegenError> {
-    let context = context.into();
+    scalar_kind_inner(types, ty, context.into(), &mut HashSet::new())
+}
+fn scalar_kind_inner(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: String,
+    seen: &mut HashSet<TypeId>,
+) -> Result<ScalarKind, CodegenError> {
     let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
     if ty.index() >= type_count {
         return Err(CodegenError::UnsupportedType {
@@ -143,17 +151,25 @@ pub(crate) fn scalar_kind(
         Type::Nothing => ScalarKind::Nothing,
         Type::String => ScalarKind::String,
         Type::Bytes => ScalarKind::Bytes,
+        Type::Struct(id) => {
+            if seen.insert(ty) {
+                for (_, field) in &types.resolve_struct(*id).fields {
+                    scalar_kind_inner(types, *field, "struct field".into(), seen)?;
+                }
+            }
+            ScalarKind::Struct
+        }
         Type::List(inner) => {
-            scalar_kind(types, *inner, "list element")?;
+            scalar_kind_inner(types, *inner, "list element".into(), seen)?;
             ScalarKind::List
         }
         Type::Optional(inner) => {
-            scalar_kind(types, *inner, "optional payload")?;
+            scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
             ScalarKind::Sum
         }
         Type::Result(ok, error) => {
-            scalar_kind(types, *ok, "result success payload")?;
-            scalar_kind(types, *error, "result failure payload")?;
+            scalar_kind_inner(types, *ok, "result success payload".into(), seen)?;
+            scalar_kind_inner(types, *error, "result failure payload".into(), seen)?;
             ScalarKind::Sum
         }
         Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
@@ -649,8 +665,52 @@ impl Verifier<'_> {
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(function, expression.span, "indirect call"))
             }
-            ExpressionKind::StructConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "struct construction"))
+            ExpressionKind::StructConstruct {
+                struct_type,
+                fields,
+                validates_refinements,
+                ..
+            } => {
+                if *validates_refinements {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "struct refinement validation",
+                    ));
+                }
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *struct_type,
+                    expression.ty,
+                    "struct construction type mismatch",
+                )?;
+                let Type::Struct(id) = self.types.resolve(*struct_type) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "struct construction",
+                    ));
+                };
+                let layout = &self.types.resolve_struct(*id).fields;
+                if fields.len() != layout.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "struct field count mismatch",
+                    ));
+                }
+                for (field, (_, ty)) in fields.iter().zip(layout) {
+                    self.expression(function, field)?;
+                    self.require_same_type(
+                        function,
+                        field.span,
+                        *ty,
+                        field.ty,
+                        "struct field type mismatch",
+                    )?;
+                }
+                Ok(())
             }
             ExpressionKind::BitfieldConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "bitfield construction"))
@@ -750,8 +810,41 @@ impl Verifier<'_> {
             ExpressionKind::ActorSpawn { .. } | ExpressionKind::ActorMessage { .. } => {
                 Err(self.unsupported(function, expression.span, "actor operation"))
             }
-            ExpressionKind::Field { .. } => {
-                Err(self.unsupported(function, expression.span, "field access"))
+            ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } => {
+                self.expression(function, base)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    base.ty,
+                    *owner_type,
+                    "field owner mismatch",
+                )?;
+                let Type::Struct(id) = self.types.resolve(*owner_type) else {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "non-struct field access",
+                    ));
+                };
+                let (_, ty) = self
+                    .types
+                    .resolve_struct(*id)
+                    .fields
+                    .get(field.index() as usize)
+                    .ok_or_else(|| {
+                        self.contract_error(function, expression.span, "invalid struct field index")
+                    })?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *ty,
+                    expression.ty,
+                    "projected field type mismatch",
+                )
             }
         }
     }
@@ -823,6 +916,7 @@ impl Verifier<'_> {
                         | ScalarKind::Bytes
                         | ScalarKind::Sum
                         | ScalarKind::List
+                        | ScalarKind::Struct
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {

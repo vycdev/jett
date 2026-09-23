@@ -36,11 +36,20 @@ fn launcher() -> NativeLauncherBundle {
 }
 
 fn run_bounded(executable: &Path, directory: &Path) -> std::process::Output {
+    run_bounded_input(executable, directory, None)
+}
+
+fn run_bounded_input(
+    executable: &Path,
+    directory: &Path,
+    input: Option<&str>,
+) -> std::process::Output {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
     let mut child = Command::new(executable)
         .current_dir(directory)
         .env_clear()
+        .envs(input.map(|value| ("JETT_NATIVE_TEST_INPUT", value)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1016,6 +1025,15 @@ function main() returns nothing:
 }
 
 #[test]
+fn native_user_struct_generic_fixture() {
+    let source = include_str!("../../../tests/run_pass/generic_struct.jett");
+    let output = run_source(&format!(
+        "{source}\nfunction main() returns nothing:\n    println(pair_first_test(), pair_second_test(), box_value_test())\n"
+    ));
+    assert_eq!(output.stdout, b"42 hello 100\n");
+}
+
+#[test]
 fn native_handler_default_ends_exited_iteration_loan() {
     let output = run_source(
         r#"
@@ -1032,6 +1050,90 @@ function main() returns nothing:
 "#,
     );
     assert_eq!(output.stdout, b"one7 2\n");
+}
+
+#[test]
+fn native_user_struct_explicit_equality_fixture() {
+    let source = include_str!("../../../tests/run_pass/explicit_struct_equality.jett");
+    let output = run_source(&format!(
+        "{source}\nfunction main() returns nothing:\n    println(equality_uses_the_explicit_contract())\n"
+    ));
+    assert_eq!(output.stdout, b"true\n");
+}
+
+#[test]
+fn native_user_struct_nested_owners_moves_views_clones_and_overwrite() {
+    let output = run_source(
+        r#"
+struct Packet:
+    data: bytes
+    label: string
+    number: int64
+struct Envelope:
+    packet: Packet
+    extras: list[optional[bytes]]
+function mark(value: int64) returns int64:
+    print(value, ";")
+    return value * 3
+function make(value: int64) returns Packet:
+    return Packet(number: mark(value), label: "p{value}", data: bytes.from_string("{value}"))
+function wrap(value: int64) returns Envelope:
+    return Envelope(packet: make(value), extras: list(some(bytes.from_string("extra"))))
+function read(view value: Envelope) returns nothing:
+    println(value.packet.label, value.packet.number, bytes.to_hex(view value.packet.data))
+function relay(value: Envelope, early: bool) returns Envelope:
+    Envelope held = wrap(9)
+    if early:
+        return value
+    return clone value
+function main() returns nothing:
+    mutable Envelope current = wrap(1)
+    Envelope copied = clone current
+    current = relay(wrap(2), true)
+    read(view copied)
+    read(view current)
+    bytes extracted = clone current.packet.data
+    println(bytes.to_hex(view extracted), list.length[optional[bytes]](view current.extras))
+    Envelope other = relay(current, false)
+    read(view other)
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        b"1 ;2 ;9 ;p1 3 31\np2 6 32\n32 1\n9 ;p2 6 32\n"
+    );
+}
+
+#[test]
+fn native_user_struct_terminal_failure_cleans_partial_fields_and_callers() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("failure.jett");
+    std::fs::write(&path, r#"
+struct Packet:
+    data: bytes
+    text: string
+struct Envelope:
+    packet: Packet
+    extra: optional[bytes]
+function explode(value: Packet) returns Packet:
+    return Packet(data: bytes.from_string("partial"), text: string.repeat("ab", 9223372036854775807))
+function relay(value: Packet) returns Packet:
+    Envelope held = Envelope(packet: Packet(data: bytes.from_string("held"), text: "outer"), extra: some(bytes.new()))
+    return explode(value)
+function main() returns nothing:
+    mutable Packet value = Packet(data: bytes.from_string("before"), text: "before")
+    println(value.text)
+    value = relay(clone value)
+    println("unreachable")
+"#).unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&path).expect_err("terminal oracle");
+    let binary = directory.path().join("program");
+    build_host_executable(&path, &launcher(), &binary).expect("struct cleanup compilation");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stdout, b"before\n");
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
 }
 
 #[test]
@@ -1098,4 +1200,173 @@ function main() returns nothing:
     let error =
         build_host_executable(&path, &launcher(), &directory.path().join("program")).unwrap_err();
     assert!(error.to_string().contains("while borrowed"), "{error}");
+}
+
+#[test]
+fn native_user_struct_projection_loans_cannot_escape_or_conflict() {
+    for (body, expected) in [
+        (
+            "bytes stolen = item.data",
+            "projection requires a view or explicit clone",
+        ),
+        ("bytes stolen = view item.data", "view cannot escape"),
+        ("consume(view item.data, item)", "while borrowed"),
+        ("Packet moved = item\n    println(item.label)", "moved"),
+    ] {
+        let source = format!(
+            r#"
+struct Packet:
+    data: bytes
+    label: string
+function consume(view data: bytes, owner: Packet) returns nothing:
+    println(bytes.length(view data), owner.label)
+function main() returns nothing:
+    Packet item = Packet(data: bytes.new(), label: "p")
+    {body}
+"#
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("loan.jett");
+        std::fs::write(&path, source).unwrap();
+        let error = build_host_executable(&path, &launcher(), &directory.path().join("program"))
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{expected}: {error}");
+    }
+}
+
+#[test]
+fn native_user_struct_payload_bits_and_temporary_projection() {
+    let output = run_source(
+        r#"
+struct Numbers:
+    narrow: int8
+    unsigned: uint8
+    wide: uint64
+    real: float32
+    double: float64
+    flag: bool
+    empty: nothing
+function make(value: float32) returns Numbers:
+    return Numbers(narrow: -128, unsigned: 255, wide: 18446744073709551615, real: value, double: -0.0, flag: true, empty: nothing)
+function main() returns nothing:
+    Numbers numbers = make(0.1)
+    println(numbers.narrow, numbers.unsigned, numbers.wide)
+    println(numbers.real, numbers.double, numbers.flag, numbers.empty)
+    println(make(1.25).real)
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        b"-128 255 18446744073709551615\n0.10000000149011612 -0 true nothing\n1.25\n"
+    );
+}
+
+#[test]
+fn native_user_struct_same_object_observes_dynamic_process_input() {
+    let source = r#"
+struct Packet:
+    label: string
+    data: bytes
+    number: int64
+implement Equatable for Packet:
+    function equals(view self: Packet, view other: Packet) returns bool:
+        return self.number == other.number
+function make(seed: int64) returns Packet:
+    return Packet(label: "item{seed}", data: bytes.from_string("{seed}"), number: seed * 3)
+function probe(seed: int64) returns nothing:
+    Packet first = make(seed)
+    Packet other = Packet(label: "different", data: bytes.new(), number: seed * 3)
+    Packet copied = clone first
+    println(first.label, bytes.to_hex(view copied.data), first.number)
+    println(first == other, first != other, Equatable.equals(view first, view other))
+"#;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("dynamic.jett");
+    std::fs::write(&path, source).unwrap();
+    let lowered = jett_driver::lower_file_for_backend(&path).unwrap();
+    let probe = lowered
+        .mir
+        .functions
+        .iter()
+        .find(|f| f.identity.declaration.name == "probe")
+        .expect("probe identity");
+    let symbol = jett_codegen_cranelift::symbol_name(&probe.identity, &lowered.interner).unwrap();
+    let object = jett_codegen_cranelift::emit_host_object(&lowered.mir, &lowered.interner).unwrap();
+    let object_path = directory.path().join("dynamic.o");
+    std::fs::write(&object_path, object.bytes).unwrap();
+    // Test-only adapter exposes a generated local symbol; production ABI and
+    // entry restrictions are unchanged. No code or data bytes are rewritten.
+    let expose = Command::new("objcopy")
+        .arg(format!("--globalize-symbol={symbol}"))
+        .arg(&object_path)
+        .output()
+        .unwrap();
+    assert!(expose.status.success(), "{expose:?}");
+    let shim = directory.path().join("input.c");
+    std::fs::write(
+        &shim,
+        format!(
+            r#"
+#include <stdint.h>
+#include <stdlib.h>
+extern void {symbol}(void *, int64_t);
+extern uint32_t jett_rt_v1_value_status(void *);
+uint32_t jett_aot_v1_entry(void *context) {{
+    const char *input = getenv("JETT_NATIVE_TEST_INPUT");
+    if (!input) return 1;
+    {symbol}(context, strtoll(input, 0, 10));
+    return jett_rt_v1_value_status(context);
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let bundle = launcher();
+    let binary = directory.path().join("dynamic");
+    let linked = Command::new("cc")
+        .arg("-no-pie")
+        .arg(&shim)
+        .arg(&object_path)
+        .arg(&bundle.archive_path)
+        .args(&bundle.native_library_args)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .unwrap();
+    assert!(linked.status.success(), "{linked:?}");
+    // Compile exactly once, then vary real process inputs. Only the oracle
+    // source changes between runs; it is never passed to native execution.
+    let mut outputs = std::collections::BTreeSet::new();
+    for input in ["-7", "0", "11", "937"] {
+        std::fs::write(
+            &path,
+            format!("{source}\nfunction main() returns nothing:\n    probe({input})\n"),
+        )
+        .unwrap();
+        let expected = jett_driver::run_file_capture_output(&path).unwrap();
+        let actual = run_bounded_input(&binary, directory.path(), Some(input));
+        assert_eq!(actual.status.code(), Some(0), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "input {input}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+        outputs.insert(actual.stdout);
+    }
+    assert_eq!(outputs.len(), 4);
+}
+
+#[test]
+fn native_user_struct_consuming_iteration_has_owner_slot_without_allocating_body() {
+    let output = run_source(
+        r#"
+struct Packet:
+    number: int64
+    data: bytes
+function first(items: list[Packet]) returns int64:
+    for item in items:
+        return item.number
+    return -1
+function main() returns nothing:
+    println(first(list(Packet(number: 7, data: bytes.new()), Packet(number: 9, data: bytes.new()))))
+"#,
+    );
+    assert_eq!(output.stdout, b"7\n");
 }

@@ -1974,6 +1974,28 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     return None;
                 }
             }
+            Expr::Binary(left, op @ (ast::BinOp::Eq | ast::BinOp::NotEq), right, _)
+                if self.method_calls.contains_key(&span) =>
+            {
+                let function = self.resolve_user_call_target(left, span)?;
+                let call = ExpressionKind::Call {
+                    function,
+                    args: vec![self.lower_expression(left)?, self.lower_expression(right)?],
+                    evaluation_order: vec![0, 1],
+                };
+                if *op == ast::BinOp::NotEq {
+                    ExpressionKind::Unary {
+                        op: UnaryOp::Not,
+                        value: Box::new(Expression {
+                            kind: call,
+                            ty,
+                            span,
+                        }),
+                    }
+                } else {
+                    call
+                }
+            }
             Expr::Binary(left, op, right, _) => ExpressionKind::Binary {
                 left: Box::new(self.lower_expression(left)?),
                 op: lower_binary_op(*op),

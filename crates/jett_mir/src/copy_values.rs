@@ -235,7 +235,8 @@ fn visit(
             | ExpressionKind::ResultFail(_)
             | ExpressionKind::OptionalSome(_)
             | ExpressionKind::OptionalNone
-            | ExpressionKind::ListConstruct { .. } => true,
+            | ExpressionKind::ListConstruct { .. }
+            | ExpressionKind::StructConstruct { .. } => true,
             _ => false,
         });
     }
@@ -243,7 +244,10 @@ fn visit(
     // accumulate until full-expression cleanup; even short-circuit alternatives
     // receive distinct slots during emission. View/clone add no ownership.
     match &value.kind {
-        ExpressionKind::String(_) | ExpressionKind::Local(_) | ExpressionKind::Call { .. }
+        ExpressionKind::String(_)
+        | ExpressionKind::Local(_)
+        | ExpressionKind::Call { .. }
+        | ExpressionKind::Field { .. }
             if value.ty == TypeInterner::STRING =>
         {
             *temporaries += 1
@@ -284,6 +288,14 @@ fn visit(
             visit(right, reads, temporaries, types, program, false)?;
         }
         ExpressionKind::OptionalNone if program.is_some() => {}
+        ExpressionKind::StructConstruct { fields, .. } if program.is_some() => {
+            for field in fields {
+                visit(field, reads, temporaries, types, program, false)?;
+            }
+        }
+        ExpressionKind::Field { base, .. } if program.is_some() => {
+            visit(base, reads, temporaries, types, program, true)?;
+        }
         ExpressionKind::ListConstruct { elements } if program.is_some() => {
             for element in elements {
                 visit(element, reads, temporaries, types, program, false)?;
@@ -377,13 +389,35 @@ fn plan_type(
     ty: TypeId,
     program: Option<&crate::Program>,
 ) -> Result<(), String> {
+    plan_type_inner(types, ty, program, &mut BTreeSet::new())
+}
+fn plan_type_inner(
+    types: &TypeInterner,
+    ty: TypeId,
+    program: Option<&crate::Program>,
+    seen: &mut BTreeSet<u32>,
+) -> Result<(), String> {
+    if ty.index() as usize >= types.len() {
+        return Err("invalid native type".into());
+    }
+    if !seen.insert(ty.index()) {
+        return Ok(());
+    }
     if program.is_some() {
         match types.resolve(ty) {
             Type::Bytes => return Ok(()),
-            Type::Optional(inner) | Type::List(inner) => return plan_type(types, *inner, program),
+            Type::Struct(id) => {
+                for (_, field) in &types.resolve_struct(*id).fields {
+                    plan_type_inner(types, *field, program, seen)?;
+                }
+                return Ok(());
+            }
+            Type::Optional(inner) | Type::List(inner) => {
+                return plan_type_inner(types, *inner, program, seen);
+            }
             Type::Result(ok, error) => {
-                plan_type(types, *ok, program)?;
-                return plan_type(types, *error, program);
+                plan_type_inner(types, *ok, program, seen)?;
+                return plan_type_inner(types, *error, program, seen);
             }
             _ => {}
         }

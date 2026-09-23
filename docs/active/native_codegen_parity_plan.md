@@ -281,7 +281,7 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | immutable strings and separately owned bytes storage, checked leaf operations | byte fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | pending | pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs with typed fields; other families pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup covered; refinement validation and other aggregate kinds pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists; maps/sets pending | compiled list access, reverse/repeat, scalar iteration; projected views pending |
 | Results, optionals, and `handle` control flow | explicit statement-root handler CFG | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits and terminal bypass covered; nested-expression handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
@@ -296,14 +296,16 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 29 | 182 | manifest-driven deterministic production object gate for all 29 proven fixtures |
-| Successful/expected `main` execution | 8 | 30 | Linux GNU production linking and exact interpreter stdout comparison in `native_execution` and `native_values` |
-| Runtime contracts | 19 | 25 | 15 wrapping-success cases and 4 terminal failures; exact output/message plus checked native-value cleanup |
+| Native object generation | 40 | 182 | exhaustive 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Successful/expected `main` execution | 10 | 30 | Linux GNU production linking and exact interpreter stdout comparison in `native_execution` and `native_values` |
+| Runtime contracts | 20 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
-These counts come from the exhaustive 207-row `native_parity` probe, which
+These phase-4 counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
-failure until all denominators pass. The manifest pins all 29 nonempty,
-code-bearing objects; verification-only empty objects do not count. Native
+failure until all denominators pass. The original manifest pins 29 nonempty,
+code-bearing object gates; the exhaustive probe also attempts every unmarked row
+and now proves 40. Fixture membership and denominators are unchanged.
+Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 
 Terminal failures count only after behavior and cleanup match. ABI context
@@ -353,11 +355,20 @@ grapheme slicing/counting, selected Unicode operations, stdout, and numeric kern
 They consume no interpreter Value, AST, HIR, or source operation names. Exact checked
 IntrinsicId and concrete numeric type arguments select the native leaf signature.
 
-MoveValuePlan now models linear bytes, selected sum payloads and list owners, with
+MoveValuePlan now models linear bytes, selected sum payloads, list and user struct owners, with
 call-bounded loans, active iteration loans and initialized owning slots. Full
-ownership remains open for capabilities beyond Stdout, resources, named aggregates,
+ownership remains open for capabilities beyond Stdout, resources, other aggregate kinds,
 closures and tasks. Nested-expression handlers and move-only iteration projections
 remain pending. Unsupported types/forms remain rejected
 rather than being made nominally supported by the copyable-string plan. CLI
 packaging, other capability providers, and clean Windows MSVC execution also remain
 release gates.
+
+Phase 4 additionally executes both existing generic-struct and explicit-equality
+fixture bodies with supplemental mains. Namespace interface mains now match exact
+stdout natively. Struct fields retain their checked layouts and implicit-view
+semantics; Equatable comparisons carry exact checker-selected method identities
+into compiled calls. One emitted object is tested with four real process inputs.
+The full workspace checkpoint passed 1763 tests; complete remains false. Enum
+payloads, refinement-validating construction and projected-owner escapes remain
+continuation work. See `native_value_abi.md` for the precise supported boundary.
