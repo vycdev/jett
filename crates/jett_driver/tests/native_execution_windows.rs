@@ -128,6 +128,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("list_sort", "../../tests/native/list_sort.jett"),
         ("set_values", "../../tests/native/set_values.jett"),
         ("map_values", "../../tests/native/map_values.jett"),
+        (
+            "numeric_conversions",
+            "../../tests/native/numeric_conversions.jett",
+        ),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");

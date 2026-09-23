@@ -85,6 +85,10 @@ token from another context. Ordinary user code cannot construct that token.
 Typed numeric leaves preserve fixed-width wrapping, IEEE values, and exact
 library error text. Integer division syntax remains governed by the frontend
 nonzero proof; leaf errors such as invalid `math.clamp` bounds are terminal.
+Checked `float64.from_int64` and `int64.from_float64` return ordinary result
+values. They accept only exactly representable inputs, including the signed
+minimum boundary, and return the interpreter's error strings for precision
+loss, fractional values, non-finite values, or overflow.
 
 Cleanup evidence is executable: destruction rejects a nonempty value registry,
 and launcher tests prove that a deliberately leaked owner overrides entry failure

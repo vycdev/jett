@@ -225,6 +225,12 @@ pub(crate) fn verify_intrinsic(
         };
     }
     let sum_signature = match id {
+        IntrinsicId::Float64FromInt64 => {
+            Some((vec![T::INT64], Type::Result(T::FLOAT64, T::STRING)))
+        }
+        IntrinsicId::Int64FromFloat64 => {
+            Some((vec![T::FLOAT64], Type::Result(T::INT64, T::STRING)))
+        }
         IntrinsicId::Int64FromString => Some((vec![T::STRING], Type::Result(T::INT64, T::STRING))),
         IntrinsicId::Uint64FromString => {
             Some((vec![T::STRING], Type::Result(T::UINT64, T::STRING)))

@@ -296,7 +296,7 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 56 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 57 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 13 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison in `native_execution_windows` |
 | Runtime contracts | 20 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
@@ -304,7 +304,7 @@ These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 56. Four string/comptime fixtures began emitting
+unmarked row and now proves 57. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -313,6 +313,7 @@ adds one object and native `main`; primitive list sort adds
 `list_sort_uint64.jett`; primitive sets add `set_empty_helpers.jett`; maps add
 `map_from_lists_duplicate_keys.jett`, `map_merge_helpers.jett`,
 `map_operations.jett`, and `map_set_source_surface.jett`.
+Checked integer/float conversion adds `conversions.jett`.
 Fixture membership and
 denominators are unchanged. Unit and payload enums also pass dedicated
 native/interpreter differential fixtures, including recursive owned payloads.

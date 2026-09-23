@@ -851,6 +851,16 @@ impl Translator<'_, '_> {
         match id {
             IntrinsicId::BitfieldToBytes => self.encode_bitfield(evaluated[0], args[0].ty, span),
             IntrinsicId::BitfieldFromBytes => self.decode_bitfield(evaluated[0], result_type, span),
+            IntrinsicId::Float64FromInt64 | IntrinsicId::Int64FromFloat64 => {
+                let input = self.scalar(evaluated[0], span)?;
+                let leaf = if id == IntrinsicId::Float64FromInt64 {
+                    NativeLeaf::FloatFromInt
+                } else {
+                    NativeLeaf::IntFromFloat
+                };
+                let result = self.leaf(leaf, &[input], true)?;
+                self.own_linear(result)
+            }
             IntrinsicId::StringFromInt64
             | IntrinsicId::StringFromUint64
             | IntrinsicId::StringFromFloat64

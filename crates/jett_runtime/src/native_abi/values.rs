@@ -1654,6 +1654,17 @@ leaves! {
         |s| { let text = s.text(value)?; let parsed = text.parse::<u64>().map_err(|_| format!("uint64.from_string: cannot parse '{text}' as uint64")); s.parsed_sum(parsed) };
     ParseFloat, jett_rt_v1_parse_float, false, (value: u64 => I64), u64 => I64,
         |s| { let text = s.text(value)?; let parsed = text.parse::<f64>().map(f64::to_bits).map_err(|_| format!("float64.from_string: cannot parse '{text}' as float64")); s.parsed_sum(parsed) };
+    FloatFromInt, jett_rt_v1_float64_from_int64, false, (value: i64 => I64), u64 => I64,
+        |s| { let converted = value as f64;
+            let parsed = if converted as i128 == i128::from(value) { Ok(converted.to_bits()) }
+                else { Err("float64.from_int64: value is not exactly representable as float64".into()) };
+            s.parsed_sum(parsed) };
+    IntFromFloat, jett_rt_v1_int64_from_float64, false, (value: f64 => F64), u64 => I64,
+        |s| { let parsed = if value.is_finite() && value.fract() == 0.0
+                && value >= i64::MIN as f64 && value < 9_223_372_036_854_775_808.0 {
+                Ok((value as i64) as u64)
+            } else { Err("int64.from_float64: value is not exactly representable as int64".into()) };
+            s.parsed_sum(parsed) };
 
     SumNew, jett_rt_v1_sum_new, false, (tag: u32 => I32, bits: u64 => I64, owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_SUM); } s.sum(tag, bits, owned != 0) };
