@@ -118,6 +118,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("hello_print", "../../tests/run_pass/hello_print.jett"),
         ("bytes_ownership", "../../tests/native/bytes_ownership.jett"),
         ("string_search", "../../tests/native/string_search.jett"),
+        (
+            "string_intrinsics",
+            "../../tests/native/string_intrinsics.jett",
+        ),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");

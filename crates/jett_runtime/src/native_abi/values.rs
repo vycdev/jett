@@ -425,6 +425,51 @@ fn native_split<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
     parts
 }
 
+fn native_replace(haystack: &str, needle: &str, replacement: &str) -> LeafResult<String> {
+    let parts = native_split(haystack, needle);
+    let separators = parts.len().saturating_sub(1);
+    let mut length = replacement.len().checked_mul(separators).ok_or(EXHAUSTED)?;
+    for part in &parts {
+        length = length.checked_add(part.len()).ok_or(EXHAUSTED)?;
+    }
+    let mut output = String::new();
+    output.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+    for (index, part) in parts.into_iter().enumerate() {
+        if index != 0 {
+            output.push_str(replacement);
+        }
+        output.push_str(part);
+    }
+    Ok(output)
+}
+
+fn native_change_first(value: &str, case: impl Fn(char) -> String) -> String {
+    let Some(first) = value.graphemes(true).next() else {
+        return String::new();
+    };
+    let mut chars = first.chars();
+    let changed = chars.next().map(case).unwrap_or_default();
+    format!("{changed}{}{}", chars.as_str(), &value[first.len()..])
+}
+
+fn native_slugify(value: &str) -> String {
+    value
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Visit non-overlapping matches whose start and end are grapheme boundaries.
 /// Returning false stops after the current match, as index_of requires.
 fn native_scan_grapheme_matches(
@@ -836,6 +881,14 @@ leaves! {
             });
             Ok(count)
         };
+    StringReplace, jett_rt_v1_string_replace, false, (value: u64 => I64, needle: u64 => I64, replacement: u64 => I64), u64 => I64,
+        |s| { let output = native_replace(s.text(value)?, s.text(needle)?, s.text(replacement)?)?; s.insert(output) };
+    StringSlugify, jett_rt_v1_string_slugify, false, (value: u64 => I64), u64 => I64,
+        |s| { let output = native_slugify(s.text(value)?); s.insert(output) };
+    StringToUpperFirst, jett_rt_v1_string_to_upper_first, false, (value: u64 => I64), u64 => I64,
+        |s| { let output = native_change_first(s.text(value)?, |first| first.to_uppercase().collect()); s.insert(output) };
+    StringToLowerFirst, jett_rt_v1_string_to_lower_first, false, (value: u64 => I64), u64 => I64,
+        |s| { let output = native_change_first(s.text(value)?, |first| first.to_lowercase().collect()); s.insert(output) };
     Slice, jett_rt_v1_string_slice, false, (value: u64 => I64, start: i64 => I64, end: i64 => I64), u64 => I64,
         |s| {
             let parts = s.text(value)?.graphemes(true).collect::<Vec<_>>();

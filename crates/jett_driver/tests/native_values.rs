@@ -121,6 +121,21 @@ fn native_string_search_respects_grapheme_boundaries() {
     assert!(actual.stderr.is_empty(), "{actual:?}");
 }
 
+#[test]
+fn native_remaining_string_intrinsics_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/string_intrinsics.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("string intrinsic oracle");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("program");
+    build_host_executable(&fixture, &launcher(), &binary)
+        .expect("compile native string intrinsics");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
 fn run_source(source: &str) -> std::process::Output {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("values.jett");

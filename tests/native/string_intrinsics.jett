@@ -1,0 +1,8 @@
+namespace app
+function main() returns nothing:
+    println(string.replace("x🙂🙂y", "🙂", "Q"))
+    println(string.replace("á", "a", "X"), string.replace("á", "á", "X"))
+    println(string.replace("abc", "", "-"))
+    println(string.slugify("  Crème brûlée & TOMATO  "))
+    println(string.to_upper_first("áBC"), string.to_lower_first("ÁBC"))
+    println(string.to_upper_first(""), string.to_lower_first(""))

@@ -168,12 +168,16 @@ pub(crate) fn verify_intrinsic(
             return Err("invalid native string index signature".into());
         }
         IntrinsicId::StringCount => (&[T::STRING, T::STRING], T::INT64),
+        IntrinsicId::StringReplace => (&[T::STRING, T::STRING, T::STRING], T::STRING),
         IntrinsicId::StringSlice => (&[T::STRING, T::INT64, T::INT64], T::STRING),
         IntrinsicId::StringUpper
         | IntrinsicId::StringLower
         | IntrinsicId::StringTrim
         | IntrinsicId::StringTrimStart
-        | IntrinsicId::StringTrimEnd => (&[T::STRING], T::STRING),
+        | IntrinsicId::StringTrimEnd
+        | IntrinsicId::StringSlugify
+        | IntrinsicId::StringToUpperFirst
+        | IntrinsicId::StringToLowerFirst => (&[T::STRING], T::STRING),
         IntrinsicId::StringIsAlpha | IntrinsicId::StringIsNumeric => (&[T::STRING], T::BOOL),
         IntrinsicId::StringRepeat => (&[T::STRING, T::INT64], T::STRING),
         IntrinsicId::StdoutWrite => (&[T::STDOUT, T::STRING], T::NOTHING),
@@ -206,6 +210,10 @@ pub(crate) fn string_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
         IntrinsicId::StringCharCount => NativeLeaf::CharCount,
         IntrinsicId::StringIndexOf => NativeLeaf::StringIndexOf,
         IntrinsicId::StringCount => NativeLeaf::StringCount,
+        IntrinsicId::StringReplace => NativeLeaf::StringReplace,
+        IntrinsicId::StringSlugify => NativeLeaf::StringSlugify,
+        IntrinsicId::StringToUpperFirst => NativeLeaf::StringToUpperFirst,
+        IntrinsicId::StringToLowerFirst => NativeLeaf::StringToLowerFirst,
         IntrinsicId::StringSlice => NativeLeaf::Slice,
         IntrinsicId::StringUpper => NativeLeaf::Upper,
         IntrinsicId::StringLower => NativeLeaf::Lower,

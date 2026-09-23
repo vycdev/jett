@@ -215,6 +215,14 @@ byte matches. Empty delimiters preserve endpoint empty strings. CR/LF/CRLF line
 segmentation matches the interpreter. split_max, reverse and list.skip remain
 compiled Jett control flow, not runtime implementations of their source bodies.
 
+The remaining string intrinsics now have typed native leaves. Replace reuses
+the grapheme split matcher and checks output capacity before assembly; empty
+needles preserve the interpreter's leading, between-grapheme and trailing
+replacement positions. Slugify and first-grapheme case changes match the
+interpreter's Unicode behavior. Existing run-pass string fixtures now emit
+native objects, and dedicated linked fixtures compare observable output with
+the interpreter.
+
 ## Native user struct ownership (phase 4)
 
 User structs, including concrete generic instances, use distinct context-bound
