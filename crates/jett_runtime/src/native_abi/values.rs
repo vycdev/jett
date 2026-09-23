@@ -20,6 +20,10 @@ const INVALID_LIST: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native list handle",
 );
+const INVALID_BYTES: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native bytes handle",
+);
 const INVALID_SUM: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native sum handle or tag",
@@ -115,10 +119,65 @@ impl NativeValues {
         Ok(id)
     }
     fn bytes(&self, id: u64) -> LeafResult<&[u8]> {
-        self.bytes.get(&id).map(Vec::as_slice).ok_or((
-            JettRuntimeStatusV1::INVALID_ARGUMENT,
-            b"invalid native bytes handle",
-        ))
+        self.bytes.get(&id).map(Vec::as_slice).ok_or(INVALID_BYTES)
+    }
+    fn write_bitfield_bits(
+        &mut self,
+        id: u64,
+        numeric: u64,
+        width: u32,
+        network_order: u32,
+        bit_offset: u64,
+    ) -> LeafResult<u32> {
+        if !(1..=64).contains(&width)
+            || network_order > 1
+            || (width < 64 && numeric >= (1_u64 << width))
+        {
+            return Err(INVALID_STRUCT);
+        }
+        let offset = usize::try_from(bit_offset).map_err(|_| EXHAUSTED)?;
+        let end = offset.checked_add(width as usize).ok_or(EXHAUSTED)?;
+        let byte_count = end.checked_add(7).ok_or(EXHAUSTED)? / 8;
+        let bytes = self.bytes.get_mut(&id).ok_or(INVALID_BYTES)?;
+        if byte_count > bytes.len() {
+            bytes
+                .try_reserve_exact(byte_count - bytes.len())
+                .map_err(|_| EXHAUSTED)?;
+            bytes.resize(byte_count, 0);
+        }
+        let little_endian_bytes =
+            width > 8 && width % 8 == 0 && network_order == 0 && offset % 8 == 0;
+        for bit in 0..width as usize {
+            let shift = if little_endian_bytes {
+                (bit / 8) * 8 + (7 - bit % 8)
+            } else {
+                width as usize - 1 - bit
+            };
+            if (numeric >> shift) & 1 != 0 {
+                let position = offset + bit;
+                bytes[position / 8] |= 1 << (7 - position % 8);
+            }
+        }
+        Ok(0)
+    }
+    fn extend_bitfield_payload(&mut self, id: u64, payload: u64) -> LeafResult<u32> {
+        let source = self.lists.get(&payload).ok_or(INVALID_LIST)?;
+        if source.owned
+            || source
+                .elements
+                .iter()
+                .any(|element| element.is_none_or(|value| value > u8::MAX as u64))
+        {
+            return Err(INVALID_LIST);
+        }
+        let bytes = self.bytes.get_mut(&id).ok_or(INVALID_BYTES)?;
+        bytes
+            .try_reserve_exact(source.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for element in &source.elements {
+            bytes.push(element.expect("validated payload element") as u8);
+        }
+        Ok(0)
     }
     fn sum(&mut self, tag: u32, bits: u64, owned: bool) -> LeafResult<u64> {
         #[cfg(test)]
@@ -769,6 +828,10 @@ leaves! {
         |s| s.drop_value(value);
     BytesNew, jett_rt_v1_bytes_new, false, (), u64 => I64,
         |s| s.insert_bytes(Vec::new());
+    BitfieldWriteBits, jett_rt_v1_bitfield_write_bits, false, (value: u64 => I64, numeric: u64 => I64, width: u32 => I32, network_order: u32 => I32, bit_offset: u64 => I64), u32 => I32,
+        |s| s.write_bitfield_bits(value, numeric, width, network_order, bit_offset);
+    BitfieldExtendPayload, jett_rt_v1_bitfield_extend_payload, false, (value: u64 => I64, payload: u64 => I64), u32 => I32,
+        |s| s.extend_bitfield_payload(value, payload);
     BytesClone, jett_rt_v1_bytes_clone, false, (value: u64 => I64), u64 => I64,
         |s| { let data = s.bytes(value)?.to_vec(); s.insert_bytes(data) };
     BytesLength, jett_rt_v1_bytes_length, false, (value: u64 => I64), i64 => I64,

@@ -55,6 +55,16 @@ pub(crate) fn verify_intrinsic(
     types: &TypeInterner,
 ) -> Result<(), String> {
     use TypeInterner as T;
+    if id == IntrinsicId::BitfieldToBytes {
+        return if args.len() == 1
+            && matches!(types.resolve(args[0].ty), Type::Bitfield(_))
+            && result == T::BYTES
+        {
+            Ok(())
+        } else {
+            Err("invalid native bitfield encoding signature".into())
+        };
+    }
     if id == IntrinsicId::Range {
         return if (1..=3).contains(&args.len())
             && args.iter().all(|a| a.ty == T::INT64)

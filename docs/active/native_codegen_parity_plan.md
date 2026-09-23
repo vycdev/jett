@@ -281,7 +281,7 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics and separately owned bytes storage, checked leaf operations | string search/replace, Unicode case changes, byte fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machines and refinements pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership and clone covered; bitfield encoding/decoding, width validation, payload-enum equality and other aggregate kinds pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machines and refinements pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte encoding covered; bitfield decoding, width validation, payload-enum equality and other aggregate kinds pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists; maps/sets pending | compiled list access, reverse/repeat, scalar iteration; projected views pending |
 | Results, optionals, and `handle` control flow | explicit statement-root handler CFG | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits and terminal bypass covered; nested-expression handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
@@ -310,9 +310,10 @@ enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`. Fixture membership and
 denominators are unchanged. Unit and payload enums also pass dedicated
 native/interpreter differential fixtures, including recursive owned payloads.
-Fixed-width bitfield values and collection payload ownership also pass a
-dedicated native/interpreter fixture; serialization and width-validation
-results remain outside this slice.
+Fixed-width bitfield values, collection payload ownership and byte encoding
+also pass a dedicated native/interpreter fixture, including network order,
+native order, enum discriminants and trailing payload bytes. Byte decoding and
+width-validation results remain outside this slice.
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

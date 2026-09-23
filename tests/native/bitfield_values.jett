@@ -2,6 +2,15 @@ namespace app
 bitfield Header:
     version: 4 bits
     length: 8 bits
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield network NetworkHeader:
+    version: 4 bits
+    header_length: 4 bits
+    protocol: 8 bits as Protocol
+bitfield WideNativeHeader:
+    sequence: 64 bits
 bitfield Packet:
     kind: 8 bits
     payload: list[uint8]
@@ -9,8 +18,14 @@ function main() returns nothing:
     Header original = Header(version: 4, length: 12)
     Header duplicate = clone original
     println(original.version, duplicate.length)
+    println(bytes.to_hex(Header.to_bytes(original)))
+    NetworkHeader network = NetworkHeader(version: 4, header_length: 5, protocol: Protocol.tcp)
+    println(bytes.to_hex(NetworkHeader.to_bytes(network)))
+    WideNativeHeader wide = WideNativeHeader(sequence: 72623859790382856)
+    println(bytes.to_hex(WideNativeHeader.to_bytes(wide)))
     mutable list[uint8] payload = list.new[uint8]()
     payload = list.append[uint8](payload, 7)
     Packet packet = Packet(kind: 3, payload: payload)
     Packet copied = clone packet
     println(packet.kind, list.length(view copied.payload))
+    println(bytes.to_hex(Packet.to_bytes(copied)))

@@ -1,5 +1,6 @@
 use super::*;
 use jett_hir::{IntrinsicId, StringSegment, VariantId};
+use jett_types::BitfieldFieldKind;
 use std::collections::BTreeSet;
 
 impl Translator<'_, '_> {
@@ -96,6 +97,66 @@ impl Translator<'_, '_> {
             }
         }
         Ok(record)
+    }
+    pub(super) fn encode_bitfield(
+        &mut self,
+        value: LoweredValue,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let Type::Bitfield(id) = self.types.resolve(ty) else {
+            return Err(self.unsupported(span, "bitfield encoding type"));
+        };
+        let layout = self.types.resolve_bitfield(*id).clone();
+        let record = self.scalar(value, span)?;
+        let bytes = self.leaf(NativeLeaf::BytesNew, &[], true)?;
+        let output = self.own_linear(bytes)?;
+        let mut bit_offset = 0_u64;
+        for (field_index, field) in layout.fields.iter().enumerate() {
+            let index = self
+                .builder
+                .ins()
+                .iconst(ir::types::I64, field_index as i64);
+            let bits = self.leaf(NativeLeaf::StructField, &[record, index], true)?;
+            match &field.kind {
+                BitfieldFieldKind::Bits { width } => {
+                    let numeric = if let Type::Enum(enum_id) = self.types.resolve(field.ty) {
+                        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                        let tag = self.leaf(NativeLeaf::StructField, &[bits, zero], true)?;
+                        let variants = self.types.resolve_enum(*enum_id).variants.clone();
+                        let mut numeric = zero;
+                        for (index, variant) in variants.iter().enumerate() {
+                            let matches =
+                                self.builder.ins().icmp_imm(IntCC::Equal, tag, index as i64);
+                            let discriminant = self
+                                .builder
+                                .ins()
+                                .iconst(ir::types::I64, variant.discriminant);
+                            numeric = self.builder.ins().select(matches, discriminant, numeric);
+                        }
+                        numeric
+                    } else {
+                        bits
+                    };
+                    let width_value = self.builder.ins().iconst(ir::types::I32, i64::from(*width));
+                    let network = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I32, i64::from(layout.network_order));
+                    let offset = self.builder.ins().iconst(ir::types::I64, bit_offset as i64);
+                    self.leaf(
+                        NativeLeaf::BitfieldWriteBits,
+                        &[bytes, numeric, width_value, network, offset],
+                        true,
+                    )?;
+                    bit_offset += u64::from(*width);
+                }
+                BitfieldFieldKind::Payload => {
+                    self.leaf(NativeLeaf::BitfieldExtendPayload, &[bytes, bits], true)?;
+                }
+            }
+        }
+        Ok(output)
     }
     pub(super) fn struct_field(
         &mut self,
@@ -504,6 +565,7 @@ impl Translator<'_, '_> {
             };
         }
         match id {
+            IntrinsicId::BitfieldToBytes => self.encode_bitfield(evaluated[0], args[0].ty, span),
             IntrinsicId::StringFromInt64
             | IntrinsicId::StringFromUint64
             | IntrinsicId::StringFromFloat64
