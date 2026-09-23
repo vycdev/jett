@@ -708,3 +708,38 @@ fn rejects_unbaked_comptime_instead_of_executing_it_at_runtime() {
         .expect_err("unbaked comptime must not become runtime code");
     assert!(error.to_string().contains("unbaked comptime"), "{error}");
 }
+
+#[test]
+fn malformed_sequence_element_type_returns_error_without_panicking() {
+    for by_view in [true, false] {
+        let source = format!(
+            "function length(items: list[int64]) returns int64:\n    for item in {}items:\n        return item\n    return 0\n",
+            if by_view { "view " } else { "" }
+        );
+        let (mut program, mut types) = lower_source(&source);
+        emit_host_object(&program, &types).expect("valid baseline");
+        let mut foreign = TypeInterner::new();
+        let mut inner = TypeInterner::INT64;
+        for _ in 0..1000 {
+            inner = foreign.intern(jett_types::Type::List(inner));
+        }
+        assert!(inner.index() as usize > types.len());
+        let invalid = types.intern(jett_types::Type::List(inner));
+        for function in &mut program.functions {
+            for block in &mut function.blocks {
+                if let jett_mir::TerminatorKind::ForEach { iterable, .. } =
+                    &mut block.terminator.kind
+                {
+                    iterable.ty = invalid;
+                }
+            }
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            emit_host_object(&program, &types)
+        }));
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "must reject malformed element without panic: {result:?}"
+        );
+    }
+}

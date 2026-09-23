@@ -12,12 +12,19 @@ fn launcher() -> NativeLauncherBundle {
         let executable = std::env::current_exe().expect("test executable");
         let profile = executable.parent().unwrap().parent().unwrap();
         let target = profile.parent().unwrap().join("native-values-launcher");
-        let debug = target.join("debug");
+        let host = jett_driver::native::host_target();
+        let profile_name = profile.file_name().unwrap().to_str().unwrap();
+        let cargo_profile = if profile_name == "debug" {
+            "test"
+        } else {
+            profile_name
+        };
+        let debug = target.join(&host).join(profile_name);
         let status = Command::new(env!("CARGO"))
             .args(["build", "-q", "-p", "jett_native_launcher", "--target-dir"])
             .arg(&target)
+            .args(["--target", &host, "--profile", cargo_profile])
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-            .env("CARGO_BUILD_JOBS", "1")
             .status()
             .expect("build target-matched launcher");
         assert!(status.success(), "launcher build failed: {status}");
@@ -1006,4 +1013,89 @@ function main() returns nothing:
     println(list.length[string](string.lines("")), string.join(string.lines("\r\n\nend\r"), "|"))
 "#,
     );
+}
+
+#[test]
+fn native_handler_default_ends_exited_iteration_loan() {
+    let output = run_source(
+        r#"
+function main() returns nothing:
+    list[string] items = list("one", "two")
+    optional[int64] missing = none
+    int64 chosen = missing handle:
+        for item in view items:
+            print(item)
+            default 7
+        default 0
+    list[string] moved = items
+    println(chosen, list.length[string](view moved))
+"#,
+    );
+    assert_eq!(output.stdout, b"one7 2\n");
+}
+
+#[test]
+fn native_handler_default_nested_regions_and_reentry() {
+    let output = run_source(
+        r#"
+function inner_exit() returns nothing:
+    list[string] outer = list("a", "b")
+    for item in view outer:
+        list[string] inner = list("x", "y")
+        optional[int64] missing = none
+        int64 selected = missing handle:
+            for nested in view inner:
+                print(item, nested)
+                default 7
+            default 0
+        list[string] moved = inner
+        println(selected, list.length[string](view moved))
+    println(list.length[string](outer))
+function multiple_exit() returns nothing:
+    list[string] outer = list("a", "b")
+    list[string] inner = list("x", "y")
+    mutable int64 count = 0
+    while count < 2:
+        optional[int64] missing = none
+        int64 selected = missing handle:
+            for item in view outer:
+                for nested in view inner:
+                    print(item, nested)
+                    default 8
+            default 0
+        println(selected)
+        count = count + 1
+    println(list.length[string](outer), list.length[string](inner))
+function main() returns nothing:
+    inner_exit()
+    multiple_exit()
+"#,
+    );
+    assert_eq!(output.stdout, b"a x7 2\nb x7 2\n2\na x8\na x8\n2 2\n");
+}
+
+#[test]
+fn native_handler_default_retains_outer_iteration_loan() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("invalid_move.jett");
+    std::fs::write(
+        &path,
+        r#"
+function main() returns nothing:
+    list[string] items = list("a", "b")
+    for item in view items:
+        optional[int64] missing = none
+        int64 selected = missing handle:
+            for nested in view items:
+                default 7
+            default 0
+        list[string] moved = items
+        println(selected, list.length[string](view moved))
+        break
+"#,
+    )
+    .unwrap();
+    let error =
+        build_host_executable(&path, &launcher(), &directory.path().join("program")).unwrap_err();
+    assert!(error.to_string().contains("while borrowed"), "{error}");
 }

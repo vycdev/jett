@@ -29,11 +29,14 @@ fn launcher() -> Launcher {
         // Cargo's built-in test profile shares the debug output directory.
         let cargo_profile = if profile == "debug" { "test" } else { profile };
         let host = jett_driver::native::host_target();
-        // A fresh target directory prevents stale archives masking a wrong
-        // build and avoids contending with the outer Cargo's build lock.
-        let target = tempfile::tempdir().expect("isolated launcher target directory");
+        // Share one nested cache, outside the outer Cargo build lock.
+        // Explicit host and profile still select the correct archive.
+        let target = profile_directory
+            .parent()
+            .unwrap()
+            .join("native-values-launcher");
         let status = Command::new(env!("CARGO"))
-            .args(["build", "-q", "-p", "jett_native_launcher", "--jobs", "1"])
+            .args(["build", "-q", "-p", "jett_native_launcher"])
             .args([
                 "--target",
                 &host,
@@ -41,13 +44,12 @@ fn launcher() -> Launcher {
                 cargo_profile,
                 "--target-dir",
             ])
-            .arg(target.path())
+            .arg(&target)
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
             .status()
             .expect("build host- and profile-matched launcher");
         assert!(status.success(), "launcher build failed: {status}");
         let archive = target
-            .path()
             .join(&host)
             .join(profile)
             .join("libjett_native_launcher.a");

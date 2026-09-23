@@ -45,6 +45,9 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 continue;
             };
             let element = *element;
+            if element.index() as usize >= types.len() {
+                continue;
+            }
             if by_view
                 && !matches!(
                     types.resolve(element),
@@ -197,18 +200,98 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             prefix.append(&mut function.blocks[body.index() as usize].statements);
             function.blocks[body.index() as usize].statements = prefix;
             if by_view {
-                function.blocks[exit.index() as usize].statements.insert(
-                    0,
-                    Statement {
-                        kind: StatementKind::IterationBorrow {
-                            source,
-                            token: cursor,
-                            start: false,
-                        },
-                        span,
-                    },
-                );
+                // Handler default may bypass the designated loop exit. Split
+                // every edge leaving this CFG region, ending only this token.
+                let mut pending = vec![exit];
+                while let Some(block) = pending.pop() {
+                    if block == header || outside[block.index() as usize] {
+                        continue;
+                    }
+                    outside[block.index() as usize] = true;
+                    pending.extend_from_slice(cfg.successors(block));
+                }
+                let mut region = vec![false; outside.len()];
+                let mut pending = vec![header];
+                while let Some(block) = pending.pop() {
+                    let i = block.index() as usize;
+                    if outside[i] || region[i] {
+                        continue;
+                    }
+                    region[i] = true;
+                    pending.extend_from_slice(cfg.successors(block));
+                }
+                for i in 0..region.len() {
+                    if !region[i] {
+                        continue;
+                    }
+                    for &target in cfg.successors(function.blocks[i].id) {
+                        if region[target.index() as usize] {
+                            continue;
+                        }
+                        let end = BlockId(function.blocks.len() as u32);
+                        function.blocks.push(BasicBlock {
+                            id: end,
+                            statements: vec![Statement {
+                                kind: StatementKind::IterationBorrow {
+                                    source,
+                                    token: cursor,
+                                    start: false,
+                                },
+                                span,
+                            }],
+                            terminator: Terminator {
+                                kind: TerminatorKind::Goto(target),
+                                span,
+                            },
+                        });
+                        redirect_edge(&mut function.blocks[i].terminator.kind, target, end);
+                    }
+                }
             }
         }
+    }
+}
+
+fn redirect_edge(kind: &mut TerminatorKind, old: BlockId, new: BlockId) {
+    let replace = |id: &mut BlockId| {
+        if *id == old {
+            *id = new;
+        }
+    };
+    match kind {
+        TerminatorKind::Goto(id) => replace(id),
+        TerminatorKind::Branch {
+            then_block,
+            else_block,
+            ..
+        } => {
+            replace(then_block);
+            replace(else_block);
+        }
+        TerminatorKind::ForEach { body, exit, .. } => {
+            replace(body);
+            replace(exit);
+        }
+        TerminatorKind::Switch {
+            variants,
+            otherwise,
+            ..
+        } => {
+            for (_, id, _) in variants {
+                replace(id);
+            }
+            if let Some(id) = otherwise {
+                replace(id);
+            }
+        }
+        TerminatorKind::ReflectedTypeDispatch {
+            arms, otherwise, ..
+        } => {
+            for arm in arms {
+                replace(&mut arm.target);
+            }
+            replace(otherwise);
+        }
+        TerminatorKind::Return(_) | TerminatorKind::Respond(_) | TerminatorKind::Unreachable => {}
     }
 }
