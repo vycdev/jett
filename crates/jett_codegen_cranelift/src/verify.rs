@@ -15,6 +15,12 @@ pub(crate) enum ScalarKind {
     Float(u16),
     Bool,
     Nothing,
+    String,
+    Bytes,
+    Sum,
+    List,
+    Struct,
+    Stdout,
 }
 
 impl ScalarKind {
@@ -115,7 +121,14 @@ pub(crate) fn scalar_kind(
     ty: TypeId,
     context: impl Into<String>,
 ) -> Result<ScalarKind, CodegenError> {
-    let context = context.into();
+    scalar_kind_inner(types, ty, context.into(), &mut HashSet::new())
+}
+fn scalar_kind_inner(
+    types: &TypeInterner,
+    ty: TypeId,
+    context: String,
+    seen: &mut HashSet<TypeId>,
+) -> Result<ScalarKind, CodegenError> {
     let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
     if ty.index() >= type_count {
         return Err(CodegenError::UnsupportedType {
@@ -136,6 +149,30 @@ pub(crate) fn scalar_kind(
         Type::Float64 => ScalarKind::Float(64),
         Type::Bool => ScalarKind::Bool,
         Type::Nothing => ScalarKind::Nothing,
+        Type::String => ScalarKind::String,
+        Type::Bytes => ScalarKind::Bytes,
+        Type::Struct(id) => {
+            if seen.insert(ty) {
+                for (_, field) in &types.resolve_struct(*id).fields {
+                    scalar_kind_inner(types, *field, "struct field".into(), seen)?;
+                }
+            }
+            ScalarKind::Struct
+        }
+        Type::List(inner) => {
+            scalar_kind_inner(types, *inner, "list element".into(), seen)?;
+            ScalarKind::List
+        }
+        Type::Optional(inner) => {
+            scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
+            ScalarKind::Sum
+        }
+        Type::Result(ok, error) => {
+            scalar_kind_inner(types, *ok, "result success payload".into(), seen)?;
+            scalar_kind_inner(types, *error, "result failure payload".into(), seen)?;
+            ScalarKind::Sum
+        }
+        Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
         unsupported => {
             return Err(CodegenError::UnsupportedType {
                 type_name: types.type_name(ty),
@@ -182,6 +219,8 @@ impl Verifier<'_> {
             }
             self.terminator(function, &block.terminator)?;
         }
+        jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
+            .map_err(|message| self.contract_error(function, function.span, message))?;
         Ok(())
     }
 
@@ -234,6 +273,92 @@ impl Verifier<'_> {
 
     fn statement(&self, function: &Function, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::IterationBorrow { source, token, .. } => {
+                if !matches!(
+                    self.types.resolve(function.local(*source).unwrap().ty),
+                    Type::List(_)
+                ) || function.local(*token).unwrap().ty != TypeInterner::INT64
+                {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "invalid iteration loan",
+                    ));
+                }
+                Ok(())
+            }
+            StatementKind::SequenceLength { source, target }
+            | StatementKind::SequenceGet { source, target, .. } => {
+                let Type::List(element) = self.types.resolve(function.local(*source).unwrap().ty)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "sequence requires list",
+                    ));
+                };
+                let expected =
+                    if let StatementKind::SequenceGet { index, consume, .. } = statement.kind {
+                        self.require_same_type(
+                            function,
+                            statement.span,
+                            TypeInterner::INT64,
+                            function.local(index).unwrap().ty,
+                            "sequence index must be int64",
+                        )?;
+                        if !consume && jett_mir::move_values::is_linear(self.types, *element) {
+                            return Err(self.unsupported(
+                                function,
+                                statement.span,
+                                "move-only iteration element places",
+                            ));
+                        }
+                        *element
+                    } else {
+                        TypeInterner::INT64
+                    };
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    expected,
+                    function.local(*target).unwrap().ty,
+                    "sequence target type mismatch",
+                )
+            }
+
+            StatementKind::SumTag { source, target }
+            | StatementKind::SumTake { source, target, .. } => {
+                let source = function.local(*source).ok_or_else(|| {
+                    self.contract_error(function, statement.span, "missing sum place")
+                })?;
+                let target = function.local(*target).ok_or_else(|| {
+                    self.contract_error(function, statement.span, "missing payload place")
+                })?;
+                let payload = match (self.types.resolve(source.ty), &statement.kind) {
+                    (Type::Result(..) | Type::Optional(_), StatementKind::SumTag { .. }) => {
+                        TypeInterner::BOOL
+                    }
+                    (Type::Result(ok, error), StatementKind::SumTake { success, .. }) => {
+                        if *success { *ok } else { *error }
+                    }
+                    (Type::Optional(inner), StatementKind::SumTake { success: true, .. }) => *inner,
+                    _ => {
+                        return Err(self.contract_error(
+                            function,
+                            statement.span,
+                            "invalid sum projection",
+                        ));
+                    }
+                };
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    payload,
+                    target.ty,
+                    "sum payload type mismatch",
+                )
+            }
+
             StatementKind::Let { local, value } => {
                 let local = function.local(*local).ok_or_else(|| {
                     self.contract_error(
@@ -468,9 +593,10 @@ impl Verifier<'_> {
                     "direct call result type does not match its signature",
                 )
             }
-            ExpressionKind::Comptime(value)
-            | ExpressionKind::View(value)
-            | ExpressionKind::Clone(value) => {
+            ExpressionKind::Comptime(_) => {
+                Err(self.unsupported(function, expression.span, "unbaked comptime expression"))
+            }
+            ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
                 self.expression(function, value)?;
                 self.require_same_type(
                     function,
@@ -480,19 +606,111 @@ impl Verifier<'_> {
                     "scalar wrapper changes its value type",
                 )
             }
+            ExpressionKind::String(_) if kind == ScalarKind::String => Ok(()),
             ExpressionKind::String(_) => {
-                Err(self.unsupported(function, expression.span, "string literal"))
+                Err(self.expression_kind_error(function, expression, "string literal"))
             }
-            ExpressionKind::Intrinsic { intrinsic, .. } => Err(self.unsupported(
-                function,
-                expression.span,
-                format!("runtime intrinsic `{}`", intrinsic.canonical_name()),
-            )),
+            ExpressionKind::Intrinsic {
+                intrinsic,
+                args,
+                type_arguments,
+                ..
+            } => {
+                for arg in args {
+                    self.expression(function, arg)?;
+                }
+                let numeric_generic = matches!(
+                    intrinsic,
+                    jett_hir::IntrinsicId::MathKernelAbs
+                        | jett_hir::IntrinsicId::MathKernelMin
+                        | jett_hir::IntrinsicId::MathKernelMax
+                );
+                if numeric_generic
+                    && type_arguments.as_slice()
+                        != [args.first().map_or(TypeInterner::ERROR, |a| a.ty)]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "numeric intrinsic type argument differs from operand",
+                    ));
+                }
+                let list_generic = crate::values::list_intrinsic(*intrinsic);
+                if list_generic
+                    && type_arguments.as_slice()
+                        != [crate::values::list_element(
+                            *intrinsic,
+                            args,
+                            expression.ty,
+                            self.types,
+                        )
+                        .unwrap_or(TypeInterner::ERROR)]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "list intrinsic type argument differs from element",
+                    ));
+                }
+                if !numeric_generic && !list_generic && !type_arguments.is_empty() {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "generic native intrinsic",
+                    ));
+                }
+                crate::values::verify_intrinsic(*intrinsic, args, expression.ty, self.types)
+                    .map_err(|message| self.contract_error(function, expression.span, message))
+            }
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(function, expression.span, "indirect call"))
             }
-            ExpressionKind::StructConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "struct construction"))
+            ExpressionKind::StructConstruct {
+                struct_type,
+                fields,
+                validates_refinements,
+                ..
+            } => {
+                if *validates_refinements {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "struct refinement validation",
+                    ));
+                }
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *struct_type,
+                    expression.ty,
+                    "struct construction type mismatch",
+                )?;
+                let Type::Struct(id) = self.types.resolve(*struct_type) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "struct construction",
+                    ));
+                };
+                let layout = &self.types.resolve_struct(*id).fields;
+                if fields.len() != layout.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "struct field count mismatch",
+                    ));
+                }
+                for (field, (_, ty)) in fields.iter().zip(layout) {
+                    self.expression(function, field)?;
+                    self.require_same_type(
+                        function,
+                        field.span,
+                        *ty,
+                        field.ty,
+                        "struct field type mismatch",
+                    )?;
+                }
+                Ok(())
             }
             ExpressionKind::BitfieldConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "bitfield construction"))
@@ -503,17 +721,59 @@ impl Verifier<'_> {
             ExpressionKind::MachineTransition { .. } => {
                 Err(self.unsupported(function, expression.span, "machine transition"))
             }
-            ExpressionKind::ListConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "list construction"))
+            ExpressionKind::ListConstruct { elements } => {
+                let Type::List(element) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "list construction",
+                    ));
+                };
+                for value in elements {
+                    self.expression(function, value)?;
+                    self.require_same_type(
+                        function,
+                        value.span,
+                        *element,
+                        value.ty,
+                        "list element type mismatch",
+                    )?;
+                }
+                Ok(())
             }
             ExpressionKind::MapConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "map construction"))
             }
-            ExpressionKind::ResultOk(_) | ExpressionKind::ResultFail(_) => {
-                Err(self.unsupported(function, expression.span, "result construction"))
+            ExpressionKind::ResultOk(value)
+            | ExpressionKind::ResultFail(value)
+            | ExpressionKind::OptionalSome(value) => {
+                let payload = match (&expression.kind, self.types.resolve(expression.ty)) {
+                    (ExpressionKind::ResultOk(_), Type::Result(ok, _)) => *ok,
+                    (ExpressionKind::ResultFail(_), Type::Result(_, error)) => *error,
+                    (ExpressionKind::OptionalSome(_), Type::Optional(inner)) => *inner,
+                    _ => {
+                        return Err(self.expression_kind_error(
+                            function,
+                            expression,
+                            "sum constructor",
+                        ));
+                    }
+                };
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    payload,
+                    value.ty,
+                    "sum constructor payload type mismatch",
+                )
             }
-            ExpressionKind::OptionalSome(_) | ExpressionKind::OptionalNone => {
-                Err(self.unsupported(function, expression.span, "optional construction"))
+            ExpressionKind::OptionalNone => {
+                if matches!(self.types.resolve(expression.ty), Type::Optional(_)) {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "optional none"))
+                }
             }
             ExpressionKind::Handle { .. } => {
                 Err(self.unsupported(function, expression.span, "failure handler"))
@@ -521,8 +781,19 @@ impl Verifier<'_> {
             ExpressionKind::EnumConstruct { .. } => {
                 Err(self.unsupported(function, expression.span, "enum construction"))
             }
-            ExpressionKind::StringInterpolation(_) => {
-                Err(self.unsupported(function, expression.span, "string interpolation"))
+            ExpressionKind::StringInterpolation(segments) => {
+                if kind != ScalarKind::String {
+                    return Err(self.expression_kind_error(function, expression, "interpolation"));
+                }
+                for segment in segments {
+                    if let jett_hir::StringSegment::Value(value) = segment {
+                        self.expression(function, value)?;
+                        if !crate::values::is_formattable(self.types, value.ty) {
+                            return Err(self.unsupported(function, value.span, "format value"));
+                        }
+                    }
+                }
+                Ok(())
             }
             ExpressionKind::Declassify(_) | ExpressionKind::Coarsen(_) => {
                 Err(self.unsupported(function, expression.span, "secret operation"))
@@ -539,8 +810,41 @@ impl Verifier<'_> {
             ExpressionKind::ActorSpawn { .. } | ExpressionKind::ActorMessage { .. } => {
                 Err(self.unsupported(function, expression.span, "actor operation"))
             }
-            ExpressionKind::Field { .. } => {
-                Err(self.unsupported(function, expression.span, "field access"))
+            ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } => {
+                self.expression(function, base)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    base.ty,
+                    *owner_type,
+                    "field owner mismatch",
+                )?;
+                let Type::Struct(id) = self.types.resolve(*owner_type) else {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "non-struct field access",
+                    ));
+                };
+                let (_, ty) = self
+                    .types
+                    .resolve_struct(*id)
+                    .fields
+                    .get(field.index() as usize)
+                    .ok_or_else(|| {
+                        self.contract_error(function, expression.span, "invalid struct field index")
+                    })?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *ty,
+                    expression.ty,
+                    "projected field type mismatch",
+                )
             }
         }
     }
@@ -605,7 +909,15 @@ impl Verifier<'_> {
             }
             BinaryOp::Modulo => operand.is_integer() && result == operand,
             BinaryOp::Equal | BinaryOp::NotEqual => {
-                operand != ScalarKind::Nothing && result == ScalarKind::Bool
+                !matches!(
+                    operand,
+                    ScalarKind::Nothing
+                        | ScalarKind::Stdout
+                        | ScalarKind::Bytes
+                        | ScalarKind::Sum
+                        | ScalarKind::List
+                        | ScalarKind::Struct
+                ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {
                 operand.is_numeric() && result == ScalarKind::Bool

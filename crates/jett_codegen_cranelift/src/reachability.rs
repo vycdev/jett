@@ -124,7 +124,12 @@ fn collect_function_references(function: &Function, references: &mut Vec<(Functi
                         collect_expression_references(condition, references);
                     }
                 }
-                StatementKind::Trace(_) => {}
+                StatementKind::IterationBorrow { .. }
+                | StatementKind::SequenceLength { .. }
+                | StatementKind::SequenceGet { .. }
+                | StatementKind::SumTag { .. }
+                | StatementKind::SumTake { .. }
+                | StatementKind::Trace(_) => {}
             }
         }
         match &block.terminator.kind {

@@ -976,6 +976,11 @@ primitive interface dispatch. The same normalization enforces the declared
 `int8`/`int16`/`int32` and `uint8`/`uint16`/`uint32` ranges after expressions
 and at typed assignment, parameter, and return boundaries; values outside the
 checked primitive range stop interpretation with a deterministic diagnostic.
+The same checked-expression and declared-type normalization rounds float32
+literals and arithmetic results to f32 before widening into the internal
+`Value::Float64` carrier. Both runtime and explicit comptime evaluation use
+this boundary, so intermediate arithmetic cannot silently retain f64 precision.
+Native formatting and interpreter display both format that exactly widened value.
 The driver additionally evaluates every explicit `comptime expression` after
 type checking and stores the resulting value by source span. Runtime
 interpretation consumes that stored value instead of evaluating the expression
@@ -2582,3 +2587,60 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 | E0800–E0802 | Complexity limit errors (too many statements, too much nesting, too much cyclomatic complexity) |
 | E0999–E1000 | Lexer/parser diagnostics surfaced by the parser |
 | E9000 | Comptime verify failures |
+
+### Native Linux executable seed
+
+The Cranelift scalar AOT path can link on the exact x86-64 Linux GNU host as
+well as the existing Windows MSVC target. An explicit, target-matched launcher
+bundle supplies ABI version, CRT mode, archive and system libraries. Linux uses
+`cc` or a literal `JETT_NATIVE_CC` executable path, without shell interpolation;
+Windows retains MSVC SDK discovery and the static-CRT contract. Both publish
+only a successfully linked executable. The Linux scalar seed runs under an
+automated deadline without source-tree or compiler environment dependencies.
+Full language/runtime parity and clean Windows execution are still release
+gates, not claims made by this seed. See `active/native_codegen_parity_plan.md`.
+
+Explicit `comptime` primitive results are imported into typed HIR before MIR
+lowering, retaining their checked type and span. Ordinary pure calls remain
+runtime calls. The backend rejects any unresolved `Comptime` marker instead of
+emitting its source computation. Composite constants still need native layout
+lowering and remain an explicit native parity gap. A native regression executes
+baked `math.factorial(5)` after removing its source file.
+
+
+### Native string and numeric execution slice
+
+The current Cranelift subset also executes immutable strings, interpolation,
+print/println, checked Stdout entry parameters, and typed numeric runtime kernels.
+String handles have explicit retain/release ownership and are destroyed at last
+release. MIR definite-initialization and liveness facts drive local and temporary
+cleanup through branches, loops, overwrites, returns, and terminal failures.
+
+Terminal runtime failure is a context-local first error, not `result.fail` data.
+Compiled calls test that channel before using a return value; failure edges release
+frame owners and propagate it to the launcher. Context destruction checks for leaked
+native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
+use the same extended-grapheme segmentation dependency as the interpreter. This
+initial handle representation is not the proposed inline/SSO optimization.
+
+The full native parity gate is still incomplete: 19/182 genuine objects, 8/30
+main outcomes, and 14/25 runtime contracts, with 182/182 typed lowering. See
+`active/native_value_abi.md` for ABI ownership and failure contracts and
+`active/native_codegen_parity_plan.md` for the remaining gates. In particular,
+move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
+reflection/JSON, actors/tasks, other capabilities, and clean Windows release
+verification are not established by this slice.
+
+
+### Native user struct slice
+
+Checked concrete struct layouts now reach native fixed field-slot records with
+explicit initialization and recursive ownership. MIR plans moves, call-bounded
+projected views, clone temporaries and drop slots; codegen emits construction,
+projection and all user control flow. Typed runtime leaves only manage storage.
+The checker exports exact Equatable method identities for comparison expressions;
+HIR turns them into ordinary direct calls (and negation for inequality), never
+structural or handle equality. See `active/native_value_abi.md` for the supported
+ownership subset and remaining projected-place/refinement/enum boundaries.
+Earlier native coverage figures above describe historical slices, not the current
+release gate. The exhaustive checkpoint is recorded in the active parity plan.

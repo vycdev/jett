@@ -10246,6 +10246,21 @@ impl<'a> TypeChecker<'a> {
                     ));
                     return TypeInterner::ERROR;
                 }
+                if matches!(self.interner.resolve(lhs_base), Type::Struct(_)) {
+                    // Equality is a checked method call, not structural data
+                    // comparison. Preserve its exact body identity for HIR,
+                    // including concrete generic/body fact snapshots.
+                    if let Some(&interface) = self.named_types.get("Equatable")
+                        && let Some(&index) = self.interface_method_definitions.get(&(
+                            interface,
+                            lhs_base,
+                            "equals".to_string(),
+                        ))
+                    {
+                        let source_span = self.method_definitions[index].source_span;
+                        self.record_method_call(span, source_span);
+                    }
+                }
                 self.maybe_wrap_secret(TypeInterner::BOOL, tainted)
             }
 

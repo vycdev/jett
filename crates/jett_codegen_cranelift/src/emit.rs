@@ -1,3 +1,6 @@
+mod values;
+use jett_mir::move_values::{MoveValuePlan, is_linear};
+use jett_runtime::native_abi::values::NativeLeaf;
 use std::str::FromStr;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -37,6 +40,7 @@ struct DeclaredFunction {
     native_id: FuncId,
     symbol: String,
     signature: ir::Signature,
+    modes: Vec<jett_mir::ParamMode>,
 }
 
 /// Sparse original-MIR-index mapping. Only backend-reachable functions have a
@@ -112,9 +116,9 @@ pub fn emit_host_object(
 ///
 /// `entry` is an exact checked MIR identity; this API never selects an entry by
 /// source name. The wrapper has the target C ABI `uint32_t(void *context)`,
-/// forwards its opaque runtime context to the parameterless,
-/// `nothing`-returning Jett function, and returns
-/// [`JETT_AOT_ENTRY_SUCCESS_V1`].
+/// forwards its opaque runtime context to a `nothing`-returning Jett function,
+/// supplies explicit tokens for checked Stdout parameters, and returns the
+/// terminal failure status (or [`JETT_AOT_ENTRY_SUCCESS_V1`]).
 pub fn emit_host_program_object(
     program: &Program,
     types: &TypeInterner,
@@ -177,6 +181,10 @@ fn emit_for_triple(
     if let Some(entry) = entry {
         validate_program_entry_contract(program, types, entry)?;
     }
+    jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    let mut prepared = program.clone();
+    jett_mir::prepare_native_sequences(&mut prepared, types);
+    let program = &prepared;
     let verified = verify_program(program, types)?;
     if let Some(entry) = entry
         && verified.get(entry).is_none()
@@ -211,6 +219,7 @@ fn emit_for_triple(
         translate_function(
             &mut module,
             &declarations,
+            program,
             function,
             types,
             &declaration.symbol,
@@ -269,6 +278,7 @@ fn declare_reachable_functions(
             native_id,
             symbol: verified_function.symbol.clone(),
             signature,
+            modes: function.params.iter().map(|p| p.mode).collect(),
         })?;
     }
     Ok(declarations)
@@ -308,7 +318,7 @@ fn validate_program_entry_contract(
             function_id: entry.index(),
         });
     }
-    if !function.params.is_empty() {
+    if function.params.iter().any(|p| p.ty != TypeInterner::STDOUT) {
         return Err(CodegenError::IncompatibleProgramEntry {
             function_id: entry.index(),
             message: format!("expected no parameters, found {}", function.params.len()),
@@ -343,14 +353,6 @@ fn define_program_entry_wrapper(
             .ok_or_else(|| CodegenError::UnreachableProgramEntry {
                 function_id: entry.index(),
             })?;
-    if entry_function.signature.params.as_slice() != [runtime_context_abi_param(module)]
-        || !entry_function.signature.returns.is_empty()
-    {
-        return Err(CodegenError::IncompatibleProgramEntry {
-            function_id: entry.index(),
-            message: "native entry signature does not contain exactly one hidden runtime-context pointer and no return value".to_string(),
-        });
-    }
     if module.get_name(JETT_AOT_ENTRY_SYMBOL_V1).is_some() {
         return Err(CodegenError::DuplicateSymbol(
             JETT_AOT_ENTRY_SYMBOL_V1.to_string(),
@@ -411,17 +413,23 @@ fn translate_program_entry_wrapper(
             message: "exported entry wrapper is missing its runtime-context pointer".to_string(),
         })?;
     let entry_reference = module.declare_func_in_func(entry_function.native_id, builder.func);
-    let call = builder.ins().call(entry_reference, &[runtime_context]);
-    if !builder.func.dfg.inst_results(call).is_empty() {
-        return Err(CodegenError::IncompatibleProgramEntry {
-            function_id: entry.index(),
-            message: "native entry call unexpectedly returns a value".to_string(),
-        });
+    let mut args = vec![runtime_context];
+    if entry_function.signature.params.len() > 1 {
+        let leaf = crate::values::declare_leaf(module, NativeLeaf::GrantStdout)?;
+        let leaf = module.declare_func_in_func(leaf, builder.func);
+        let call = builder.ins().call(leaf, &[runtime_context]);
+        let authority = builder.func.dfg.inst_results(call)[0];
+        args.extend(std::iter::repeat_n(
+            authority,
+            entry_function.signature.params.len() - 1,
+        ));
     }
-    let success = builder
-        .ins()
-        .iconst(ir::types::I32, i64::from(JETT_AOT_ENTRY_SUCCESS_V1));
-    builder.ins().return_(&[success]);
+    builder.ins().call(entry_reference, &args);
+    let leaf = crate::values::declare_leaf(module, NativeLeaf::Status)?;
+    let leaf = module.declare_func_in_func(leaf, builder.func);
+    let call = builder.ins().call(leaf, &[runtime_context]);
+    let status = builder.func.dfg.inst_results(call)[0];
+    builder.ins().return_(&[status]);
     builder.seal_all_blocks();
     builder.finalize();
     Ok(())
@@ -460,6 +468,12 @@ fn clif_type(
         ScalarKind::Float(32) => Some(ir::types::F32),
         ScalarKind::Float(64) => Some(ir::types::F64),
         ScalarKind::Nothing => None,
+        ScalarKind::String
+        | ScalarKind::Bytes
+        | ScalarKind::Sum
+        | ScalarKind::List
+        | ScalarKind::Struct
+        | ScalarKind::Stdout => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -475,6 +489,7 @@ fn clif_type(
 fn translate_function(
     module: &mut ObjectModule,
     declarations: &DeclaredFunctions,
+    program: &Program,
     function: &Function,
     types: &TypeInterner,
     symbol: &str,
@@ -491,6 +506,33 @@ fn translate_function(
     builder.append_block_params_for_function_params(entry);
 
     let runtime_context = builder.declare_var(module.target_config().pointer_type());
+    let ownership = MoveValuePlan::analyze(program, function, types)
+        .map_err(|message| contract_error(symbol, function.span, message))?;
+    let local_slots = function
+        .locals
+        .iter()
+        .map(|l| {
+            if ownership.owned_locals.contains(&(l.id.index() as usize)) {
+                Some(builder.create_sized_stack_slot(ir::StackSlotData::new(
+                    ir::StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                )))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let temporary_slots = (0..ownership.temporary_slots)
+        .map(|_| {
+            builder.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                8,
+                3,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let failure_block = builder.create_block();
 
     let mut variables = Vec::with_capacity(function.locals.len());
     for local in &function.locals {
@@ -537,6 +579,10 @@ fn translate_function(
                         format!("cannot bind native runtime context: {error}"),
                     )
                 })?;
+            let zero = builder.ins().iconst(ir::types::I64, 0);
+            for slot in local_slots.iter().flatten().chain(&temporary_slots) {
+                builder.ins().stack_store(zero, *slot, 0);
+            }
             let mut incoming_index = 1_usize;
             for parameter in &function.params {
                 let variable =
@@ -566,13 +612,60 @@ fn translate_function(
             runtime_context,
             types,
             symbol,
+            local_types: &function.locals,
+            local_slots: &local_slots,
+            temporary_slots: &temporary_slots,
+            next_temporary: 0,
+            failure_block,
         };
-        for statement in &block.statements {
+        if block.id == function.entry {
+            for parameter in &function.params {
+                if let Some(slot) = local_slots[parameter.local.index() as usize] {
+                    let v = translator
+                        .builder
+                        .use_var(variables[parameter.local.index() as usize].unwrap());
+                    let owned = if is_linear(types, parameter.ty) {
+                        v
+                    } else {
+                        translator.leaf(NativeLeaf::Retain, &[v], true)?
+                    };
+                    translator.builder.ins().stack_store(owned, slot, 0);
+                }
+            }
+        }
+        translator.drop_dead_locals(&ownership.live_in[block_index])?;
+        for (index, statement) in block.statements.iter().enumerate() {
             translator.statement(statement)?;
+            translator.drop_temporaries()?;
+            translator.drop_dead_locals(&ownership.live_after_statement[block_index][index])?;
         }
         translator.terminator(&block.terminator)?;
     }
 
+    builder.switch_to_block(failure_block);
+    let mut translator = Translator {
+        builder: &mut builder,
+        module,
+        declarations,
+        blocks: &blocks,
+        variables: &variables,
+        runtime_context,
+        types,
+        symbol,
+        local_types: &function.locals,
+        local_slots: &local_slots,
+        temporary_slots: &temporary_slots,
+        next_temporary: temporary_slots.len(),
+        failure_block,
+    };
+    translator.drop_all()?;
+    let results = match clif_type(types, function.return_type, "failure return")? {
+        None => vec![],
+        Some(ir::types::F32) => vec![translator.builder.ins().f32const(0.0)],
+        Some(ir::types::F64) => vec![translator.builder.ins().f64const(0.0)],
+        Some(t) => vec![translator.builder.ins().iconst(t, 0)],
+    };
+    translator.builder.ins().return_(&results);
     builder.seal_all_blocks();
     builder.finalize();
     Ok(())
@@ -581,6 +674,7 @@ fn translate_function(
 #[derive(Clone, Copy)]
 enum LoweredValue {
     Scalar(Value),
+    Owned(Value, ir::StackSlot),
     Nothing,
 }
 
@@ -593,11 +687,76 @@ struct Translator<'a, 'builder> {
     runtime_context: Variable,
     types: &'a TypeInterner,
     symbol: &'a str,
+    local_types: &'a [jett_mir::Local],
+    local_slots: &'a [Option<ir::StackSlot>],
+    temporary_slots: &'a [ir::StackSlot],
+    next_temporary: usize,
+    failure_block: ir::Block,
 }
 
 impl Translator<'_, '_> {
     fn statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::IterationBorrow { .. } => Ok(()),
+            StatementKind::SequenceLength { source, target }
+            | StatementKind::SequenceGet { source, target, .. } => {
+                let ty = self.local_types[source.index() as usize].ty;
+                let source_expr = Expression {
+                    kind: ExpressionKind::Local(*source),
+                    ty,
+                    span: statement.span,
+                };
+                let value = self.argument(&source_expr, true)?;
+                let value = self.scalar(value, statement.span)?;
+                let output =
+                    if let StatementKind::SequenceGet { index, consume, .. } = statement.kind {
+                        let index = self
+                            .builder
+                            .use_var(self.variables[index.index() as usize].unwrap());
+                        let leaf = if consume {
+                            NativeLeaf::ListElementTake
+                        } else {
+                            NativeLeaf::ListElementClone
+                        };
+                        let bits = self.leaf(leaf, &[value, index], true)?;
+                        self.unpack_payload(
+                            bits,
+                            self.local_types[target.index() as usize].ty,
+                            statement.span,
+                        )?
+                    } else {
+                        LoweredValue::Scalar(self.leaf(NativeLeaf::ListLength, &[value], true)?)
+                    };
+                self.define_local(*target, output, statement.span)
+            }
+
+            StatementKind::SumTag { source, target } => {
+                let slot = self.local_slots[source.index() as usize]
+                    .ok_or_else(|| self.unsupported(statement.span, "sum view tag place"))?;
+                let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                let tag = self.leaf(NativeLeaf::SumTag, &[v], true)?;
+                let flag = self.builder.ins().ireduce(ir::types::I8, tag);
+                self.define_local(*target, LoweredValue::Scalar(flag), statement.span)
+            }
+            StatementKind::SumTake {
+                source,
+                target,
+                success,
+            } => {
+                let slot = self.local_slots[source.index() as usize]
+                    .ok_or_else(|| self.unsupported(statement.span, "take borrowed sum"))?;
+                let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                let tag = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(*success));
+                let bits = self.leaf(NativeLeaf::SumTake, &[v, tag], true)?;
+                self.clear_slot(slot);
+                let ty = self.local_types[target.index() as usize].ty;
+                let value = self.unpack_payload(bits, ty, statement.span)?;
+                self.define_local(*target, value, statement.span)
+            }
+
             StatementKind::Let { local, value } => {
                 let value = self.expression(value)?;
                 self.define_local(*local, value, statement.span)
@@ -625,21 +784,31 @@ impl Translator<'_, '_> {
     fn terminator(&mut self, terminator: &Terminator) -> Result<(), CodegenError> {
         match &terminator.kind {
             TerminatorKind::Return(value) => {
-                if let Some(value) = value {
-                    match self.expression(value)? {
-                        LoweredValue::Scalar(value) => {
-                            self.builder.ins().return_(&[value]);
-                        }
-                        LoweredValue::Nothing => {
-                            self.builder.ins().return_(&[]);
-                        }
+                let mut result = match value {
+                    Some(v) => self.expression(v)?,
+                    None => LoweredValue::Nothing,
+                };
+                if value.as_ref().is_some_and(|v| v.ty == TypeInterner::STRING) {
+                    let v = self.scalar(result, terminator.span)?;
+                    result = LoweredValue::Scalar(self.leaf(NativeLeaf::Retain, &[v], true)?);
+                }
+                if let LoweredValue::Owned(v, slot) = result {
+                    self.clear_slot(slot);
+                    result = LoweredValue::Scalar(v);
+                }
+                self.drop_all()?;
+                match result {
+                    LoweredValue::Scalar(v) | LoweredValue::Owned(v, _) => {
+                        self.builder.ins().return_(&[v]);
                     }
-                } else {
-                    self.builder.ins().return_(&[]);
+                    LoweredValue::Nothing => {
+                        self.builder.ins().return_(&[]);
+                    }
                 }
                 Ok(())
             }
             TerminatorKind::Goto(target) => {
+                self.drop_temporaries()?;
                 let target = block_for(self.blocks, target.index(), terminator.span, self.symbol)?;
                 self.builder.ins().jump(target, &[]);
                 Ok(())
@@ -651,6 +820,7 @@ impl Translator<'_, '_> {
             } => {
                 let lowered_condition = self.expression(condition)?;
                 let condition = self.scalar(lowered_condition, condition.span)?;
+                self.drop_temporaries()?;
                 let then_block = block_for(
                     self.blocks,
                     then_block.index(),
@@ -730,6 +900,15 @@ impl Translator<'_, '_> {
                 let Some(variable) = variable else {
                     return Ok(LoweredValue::Nothing);
                 };
+                if let Some(slot) = self.local_slots[local.index() as usize] {
+                    let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                    if is_linear(self.types, expression.ty) {
+                        self.clear_slot(slot);
+                        return self.own_linear(v);
+                    }
+                    let v = self.leaf(NativeLeaf::Retain, &[v], true)?;
+                    return self.own(v);
+                }
                 let value = self.builder.try_use_var(variable).map_err(|error| {
                     contract_error(
                         self.symbol,
@@ -768,6 +947,16 @@ impl Translator<'_, '_> {
                 }
                 let lowered_right = self.expression(right)?;
                 let right_value = self.scalar(lowered_right, right.span)?;
+                if operand_kind == ScalarKind::String {
+                    let value = self.leaf(NativeLeaf::Equal, &[left_value, right_value], true)?;
+                    let value = self.builder.ins().ireduce(ir::types::I8, value);
+                    let value = if *op == BinaryOp::NotEqual {
+                        self.builder.ins().bxor_imm(value, 1)
+                    } else {
+                        value
+                    };
+                    return Ok(LoweredValue::Scalar(value));
+                }
                 let value =
                     self.binary(left_value, *op, right_value, operand_kind, expression.span)?;
                 Ok(LoweredValue::Scalar(value))
@@ -777,20 +966,44 @@ impl Translator<'_, '_> {
                 args,
                 evaluation_order,
             } => self.call(*function, args, evaluation_order, expression),
-            ExpressionKind::Comptime(value)
-            | ExpressionKind::View(value)
-            | ExpressionKind::Clone(value) => self.expression(value),
-            ExpressionKind::String(_) => Err(self.unsupported(expression.span, "string literal")),
-            ExpressionKind::Intrinsic { intrinsic, .. } => {
-                let construct = format!("runtime intrinsic `{}`", intrinsic.canonical_name());
-                Err(self.unsupported(expression.span, &construct))
+            ExpressionKind::Comptime(_) => {
+                Err(self.unsupported(expression.span, "unbaked comptime expression"))
             }
+            ExpressionKind::View(value) => self.argument(value, true),
+            ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
+                let borrowed = self.argument(value, true)?;
+                let v = self.scalar(borrowed, value.span)?;
+                let leaf = match self.types.resolve(value.ty) {
+                    Type::Bytes => NativeLeaf::BytesClone,
+                    Type::List(_) => NativeLeaf::ListClone,
+                    Type::Struct(_) => NativeLeaf::StructClone,
+                    _ => NativeLeaf::SumClone,
+                };
+                let cloned = self.leaf(leaf, &[v], true)?;
+                self.own_linear(cloned)
+            }
+            ExpressionKind::Clone(value) => self.expression(value),
+            ExpressionKind::String(text) => self.literal(text),
+            ExpressionKind::Intrinsic {
+                intrinsic,
+                args,
+                evaluation_order,
+                ..
+            } => self.intrinsic(
+                *intrinsic,
+                args,
+                evaluation_order,
+                expression.ty,
+                expression.span,
+            ),
             ExpressionKind::IndirectCall { .. } => {
                 Err(self.unsupported(expression.span, "indirect call"))
             }
-            ExpressionKind::StructConstruct { .. } => {
-                Err(self.unsupported(expression.span, "struct construction"))
-            }
+            ExpressionKind::StructConstruct {
+                fields,
+                evaluation_order,
+                ..
+            } => self.construct_struct(fields, evaluation_order, expression.span),
             ExpressionKind::BitfieldConstruct { .. } => {
                 Err(self.unsupported(expression.span, "bitfield construction"))
             }
@@ -800,26 +1013,27 @@ impl Translator<'_, '_> {
             ExpressionKind::MachineTransition { .. } => {
                 Err(self.unsupported(expression.span, "machine transition"))
             }
-            ExpressionKind::ListConstruct { .. } => {
-                Err(self.unsupported(expression.span, "list construction"))
+            ExpressionKind::ListConstruct { elements } => {
+                self.construct_list(elements, expression.ty, expression.span)
             }
             ExpressionKind::MapConstruct { .. } => {
                 Err(self.unsupported(expression.span, "map construction"))
             }
-            ExpressionKind::ResultOk(_) | ExpressionKind::ResultFail(_) => {
-                Err(self.unsupported(expression.span, "result construction"))
+            ExpressionKind::ResultOk(value) | ExpressionKind::OptionalSome(value) => {
+                self.construct_sum(true, Some(value), expression.span)
             }
-            ExpressionKind::OptionalSome(_) | ExpressionKind::OptionalNone => {
-                Err(self.unsupported(expression.span, "optional construction"))
+            ExpressionKind::ResultFail(value) => {
+                self.construct_sum(false, Some(value), expression.span)
             }
+            ExpressionKind::OptionalNone => self.construct_sum(false, None, expression.span),
             ExpressionKind::Handle { .. } => {
                 Err(self.unsupported(expression.span, "failure handler"))
             }
             ExpressionKind::EnumConstruct { .. } => {
                 Err(self.unsupported(expression.span, "enum construction"))
             }
-            ExpressionKind::StringInterpolation(_) => {
-                Err(self.unsupported(expression.span, "string interpolation"))
+            ExpressionKind::StringInterpolation(segments) => {
+                self.interpolate(segments, expression.span)
             }
             ExpressionKind::Declassify(_) | ExpressionKind::Coarsen(_) => {
                 Err(self.unsupported(expression.span, "secret operation"))
@@ -836,7 +1050,9 @@ impl Translator<'_, '_> {
             ExpressionKind::ActorSpawn { .. } | ExpressionKind::ActorMessage { .. } => {
                 Err(self.unsupported(expression.span, "actor operation"))
             }
-            ExpressionKind::Field { .. } => Err(self.unsupported(expression.span, "field access")),
+            ExpressionKind::Field { base, field, .. } => {
+                self.struct_field(base, field.index(), expression.ty, expression.span)
+            }
         }
     }
 
@@ -854,10 +1070,17 @@ impl Translator<'_, '_> {
                 "call evaluation order is not a permutation",
             )
         };
+        let modes = self
+            .declarations
+            .get(function)
+            .ok_or_else(invalid_order)?
+            .modes
+            .clone();
+        let indexed = args.iter().enumerate().collect::<Vec<_>>();
         let evaluated = reordered_map(
-            args,
+            &indexed,
             evaluation_order,
-            |argument| self.expression(argument),
+            |(index, argument)| self.argument(argument, modes[*index] == jett_mir::ParamMode::View),
             invalid_order,
         )?;
         let runtime_context = self
@@ -872,9 +1095,17 @@ impl Translator<'_, '_> {
             })?;
         let mut native_args = Vec::with_capacity(evaluated.len() + 1);
         native_args.push(runtime_context);
-        for (argument, value) in args.iter().zip(evaluated) {
+        for (index, (argument, value)) in args.iter().zip(evaluated).enumerate() {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
+                LoweredValue::Owned(value, slot) => {
+                    if modes[index] == jett_mir::ParamMode::Owned
+                        && is_linear(self.types, argument.ty)
+                    {
+                        self.clear_slot(slot);
+                    }
+                    native_args.push(value);
+                }
                 LoweredValue::Nothing => {
                     if scalar_kind(self.types, argument.ty, "nothing argument")?
                         != ScalarKind::Nothing
@@ -903,7 +1134,8 @@ impl Translator<'_, '_> {
             .module
             .declare_func_in_func(function_id, self.builder.func);
         let call = self.builder.ins().call(reference, &native_args);
-        let results = self.builder.func.dfg.inst_results(call);
+        let results = self.builder.func.dfg.inst_results(call).to_vec();
+        self.check_failure()?;
         if scalar_kind(self.types, expression.ty, "call result")? == ScalarKind::Nothing {
             if results.is_empty() {
                 Ok(LoweredValue::Nothing)
@@ -922,7 +1154,13 @@ impl Translator<'_, '_> {
                     "value-returning call produced no native value",
                 )
             })?;
-            Ok(LoweredValue::Scalar(value))
+            if is_linear(self.types, expression.ty) {
+                self.own_linear(value)
+            } else if expression.ty == TypeInterner::STRING {
+                self.own(value)
+            } else {
+                Ok(LoweredValue::Scalar(value))
+            }
         }
     }
 
@@ -1046,7 +1284,13 @@ impl Translator<'_, '_> {
                     ));
                 }
             },
-            ScalarKind::Nothing => {
+            ScalarKind::Nothing
+            | ScalarKind::String
+            | ScalarKind::Bytes
+            | ScalarKind::Sum
+            | ScalarKind::List
+            | ScalarKind::Struct
+            | ScalarKind::Stdout => {
                 return Err(contract_error(
                     self.symbol,
                     span,
@@ -1177,6 +1421,21 @@ impl Translator<'_, '_> {
         value: LoweredValue,
         span: Span,
     ) -> Result<(), CodegenError> {
+        if let Some(slot) = self.local_slots[local.index() as usize] {
+            let owned = if is_linear(self.types, self.local_types[local.index() as usize].ty) {
+                let LoweredValue::Owned(v, source) = value else {
+                    return Err(self.unsupported(span, "borrow escaping into owner"));
+                };
+                self.clear_slot(source);
+                v
+            } else {
+                let value = self.scalar(value, span)?;
+                self.leaf(NativeLeaf::Retain, &[value], true)?
+            };
+            self.drop_slot(slot)?;
+            self.builder.ins().stack_store(owned, slot, 0);
+            return Ok(());
+        }
         let variable = variable_for(self.variables, local.index(), span, self.symbol)?;
         match (variable, value) {
             (Some(variable), LoweredValue::Scalar(value)) => {
@@ -1209,7 +1468,7 @@ impl Translator<'_, '_> {
 
     fn scalar(&self, value: LoweredValue, span: Span) -> Result<Value, CodegenError> {
         match value {
-            LoweredValue::Scalar(value) => Ok(value),
+            LoweredValue::Scalar(value) | LoweredValue::Owned(value, _) => Ok(value),
             LoweredValue::Nothing => Err(contract_error(
                 self.symbol,
                 span,
@@ -1315,6 +1574,7 @@ mod tests {
     use jett_common::{FileId, SourceOrigin};
 
     use super::*;
+    use jett_mir::copy_values::CopyValuePlan;
 
     fn lower_source(source: &str) -> (Program, TypeInterner) {
         let file = FileId::new(0);
@@ -1377,6 +1637,7 @@ mod tests {
             translate_function(
                 &mut module,
                 &declarations,
+                &program,
                 function,
                 &types,
                 &declaration.symbol,
@@ -1406,6 +1667,7 @@ mod tests {
         translate_function(
             &mut module,
             &declarations,
+            &program,
             function,
             &types,
             &declaration.symbol,
@@ -1525,12 +1787,12 @@ function caller(value: int64, choose_original: bool) returns int64:
         let runtime_context = function.dfg.block_params(entry)[0];
         let calls = direct_call_arguments(&function);
 
-        assert_eq!(calls.len(), 2, "both branch-local calls must be emitted");
+        assert_eq!(calls.len(), 4, "two Jett calls and two failure checks");
+        assert_eq!(calls.iter().filter(|args| args.len() == 2).count(), 2);
         for arguments in calls {
-            assert_eq!(
-                arguments.len(),
-                2,
-                "hidden context plus one source argument"
+            assert!(
+                matches!(arguments.len(), 1 | 2),
+                "status receives context; Jett call also receives source argument"
             );
             assert_eq!(
                 function.dfg.resolve_aliases(arguments[0]),
@@ -1604,6 +1866,7 @@ function caller(value: int64, choose_original: bool) returns int64:
         translate_function(
             &mut module,
             &declarations,
+            &program,
             caller,
             &types,
             &declaration.symbol,
@@ -1611,7 +1874,7 @@ function caller(value: int64, choose_original: bool) returns int64:
         )
         .expect("reachable-only function translation");
 
-        assert_eq!(context.func.layout.blocks().count(), 1);
+        assert_eq!(context.func.layout.blocks().count(), 2); // plus terminal-failure epilogue
         assert!(direct_call_arguments(&context.func).is_empty());
     }
 
@@ -1637,7 +1900,7 @@ function selected_entry() returns nothing:
             .expect("wrapper entry block");
         let incoming_context = context.func.dfg.block_params(block)[0];
         let calls = direct_call_arguments(&context.func);
-        assert_eq!(calls, [vec![incoming_context]]);
+        assert_eq!(calls, [vec![incoming_context], vec![incoming_context]]); // entry and failure status
         assert_eq!(
             context.func.signature.params,
             [AbiParam::new(module.target_config().pointer_type())]
@@ -1671,5 +1934,193 @@ function or_value(left: bool) returns bool:
                 "{name} used eager boolean arithmetic:\n{clif}"
             );
         }
+    }
+
+    #[test]
+    fn native_ownership_rejects_read_before_initialization() {
+        let (mut program, types) = lower_source(
+            r#"
+function selected_entry() returns string:
+    string value = "live"
+    return value
+"#,
+        );
+        program.functions[0].blocks[0].statements.clear();
+        let error =
+            emit_host_object(&program, &types).expect_err("missing initializer is invalid MIR");
+        assert!(
+            error.to_string().contains("definite initialization"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn native_ownership_plan_keeps_loop_carried_strings_live() {
+        let (program, types) = lower_source(
+            r#"
+function selected_entry(keep: bool) returns string:
+    mutable string value = "live"
+    while keep:
+        value = "next"
+    return value
+"#,
+        );
+        let function = &program.functions[0];
+        let plan = CopyValuePlan::analyze(function, &types).unwrap();
+        let local = function
+            .locals
+            .iter()
+            .find(|l| l.name == "value")
+            .unwrap()
+            .id
+            .index() as usize;
+        assert!(plan.owned_locals.contains(&local));
+        for block in &function.blocks {
+            if matches!(block.terminator.kind, TerminatorKind::Branch { .. }) {
+                assert!(plan.live_in[block.id.index() as usize].contains(&local));
+                assert!(plan.live_out[block.id.index() as usize].contains(&local));
+            }
+        }
+    }
+
+    #[test]
+    fn copy_value_plan_does_not_claim_move_only_ownership() {
+        let (program, types) = lower_source(
+            r#"
+function discard(view value: bytes) returns nothing:
+    return nothing
+"#,
+        );
+        let error = CopyValuePlan::analyze(&program.functions[0], &types)
+            .expect_err("bytes needs move/borrow/drop analysis");
+        assert!(error.contains("move/borrow/drop"), "{error}");
+    }
+    #[test]
+    fn native_linear_plan_rejects_move_across_loop_backedge() {
+        let (program, types) = lower_source(
+            r#"
+function consume(value: bytes) returns nothing:
+    return nothing
+function loop_move(value: bytes, repeat: bool) returns nothing:
+    while repeat:
+        consume(value)
+"#,
+        );
+        let error = emit_host_object(&program, &types)
+            .expect_err("loop reads moved place on next iteration");
+        assert!(
+            error.to_string().contains("moved or uninitialized"),
+            "{error}"
+        );
+    }
+    #[test]
+    fn native_linear_plan_rejects_borrow_escape_and_argument_alias() {
+        let (mut program, types) = lower_source(
+            r#"
+function identity(value: bytes) returns bytes:
+    return value
+"#,
+        );
+        program.functions[0].params[0].mode = jett_mir::ParamMode::View;
+        let error =
+            emit_host_object(&program, &types).expect_err("view cannot be returned as owner");
+        assert!(
+            error.to_string().contains("cannot move borrowed"),
+            "{error}"
+        );
+        let (program, types) = lower_source(
+            r#"
+function mixed(view first: bytes, second: bytes) returns nothing:
+    return nothing
+function alias(value: bytes) returns nothing:
+    mixed(view value, value)
+"#,
+        );
+        let error = emit_host_object(&program, &types)
+            .expect_err("loan must survive all argument evaluation");
+        assert!(error.to_string().contains("while borrowed"), "{error}");
+    }
+    #[test]
+    fn iteration_loan_survives_nested_loop_and_rejects_owner_escape() {
+        let (program, types) = lower_source(
+            r#"
+function escaped(items: list[int64]) returns list[int64]:
+    for item in view items:
+        for other in view items:
+            break
+        return items
+    return items
+"#,
+        );
+        let error =
+            emit_host_object(&program, &types).expect_err("outer iteration view remains active");
+        assert!(error.to_string().contains("while borrowed"), "{error}");
+    }
+    #[test]
+    fn consuming_sequence_cannot_take_from_a_borrowed_parameter() {
+        let (mut program, types) = lower_source(
+            r#"
+function visit(items: list[int64]) returns nothing:
+    for item in view items:
+        break
+"#,
+        );
+        jett_mir::prepare_native_sequences(&mut program, &types);
+        program.functions[0].params[0].mode = jett_mir::ParamMode::View;
+        for block in &mut program.functions[0].blocks {
+            for statement in &mut block.statements {
+                if let StatementKind::SequenceGet { consume, .. } = &mut statement.kind {
+                    *consume = true;
+                }
+            }
+        }
+        let error = emit_host_object(&program, &types).expect_err("cannot take a borrowed element");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot take element from borrowed"),
+            "{error}"
+        );
+    }
+    #[test]
+    fn sequence_preheader_is_selected_by_cfg_not_block_position() {
+        let (mut program, types) = lower_source(
+            r#"
+function visit(items: list[int64]) returns int64:
+    mutable int64 total = 0
+    for item in items:
+        total = total + item
+    return total
+"#,
+        );
+        let function = &mut program.functions[0];
+        let old_entry = function.entry;
+        let last = function.blocks.last().unwrap().id;
+        let remap = |id| {
+            if id == old_entry {
+                last
+            } else if id == last {
+                old_entry
+            } else {
+                id
+            }
+        };
+        function
+            .blocks
+            .swap(old_entry.index() as usize, last.index() as usize);
+        function.entry = remap(old_entry);
+        for block in &mut function.blocks {
+            block.id = remap(block.id);
+            match &mut block.terminator.kind {
+                TerminatorKind::Goto(target) => *target = remap(*target),
+                TerminatorKind::ForEach { body, exit, .. } => {
+                    *body = remap(*body);
+                    *exit = remap(*exit);
+                }
+                TerminatorKind::Return(_) | TerminatorKind::Unreachable => {}
+                other => panic!("unexpected fixture terminator {other:?}"),
+            }
+        }
+        emit_host_object(&program, &types).expect("late-numbered unique loop preheader");
     }
 }

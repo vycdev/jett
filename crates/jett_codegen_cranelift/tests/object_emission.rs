@@ -700,3 +700,115 @@ function caller() returns int64:
 
     assert!(matches!(error, CodegenError::InvalidMir(_)));
 }
+
+#[test]
+fn rejects_unbaked_comptime_instead_of_executing_it_at_runtime() {
+    let (program, types) = lower_source("function main() returns int64:\n    return comptime 42\n");
+    let error = emit_host_object(&program, &types)
+        .expect_err("unbaked comptime must not become runtime code");
+    assert!(error.to_string().contains("unbaked comptime"), "{error}");
+}
+
+#[test]
+fn malformed_sequence_element_type_returns_error_without_panicking() {
+    for by_view in [true, false] {
+        let source = format!(
+            "function length(items: list[int64]) returns int64:\n    for item in {}items:\n        return item\n    return 0\n",
+            if by_view { "view " } else { "" }
+        );
+        let (mut program, mut types) = lower_source(&source);
+        emit_host_object(&program, &types).expect("valid baseline");
+        let mut foreign = TypeInterner::new();
+        let mut inner = TypeInterner::INT64;
+        for _ in 0..1000 {
+            inner = foreign.intern(jett_types::Type::List(inner));
+        }
+        assert!(inner.index() as usize > types.len());
+        let invalid = types.intern(jett_types::Type::List(inner));
+        for function in &mut program.functions {
+            for block in &mut function.blocks {
+                if let jett_mir::TerminatorKind::ForEach { iterable, .. } =
+                    &mut block.terminator.kind
+                {
+                    iterable.ty = invalid;
+                }
+            }
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            emit_host_object(&program, &types)
+        }));
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "must reject malformed element without panic: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn struct_layout_and_projection_contracts_are_validated_before_emission() {
+    use jett_hir::ExpressionKind;
+    let (baseline, types) = lower_source(
+        r#"
+struct Pair:
+    number: int64
+    text: string
+function make() returns Pair:
+    return Pair(number: 7, text: "value")
+function read(view pair: Pair) returns string:
+    return pair.text
+"#,
+    );
+    emit_host_object(&baseline, &types).expect("valid struct layout");
+    for corruption in 0..6 {
+        let mut program = baseline.clone();
+        if corruption < 4 {
+            let TerminatorKind::Return(Some(value)) =
+                &mut program.functions[0].blocks[0].terminator.kind
+            else {
+                panic!("constructor return");
+            };
+            let ExpressionKind::StructConstruct {
+                fields,
+                struct_type,
+                evaluation_order,
+                validates_refinements,
+            } = &mut value.kind
+            else {
+                panic!("constructor");
+            };
+            match corruption {
+                0 => fields[0].ty = TypeInterner::BOOL,
+                1 => *struct_type = TypeInterner::INT64,
+                2 => evaluation_order.swap(0, 1), // valid reordering, but duplicate below
+                3 => *validates_refinements = true,
+                _ => unreachable!(),
+            }
+            if corruption == 2 {
+                evaluation_order[1] = evaluation_order[0];
+            }
+        } else {
+            let TerminatorKind::Return(Some(value)) =
+                &mut program.functions[1].blocks[0].terminator.kind
+            else {
+                panic!("projection return");
+            };
+            let ExpressionKind::Field { owner_type, .. } = &mut value.kind else {
+                panic!("field");
+            };
+            if corruption == 4 {
+                *owner_type = TypeInterner::INT64;
+            } else {
+                value.ty = TypeInterner::BOOL;
+            }
+        }
+        let rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            emit_host_object(&program, &types)
+        }));
+        assert!(
+            matches!(rejection, Ok(Err(_))),
+            "corruption {corruption}: {rejection:?}"
+        );
+    }
+    // Copy-only public plan must not become a back door for struct ownership.
+    assert!(jett_mir::copy_values::CopyValuePlan::analyze(&baseline.functions[0], &types).is_err());
+}

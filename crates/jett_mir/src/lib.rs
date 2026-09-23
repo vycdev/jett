@@ -1,6 +1,11 @@
 //! Jett's backend-neutral control-flow graph representation.
 
 mod analysis;
+pub mod copy_values;
+mod handlers;
+mod sequences;
+pub use sequences::prepare_native_sequences;
+pub mod move_values;
 
 pub use analysis::{AnalysisError, ControlFlowGraph};
 pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};
@@ -64,6 +69,33 @@ pub struct Statement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    SequenceLength {
+        source: LocalId,
+        target: LocalId,
+    },
+    SequenceGet {
+        /// Transfer an initialized element from an exclusively owned iterator.
+        consume: bool,
+        source: LocalId,
+        index: LocalId,
+        target: LocalId,
+    },
+    IterationBorrow {
+        source: LocalId,
+        token: LocalId,
+        start: bool,
+    },
+    /// Read a sum discriminant without consuming its owner.
+    SumTag {
+        source: LocalId,
+        target: LocalId,
+    },
+    /// Consume the sum and transfer only its selected initialized payload.
+    SumTake {
+        source: LocalId,
+        target: LocalId,
+        success: bool,
+    },
     Let {
         local: LocalId,
         value: Expression,
@@ -312,6 +344,31 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::SequenceLength { source, target } => {
+                self.check_local(*source, statement.span, "sequence source");
+                self.check_local(*target, statement.span, "sequence length");
+            }
+            StatementKind::SequenceGet {
+                source,
+                index,
+                target,
+                ..
+            } => {
+                self.check_local(*source, statement.span, "sequence source");
+                self.check_local(*index, statement.span, "sequence index");
+                self.check_local(*target, statement.span, "sequence element");
+            }
+            StatementKind::IterationBorrow { source, token, .. } => {
+                self.check_local(*source, statement.span, "iteration borrow");
+                self.check_local(*token, statement.span, "iteration loan token");
+            }
+
+            StatementKind::SumTag { source, target }
+            | StatementKind::SumTake { source, target, .. } => {
+                self.check_local(*source, statement.span, "sum source");
+                self.check_local(*target, statement.span, "sum target");
+            }
+
             StatementKind::Let { local, value } => {
                 self.check_local(*local, statement.span, "let statement");
                 self.expression(value);
@@ -701,13 +758,17 @@ pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
 
 fn lower_function(function: &hir::Function) -> Function {
     let mut builder = Builder::new(function.body.span);
+    builder.locals = function.locals.clone();
     builder.lower_block(&function.body);
+    if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
+        builder.terminate(TerminatorKind::Return(None), function.body.span);
+    }
     Function {
         id: function.id,
         identity: function.identity.clone(),
         params: function.params.clone(),
         return_type: function.return_type,
-        locals: function.locals.clone(),
+        locals: builder.locals,
         entry: BlockId(0),
         blocks: builder.blocks,
         span: function.span,
@@ -718,6 +779,8 @@ struct Builder {
     blocks: Vec<BasicBlock>,
     current: BlockId,
     loops: Vec<(BlockId, BlockId)>,
+    locals: Vec<Local>,
+    handlers: Vec<(LocalId, BlockId)>,
 }
 
 impl Builder {
@@ -733,6 +796,8 @@ impl Builder {
             }],
             current: BlockId(0),
             loops: Vec::new(),
+            locals: Vec::new(),
+            handlers: Vec::new(),
         }
     }
 
@@ -783,28 +848,42 @@ impl Builder {
 
     fn lower_statement(&mut self, statement: &hir::Statement) {
         match &statement.kind {
-            hir::StatementKind::Let { local, value } => self.push(
-                StatementKind::Let {
-                    local: *local,
-                    value: value.clone(),
-                },
-                statement.span,
-            ),
-            hir::StatementKind::Assign { target, value } => self.push(
-                StatementKind::Assign {
-                    target: target.clone(),
-                    value: value.clone(),
-                },
-                statement.span,
-            ),
+            hir::StatementKind::Let { local, value } => {
+                let value = self.lower_value(value);
+                self.push(
+                    StatementKind::Let {
+                        local: *local,
+                        value,
+                    },
+                    statement.span,
+                );
+            }
+            hir::StatementKind::Assign { target, value } => {
+                let value = self.lower_value(value);
+                self.push(
+                    StatementKind::Assign {
+                        target: target.clone(),
+                        value,
+                    },
+                    statement.span,
+                );
+            }
             hir::StatementKind::Expression(value) => {
-                self.push(StatementKind::Evaluate(value.clone()), statement.span)
+                let value = self.lower_value(value);
+                self.push(StatementKind::Evaluate(value), statement.span);
             }
             hir::StatementKind::HandleDefault(value) => {
-                self.push(StatementKind::HandleDefault(value.clone()), statement.span)
+                let value = self.lower_value(value);
+                if let Some(&(local, continuation)) = self.handlers.last() {
+                    self.push(StatementKind::Let { local, value }, statement.span);
+                    self.terminate(TerminatorKind::Goto(continuation), statement.span);
+                } else {
+                    self.push(StatementKind::HandleDefault(value), statement.span);
+                }
             }
             hir::StatementKind::Return(value) => {
-                self.terminate(TerminatorKind::Return(value.clone()), statement.span)
+                let value = value.as_ref().map(|v| self.lower_value(v));
+                self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
                 let target = self.loops.last().expect("validated break has a loop").1;

@@ -35,6 +35,11 @@ impl FunctionId {
 pub struct LocalId(u32);
 
 impl LocalId {
+    /// Allocate a canonical local identity during backend-neutral lowering.
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }
@@ -1967,6 +1972,28 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         "identifier is neither a local nor a checked concrete function value",
                     );
                     return None;
+                }
+            }
+            Expr::Binary(left, op @ (ast::BinOp::Eq | ast::BinOp::NotEq), right, _)
+                if self.method_calls.contains_key(&span) =>
+            {
+                let function = self.resolve_user_call_target(left, span)?;
+                let call = ExpressionKind::Call {
+                    function,
+                    args: vec![self.lower_expression(left)?, self.lower_expression(right)?],
+                    evaluation_order: vec![0, 1],
+                };
+                if *op == ast::BinOp::NotEq {
+                    ExpressionKind::Unary {
+                        op: UnaryOp::Not,
+                        value: Box::new(Expression {
+                            kind: call,
+                            ty,
+                            span,
+                        }),
+                    }
+                } else {
+                    call
                 }
             }
             Expr::Binary(left, op, right, _) => ExpressionKind::Binary {

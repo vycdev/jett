@@ -7023,7 +7023,12 @@ width, including signed minimum divided by `-1`. Integer division and modulo
 are accepted only when the divisor is statically proven nonzero by its
 refinement, a nonzero literal or immutable binding, or a visible equality
 guard. Floating-point arithmetic follows IEEE behavior, including infinity and
-NaN for division by zero. Arithmetic therefore does not create runtime
+NaN for division by zero. A float32 expression rounds to 32-bit precision at
+each expression result, including literals and intermediate arithmetic, in both
+runtime and explicit comptime evaluation. Its current string conversion formats
+that value exactly widened to the shared float64 display carrier; it does not
+restore discarded precision or promise shortest-float32 decimal output.
+Arithmetic therefore does not create runtime
 exceptions or handled errors. Refinement types remain the way to constrain an
 application to a mathematically non-overflowing domain.
 
@@ -7450,3 +7455,46 @@ the completed [reflection predicate fact contract](completed/reflection_predicat
 3. A compressed reference file (`skill.md`) should be created for LLM agents — containing compiler usage, syntax overview, code rules, common patterns, and short code examples. This is the file an LLM loads into its context before writing Jett code. Should be done after the design document is stable.
 4. TOON (`toon.serialize()`, `toon.parse()`) could be exposed as a standard library module for user code, alongside JSON. This would let Jett programs produce TOON output for LLM consumption — not just the compiler. To be considered after core stdlib is stable.
 5. Fast compilation is an implementation goal: incremental compilation, caching, and minimal rebuilds. Target should be sub-second recompilation for typical changes. Slow compilation breaks the LLM compile-test-fix feedback cycle.
+
+### Native Linux executable seed
+
+The Cranelift scalar AOT path can link on the exact x86-64 Linux GNU host as
+well as the existing Windows MSVC target. An explicit, target-matched launcher
+bundle supplies ABI version, CRT mode, archive and system libraries. Linux uses
+`cc` or a literal `JETT_NATIVE_CC` executable path, without shell interpolation;
+Windows retains MSVC SDK discovery and the static-CRT contract. Both publish
+only a successfully linked executable. The Linux scalar seed runs under an
+automated deadline without source-tree or compiler environment dependencies.
+Full language/runtime parity and clean Windows execution are still release
+gates, not claims made by this seed. See `active/native_codegen_parity_plan.md`.
+
+Explicit `comptime` primitive results are imported into typed HIR before MIR
+lowering, retaining their checked type and span. Ordinary pure calls remain
+runtime calls. The backend rejects any unresolved `Comptime` marker instead of
+emitting its source computation. Composite constants still need native layout
+lowering and remain an explicit native parity gap. A native regression executes
+baked `math.factorial(5)` after removing its source file.
+
+
+### Native string and numeric execution slice
+
+The current Cranelift subset also executes immutable strings, interpolation,
+print/println, checked Stdout entry parameters, and typed numeric runtime kernels.
+String handles have explicit retain/release ownership and are destroyed at last
+release. MIR definite-initialization and liveness facts drive local and temporary
+cleanup through branches, loops, overwrites, returns, and terminal failures.
+
+Terminal runtime failure is a context-local first error, not `result.fail` data.
+Compiled calls test that channel before using a return value; failure edges release
+frame owners and propagate it to the launcher. Context destruction checks for leaked
+native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
+use the same extended-grapheme segmentation dependency as the interpreter. This
+initial handle representation is not the proposed inline/SSO optimization.
+
+The full native parity gate is still incomplete: 19/182 genuine objects, 8/30
+main outcomes, and 14/25 runtime contracts, with 182/182 typed lowering. See
+`active/native_value_abi.md` for ABI ownership and failure contracts and
+`active/native_codegen_parity_plan.md` for the remaining gates. In particular,
+move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
+reflection/JSON, actors/tasks, other capabilities, and clean Windows release
+verification are not established by this slice.

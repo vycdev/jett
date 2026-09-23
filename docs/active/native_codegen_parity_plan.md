@@ -27,7 +27,7 @@ explicitly marked unimplemented, with the reason recorded in the same change.
 Run-pass files without `main`, including verification and property fixtures,
 count toward the 182-fixture lowering obligation. The initial executable
 harness does not execute their `verify` blocks natively, so they do not count
-toward the 29-fixture execution obligation. Passing them through frontend
+toward the 30-fixture execution obligation. Passing them through frontend
 verification is not evidence that their bodies executed as native code. A
 future native verification harness may add a separate execution denominator.
 
@@ -280,13 +280,13 @@ lowering alone never changes an execution row to complete.
 | Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
-| Strings and bytes | covered | pending | pending |
-| Structs, enums, bitfields, machines, and refinements | covered | pending | pending |
-| Lists, maps, and sets | covered | pending | pending |
-| Results, optionals, and `handle` control flow | covered, but handler bodies still require explicit MIR CFG extraction | pending | pending |
+| Strings and bytes | covered | immutable strings and separately owned bytes storage, checked leaf operations | byte fixture functions, nested cleanup, moves/views/clones covered |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs with typed fields; other families pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup covered; refinement validation and other aggregate kinds pending |
+| Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists; maps/sets pending | compiled list access, reverse/repeat, scalar iteration; projected views pending |
+| Results, optionals, and `handle` control flow | explicit statement-root handler CFG | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits and terminal bypass covered; nested-expression handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
 | Compiler intrinsics and reflection | covered with checked operands and closed `IntrinsicId` identities | pending | pending |
-| Capabilities and runtime resources | nominal checked types covered | pending | pending |
+| Capabilities and runtime resources | nominal checked types covered | explicit Stdout entry and write; others pending | Stdout output covered; other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
 | Trace, breakpoint, assert, and failure reporting | covered | pending | pending |
@@ -296,11 +296,79 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 2 | 182 | manifest-driven production object gate for `simple.jett` and `native_scalar_entry.jett` |
-| Successful/expected `main` execution | 0 | 30 | automated native link-and-run differential gate pending |
-| Runtime contracts | 0 | 25 | native runtime-contract differential gate pending |
+| Native object generation | 40 | 182 | exhaustive 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Successful/expected `main` execution | 10 | 30 | Linux GNU production linking and exact interpreter stdout comparison in `native_execution` and `native_values` |
+| Runtime contracts | 20 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
-These are intentionally conservative counts. The two scalar object fixtures
-count because the manifest gate executes the production emission API and checks
-deterministic nonempty artifacts. A manual linked smoke run is not counted as
-execution coverage until the same path is enforced by an automated gate.
+These phase-4 counts come from the exhaustive 207-row `native_parity` probe, which
+attempts every fixture regardless of staged `object_emit` labels and returns
+failure until all denominators pass. The original manifest pins 29 nonempty,
+code-bearing object gates; the exhaustive probe also attempts every unmarked row
+and now proves 40. Fixture membership and denominators are unchanged.
+Verification-only empty objects do not count. Native
+execution tests additionally assert computed output, not only process success.
+
+Terminal failures count only after behavior and cleanup match. ABI context
+destruction now rejects unreleased string owners; launcher exit 71 requires
+successful destruction, while leaks override it with exit 72. Dedicated launcher
+tests exercise both paths and nested native-call tests exercise temporary/local
+cleanup. This is evidence for the current scalar/string runtime, not a claim
+that unsupported resource families already have finalizer/effect instrumentation.
+
+## Linux GNU executable harness
+
+The production linker also accepts exactly `x86_64-unknown-linux-gnu` when it
+is the compiler host. `NativeLauncherBundle::linux_gnu_v1` specifies the Rust
+static launcher archive, ABI v1, dynamic GNU CRT, and ordered system libraries.
+`cc` (or the literal executable path in `JETT_NATIVE_CC`) links the Cranelift
+object without a shell. Cross-target bundles are rejected before linking.
+Windows MSVC retains its static CRT, SDK discovery, library order, and atomic
+publication contract; Windows execution has not been verified on Linux.
+
+`cargo test -p jett_driver --test native_execution` builds the target-matched
+launcher archive and executes the scalar-entry fixture in an empty directory
+with an empty environment and a deadline. The executable needs no compiler
+source at runtime. This is one executable seed, not full native parity or a
+clean-distribution packaging claim. All remaining fixture obligations remain.
+
+Explicit `comptime` primitive results are imported into typed HIR before MIR
+lowering, retaining their checked type and span. Ordinary pure calls remain
+runtime calls. The backend rejects any unresolved `Comptime` marker instead of
+emitting its source computation. Composite constants still need native layout
+lowering and remain an explicit native parity gap. A native regression executes
+baked `math.factorial(5)` after removing its source file.
+
+
+## Native runtime-value slice
+
+`active/native_value_abi.md` defines immutable context-associated string handles,
+borrowed call inputs, owned results, terminal failure transport, and the separate
+Stdout token. `jett_mir::copy_values::CopyValuePlan` computes definite initialization
+and liveness over CFG backedges. Cranelift consumes those facts to release dead
+locals, overwritten values, full-expression temporaries, and all frame owners on
+return or terminal failure. Runtime allocation maps remove each string at its last
+release; context destruction is a leak check, not a program-long value arena.
+
+Ordinary Jett calls, branches, loops, argument evaluation, and string interpolation
+are emitted code. Typed runtime leaves implement string storage, formatting,
+grapheme slicing/counting, selected Unicode operations, stdout, and numeric kernels.
+They consume no interpreter Value, AST, HIR, or source operation names. Exact checked
+IntrinsicId and concrete numeric type arguments select the native leaf signature.
+
+MoveValuePlan now models linear bytes, selected sum payloads, list and user struct owners, with
+call-bounded loans, active iteration loans and initialized owning slots. Full
+ownership remains open for capabilities beyond Stdout, resources, other aggregate kinds,
+closures and tasks. Nested-expression handlers and move-only iteration projections
+remain pending. Unsupported types/forms remain rejected
+rather than being made nominally supported by the copyable-string plan. CLI
+packaging, other capability providers, and clean Windows MSVC execution also remain
+release gates.
+
+Phase 4 additionally executes both existing generic-struct and explicit-equality
+fixture bodies with supplemental mains. Namespace interface mains now match exact
+stdout natively. Struct fields retain their checked layouts and implicit-view
+semantics; Equatable comparisons carry exact checker-selected method identities
+into compiled calls. One emitted object is tested with four real process inputs.
+The full workspace checkpoint passed 1763 tests; complete remains false. Enum
+payloads, refinement-validating construction and projected-owner escapes remain
+continuation work. See `native_value_abi.md` for the precise supported boundary.

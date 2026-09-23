@@ -2,8 +2,8 @@
 //!
 //! Native compilation is deliberately split into an object stage and a link
 //! stage. The object stage consumes the exact checked program-entry identity
-//! published by [`crate::BackendLoweringResult`]. The Windows MSVC link stage
-//! accepts launcher metadata explicitly, invokes `link.exe` without a shell,
+//! published by [`crate::BackendLoweringResult`]. The Windows MSVC and Linux GNU
+//! link stages accept explicit launcher metadata and invoke tools without a shell,
 //! and publishes an executable only after a successful bounded link.
 
 use std::ffi::{OsStr, OsString};
@@ -22,6 +22,22 @@ use crate::{BackendLoweringError, BackendLoweringResult, lower_file_for_backend}
 
 /// The sole target accepted by the version 1 native Windows linker.
 pub const WINDOWS_MSVC_NATIVE_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Supported Linux GNU host; this is not a cross-linking contract.
+pub const LINUX_GNU_NATIVE_TARGET: &str = "x86_64-unknown-linux-gnu";
+
+const SUPPORTED_NATIVE_HOSTS: &str = "x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu";
+
+/// System libraries required by the GNU dynamic-CRT launcher archive.
+pub const LINUX_GNU_V1_NATIVE_LIBRARIES: &[&str] = &[
+    "-lgcc_s",
+    "-lutil",
+    "-lrt",
+    "-lpthread",
+    "-lm",
+    "-ldl",
+    "-lc",
+];
 
 /// The runtime ABI expected by the version 1 native launcher.
 pub const NATIVE_RUNTIME_ABI_VERSION_V1: u32 = 1;
@@ -76,6 +92,20 @@ pub struct NativeLauncherBundle {
 }
 
 impl NativeLauncherBundle {
+    /// Describe a Linux GNU launcher archive built for the compiler host.
+    pub fn linux_gnu_v1(archive_path: impl Into<PathBuf>) -> Self {
+        Self {
+            archive_path: archive_path.into(),
+            target: LINUX_GNU_NATIVE_TARGET.to_string(),
+            runtime_abi_version: NATIVE_RUNTIME_ABI_VERSION_V1,
+            crt_mode: NativeCrtMode::Dynamic,
+            native_library_args: LINUX_GNU_V1_NATIVE_LIBRARIES
+                .iter()
+                .map(OsString::from)
+                .collect(),
+        }
+    }
+
     /// Describe the canonical version 1 static-CRT launcher for Windows MSVC.
     pub fn windows_msvc_static_v1(archive_path: impl Into<PathBuf>) -> Self {
         Self {
@@ -347,7 +377,7 @@ impl fmt::Display for NativeBuildError {
             }
             Self::UnsupportedHost { actual, supported } => write!(
                 formatter,
-                "native executable linking is unsupported on host `{actual}`; expected `{supported}`"
+                "native executable linking is unsupported on host `{actual}`; supported hosts: {supported}"
             ),
             Self::ObjectTargetMismatch {
                 object_target,
@@ -370,8 +400,8 @@ impl fmt::Display for NativeBuildError {
             ),
             Self::LauncherNativeLibrariesMismatch { actual } => write!(
                 formatter,
-                "launcher native-library arguments {:?} do not match the canonical version 1 static-CRT contract {:?}",
-                actual, WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES
+                "launcher native-library arguments {:?} do not match the canonical target-specific version 1 contract",
+                actual
             ),
             Self::CreateTemporaryDirectory { parent, source } => write!(
                 formatter,
@@ -576,12 +606,20 @@ fn link_host_object_with_timeout(
     timeout: Duration,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
     validate_link_host(object)?;
-    validate_launcher(launcher)?;
+    validate_host_launcher(launcher)?;
     validate_regular_file(
         &launcher.archive_path,
         NativePathRole::LauncherArchive,
-        Some("lib"),
+        Some(if launcher.target == LINUX_GNU_NATIVE_TARGET {
+            "a"
+        } else {
+            "lib"
+        }),
     )?;
+    // Linking runs in a temporary directory, so relative archive inputs must
+    // be resolved against the callers current directory first.
+    let mut launcher = launcher.clone();
+    launcher.archive_path = absolute_output_path(&launcher.archive_path)?;
     let output_path = absolute_output_path(output_path)?;
     validate_output_path(&output_path)?;
 
@@ -607,14 +645,24 @@ fn link_host_object_with_timeout(
         source,
     })?;
 
-    link_windows_msvc(
-        &object_path,
-        launcher,
-        &linked_executable,
-        &linked_pdb,
-        build_directory.path(),
-        timeout,
-    )?;
+    if launcher.target == LINUX_GNU_NATIVE_TARGET {
+        link_linux_gnu(
+            &object_path,
+            &launcher,
+            &linked_executable,
+            build_directory.path(),
+            timeout,
+        )?;
+    } else {
+        link_windows_msvc(
+            &object_path,
+            &launcher,
+            &linked_executable,
+            &linked_pdb,
+            build_directory.path(),
+            timeout,
+        )?;
+    }
     let linked_metadata = fs::metadata(&linked_executable).map_err(|source| {
         if source.kind() == io::ErrorKind::NotFound {
             NativeBuildError::MissingLinkedExecutable {
@@ -645,13 +693,21 @@ fn link_host_object_with_timeout(
 }
 
 fn validate_link_host(object: &NativeProgramObjectArtifact) -> Result<(), NativeBuildError> {
-    let host_target = jett_codegen_cranelift::host_target().to_string();
-    if !cfg!(all(target_os = "windows", target_env = "msvc"))
-        || host_target != WINDOWS_MSVC_NATIVE_TARGET
-    {
+    validate_link_host_for(object, jett_codegen_cranelift::host_target().to_string())
+}
+
+fn validate_link_host_for(
+    object: &NativeProgramObjectArtifact,
+    host_target: String,
+) -> Result<(), NativeBuildError> {
+    let supported = (cfg!(all(target_os = "windows", target_env = "msvc"))
+        && host_target == WINDOWS_MSVC_NATIVE_TARGET)
+        || (cfg!(all(target_os = "linux", target_env = "gnu"))
+            && host_target == LINUX_GNU_NATIVE_TARGET);
+    if !supported {
         return Err(NativeBuildError::UnsupportedHost {
             actual: host_target,
-            supported: WINDOWS_MSVC_NATIVE_TARGET,
+            supported: SUPPORTED_NATIVE_HOSTS,
         });
     }
     if object.target() != host_target {
@@ -666,11 +722,42 @@ fn validate_link_host(object: &NativeProgramObjectArtifact) -> Result<(), Native
     Ok(())
 }
 
+fn validate_host_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildError> {
+    if cfg!(all(
+        target_os = "linux",
+        target_env = "gnu",
+        target_arch = "x86_64"
+    )) {
+        validate_launcher_contract(
+            launcher,
+            LINUX_GNU_NATIVE_TARGET,
+            NativeCrtMode::Dynamic,
+            LINUX_GNU_V1_NATIVE_LIBRARIES,
+        )
+    } else {
+        validate_launcher(launcher)
+    }
+}
+
 fn validate_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildError> {
-    if launcher.target != WINDOWS_MSVC_NATIVE_TARGET {
+    validate_launcher_contract(
+        launcher,
+        WINDOWS_MSVC_NATIVE_TARGET,
+        NativeCrtMode::Static,
+        WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES,
+    )
+}
+
+fn validate_launcher_contract(
+    launcher: &NativeLauncherBundle,
+    target: &'static str,
+    crt: NativeCrtMode,
+    libraries: &[&str],
+) -> Result<(), NativeBuildError> {
+    if launcher.target != target {
         return Err(NativeBuildError::LauncherTargetMismatch {
             actual: launcher.target.clone(),
-            expected: WINDOWS_MSVC_NATIVE_TARGET,
+            expected: target,
         });
     }
     if launcher.runtime_abi_version != NATIVE_RUNTIME_ABI_VERSION_V1 {
@@ -679,16 +766,13 @@ fn validate_launcher(launcher: &NativeLauncherBundle) -> Result<(), NativeBuildE
             expected: NATIVE_RUNTIME_ABI_VERSION_V1,
         });
     }
-    if launcher.crt_mode != NativeCrtMode::Static {
+    if launcher.crt_mode != crt {
         return Err(NativeBuildError::LauncherCrtMismatch {
             actual: launcher.crt_mode,
-            expected: NativeCrtMode::Static,
+            expected: crt,
         });
     }
-    let expected: Vec<OsString> = WINDOWS_MSVC_STATIC_V1_NATIVE_LIBRARIES
-        .iter()
-        .map(OsString::from)
-        .collect();
+    let expected: Vec<OsString> = libraries.iter().map(OsString::from).collect();
     if launcher.native_library_args != expected {
         return Err(NativeBuildError::LauncherNativeLibrariesMismatch {
             actual: launcher.native_library_args.clone(),
@@ -726,7 +810,7 @@ fn validate_regular_file(
 }
 
 fn validate_output_path(path: &Path) -> Result<(), NativeBuildError> {
-    if !has_ascii_case_insensitive_extension(path, "exe") {
+    if cfg!(windows) && !has_ascii_case_insensitive_extension(path, "exe") {
         return Err(NativeBuildError::InvalidExtension {
             role: NativePathRole::Output,
             path: path.to_path_buf(),
@@ -778,6 +862,47 @@ fn absolute_output_path(path: &Path) -> Result<PathBuf, NativeBuildError> {
     std::env::current_dir()
         .map(|current| current.join(path))
         .map_err(NativeBuildError::ResolveCurrentDirectory)
+}
+
+fn link_linux_gnu(
+    object: &Path,
+    launcher: &NativeLauncherBundle,
+    executable: &Path,
+    working_directory: &Path,
+    timeout: Duration,
+) -> Result<(), NativeBuildError> {
+    // One literal executable path, never shell text or space-split flags.
+    // Resolve Linux paths containing a separator against the caller's cwd,
+    // before the child moves into the build directory. Bare names use PATH.
+    let linker =
+        PathBuf::from(std::env::var_os("JETT_NATIVE_CC").unwrap_or_else(|| OsString::from("cc")));
+    let linker = if linker.is_relative() && linker.as_os_str().as_encoded_bytes().contains(&b'/') {
+        absolute_output_path(&linker)?
+    } else {
+        linker
+    };
+    let mut command = Command::new(&linker);
+    command
+        .current_dir(working_directory)
+        .arg("-no-pie")
+        .arg("-o")
+        .arg(executable)
+        .arg(object)
+        .arg(&launcher.archive_path)
+        .args(&launcher.native_library_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_command_with_timeout(command, &linker, timeout)?;
+    if !output.status.success() {
+        return Err(NativeBuildError::LinkFailed {
+            linker,
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -833,10 +958,11 @@ fn link_windows_msvc(
 ) -> Result<(), NativeBuildError> {
     Err(NativeBuildError::UnsupportedHost {
         actual: jett_codegen_cranelift::host_target().to_string(),
-        supported: WINDOWS_MSVC_NATIVE_TARGET,
+        supported: SUPPORTED_NATIVE_HOSTS,
     })
 }
 
+#[cfg(any(windows, test))]
 fn linker_arguments(
     object_path: &Path,
     launcher: &NativeLauncherBundle,
@@ -858,6 +984,7 @@ fn linker_arguments(
     arguments
 }
 
+#[cfg(any(windows, test))]
 fn prefixed_path_argument(prefix: &str, path: &Path) -> OsString {
     let mut argument = OsString::from(prefix);
     argument.push(path.as_os_str());
@@ -876,35 +1003,35 @@ fn run_command_with_timeout(
     program: &Path,
     timeout: Duration,
 ) -> Result<CommandOutput, NativeBuildError> {
+    // Files do not require EOF from every descendant that inherited a handle.
+    // Reopen gives writers independent offsets; capture only the exit snapshot.
+    let mut stdout = capture_file("stdout")?;
+    let mut stderr = capture_file("stderr")?;
+    command
+        .stdout(
+            stdout
+                .reopen()
+                .map_err(|source| NativeBuildError::CaptureLinkerOutput {
+                    stream: "stdout",
+                    source,
+                })?,
+        )
+        .stderr(
+            stderr
+                .reopen()
+                .map_err(|source| NativeBuildError::CaptureLinkerOutput {
+                    stream: "stderr",
+                    source,
+                })?,
+        );
     let child = command
         .spawn()
         .map_err(|source| NativeBuildError::SpawnLinker {
             linker: program.to_path_buf(),
             source,
         })?;
-    // From this point onward every return path either observes a reaped child
-    // or lets the guard terminate and reap it.
+    // Every return path either observes a reaped child or terminates/reaps it.
     let mut child = ManagedChild::new(child);
-    let stdout =
-        child
-            .child
-            .stdout
-            .take()
-            .ok_or_else(|| NativeBuildError::CaptureLinkerOutput {
-                stream: "stdout",
-                source: io::Error::other("linker stdout pipe was not created"),
-            })?;
-    let stderr =
-        child
-            .child
-            .stderr
-            .take()
-            .ok_or_else(|| NativeBuildError::CaptureLinkerOutput {
-                stream: "stderr",
-                source: io::Error::other("linker stderr pipe was not created"),
-            })?;
-    let stdout_reader = spawn_output_reader(stdout, "stdout")?;
-    let stderr_reader = spawn_output_reader(stderr, "stderr")?;
     let start = Instant::now();
 
     let (status, timed_out) = loop {
@@ -927,8 +1054,8 @@ fn run_command_with_timeout(
         }
     };
 
-    let stdout = join_output(stdout_reader, "stdout")?;
-    let stderr = join_output(stderr_reader, "stderr")?;
+    let stdout = read_output_snapshot(stdout.as_file_mut(), "stdout")?;
+    let stderr = read_output_snapshot(stderr.as_file_mut(), "stderr")?;
     if timed_out {
         return Err(NativeBuildError::LinkTimedOut {
             linker: program.to_path_buf(),
@@ -993,33 +1120,22 @@ impl Drop for ManagedChild {
     }
 }
 
-fn spawn_output_reader(
-    stream: impl Read + Send + 'static,
-    name: &'static str,
-) -> Result<thread::JoinHandle<io::Result<Vec<u8>>>, NativeBuildError> {
-    thread::Builder::new()
-        .name(format!("jett-linker-{name}"))
-        .spawn(move || read_stream(stream))
-        .map_err(|source| NativeBuildError::SpawnLinkerOutputThread {
-            stream: name,
-            source,
-        })
+fn capture_file(stream: &'static str) -> Result<tempfile::NamedTempFile, NativeBuildError> {
+    tempfile::NamedTempFile::new()
+        .map_err(|source| NativeBuildError::CaptureLinkerOutput { stream, source })
 }
 
-fn read_stream(mut stream: impl Read) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    stream.read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
-
-fn join_output(
-    reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+fn read_output_snapshot(
+    file: &mut fs::File,
     stream: &'static str,
 ) -> Result<Vec<u8>, NativeBuildError> {
-    reader
-        .join()
-        .map_err(|_| NativeBuildError::LinkerOutputThreadPanicked { stream })?
-        .map_err(|source| NativeBuildError::CaptureLinkerOutput { stream, source })
+    let mut read = || -> io::Result<Vec<u8>> {
+        let length = file.metadata()?.len();
+        let mut bytes = Vec::new();
+        file.take(length).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    };
+    read().map_err(|source| NativeBuildError::CaptureLinkerOutput { stream, source })
 }
 
 #[cfg(windows)]
@@ -1064,6 +1180,231 @@ fn publish_executable(from: &Path, to: &Path) -> Result<(), NativeBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_host_diagnostic_names_both_native_hosts() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            "function main() returns nothing:\n    return nothing\n",
+        )
+        .unwrap();
+        let object = emit_host_program_object_for_file(&source).unwrap();
+        let error = validate_link_host_for(&object, "aarch64-unknown-linux-gnu".to_owned())
+            .expect_err("unsupported hosts must not silently cross-link");
+        assert!(matches!(error, NativeBuildError::UnsupportedHost { .. }));
+        let diagnostic = error.to_string();
+        assert!(
+            diagnostic.contains("aarch64-unknown-linux-gnu"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains(WINDOWS_MSVC_NATIVE_TARGET),
+            "{diagnostic}"
+        );
+        assert!(diagnostic.contains(LINUX_GNU_NATIVE_TARGET), "{diagnostic}");
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    #[test]
+    fn linux_cc_override_child() {
+        let Some(directory) = std::env::var_os("JETT_TEST_CC_DIRECTORY") else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let result = link_linux_gnu(
+            &directory.join("main.o"),
+            &NativeLauncherBundle::linux_gnu_v1(directory.join("support.o")),
+            &directory.join("program"),
+            &directory.join("build directory"),
+            Duration::from_secs(10),
+        );
+        if std::env::var_os("JETT_TEST_CC_MISSING").is_some() {
+            assert!(
+                matches!(result, Err(NativeBuildError::SpawnLinker { source, .. })
+                if source.kind() == io::ErrorKind::NotFound)
+            );
+        } else {
+            result.expect("literal compiler path must link from a different cwd");
+            assert_eq!(
+                Command::new(directory.join("program"))
+                    .status()
+                    .unwrap()
+                    .code(),
+                Some(42)
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    #[test]
+    fn linux_cc_overrides_are_literal_and_relative_to_the_caller() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir(root.join("tool chain")).unwrap();
+        fs::create_dir(root.join("build directory")).unwrap();
+        let cc = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("cc"))
+            .find(|path| path.is_file())
+            .expect("host C compiler");
+        let cc = fs::canonicalize(cc).unwrap();
+        let compiler = root.join("tool chain/cc literal");
+        std::os::unix::fs::symlink(&cc, &compiler).unwrap();
+        std::os::unix::fs::symlink(&cc, root.join("tool chain/cc")).unwrap();
+        for (name, source) in [
+            (
+                "main",
+                "extern int answer(void); int main(void) { return answer(); }",
+            ),
+            ("support", "int answer(void) { return 42; }"),
+        ] {
+            fs::write(root.join(format!("{name}.c")), source).unwrap();
+            assert!(
+                Command::new(&cc)
+                    .arg("-c")
+                    .arg(root.join(format!("{name}.c")))
+                    .arg("-o")
+                    .arg(root.join(format!("{name}.o")))
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let path = std::env::join_paths(
+            std::iter::once(root.join("tool chain"))
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        for (compiler, missing) in [
+            (compiler, false),
+            (PathBuf::from("cc"), false),
+            (PathBuf::from("./tool chain/missing compiler"), true),
+            (PathBuf::from("./tool chain/cc literal"), false),
+        ] {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "native::tests::linux_cc_override_child",
+                    "--nocapture",
+                ])
+                .current_dir(root)
+                .env("JETT_NATIVE_CC", &compiler)
+                .env("JETT_TEST_CC_DIRECTORY", root)
+                .env("PATH", &path)
+                .env_remove("JETT_TEST_CC_MISSING");
+            if missing {
+                command.env("JETT_TEST_CC_MISSING", "1");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "compiler {}: {output:?}",
+                compiler.display()
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    #[test]
+    fn linux_launcher_contract_rejects_incompatible_metadata() {
+        let canonical = NativeLauncherBundle::linux_gnu_v1("launcher.a");
+        assert!(validate_host_launcher(&canonical).is_ok());
+        let mut wrong = canonical.clone();
+        wrong.target = WINDOWS_MSVC_NATIVE_TARGET.to_owned();
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherTargetMismatch { .. })
+        ));
+        wrong = canonical.clone();
+        wrong.runtime_abi_version += 1;
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherRuntimeAbiMismatch { .. })
+        ));
+        wrong = canonical.clone();
+        wrong.crt_mode = NativeCrtMode::Static;
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherCrtMismatch { .. })
+        ));
+        wrong = canonical;
+        wrong.native_library_args.pop();
+        assert!(matches!(
+            validate_host_launcher(&wrong),
+            Err(NativeBuildError::LauncherNativeLibrariesMismatch { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_runner_captures_large_streams_and_failure_status() {
+        let stdout = "o".repeat(96 * 1024);
+        let stderr = "e".repeat(96 * 1024);
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "printf '%s' \"$1\"; printf '%s' \"$2\" >&2; exit 7",
+                "sh",
+                &stdout,
+                &stderr,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output =
+            run_command_with_timeout(command, Path::new("sh"), Duration::from_secs(3)).unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, stdout.as_bytes());
+        assert_eq!(output.stderr, stderr.as_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_deadline_does_not_wait_for_inherited_output_pipes() {
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "printf captured; printf diagnostic >&2; sleep 4 & wait",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let start = Instant::now();
+        let error = run_command_with_timeout(command, Path::new("sh"), Duration::from_millis(100))
+            .expect_err("shell must time out even when its child retains output handles");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "inherited pipes defeated the deadline"
+        );
+        match error {
+            NativeBuildError::LinkTimedOut { stdout, stderr, .. } => {
+                assert_eq!(stdout, "captured");
+                assert_eq!(stderr, "diagnostic");
+            }
+            error => panic!("unexpected error: {error}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_runner_enforces_unix_deadline_and_reaps_child() {
+        let mut command = Command::new("sleep");
+        command
+            .arg("10")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let start = Instant::now();
+        assert!(matches!(
+            run_command_with_timeout(command, Path::new("sleep"), Duration::from_millis(25)),
+            Err(NativeBuildError::LinkTimedOut { .. })
+        ));
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
 
     #[test]
     fn canonical_launcher_metadata_is_complete_and_static() {
@@ -1222,6 +1563,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn output_validation_rejects_a_non_executable_extension_before_linking() {
         let path = std::env::current_dir()

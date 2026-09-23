@@ -1,3 +1,4 @@
+mod native_constants;
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
 use jett_comptime::evaluate_explicit_comptime_expressions;
 use jett_comptime::value::Value;
@@ -2743,13 +2744,14 @@ pub fn lower_file_for_backend_with_options(
         ));
     }
 
-    let hir = jett_hir::lower(
+    let mut hir = jett_hir::lower(
         &parse_result.module,
         &resolve_result,
         &check_result,
         &source_origins,
     )
     .map_err(BackendLoweringError::Hir)?;
+    native_constants::bake_primitives(&mut hir, &explicit_comptime_values);
     let program_entry = lowered_program_entry(&hir, source_program_entry)?;
     let mir = jett_mir::lower(&hir).map_err(BackendLoweringError::Mir)?;
     jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;

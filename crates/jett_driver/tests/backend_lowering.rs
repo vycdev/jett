@@ -176,3 +176,30 @@ fn run_pass_backend_lowering_gaps_are_explicit_and_monotonic() {
         "run-pass fixtures still outside backend lowering:\n{failures:#?}"
     );
 }
+
+#[test]
+fn backend_lowering_bakes_explicit_comptime_but_preserves_runtime_calls() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("constants.jett");
+    fs::write(&source, "function double(value: int64) returns int64:\n    return value * 2\nfunction main() returns nothing:\n    int64 baked = comptime double(21)\n    int64 dynamic = double(20)\n    return nothing\n").unwrap();
+    let lowered = lower_file_for_backend(&source).expect("checked constants lower");
+    let entry = lowered.program_entry.unwrap();
+    let main = &lowered.mir.functions[entry.index() as usize];
+    let jett_mir::StatementKind::Let { value: baked, .. } = &main.blocks[0].statements[0].kind
+    else {
+        panic!("baked let")
+    };
+    assert!(
+        matches!(baked.kind, jett_hir::ExpressionKind::Int(42)),
+        "explicit comptime must become typed constant, got {:?}",
+        baked.kind
+    );
+    let jett_mir::StatementKind::Let { value: dynamic, .. } = &main.blocks[0].statements[1].kind
+    else {
+        panic!("dynamic let")
+    };
+    assert!(
+        matches!(dynamic.kind, jett_hir::ExpressionKind::Call { .. }),
+        "ordinary pure call must remain runtime MIR"
+    );
+}

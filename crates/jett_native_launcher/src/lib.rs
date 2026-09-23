@@ -54,6 +54,9 @@ struct RuntimeCall {
 trait RuntimeLifecycle {
     fn create(&mut self, out_context: *mut JettRuntimeContextV1) -> RuntimeCall;
     fn destroy(&mut self, context: *mut JettRuntimeContextV1) -> RuntimeCall;
+    fn failure(&mut self, _context: *mut JettRuntimeContextV1) -> Option<RuntimeCall> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -77,6 +80,22 @@ impl RuntimeLifecycle for NativeRuntime {
             // SAFETY: the runtime v1 call contract initializes the result
             // record for every returned status.
             result: unsafe { result.assume_init() },
+        }
+    }
+
+    fn failure(&mut self, context: *mut JettRuntimeContextV1) -> Option<RuntimeCall> {
+        let mut result = MaybeUninit::uninit();
+        // SAFETY: launch_with retains the stationary context until destruction.
+        let status = unsafe {
+            jett_runtime::native_abi::values::jett_rt_v1_value_failure(context, result.as_mut_ptr())
+        };
+        if status == JettRuntimeStatusV1::OK {
+            None
+        } else {
+            Some(RuntimeCall {
+                status,
+                result: unsafe { result.assume_init() },
+            })
         }
     }
 
@@ -144,6 +163,8 @@ where
         Err(()) => EntryOutcome::Panicked,
     };
 
+    let entry_failure = runtime.failure(context.as_mut_ptr());
+
     // Cleanup is attempted exactly once after every successful creation,
     // including entry failures and recoverable entry panics.
     let destroy_outcome = match catch_operation(|| runtime.destroy(context.as_mut_ptr())) {
@@ -154,7 +175,15 @@ where
     let mut exit = match entry_outcome {
         EntryOutcome::Status(JETT_AOT_ENTRY_SUCCESS_V1) => JETT_LAUNCHER_EXIT_SUCCESS,
         EntryOutcome::Status(status) => {
-            write_entry_failure(stderr, status);
+            if let Some(failure) = entry_failure {
+                let _ = stderr.write_all(b"runtime error: ");
+                let _ = stderr.write_all(
+                    runtime_message(failure.result.message).unwrap_or(INVALID_RUNTIME_MESSAGE),
+                );
+                let _ = stderr.write_all(b"\n");
+            } else {
+                write_entry_failure(stderr, status);
+            }
             JETT_LAUNCHER_EXIT_ENTRY_FAILURE
         }
         EntryOutcome::Panicked => {
@@ -441,5 +470,78 @@ mod tests {
         assert_eq!(exit, JETT_LAUNCHER_EXIT_PANIC);
         assert_eq!(runtime.destroy_calls, 1);
         assert_eq!(stderr, DESTROY_PANIC_MESSAGE);
+    }
+
+    #[test]
+    fn native_owned_value_leak_cannot_report_successful_failure_cleanup() {
+        let mut runtime = NativeRuntime;
+        let mut stderr = Vec::new();
+        let exit = launch_with(
+            &mut runtime,
+            |context| {
+                let text = b"deliberately unreleased";
+                let value = unsafe {
+                    jett_runtime::native_abi::values::jett_rt_v1_string_literal(
+                        context.cast(),
+                        text.as_ptr(),
+                        text.len() as u64,
+                    )
+                };
+                assert_ne!(value, 0);
+                19
+            },
+            &mut stderr,
+        );
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_DESTROY_FAILURE);
+        assert_eq!(stderr, b"jett launcher: program entry failed (status 19)\njett launcher: runtime context destruction failed (status 1): native value ownership leak\n");
+    }
+
+    #[test]
+    fn native_terminal_failure_releases_values_and_preserves_message() {
+        let mut runtime = NativeRuntime;
+        let mut stderr = Vec::new();
+        let exit = launch_with(
+            &mut runtime,
+            |context| {
+                use jett_runtime::native_abi::values::*;
+                unsafe {
+                    let context = context.cast();
+                    let value = jett_rt_v1_string_literal(context, b"ab".as_ptr(), 2);
+                    assert_eq!(jett_rt_v1_string_repeat(context, value, i64::MAX), 0);
+                    jett_rt_v1_string_release(context, value);
+                    jett_rt_v1_value_status(context)
+                }
+            },
+            &mut stderr,
+        );
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_ENTRY_FAILURE);
+        assert_eq!(
+            stderr,
+            b"runtime error: string.repeat: requested output is too large\n"
+        );
+    }
+    #[test]
+    fn native_double_drop_overrides_terminal_failure_without_erasing_it() {
+        let mut runtime = NativeRuntime;
+        let mut stderr = Vec::new();
+        let exit = launch_with(
+            &mut runtime,
+            |context| {
+                use jett_runtime::native_abi::values::*;
+                unsafe {
+                    let context = context.cast();
+                    let value = jett_rt_v1_bytes_new(context);
+                    let text = jett_rt_v1_string_literal(context, b"ab".as_ptr(), 2);
+                    jett_rt_v1_string_repeat(context, text, i64::MAX);
+                    jett_rt_v1_value_drop(context, value);
+                    jett_rt_v1_value_drop(context, value);
+                    jett_rt_v1_value_drop(context, text);
+                    jett_rt_v1_value_status(context)
+                }
+            },
+            &mut stderr,
+        );
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_DESTROY_FAILURE);
+        assert_eq!(stderr, b"runtime error: string.repeat: requested output is too large\njett launcher: runtime context destruction failed (status 1): native value cleanup failed\n");
     }
 }
