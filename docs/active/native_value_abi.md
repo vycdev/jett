@@ -13,8 +13,12 @@ Stdout entry parameters and passed explicitly to printing leaf operations.
 Clock authority is likewise a distinct context-bound token. The native entry
 grants it only for checked Clock parameters; `Clock.__now` validates the token
 and samples the wall clock through the same pre-epoch flooring and int64
-millisecond-range kernel as the interpreter. Scripted Clock injection and its
-failure contracts still need native launcher support.
+millisecond-range kernel as the interpreter. The native launcher can opt into
+a per-context scripted provider through `JETT_NATIVE_TEST_CLOCK_SCRIPT_V1` for
+deterministic parity runs. An empty script means an exhausted provider; absent
+configuration keeps the production wall clock. Native Clock reads match the
+interpreter's sample conversion, unavailability, and exhaustion failures.
+Checking for leftover scripted samples after a successful run remains pending.
 
 Generated functions and all source control flow remain Cranelift machine code.
 Copyable string arguments are borrowed by the native call ABI; callee owning

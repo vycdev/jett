@@ -290,7 +290,7 @@ lowering alone never changes an execution row to complete.
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | pending | pending |
 | Compiler intrinsics and reflection | covered with checked operands and closed `IntrinsicId` identities | pending | pending |
-| Capabilities and runtime resources | nominal checked types covered | explicit Stdout and production Clock entry grants; others pending | Stdout output and production Clock sampling covered; scripted Clock and other providers/resources pending |
+| Capabilities and runtime resources | nominal checked types covered | explicit Stdout and Clock entry grants; others pending | Stdout output, production Clock sampling, and deterministic scripted Clock reads covered; exact-consumption check and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace statements covered; other trace types and breakpoint/assert pending | `int64` trace debug lines match interpreter stderr; other instrumentation pending |
@@ -301,8 +301,8 @@ The current fixture gates are therefore:
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
 | Native object generation | 81 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
-| Successful/expected `main` execution | 16 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison in `native_execution_windows` |
-| Runtime contracts | 22 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
+| Successful/expected `main` execution | 17 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock samples |
+| Runtime contracts | 23 | 25 | exhaustive runtime-contract probe, including exhausted scripted Clock; matched behavior and checked native-value cleanup |
 
 These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
@@ -334,7 +334,7 @@ fault tests verify nested list/map rollback.
 Transparent secret/refinement representation and constant-time native secret
 comparison add `secret_compare_boundary.jett` object emission; the two secret
 integer wrapping fixtures now pass their runtime contracts. The remaining
-runtime-contract gaps require Clock and Random capability providers.
+runtime-contract gaps at that point required Clock and Random capability providers.
 Shared private crypto kernels add `crypto.jett` and `use_imports.jett` object
 emission. Their native leaves keep public wrappers in `.jett`, with a dedicated
 main checking digest bytes, long-key HMAC, and explicit secret declassification.
@@ -363,9 +363,11 @@ Production Clock authority and wall-clock sampling add native objects for
 `clock_production.jett` and `clock_scripted.jett`. `clock_production.jett`
 also passes native `main` execution, and a dedicated executable checks a
 mixed Clock/Stdout entry. Clock conversion shares the interpreter's pre-epoch
-flooring and range checks. The scripted Clock fixture still needs native
-sample injection for deterministic output comparison, and the Clock failure
-contract remains open.
+flooring and range checks. The launcher now accepts an explicit test-only
+sample script. The parity probe supplies the same samples to the interpreter
+and native runtime for `clock_scripted.jett`, including pre-epoch timestamps,
+and an empty script for the exhausted-provider runtime failure. Detecting
+unconsumed samples at successful native process exit remains pending.
 Native arithmetic now accepts a nonzero refinement as the right operand of
 integer division or modulo when its base matches the left operand. This is
 covered by an object-emission test; `integer_nonzero_proofs.jett` still needs

@@ -125,11 +125,43 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
     let object = value
         .as_object()
         .ok_or_else(|| format!("{context} must be an object"))?;
-    require_exact_fields(
-        object,
-        &["path", "obligations", "expected_outcome"],
-        &context,
-    )?;
+    let mut fields = vec!["path", "obligations", "expected_outcome"];
+    if object.contains_key("clock_test_samples") {
+        fields.push("clock_test_samples");
+    }
+    require_exact_fields(object, &fields, &context)?;
+
+    if let Some(samples) = object.get("clock_test_samples") {
+        let samples = samples
+            .as_array()
+            .ok_or_else(|| format!("{context}.clock_test_samples must be an array"))?;
+        for (sample_index, sample) in samples.iter().enumerate() {
+            let sample_context = format!("{context}.clock_test_samples[{sample_index}]");
+            if sample == "unavailable" {
+                continue;
+            }
+            let sample = sample.as_object().ok_or_else(|| {
+                format!("{sample_context} must be a wall sample or `unavailable`")
+            })?;
+            require_exact_fields(sample, &["wall"], &sample_context)?;
+            let wall = sample["wall"]
+                .as_object()
+                .ok_or_else(|| format!("{sample_context}.wall must be an object"))?;
+            require_exact_fields(wall, &["unix_seconds", "nanoseconds"], &sample_context)?;
+            wall["unix_seconds"]
+                .as_str()
+                .and_then(|value| value.parse::<i128>().ok())
+                .ok_or_else(|| {
+                    format!("{sample_context}.wall.unix_seconds must be an i128 decimal string")
+                })?;
+            wall["nanoseconds"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    format!("{sample_context}.wall.nanoseconds must be a u32 integer")
+                })?;
+        }
+    }
 
     let path = required_string(object, "path", &context)?.to_owned();
     let category = validate_fixture_path(&path, &context)?;
@@ -476,6 +508,14 @@ fn native_parity_manifest_parser_rejects_malformed_entries() {
         (
             "unknown fixture field",
             r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only","extra":true}]}"#,
+        ),
+        (
+            "malformed Clock sample",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only","clock_test_samples":[{"wall":{"unix_seconds":"0","nanoseconds":-1}}]}]}"#,
+        ),
+        (
+            "unknown Clock sample field",
+            r#"{"version":1,"fixtures":[{"path":"tests/run_pass/a.jett","obligations":["lower"],"expected_outcome":"lower_only","clock_test_samples":[{"wall":{"unix_seconds":"0","nanoseconds":0,"extra":true}}]}]}"#,
         ),
         (
             "unknown obligation",

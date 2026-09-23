@@ -2,6 +2,7 @@
 //! Usage: cargo run -p jett_driver --example native_parity -- LAUNCHER REPORT.json
 //! Every inventory row is attempted, irrespective of staged object_emit markers.
 use jett_driver::native::{self, NativeLauncherBundle};
+use jett_runtime::clock::{ClockTestSample, TEST_SCRIPT_ENV, encode_test_script};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
@@ -10,15 +11,22 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output, Stdio};
 use std::time::{Duration, Instant};
 
-fn execute(binary: &Path, directory: &Path) -> Result<Output, String> {
-    let mut child = Command::new(binary)
+fn execute(
+    binary: &Path,
+    directory: &Path,
+    clock_samples: Option<&[ClockTestSample]>,
+) -> Result<Output, String> {
+    let mut command = Command::new(binary);
+    command
         .current_dir(directory)
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped());
+    if let Some(samples) = clock_samples {
+        command.env(TEST_SCRIPT_ENV, encode_test_script(samples));
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
     let out = std::thread::spawn(move || {
@@ -65,11 +73,18 @@ fn behavior(
     binary: &Path,
     directory: &Path,
     expected_failure: bool,
+    clock_samples: Option<&[ClockTestSample]>,
 ) -> Result<Value, String> {
-    let actual = execute(binary, directory)?;
+    let actual = execute(binary, directory, clock_samples)?;
     let stdout = String::from_utf8(actual.stdout).map_err(|e| e.to_string())?;
     let stderr = String::from_utf8(actual.stderr).map_err(|e| e.to_string())?;
-    let (oracle, failure) = match jett_driver::run_file_capture_outcome(source) {
+    let oracle_result = match clock_samples {
+        Some(samples) => {
+            jett_driver::run_file_capture_outcome_with_clock_test_samples(source, samples.to_vec())
+        }
+        None => jett_driver::run_file_capture_outcome(source),
+    };
+    let (oracle, failure) = match oracle_result {
         Ok(output) => (output, None),
         Err(failure) => (failure.output, Some(failure.message)),
     };
@@ -100,6 +115,40 @@ fn behavior(
                 "cleanup_contract":"native owning-value registry empty at checked context destruction"
         }),
     )
+}
+
+fn clock_samples(fixture: &Value) -> Result<Option<Vec<ClockTestSample>>, String> {
+    let Some(samples) = fixture.get("clock_test_samples") else {
+        return Ok(None);
+    };
+    let samples = samples
+        .as_array()
+        .ok_or("clock_test_samples must be an array")?;
+    samples
+        .iter()
+        .map(|sample| {
+            if sample == "unavailable" {
+                return Ok(ClockTestSample::Unavailable);
+            }
+            let wall = sample.get("wall").ok_or("invalid Clock sample")?;
+            let unix_seconds = wall["unix_seconds"]
+                .as_str()
+                .ok_or("Clock seconds must be a decimal string")?
+                .parse::<i128>()
+                .map_err(|_| "invalid Clock seconds")?;
+            let subsecond_nanoseconds = wall["nanoseconds"]
+                .as_u64()
+                .ok_or("Clock nanoseconds must be an unsigned integer")?
+                .try_into()
+                .map_err(|_| "Clock nanoseconds exceed u32")?;
+            Ok(ClockTestSample::Wall {
+                unix_seconds,
+                subsecond_nanoseconds,
+            })
+        })
+        .collect::<Result<Vec<_>, &str>>()
+        .map(Some)
+        .map_err(str::to_owned)
 }
 
 fn main() -> ExitCode {
@@ -179,7 +228,14 @@ fn main() -> ExitCode {
                 Ok(_) => {
                     row["linked"] = json!(true);
                     let failure = fixture["expected_outcome"] == "expected_failure";
-                    match behavior(&source, &output, directory.path(), failure) {
+                    let samples = clock_samples(fixture).expect("valid Clock sample manifest");
+                    match behavior(
+                        &source,
+                        &output,
+                        directory.path(),
+                        failure,
+                        samples.as_deref(),
+                    ) {
                         Err(error) => row["execution_error"] = json!(error),
                         Ok(result) => {
                             let pass = execution_passes(&result, failure);

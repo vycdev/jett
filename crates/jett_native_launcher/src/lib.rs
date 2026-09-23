@@ -249,9 +249,24 @@ fn write_bytes<W: Write>(stderr: &mut W, message: &[u8]) {
 #[cfg(not(test))]
 fn run_native_launcher<W: Write>(stderr: &mut W) -> c_int {
     let mut runtime = NativeRuntime;
+    let clock_script = std::env::var(jett_runtime::clock::TEST_SCRIPT_ENV).ok();
     launch_with(
         &mut runtime,
         |context| {
+            if let Some(script) = &clock_script {
+                // SAFETY: `context` is live and stationary, and `script` remains
+                // readable for the duration of the configuration call.
+                let status = unsafe {
+                    jett_runtime::native_abi::values::jett_rt_v1_clock_configure_scripted(
+                        context.cast(),
+                        script.as_ptr(),
+                        script.len() as u64,
+                    )
+                };
+                if status != JETT_AOT_ENTRY_SUCCESS_V1 {
+                    return status;
+                }
+            }
             // SAFETY: the generated object implements the committed version 1
             // C entry ABI, and `context` remains live and stationary until the
             // entry call returns.

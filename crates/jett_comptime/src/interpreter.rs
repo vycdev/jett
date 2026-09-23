@@ -13,6 +13,7 @@ use jett_parser::ast::{
     Ident, ImplementBlock, InterfaceDecl, Item, MachineDef, Module, Param, Pattern, PipelineStep,
     PipelineStepHandle, Stmt, StringPart, StructDef, TypeAlias, TypeExpr, UnaryOp,
 };
+pub use jett_runtime::clock::ClockTestSample;
 #[cfg(test)]
 use jett_runtime::clock::raw_wall_clock_sample;
 use jett_runtime::clock::{checked_clock_milliseconds, production_wall_clock_sample};
@@ -651,15 +652,6 @@ pub enum RandomTestSample {
 enum RandomProvider {
     Production(StdRng),
     Scripted(std::collections::VecDeque<RandomTestSample>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClockTestSample {
-    Wall {
-        unix_seconds: i128,
-        subsecond_nanoseconds: u32,
-    },
-    Unavailable,
 }
 
 enum ClockProvider {

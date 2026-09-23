@@ -18,6 +18,7 @@ jett_typecheck.workspace = true
 jett_hir.workspace = true
 jett_mir.workspace = true
 jett_comptime.workspace = true
+jett_runtime.workspace = true
 jett_fmt.workspace = true
 jett_query.workspace = true
 jett_codegen_cranelift.workspace = true

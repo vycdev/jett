@@ -397,6 +397,7 @@ pub(super) struct NativeValues {
     pub(super) cleanup_failed: bool,
     stdout: Option<u64>,
     clock: Option<u64>,
+    clock_script: Option<std::collections::VecDeque<clock::ClockTestSample>>,
 }
 impl NativeValues {
     #[cfg(test)]
@@ -1685,6 +1686,41 @@ fn leaf<T: FailureDefault>(
     }
 }
 
+/// Configure an opt-in deterministic Clock provider before native program entry.
+/// An empty script selects an exhausted provider rather than the wall clock.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_clock_configure_scripted(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            clock::INVALID_SCRIPT.as_bytes(),
+        );
+        if s.clock.is_some() || s.clock_script.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        s.clock_script = Some(clock::decode_test_script(script).map_err(|_| invalid)?);
+        Ok(0)
+    })
+}
+
 /// Scalar signature schema consumed by Cranelift, never inferred from names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbiScalar {
@@ -2121,8 +2157,24 @@ leaves! {
         |s| { if let Some(token) = s.clock { return Ok(token); } let token = next_identity()?; s.clock = Some(token); Ok(token) };
     ClockNow, jett_rt_v1_clock_now, false, (authority: u64 => I64), i64 => I64,
         |s| { if s.clock != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Clock authority")); }
-            let (seconds, nanoseconds) = clock::production_wall_clock_sample();
-            clock::checked_clock_milliseconds(seconds, nanoseconds).map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes())) };
+            if let Some(script) = &mut s.clock_script {
+                let sample = script.front().copied().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Clock.now: test clock exhausted".as_slice()))?;
+                match sample {
+                    clock::ClockTestSample::Unavailable => {
+                        script.pop_front();
+                        Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Clock.now: wall clock unavailable"))
+                    }
+                    clock::ClockTestSample::Wall { unix_seconds, subsecond_nanoseconds } => {
+                        let value = clock::checked_clock_milliseconds(unix_seconds, subsecond_nanoseconds)
+                            .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+                        script.pop_front();
+                        Ok(value)
+                    }
+                }
+            } else {
+                let (seconds, nanoseconds) = clock::production_wall_clock_sample();
+                clock::checked_clock_milliseconds(seconds, nanoseconds).map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))
+            } };
     Stdout, jett_rt_v1_string_stdout, false, (authority: u64 => I64, value: u64 => I64), u32 => I32,
         |s| {
             if s.stdout != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority")); }
@@ -2321,6 +2373,49 @@ mod tests {
                 Some((
                     JettRuntimeStatusV1::INVALID_ARGUMENT,
                     b"invalid Clock authority".as_slice()
+                ))
+            );
+        }
+    }
+    #[test]
+    fn scripted_clock_samples_are_context_bound_and_exhaustion_is_terminal() {
+        let first = Context::new();
+        let second = Context::new();
+        let samples = [
+            clock::ClockTestSample::Wall {
+                unix_seconds: -1,
+                subsecond_nanoseconds: 999_999_999,
+            },
+            clock::ClockTestSample::Wall {
+                unix_seconds: 42,
+                subsecond_nanoseconds: 123_456_789,
+            },
+        ];
+        let script = clock::encode_test_script(&samples);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_clock_configure_scripted(
+                    first.pointer(),
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let token = jett_rt_v1_grant_clock(first.pointer());
+            let foreign = jett_rt_v1_grant_clock(second.pointer());
+            assert_eq!(jett_rt_v1_clock_now(first.pointer(), token), -1);
+            assert_eq!(jett_rt_v1_clock_now(first.pointer(), token), 42_123);
+            assert_eq!(jett_rt_v1_clock_now(first.pointer(), token), 0);
+            assert_ne!(jett_rt_v1_value_status(first.pointer()), 0);
+            let _ = jett_rt_v1_clock_now(second.pointer(), foreign);
+            assert_eq!(jett_rt_v1_value_status(second.pointer()), 0);
+            let lease = acquire_context(context_key(first.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state.as_ref().unwrap().values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"Clock.now: test clock exhausted".as_slice()
                 ))
             );
         }
