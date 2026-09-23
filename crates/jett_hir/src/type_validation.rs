@@ -726,6 +726,7 @@ mod tests {
                 kind: ExpressionKind::Intrinsic {
                     intrinsic: IntrinsicId::TypeName,
                     type_arguments: vec![nested_error],
+                    reflection_arguments: Vec::new(),
                     args: Vec::new(),
                     evaluation_order: Vec::new(),
                 },

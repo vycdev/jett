@@ -53,6 +53,8 @@ pub struct CheckedGenericFunctionInstantiation {
     /// type for reflection operations such as `type.name[T]()`. HIR consumes
     /// this map instead of resolving source `TypeExpr` syntax again.
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    /// Source-aware type metadata for reflection calls in this body.
+    pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     /// Source arguments normalized to parameter order for calls in this body.
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Concrete source-defined method targets selected in this body.
@@ -107,6 +109,7 @@ pub struct CheckedBodyFacts {
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     pub method_calls: HashMap<Span, CheckedMethodCall>,
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
@@ -139,6 +142,7 @@ pub struct CheckedGenericCall {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct CheckedGenericSpecialization {
     pub type_argument_kinds: Vec<String>,
+    pub type_argument_reflections: Vec<ReflectionTypeInfo>,
     pub type_info_kinds: Vec<(usize, String)>,
     pub type_info_primitives: Vec<(usize, Option<String>)>,
     pub type_kind_values: Vec<(usize, String)>,
@@ -197,6 +201,7 @@ pub struct CheckResult {
     /// Concrete type operands for compiler-owned generic calls outside generic
     /// function bodies, keyed by call span.
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     /// Source arguments normalized to parameter order, keyed by call span.
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source-defined method bodies in deterministic declaration order.
@@ -257,6 +262,7 @@ pub fn check_with_options(
         generic_calls: checker.generic_calls,
         intrinsic_ids: checker.intrinsic_ids,
         intrinsic_type_arguments: checker.intrinsic_type_arguments,
+        intrinsic_reflection_arguments: checker.intrinsic_reflection_arguments,
         call_argument_orders: checker.call_argument_orders,
         method_definitions: checker.method_definitions,
         method_calls: checker.method_calls,
@@ -348,6 +354,7 @@ struct ActiveGenericInstantiation {
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
@@ -464,6 +471,8 @@ struct TypeChecker<'a> {
     reflection_variants_by_id: HashMap<TypeId, (String, Vec<ReflectionVariantInfo>)>,
     /// Active type variable substitution during monomorphization (type_param_name → TypeId).
     type_var_subst: HashMap<String, TypeId>,
+    /// Source-aware metadata for the concrete generic type parameters.
+    type_var_reflections: HashMap<String, ReflectionTypeInfo>,
     /// Source-level reflected kind tags for active type variables. This keeps
     /// simple aliases visible to `type.kind_tag[T]()` while their TypeId may
     /// resolve to the alias base type.
@@ -507,6 +516,7 @@ struct TypeChecker<'a> {
     /// Concrete type operands for compiler-owned generic calls outside a
     /// generic function body.
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     /// Checked source-to-parameter permutations outside generic bodies.
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source method bodies exported to HIR.
@@ -591,6 +601,7 @@ impl<'a> TypeChecker<'a> {
             reflection_machines_by_id: HashMap::new(),
             reflection_variants_by_id: HashMap::new(),
             type_var_subst: HashMap::new(),
+            type_var_reflections: HashMap::new(),
             type_var_kind_tags: HashMap::new(),
             reflection_type_info_kind_scopes: Vec::new(),
             reflection_type_info_primitive_scopes: Vec::new(),
@@ -607,6 +618,7 @@ impl<'a> TypeChecker<'a> {
             generic_calls: HashMap::new(),
             intrinsic_ids: HashMap::new(),
             intrinsic_type_arguments: HashMap::new(),
+            intrinsic_reflection_arguments: HashMap::new(),
             call_argument_orders: HashMap::new(),
             method_definitions: Vec::new(),
             method_definitions_by_owner: HashMap::new(),
@@ -2176,6 +2188,11 @@ impl<'a> TypeChecker<'a> {
         if let TypeExpr::View(inner, _) = ty {
             return self.reflection_type_info_for_type_expr(inner, namespace, resolved_ty);
         }
+        if let TypeExpr::Named(ident) = ty
+            && let Some(info) = self.type_var_reflections.get(&ident.name)
+        {
+            return info.clone();
+        }
 
         let type_name = self.reflection_type_expr_display(ty, namespace);
         let args = self.reflection_type_info_args_for_type_expr(ty, namespace, resolved_ty);
@@ -2306,7 +2323,11 @@ impl<'a> TypeChecker<'a> {
 
     fn reflection_type_expr_display(&self, ty: &TypeExpr, namespace: Option<&str>) -> String {
         match ty {
-            TypeExpr::Named(ident) => self.reflection_type_name_in_namespace(ident, namespace),
+            TypeExpr::Named(ident) => self
+                .type_var_reflections
+                .get(&ident.name)
+                .map(|info| info.type_name.clone())
+                .unwrap_or_else(|| self.reflection_type_name_in_namespace(ident, namespace)),
             TypeExpr::Generic(ident, args, _) => {
                 let args = args
                     .iter()
@@ -2345,11 +2366,56 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflection_arguments_for_type_args(
+        &mut self,
+        type_args: &[TypeExpr],
+        concrete_args: &[TypeId],
+    ) -> Vec<ReflectionTypeInfo> {
+        let namespace = self.current_function_name.as_deref().and_then(|name| {
+            name.rsplit_once('.')
+                .map(|(namespace, _)| namespace.to_string())
+        });
+        type_args
+            .iter()
+            .zip(concrete_args)
+            .map(|(source, &ty)| {
+                self.reflection_type_info_for_type_expr(source, namespace.as_deref(), ty)
+            })
+            .collect()
+    }
+
+    fn reflection_arguments_for_inferred_types(
+        &self,
+        concrete_args: &[TypeId],
+    ) -> Vec<ReflectionTypeInfo> {
+        concrete_args
+            .iter()
+            .map(|&ty| self.reflection_type_info_for_type(ty))
+            .collect()
+    }
+
     fn reflection_type_name_in_namespace(
         &self,
         ident: &ast::Ident,
         namespace: Option<&str>,
     ) -> String {
+        if let Some(definition) = self.resolve.resolutions.get(&ident.span) {
+            let resolved = self.resolve.scope_table.def(*definition);
+            if matches!(
+                resolved.kind,
+                DefKind::Type
+                    | DefKind::Struct
+                    | DefKind::Enum
+                    | DefKind::Bitfield
+                    | DefKind::Interface
+                    | DefKind::Machine
+                    | DefKind::Actor
+                    | DefKind::Resource
+            ) && self.reflection_type_name_is_registered(&resolved.name)
+            {
+                return resolved.name.clone();
+            }
+        }
         if ident.name.contains('.') {
             return ident.name.clone();
         }
@@ -5803,6 +5869,7 @@ impl<'a> TypeChecker<'a> {
         function_name: &str,
         func: &FunctionDef,
         concrete_args: &[TypeId],
+        type_argument_reflections: Vec<ReflectionTypeInfo>,
         subst: HashMap<String, TypeId>,
         kind_subst: HashMap<String, String>,
         param_facts: ReflectionParamFacts,
@@ -5818,7 +5885,12 @@ impl<'a> TypeChecker<'a> {
         let specialize_reflection_branches = branch_specializable || !param_facts.is_empty();
 
         let definition = self.declaration_def_id(func.name.span);
-        let specialization = Self::generic_specialization(func, &kind_subst, &param_facts);
+        let specialization = Self::generic_specialization(
+            func,
+            &kind_subst,
+            &type_argument_reflections,
+            &param_facts,
+        );
         let cache_key = (
             function_name.to_string(),
             concrete_args.to_vec(),
@@ -5838,6 +5910,14 @@ impl<'a> TypeChecker<'a> {
         let instantiated_name = format!("{function_name}[{}]", type_arg_names.join(", "));
 
         let old_subst = std::mem::replace(&mut self.type_var_subst, subst);
+        let old_reflections = std::mem::replace(
+            &mut self.type_var_reflections,
+            func.type_params
+                .iter()
+                .map(|param| param.name.clone())
+                .zip(type_argument_reflections)
+                .collect(),
+        );
         let old_kind_subst = std::mem::replace(&mut self.type_var_kind_tags, kind_subst);
         let parameter_types = func
             .params
@@ -5867,6 +5947,7 @@ impl<'a> TypeChecker<'a> {
                         generic_calls: HashMap::new(),
                         intrinsic_ids: HashMap::new(),
                         intrinsic_type_arguments: HashMap::new(),
+                        intrinsic_reflection_arguments: HashMap::new(),
                         call_argument_orders: HashMap::new(),
                         method_calls: HashMap::new(),
                         struct_constructions: HashMap::new(),
@@ -5902,6 +5983,7 @@ impl<'a> TypeChecker<'a> {
                     generic_calls: HashMap::new(),
                     intrinsic_ids: HashMap::new(),
                     intrinsic_type_arguments: HashMap::new(),
+                    intrinsic_reflection_arguments: HashMap::new(),
                     call_argument_orders: HashMap::new(),
                     method_calls: HashMap::new(),
                     struct_constructions: HashMap::new(),
@@ -5929,6 +6011,9 @@ impl<'a> TypeChecker<'a> {
                     .intrinsic_type_arguments
                     .extend(active.intrinsic_type_arguments);
                 entry
+                    .intrinsic_reflection_arguments
+                    .extend(active.intrinsic_reflection_arguments);
+                entry
                     .call_argument_orders
                     .extend(active.call_argument_orders);
                 entry.method_calls.extend(active.method_calls);
@@ -5950,6 +6035,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         self.type_var_subst = old_subst;
+        self.type_var_reflections = old_reflections;
         self.type_var_kind_tags = old_kind_subst;
         self.current_return_type = old_return_type;
         self.current_function_name = old_function_name;
@@ -6037,6 +6123,32 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_intrinsic_reflection_arguments(&mut self, span: Span, type_args: &[TypeExpr]) {
+        let intrinsic = self
+            .active_generic_instantiations
+            .last()
+            .and_then(|active| active.intrinsic_ids.get(&span))
+            .or_else(|| self.intrinsic_ids.get(&span));
+        if !intrinsic.is_some_and(|id| id.canonical_name().starts_with("type.")) {
+            return;
+        }
+        let concrete_args = type_args
+            .iter()
+            .map(|arg| self.resolve_type_expr(arg))
+            .collect::<Vec<_>>();
+        if concrete_args.contains(&TypeInterner::ERROR) {
+            return;
+        }
+        let reflected = self.reflection_arguments_for_type_args(type_args, &concrete_args);
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active
+                .intrinsic_reflection_arguments
+                .insert(span, reflected);
+        } else {
+            self.intrinsic_reflection_arguments.insert(span, reflected);
+        }
+    }
+
     fn record_call_argument_order(&mut self, span: Span, source_indices: Vec<usize>) {
         let order = CheckedCallArgumentOrder { source_indices };
         if let Some(active) = self.active_generic_instantiations.last_mut() {
@@ -6105,6 +6217,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.generic_calls, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_type_arguments, owner);
+            Self::clear_facts_in_span(&mut active.intrinsic_reflection_arguments, owner);
             Self::clear_facts_in_span(&mut active.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut active.method_calls, owner);
             Self::clear_facts_in_span(&mut active.struct_constructions, owner);
@@ -6115,6 +6228,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut self.generic_calls, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_type_arguments, owner);
+            Self::clear_facts_in_span(&mut self.intrinsic_reflection_arguments, owner);
             Self::clear_facts_in_span(&mut self.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut self.method_calls, owner);
             Self::clear_facts_in_span(&mut self.struct_constructions, owner);
@@ -6133,6 +6247,10 @@ impl<'a> TypeChecker<'a> {
                     &active.intrinsic_type_arguments,
                     owner,
                 ),
+                intrinsic_reflection_arguments: Self::facts_in_span(
+                    &active.intrinsic_reflection_arguments,
+                    owner,
+                ),
                 call_argument_orders: Self::facts_in_span(&active.call_argument_orders, owner),
                 method_calls: Self::facts_in_span(&active.method_calls, owner),
                 struct_constructions: Self::facts_in_span(&active.struct_constructions, owner),
@@ -6149,6 +6267,10 @@ impl<'a> TypeChecker<'a> {
             generic_calls: Self::facts_in_span(&self.generic_calls, owner),
             intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
             intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
+            intrinsic_reflection_arguments: Self::facts_in_span(
+                &self.intrinsic_reflection_arguments,
+                owner,
+            ),
             call_argument_orders: Self::facts_in_span(&self.call_argument_orders, owner),
             method_calls: Self::facts_in_span(&self.method_calls, owner),
             struct_constructions: Self::facts_in_span(&self.struct_constructions, owner),
@@ -6193,6 +6315,7 @@ impl<'a> TypeChecker<'a> {
         func: &FunctionDef,
         concrete_args: &[TypeId],
         kind_subst: &HashMap<String, String>,
+        type_argument_reflections: &[ReflectionTypeInfo],
         param_facts: &ReflectionParamFacts,
     ) {
         let Some(definition) = self.declaration_def_id(func.name.span) else {
@@ -6203,7 +6326,12 @@ impl<'a> TypeChecker<'a> {
             CheckedGenericCall {
                 definition,
                 concrete_args: concrete_args.to_vec(),
-                specialization: Self::generic_specialization(func, kind_subst, param_facts),
+                specialization: Self::generic_specialization(
+                    func,
+                    kind_subst,
+                    type_argument_reflections,
+                    param_facts,
+                ),
             },
         );
     }
@@ -6211,6 +6339,7 @@ impl<'a> TypeChecker<'a> {
     fn generic_specialization(
         func: &FunctionDef,
         kind_subst: &HashMap<String, String>,
+        type_argument_reflections: &[ReflectionTypeInfo],
         param_facts: &ReflectionParamFacts,
     ) -> CheckedGenericSpecialization {
         CheckedGenericSpecialization {
@@ -6224,6 +6353,7 @@ impl<'a> TypeChecker<'a> {
                         .unwrap_or_else(|| "unknown_type".to_string())
                 })
                 .collect(),
+            type_argument_reflections: type_argument_reflections.to_vec(),
             type_info_kinds: param_facts.type_info_kinds.clone(),
             type_info_primitives: param_facts.type_info_primitives.clone(),
             type_kind_values: param_facts.type_kind_values.clone(),
@@ -9303,6 +9433,7 @@ impl<'a> TypeChecker<'a> {
                 self.record_intrinsic_id(step.span, name);
             }
             self.record_intrinsic_type_arguments(step.span, type_args);
+            self.record_intrinsic_reflection_arguments(step.span, type_args);
         }
         if builtin_signature.is_none() && type_args.is_empty() {
             if let Some(return_type) = self.check_inferred_generic_function_pipeline_step(
@@ -9528,17 +9659,21 @@ impl<'a> TypeChecker<'a> {
 
         if arguments_match {
             let param_facts = ReflectionParamFacts::default();
+            let type_argument_reflections =
+                self.reflection_arguments_for_inferred_types(&inferred.concrete_args);
             self.record_generic_call_for_template(
                 span,
                 &template,
                 &inferred.concrete_args,
                 &inferred.kind_subst,
+                &type_argument_reflections,
                 &param_facts,
             );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &inferred.concrete_args,
+                type_argument_reflections,
                 inferred.subst,
                 inferred.kind_subst,
                 param_facts,
@@ -9663,17 +9798,21 @@ impl<'a> TypeChecker<'a> {
 
         if arguments_match {
             let param_facts = ReflectionParamFacts::default();
+            let type_argument_reflections =
+                self.reflection_arguments_for_type_args(type_args, &concrete_args);
             self.record_generic_call_for_template(
                 span,
                 &template,
                 &concrete_args,
                 &kind_subst,
+                &type_argument_reflections,
                 &param_facts,
             );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &concrete_args,
+                type_argument_reflections,
                 subst,
                 kind_subst,
                 param_facts,
@@ -10643,17 +10782,20 @@ impl<'a> TypeChecker<'a> {
         let subst = HashMap::from([(type_param.name.clone(), concrete)]);
         let kind_subst = HashMap::new();
         let param_facts = ReflectionParamFacts::default();
+        let type_argument_reflections = self.reflection_arguments_for_inferred_types(&[concrete]);
         self.record_generic_call_for_template(
             call_span,
             &template,
             &[concrete],
             &kind_subst,
+            &type_argument_reflections,
             &param_facts,
         );
         self.check_generic_function_instantiation(
             name,
             &template,
             &[concrete],
+            type_argument_reflections,
             subst,
             kind_subst,
             param_facts,
@@ -10782,6 +10924,7 @@ impl<'a> TypeChecker<'a> {
                 self.record_intrinsic_id(span, name);
             }
             self.record_intrinsic_type_arguments(span, type_args);
+            self.record_intrinsic_reflection_arguments(span, type_args);
         }
 
         if let Some(name @ ("time.now_ms" | "time.now_s")) = callee_name.as_deref() {
@@ -11029,17 +11172,21 @@ impl<'a> TypeChecker<'a> {
                             &param_types,
                             &ordered_args,
                         );
+                        let type_argument_reflections =
+                            self.reflection_arguments_for_type_args(type_args, &concrete_args);
                         self.record_generic_call_for_template(
                             span,
                             &template,
                             &concrete_args,
                             &kind_subst,
+                            &type_argument_reflections,
                             &param_facts,
                         );
                         self.check_generic_function_instantiation(
                             function_name,
                             &template,
                             &concrete_args,
+                            type_argument_reflections,
                             subst,
                             kind_subst,
                             param_facts,
@@ -11794,17 +11941,21 @@ impl<'a> TypeChecker<'a> {
                 &inferred.param_types,
                 &ordered_args,
             );
+            let type_argument_reflections =
+                self.reflection_arguments_for_inferred_types(&inferred.concrete_args);
             self.record_generic_call_for_template(
                 span,
                 &template,
                 &inferred.concrete_args,
                 &inferred.kind_subst,
+                &type_argument_reflections,
                 &param_facts,
             );
             self.check_generic_function_instantiation(
                 function_name,
                 &template,
                 &inferred.concrete_args,
+                type_argument_reflections,
                 inferred.subst,
                 inferred.kind_subst,
                 param_facts,

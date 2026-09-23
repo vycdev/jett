@@ -1563,6 +1563,7 @@ function first(left: int64, right: int64) returns int64:
         type_info.kind = hir::ExpressionKind::Intrinsic {
             intrinsic: hir::IntrinsicId::TypeName,
             type_arguments: vec![bound_type],
+            reflection_arguments: Vec::new(),
             args: Vec::new(),
             evaluation_order: vec![0],
         };

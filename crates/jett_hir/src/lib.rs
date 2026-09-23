@@ -16,7 +16,7 @@ use jett_typecheck::{
     CheckedGenericSpecialization, CheckedMethodCall, CheckedMethodDefinition,
     CheckedStaticSelection, CheckedStructConstruction,
 };
-use jett_types::{Type, TypeId};
+use jett_types::{ReflectionTypeInfo, Type, TypeId};
 
 mod type_validation;
 
@@ -257,6 +257,9 @@ pub enum ExpressionKind {
         /// Concrete checked generic operands in source order. An intrinsic
         /// with no type operands carries an empty vector.
         type_arguments: Vec<TypeId>,
+        /// Checker-owned source identity for reflection operands, including
+        /// aliases that share a canonical type ID.
+        reflection_arguments: Vec<ReflectionTypeInfo>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
     },
@@ -1018,6 +1021,7 @@ impl<'a> Lowerer<'a> {
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
+            intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
             struct_constructions,
@@ -1034,6 +1038,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.generic_calls.clone(),
                 instantiation.intrinsic_ids.clone(),
                 instantiation.intrinsic_type_arguments.clone(),
+                instantiation.intrinsic_reflection_arguments.clone(),
                 instantiation.call_argument_orders.clone(),
                 instantiation.method_calls.clone(),
                 instantiation.struct_constructions.clone(),
@@ -1051,6 +1056,7 @@ impl<'a> Lowerer<'a> {
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
+                self.check.intrinsic_reflection_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
                 self.check.struct_constructions.clone(),
@@ -1095,6 +1101,7 @@ impl<'a> Lowerer<'a> {
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
+                self.check.intrinsic_reflection_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
                 self.check.struct_constructions.clone(),
@@ -1121,6 +1128,7 @@ impl<'a> Lowerer<'a> {
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
+            intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
             struct_constructions,
@@ -1273,6 +1281,7 @@ impl<'a> Lowerer<'a> {
         let generic_calls = self.check.generic_calls.clone();
         let intrinsic_ids = self.check.intrinsic_ids.clone();
         let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
+        let intrinsic_reflection_arguments = self.check.intrinsic_reflection_arguments.clone();
         let call_argument_orders = self.check.call_argument_orders.clone();
         let method_calls = self.check.method_calls.clone();
         let struct_constructions = self.check.struct_constructions.clone();
@@ -1287,6 +1296,7 @@ impl<'a> Lowerer<'a> {
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
+            intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
             struct_constructions,
@@ -1430,6 +1440,7 @@ struct BodyLowerer<'lowerer, 'program> {
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+    intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
@@ -1450,6 +1461,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         generic_calls: HashMap<Span, CheckedGenericCall>,
         intrinsic_ids: HashMap<Span, IntrinsicId>,
         intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
+        intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
         call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
         method_calls: HashMap<Span, CheckedMethodCall>,
         struct_constructions: HashMap<Span, CheckedStructConstruction>,
@@ -1464,6 +1476,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
+            intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
             struct_constructions,
@@ -1859,6 +1872,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
+            intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
             struct_constructions,
@@ -1872,6 +1886,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let saved_intrinsic_ids = std::mem::replace(&mut self.intrinsic_ids, intrinsic_ids);
         let saved_intrinsic_type_arguments =
             std::mem::replace(&mut self.intrinsic_type_arguments, intrinsic_type_arguments);
+        let saved_intrinsic_reflection_arguments = std::mem::replace(
+            &mut self.intrinsic_reflection_arguments,
+            intrinsic_reflection_arguments,
+        );
         let saved_call_argument_orders =
             std::mem::replace(&mut self.call_argument_orders, call_argument_orders);
         let saved_method_calls = std::mem::replace(&mut self.method_calls, method_calls);
@@ -1896,6 +1914,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.generic_calls = saved_generic_calls;
         self.intrinsic_ids = saved_intrinsic_ids;
         self.intrinsic_type_arguments = saved_intrinsic_type_arguments;
+        self.intrinsic_reflection_arguments = saved_intrinsic_reflection_arguments;
         self.call_argument_orders = saved_call_argument_orders;
         self.method_calls = saved_method_calls;
         self.struct_constructions = saved_struct_constructions;
@@ -2346,6 +2365,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 intrinsic: self.checked_intrinsic_id(call_span)?,
                 type_arguments: self
                     .checked_intrinsic_type_arguments(call_span, has_explicit_type_arguments)?,
+                reflection_arguments: self
+                    .intrinsic_reflection_arguments
+                    .get(&call_span)
+                    .cloned()
+                    .unwrap_or_default(),
                 args: lowered_args,
                 evaluation_order,
             })
@@ -2823,6 +2847,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 intrinsic: self.checked_intrinsic_id(step.span)?,
                 type_arguments: self
                     .checked_intrinsic_type_arguments(step.span, has_explicit_type_arguments)?,
+                reflection_arguments: self
+                    .intrinsic_reflection_arguments
+                    .get(&step.span)
+                    .cloned()
+                    .unwrap_or_default(),
                 args,
                 evaluation_order,
             }

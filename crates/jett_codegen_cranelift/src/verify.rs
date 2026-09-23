@@ -870,10 +870,35 @@ impl Verifier<'_> {
                 intrinsic,
                 args,
                 type_arguments,
+                reflection_arguments,
                 ..
             } => {
                 for arg in args {
                     self.expression(function, arg)?;
+                }
+                if matches!(
+                    intrinsic,
+                    jett_hir::IntrinsicId::TypeName
+                        | jett_hir::IntrinsicId::TypeKind
+                        | jett_hir::IntrinsicId::TypeHasSecret
+                ) {
+                    let expected = if *intrinsic == jett_hir::IntrinsicId::TypeHasSecret {
+                        TypeInterner::BOOL
+                    } else {
+                        TypeInterner::STRING
+                    };
+                    if !args.is_empty()
+                        || type_arguments.len() != 1
+                        || reflection_arguments.len() != 1
+                        || expression.ty != expected
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked reflection intrinsic operands",
+                        ));
+                    }
+                    return Ok(());
                 }
                 let numeric_generic = matches!(
                     intrinsic,

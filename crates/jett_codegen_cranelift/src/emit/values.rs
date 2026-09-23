@@ -842,6 +842,7 @@ impl Translator<'_, '_> {
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
+        reflection_arguments: &[ReflectionTypeInfo],
         args: &[Expression],
         order: &[usize],
         result_type: TypeId,
@@ -853,6 +854,24 @@ impl Translator<'_, '_> {
                 &args[index],
                 jett_mir::move_values::intrinsic_borrows(id, index),
             )?;
+        }
+        if matches!(
+            id,
+            IntrinsicId::TypeName | IntrinsicId::TypeKind | IntrinsicId::TypeHasSecret
+        ) {
+            let info = reflection_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked reflection operand"))?;
+            return match id {
+                IntrinsicId::TypeName => self.literal(&info.type_name),
+                IntrinsicId::TypeKind => self.literal(&info.kind),
+                IntrinsicId::TypeHasSecret => Ok(LoweredValue::Scalar(
+                    self.builder
+                        .ins()
+                        .iconst(ir::types::I8, i64::from(info.has_secret)),
+                )),
+                _ => unreachable!(),
+            };
         }
         if id == IntrinsicId::Range {
             let zero = self.builder.ins().iconst(ir::types::I64, 0);

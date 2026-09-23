@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use jett_common::SourceOrigin;
 use jett_hir::{DeclarationKind, FunctionIdentity};
-use jett_types::{Type, TypeId, TypeInterner};
+use jett_types::{ReflectionTypeInfo, Type, TypeId, TypeInterner};
 use sha2::{Digest, Sha256};
 
 use crate::CodegenError;
@@ -39,6 +39,16 @@ pub fn symbol_name(
     );
     for kind in &identity.specialization.type_argument_kinds {
         push_component(&mut canonical, kind);
+    }
+    if !identity.specialization.type_argument_reflections.is_empty() {
+        push_category(
+            &mut canonical,
+            "type-argument-reflections",
+            identity.specialization.type_argument_reflections.len(),
+        );
+        for info in &identity.specialization.type_argument_reflections {
+            encode_reflection_type_info(&mut canonical, info);
+        }
     }
     push_category(
         &mut canonical,
@@ -112,6 +122,23 @@ fn push_component(output: &mut String, component: &str) {
 fn push_category(output: &mut String, name: &str, item_count: usize) {
     push_component(output, name);
     push_component(output, &item_count.to_string());
+}
+
+fn encode_reflection_type_info(output: &mut String, info: &ReflectionTypeInfo) {
+    push_component(output, &info.type_name);
+    push_component(output, &info.kind);
+    match &info.primitive_tag {
+        Some(tag) => {
+            push_component(output, "some");
+            push_component(output, tag);
+        }
+        None => push_component(output, "none"),
+    }
+    push_component(output, if info.has_secret { "true" } else { "false" });
+    push_component(output, &info.args.len().to_string());
+    for arg in &info.args {
+        encode_reflection_type_info(output, arg);
+    }
 }
 
 fn canonical_type(id: TypeId, types: &TypeInterner) -> Result<String, CodegenError> {

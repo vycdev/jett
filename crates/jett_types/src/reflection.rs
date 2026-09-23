@@ -210,7 +210,7 @@ impl ReflectionMetadata {
 }
 
 /// Canonical metadata for `TypeInfo`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ReflectionTypeInfo {
     pub type_name: String,
     pub kind: String,

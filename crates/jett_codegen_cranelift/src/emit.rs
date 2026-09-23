@@ -15,7 +15,7 @@ use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
 use jett_mir::{
     ControlFlowGraph, Function, Program, Statement, StatementKind, Terminator, TerminatorKind,
 };
-use jett_types::{Type, TypeId, TypeInterner};
+use jett_types::{ReflectionTypeInfo, Type, TypeId, TypeInterner};
 use target_lexicon::{HOST, Triple};
 
 use crate::CodegenError;
@@ -1192,11 +1192,13 @@ impl Translator<'_, '_> {
             ExpressionKind::String(text) => self.literal(text),
             ExpressionKind::Intrinsic {
                 intrinsic,
+                reflection_arguments,
                 args,
                 evaluation_order,
                 ..
             } => self.intrinsic(
                 *intrinsic,
+                reflection_arguments,
                 args,
                 evaluation_order,
                 expression.ty,

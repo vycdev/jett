@@ -260,6 +260,7 @@ fn collect_expression_references(
         ExpressionKind::Intrinsic {
             intrinsic: _,
             type_arguments: _,
+            reflection_arguments: _,
             args,
             evaluation_order: _,
         }

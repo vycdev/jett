@@ -275,6 +275,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("encoding", "../../tests/native/encoding.jett"),
         ("csv", "../../tests/native/csv.jett"),
         ("secret_values", "../../tests/native/secret_values.jett"),
+        (
+            "reflection_scalars",
+            "../../tests/native/reflection_scalars.jett",
+        ),
         ("crypto", "../../tests/native/crypto.jett"),
         ("math_aggregate", "../../tests/native/math_aggregate.jett"),
         (

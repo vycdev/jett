@@ -18,6 +18,7 @@ Program {
                 type_arguments: [],
                 specialization: CheckedGenericSpecialization {
                     type_argument_kinds: [],
+                    type_argument_reflections: [],
                     type_info_kinds: [],
                     type_info_primitives: [],
                     type_kind_values: [],
@@ -201,6 +202,7 @@ Program {
                 type_arguments: [],
                 specialization: CheckedGenericSpecialization {
                     type_argument_kinds: [],
+                    type_argument_reflections: [],
                     type_info_kinds: [],
                     type_info_primitives: [],
                     type_kind_values: [],
