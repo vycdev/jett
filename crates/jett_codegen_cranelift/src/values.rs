@@ -181,6 +181,49 @@ pub(crate) fn verify_intrinsic(
             Err(format!("invalid native set signature for {id}"))
         };
     }
+    if map_intrinsic(id) {
+        let (key, value) = map_types(id, args, result, types)
+            .ok_or_else(|| "invalid native map type".to_string())?;
+        if !set_element_supported(types, key) {
+            return Err("unsupported native map key".into());
+        }
+        let map = |ty| matches!(types.resolve(ty), Type::Map(k, v) if *k == key && *v == value);
+        let valid = match id {
+            IntrinsicId::MapNew => args.is_empty() && map(result),
+            IntrinsicId::MapLength => args.len() == 1 && map(args[0].ty) && result == T::INT64,
+            IntrinsicId::MapHas => {
+                args.len() == 2 && map(args[0].ty) && args[1].ty == key && result == T::BOOL
+            }
+            IntrinsicId::MapGet => {
+                args.len() == 2
+                    && map(args[0].ty)
+                    && args[1].ty == key
+                    && matches!(types.resolve(result), Type::Optional(inner) if *inner == value)
+            }
+            IntrinsicId::MapInsert => {
+                args.len() == 3
+                    && map(args[0].ty)
+                    && args[1].ty == key
+                    && args[2].ty == value
+                    && map(result)
+            }
+            IntrinsicId::MapRemove => {
+                args.len() == 2 && map(args[0].ty) && args[1].ty == key && map(result)
+            }
+            IntrinsicId::MapFromLists => {
+                args.len() == 2
+                    && matches!(types.resolve(args[0].ty), Type::List(inner) if *inner == key)
+                    && matches!(types.resolve(args[1].ty), Type::List(inner) if *inner == value)
+                    && map(result)
+            }
+            _ => false,
+        };
+        return if valid {
+            Ok(())
+        } else {
+            Err(format!("invalid native map signature for {id}"))
+        };
+    }
     let sum_signature = match id {
         IntrinsicId::Int64FromString => Some((vec![T::STRING], Type::Result(T::INT64, T::STRING))),
         IntrinsicId::Uint64FromString => {
@@ -354,6 +397,35 @@ pub(crate) fn set_intrinsic(id: IntrinsicId) -> bool {
             | IntrinsicId::SetContains
             | IntrinsicId::SetLength
     )
+}
+pub(crate) fn map_intrinsic(id: IntrinsicId) -> bool {
+    matches!(
+        id,
+        IntrinsicId::MapNew
+            | IntrinsicId::MapLength
+            | IntrinsicId::MapHas
+            | IntrinsicId::MapGet
+            | IntrinsicId::MapInsert
+            | IntrinsicId::MapRemove
+            | IntrinsicId::MapFromLists
+    )
+}
+pub(crate) fn map_types(
+    id: IntrinsicId,
+    args: &[Expression],
+    result: TypeId,
+    types: &TypeInterner,
+) -> Option<(TypeId, TypeId)> {
+    let ty = if matches!(id, IntrinsicId::MapNew | IntrinsicId::MapFromLists) {
+        result
+    } else {
+        args.first()?.ty
+    };
+    if let Type::Map(key, value) = types.resolve(ty) {
+        Some((*key, *value))
+    } else {
+        None
+    }
 }
 pub(crate) fn set_element(
     id: IntrinsicId,

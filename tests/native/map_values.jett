@@ -1,0 +1,26 @@
+namespace app
+function main() returns nothing:
+    mutable map[string, int64] scores = map("ada": 1, "bob": 2, "ada": 3)
+    println(map.length[string, int64](scores), map.has[string, int64](scores, "ada"))
+    println(map.get_or[string, int64](clone scores, "ada", 0))
+    for key, value in clone scores:
+        println(key, value)
+    scores = map.insert[string, int64](scores, "bob", 7)
+    println(map.get_or[string, int64](clone scores, "bob", 0))
+    scores = map.remove[string, int64](scores, "ada")
+    println(map.length[string, int64](scores), map.has[string, int64](scores, "ada"))
+    mutable map[int64, string] names = map.new[int64, string]()
+    names = map.insert[int64, string](names, 1, "first")
+    names = map.insert[int64, string](names, 1, "second")
+    for key, value in view names:
+        println(key, value)
+    println(map.get_or[int64, string](clone names, 1, "missing"))
+    println(map.get_or[int64, string](names, 2, "missing"))
+    map[string, int64] zipped = map.from_lists[string, int64](list("x", "x", "y"), list(2, 5))
+    println(map.length[string, int64](zipped), map.get_or[string, int64](zipped, "x", 0))
+    map[string, int64] merged = map.merge[string, int64](map("left": 1), map("left": 4, "right": 5))
+    println(map.length[string, int64](merged), map.get_or[string, int64](clone merged, "left", 0))
+    for key in map.keys[string, int64](clone merged):
+        println(key)
+    for value in map.values[string, int64](merged):
+        println(value)

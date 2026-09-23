@@ -1,5 +1,5 @@
 use super::*;
-use jett_hir::{IntrinsicId, StringSegment, VariantId};
+use jett_hir::{IntrinsicId, MapEntry, StringSegment, VariantId};
 use jett_types::BitfieldFieldKind;
 use std::collections::BTreeSet;
 
@@ -364,6 +364,143 @@ impl Translator<'_, '_> {
         }
         Ok(list)
     }
+    fn map_new(&mut self, ty: TypeId, span: Span) -> Result<LoweredValue, CodegenError> {
+        let Type::Map(key, value) = self.types.resolve(ty) else {
+            return Err(self.unsupported(span, "invalid map layout"));
+        };
+        let key_strings = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(*key == TypeInterner::STRING));
+        let value_owned = self.builder.ins().iconst(
+            ir::types::I32,
+            i64::from(*value == TypeInterner::STRING || is_linear(self.types, *value)),
+        );
+        let result = self.leaf(NativeLeaf::MapNew, &[key_strings, value_owned], true)?;
+        self.own_linear(result)
+    }
+    fn map_insert(
+        &mut self,
+        map: LoweredValue,
+        key: LoweredValue,
+        value: LoweredValue,
+        literal: bool,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let handle = self.scalar(map, span)?;
+        let (key_bits, _) = self.payload_bits(key);
+        let (value_bits, _) = self.payload_bits(value);
+        self.leaf(
+            if literal {
+                NativeLeaf::MapAppendLiteral
+            } else {
+                NativeLeaf::MapInsert
+            },
+            &[handle, key_bits, value_bits],
+            true,
+        )?;
+        if let LoweredValue::Owned(_, slot) = key {
+            self.clear_slot(slot);
+        }
+        if let LoweredValue::Owned(_, slot) = value {
+            self.clear_slot(slot);
+        }
+        Ok(())
+    }
+    pub(super) fn construct_map(
+        &mut self,
+        entries: &[MapEntry],
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let map = self.map_new(ty, span)?;
+        for entry in entries {
+            let key = self.expression(&entry.key)?;
+            let value = self.expression(&entry.value)?;
+            self.map_insert(map, key, value, true, span)?;
+        }
+        Ok(map)
+    }
+    fn map_intrinsic(
+        &mut self,
+        id: IntrinsicId,
+        values: &[LoweredValue],
+        result_type: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        match id {
+            IntrinsicId::MapNew => self.map_new(result_type, span),
+            IntrinsicId::MapLength => {
+                let map = self.scalar(values[0], span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::MapLength,
+                    &[map],
+                    true,
+                )?))
+            }
+            IntrinsicId::MapHas => {
+                let map = self.scalar(values[0], span)?;
+                let key = self.scalar(values[1], span)?;
+                let found = self.leaf(NativeLeaf::MapHas, &[map, key], true)?;
+                Ok(LoweredValue::Scalar(
+                    self.builder.ins().ireduce(ir::types::I8, found),
+                ))
+            }
+            IntrinsicId::MapGet => {
+                let map = self.scalar(values[0], span)?;
+                let key = self.scalar(values[1], span)?;
+                let result = self.leaf(NativeLeaf::MapGet, &[map, key], true)?;
+                self.own_linear(result)
+            }
+            IntrinsicId::MapInsert => {
+                let LoweredValue::Owned(map, slot) = values[0] else {
+                    return Err(self.unsupported(span, "map insert requires owner"));
+                };
+                self.map_insert(values[0], values[1], values[2], false, span)?;
+                self.clear_slot(slot);
+                self.own_linear(map)
+            }
+            IntrinsicId::MapRemove => {
+                let LoweredValue::Owned(map, slot) = values[0] else {
+                    return Err(self.unsupported(span, "map remove requires owner"));
+                };
+                let key = self.scalar(values[1], span)?;
+                let result = self.leaf(NativeLeaf::MapRemove, &[map, key], true)?;
+                self.clear_slot(slot);
+                self.own_linear(result)
+            }
+            IntrinsicId::MapFromLists => {
+                let Type::Map(key, value) = self.types.resolve(result_type) else {
+                    return Err(self.unsupported(span, "invalid map result layout"));
+                };
+                let key_strings = *key == TypeInterner::STRING;
+                let value_owned = *value == TypeInterner::STRING || is_linear(self.types, *value);
+                let LoweredValue::Owned(keys, key_slot) = values[0] else {
+                    return Err(self.unsupported(span, "map keys require owning list"));
+                };
+                let LoweredValue::Owned(items, value_slot) = values[1] else {
+                    return Err(self.unsupported(span, "map values require owning list"));
+                };
+                let key_flag = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(key_strings));
+                let value_flag = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(value_owned));
+                let result = self.leaf(
+                    NativeLeaf::MapFromLists,
+                    &[keys, items, key_flag, value_flag],
+                    true,
+                )?;
+                self.clear_slot(key_slot);
+                self.clear_slot(value_slot);
+                self.own_linear(result)
+            }
+            _ => Err(self.unsupported(span, "map intrinsic")),
+        }
+    }
     fn list_intrinsic(
         &mut self,
         id: IntrinsicId,
@@ -673,6 +810,9 @@ impl Translator<'_, '_> {
         }
         if crate::values::set_intrinsic(id) {
             return self.set_intrinsic(id, &evaluated, result_type, span);
+        }
+        if crate::values::map_intrinsic(id) {
+            return self.map_intrinsic(id, &evaluated, result_type, span);
         }
         if let Some(leaf) = crate::values::bytes_leaf(id) {
             let arguments = evaluated

@@ -29,7 +29,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             let header = function.blocks[index].id;
             let TerminatorKind::ForEach {
                 key,
-                value: None,
+                value: value_binding,
                 by_view,
                 iterable,
                 body,
@@ -41,16 +41,21 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             if iterable.ty.index() as usize >= types.len() {
                 continue;
             }
-            let element = match types.resolve(iterable.ty) {
-                Type::List(element) | Type::Set(element) => *element,
+            let (element, map_value) = match types.resolve(iterable.ty) {
+                Type::List(element) | Type::Set(element) if value_binding.is_none() => {
+                    (*element, None)
+                }
+                Type::Map(key, map_value) if value_binding.is_some() => (*key, Some(*map_value)),
                 _ => continue,
             };
-            if element.index() as usize >= types.len() {
+            if element.index() as usize >= types.len()
+                || map_value.is_some_and(|ty| ty.index() as usize >= types.len())
+            {
                 continue;
             }
-            if by_view
-                && !matches!(
-                    types.resolve(element),
+            let viewable = |ty| {
+                matches!(
+                    types.resolve(ty),
                     Type::Int8
                         | Type::Int16
                         | Type::Int32
@@ -65,7 +70,8 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                         | Type::String
                         | Type::Nothing
                 )
-            {
+            };
+            if by_view && (!viewable(element) || map_value.is_some_and(|ty| !viewable(ty))) {
                 continue;
             }
             // A preheader is the unique predecessor reachable from entry
@@ -174,6 +180,11 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                         source,
                         index: cursor,
                         target: key,
+                        part: if map_value.is_some() {
+                            SequencePart::Key
+                        } else {
+                            SequencePart::Element
+                        },
                     },
                     span,
                 },
@@ -197,6 +208,21 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     span,
                 },
             ];
+            if let Some(value) = value_binding {
+                prefix.insert(
+                    1,
+                    Statement {
+                        kind: StatementKind::SequenceGet {
+                            consume: !by_view,
+                            source,
+                            index: cursor,
+                            target: value,
+                            part: SequencePart::Value,
+                        },
+                        span,
+                    },
+                );
+            }
             prefix.append(&mut function.blocks[body.index() as usize].statements);
             function.blocks[body.index() as usize].statements = prefix;
             if by_view {

@@ -127,6 +127,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("bitfield_values", "../../tests/native/bitfield_values.jett"),
         ("list_sort", "../../tests/native/list_sort.jett"),
         ("set_values", "../../tests/native/set_values.jett"),
+        ("map_values", "../../tests/native/map_values.jett"),
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
@@ -136,7 +137,11 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{name}: {actual:?}");
-        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stdout,
+            expected.stdout.as_bytes(),
+            "{name}: {actual:?}"
+        );
         assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
     }
 }

@@ -66,6 +66,12 @@ pub struct Statement {
     pub kind: StatementKind,
     pub span: Span,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequencePart {
+    Element,
+    Key,
+    Value,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
@@ -79,6 +85,7 @@ pub enum StatementKind {
         source: LocalId,
         index: LocalId,
         target: LocalId,
+        part: SequencePart,
     },
     IterationBorrow {
         source: LocalId,

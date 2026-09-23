@@ -50,7 +50,11 @@ impl CopyValuePlan {
                         if let StatementKind::SequenceGet { index, .. } = statement.kind {
                             reads.insert(index.index() as usize);
                             temporaries += usize::from(
-                                function.locals[target.index() as usize].ty == TypeInterner::STRING,
+                                function.locals[target.index() as usize].ty == TypeInterner::STRING
+                                    || crate::move_values::is_linear(
+                                        types,
+                                        function.locals[target.index() as usize].ty,
+                                    ),
                             );
                         }
                         Some(target.index() as usize)
@@ -310,6 +314,7 @@ fn visit(
             | ExpressionKind::OptionalSome(_)
             | ExpressionKind::OptionalNone
             | ExpressionKind::ListConstruct { .. }
+            | ExpressionKind::MapConstruct { .. }
             | ExpressionKind::StructConstruct { .. }
             | ExpressionKind::EnumConstruct { .. } => true,
             ExpressionKind::BitfieldConstruct { .. } => true,
@@ -385,6 +390,12 @@ fn visit(
         ExpressionKind::ListConstruct { elements } if program.is_some() => {
             for element in elements {
                 visit(element, reads, temporaries, types, program, false)?;
+            }
+        }
+        ExpressionKind::MapConstruct { entries } if program.is_some() => {
+            for entry in entries {
+                visit(&entry.key, reads, temporaries, types, program, false)?;
+                visit(&entry.value, reads, temporaries, types, program, false)?;
             }
         }
         ExpressionKind::ResultOk(value)
@@ -514,6 +525,10 @@ fn plan_type_inner(
             }
             Type::Optional(inner) | Type::List(inner) | Type::Set(inner) => {
                 return plan_type_inner(types, *inner, program, seen);
+            }
+            Type::Map(key, value) => {
+                plan_type_inner(types, *key, program, seen)?;
+                return plan_type_inner(types, *value, program, seen);
             }
             Type::Result(ok, error) => {
                 plan_type_inner(types, *ok, program, seen)?;

@@ -20,6 +20,7 @@ pub(crate) enum ScalarKind {
     Sum,
     List,
     Set,
+    Map,
     Struct,
     Enum,
     Bitfield,
@@ -188,6 +189,11 @@ fn scalar_kind_inner(
             scalar_kind_inner(types, *inner, "set element".into(), seen)?;
             ScalarKind::Set
         }
+        Type::Map(key, value) => {
+            scalar_kind_inner(types, *key, "map key".into(), seen)?;
+            scalar_kind_inner(types, *value, "map value".into(), seen)?;
+            ScalarKind::Map
+        }
         Type::Optional(inner) => {
             scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
             ScalarKind::Sum
@@ -301,7 +307,7 @@ impl Verifier<'_> {
             StatementKind::IterationBorrow { source, token, .. } => {
                 if !matches!(
                     self.types.resolve(function.local(*source).unwrap().ty),
-                    Type::List(_) | Type::Set(_)
+                    Type::List(_) | Type::Set(_) | Type::Map(..)
                 ) || function.local(*token).unwrap().ty != TypeInterner::INT64
                 {
                     return Err(self.contract_error(
@@ -315,7 +321,35 @@ impl Verifier<'_> {
             StatementKind::SequenceLength { source, target }
             | StatementKind::SequenceGet { source, target, .. } => {
                 let element = match self.types.resolve(function.local(*source).unwrap().ty) {
-                    Type::List(element) | Type::Set(element) => *element,
+                    Type::List(element) | Type::Set(element) => {
+                        if matches!(statement.kind, StatementKind::SequenceGet { part, .. } if part != jett_mir::SequencePart::Element)
+                        {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "invalid sequence projection",
+                            ));
+                        }
+                        *element
+                    }
+                    Type::Map(key, value) => match statement.kind {
+                        StatementKind::SequenceGet {
+                            part: jett_mir::SequencePart::Key,
+                            ..
+                        } => *key,
+                        StatementKind::SequenceGet {
+                            part: jett_mir::SequencePart::Value,
+                            ..
+                        } => *value,
+                        StatementKind::SequenceLength { .. } => *key,
+                        _ => {
+                            return Err(self.contract_error(
+                                function,
+                                statement.span,
+                                "invalid map projection",
+                            ));
+                        }
+                    },
                     _ => {
                         return Err(self.contract_error(
                             function,
@@ -771,7 +805,25 @@ impl Verifier<'_> {
                         "set intrinsic type argument differs from element",
                     ));
                 }
-                if !numeric_generic && !list_generic && !set_generic && !type_arguments.is_empty() {
+                let map_generic = crate::values::map_intrinsic(*intrinsic);
+                if map_generic
+                    && type_arguments.as_slice()
+                        != crate::values::map_types(*intrinsic, args, expression.ty, self.types)
+                            .map(|(k, v)| [k, v])
+                            .unwrap_or([TypeInterner::ERROR; 2])
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "map intrinsic type arguments differ from key and value",
+                    ));
+                }
+                if !numeric_generic
+                    && !list_generic
+                    && !set_generic
+                    && !map_generic
+                    && !type_arguments.is_empty()
+                {
                     return Err(self.unsupported(
                         function,
                         expression.span,
@@ -904,8 +956,33 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
-            ExpressionKind::MapConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "map construction"))
+            ExpressionKind::MapConstruct { entries } => {
+                let Type::Map(key, value) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "map construction",
+                    ));
+                };
+                for entry in entries {
+                    self.expression(function, &entry.key)?;
+                    self.require_same_type(
+                        function,
+                        entry.key.span,
+                        *key,
+                        entry.key.ty,
+                        "map key type mismatch",
+                    )?;
+                    self.expression(function, &entry.value)?;
+                    self.require_same_type(
+                        function,
+                        entry.value.span,
+                        *value,
+                        entry.value.ty,
+                        "map value type mismatch",
+                    )?;
+                }
+                Ok(())
             }
             ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
@@ -1145,6 +1222,7 @@ impl Verifier<'_> {
                         | ScalarKind::Bytes
                         | ScalarKind::Sum
                         | ScalarKind::List
+                        | ScalarKind::Map
                         | ScalarKind::Struct
                         | ScalarKind::Bitfield
                 ) && result == ScalarKind::Bool

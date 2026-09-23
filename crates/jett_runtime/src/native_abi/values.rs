@@ -25,6 +25,10 @@ const INVALID_SET: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native set handle or element",
 );
+const INVALID_MAP: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native map handle or entry",
+);
 const INVALID_BYTES: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native bytes handle",
@@ -130,6 +134,17 @@ struct NativeList {
 struct NativeSet {
     elements: Vec<Option<u64>>,
     strings: bool,
+}
+#[derive(Clone, Copy)]
+struct NativeMapEntry {
+    key: u64,
+    value: u64,
+    key_taken: bool,
+}
+struct NativeMap {
+    entries: Vec<Option<NativeMapEntry>>,
+    key_strings: bool,
+    value_owned: bool,
 }
 struct NativeSum {
     tag: u32,
@@ -354,6 +369,7 @@ pub(super) struct NativeValues {
     sums: HashMap<NativeHandle, NativeSum>,
     lists: HashMap<NativeHandle, NativeList>,
     sets: HashMap<NativeHandle, NativeSet>,
+    maps: HashMap<NativeHandle, NativeMap>,
     structs: HashMap<NativeHandle, NativeStruct>,
     structs_created: u64,
     structs_destroyed: u64,
@@ -361,6 +377,8 @@ pub(super) struct NativeValues {
     lists_destroyed: u64,
     sets_created: u64,
     sets_destroyed: u64,
+    maps_created: u64,
+    maps_destroyed: u64,
     sums_created: u64,
     sums_destroyed: u64,
     bytes_created: u64,
@@ -389,6 +407,8 @@ impl NativeValues {
             && self.lists_created == self.lists_destroyed
             && self.sets.is_empty()
             && self.sets_created == self.sets_destroyed
+            && self.maps.is_empty()
+            && self.maps_created == self.maps_destroyed
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
         #[cfg(test)]
@@ -594,6 +614,286 @@ impl NativeValues {
         );
         self.sets_created += 1;
         Ok(id)
+    }
+    fn new_map(&mut self, key_strings: u32, value_owned: u32) -> LeafResult<u64> {
+        if key_strings > 1 || value_owned > 1 {
+            return Err(INVALID_MAP);
+        }
+        #[cfg(test)]
+        self.allocation_checkpoint()?;
+        let id = next_identity()?;
+        self.maps.insert(
+            id,
+            NativeMap {
+                entries: Vec::new(),
+                key_strings: key_strings != 0,
+                value_owned: value_owned != 0,
+            },
+        );
+        self.maps_created += 1;
+        Ok(id)
+    }
+    fn map_position(&self, id: u64, key: u64) -> LeafResult<Option<usize>> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        if map.key_strings {
+            let key_text = self.text(key)?;
+            for (index, entry) in map.entries.iter().enumerate() {
+                if let Some(entry) = entry {
+                    if !entry.key_taken && self.text(entry.key)? == key_text {
+                        return Ok(Some(index));
+                    }
+                }
+            }
+            Ok(None)
+        } else {
+            Ok(map
+                .entries
+                .iter()
+                .position(|entry| entry.is_some_and(|entry| !entry.key_taken && entry.key == key)))
+        }
+    }
+    fn map_insert(&mut self, id: u64, key: u64, value: u64) -> LeafResult<u64> {
+        let position = self.map_position(id, key)?;
+        let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+        let key_strings = map.key_strings;
+        let value_owned = map.value_owned;
+        if position.is_none() {
+            map.entries.try_reserve(1).map_err(|_| EXHAUSTED)?;
+            map.entries.push(Some(NativeMapEntry {
+                key,
+                value,
+                key_taken: false,
+            }));
+        } else {
+            let old = map.entries[position.ok_or(INVALID_MAP)?]
+                .as_mut()
+                .ok_or(INVALID_MAP)?;
+            let old_value = std::mem::replace(&mut old.value, value);
+            if key_strings {
+                self.drop_value(key)?;
+            }
+            if value_owned {
+                self.drop_value(old_value)?;
+            }
+        }
+        Ok(id)
+    }
+    fn map_append_literal(&mut self, id: u64, key: u64, value: u64) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        if map.key_strings {
+            self.text(key)?;
+        }
+        let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+        map.entries.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        map.entries.push(Some(NativeMapEntry {
+            key,
+            value,
+            key_taken: false,
+        }));
+        Ok(id)
+    }
+    fn map_remove(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        while let Some(index) = self.map_position(id, key)? {
+            let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+            let key_strings = map.key_strings;
+            let value_owned = map.value_owned;
+            let entry = map.entries.remove(index).ok_or(INVALID_MAP)?;
+            if key_strings {
+                self.drop_value(entry.key)?;
+            }
+            if value_owned {
+                self.drop_value(entry.value)?;
+            }
+        }
+        Ok(id)
+    }
+    fn map_get(&mut self, id: u64, key: u64) -> LeafResult<u64> {
+        let Some(index) = self.map_position(id, key)? else {
+            return self.sum(SUM_FAILURE, 0, false);
+        };
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let value_owned = map.value_owned;
+        let bits = map.entries[index].ok_or(INVALID_MAP)?.value;
+        let bits = if value_owned {
+            self.clone_value(bits)?
+        } else {
+            bits
+        };
+        match self.sum(SUM_SUCCESS, bits, value_owned) {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                if value_owned {
+                    self.drop_value(bits)?;
+                }
+                Err(error)
+            }
+        }
+    }
+    fn map_element(&mut self, id: u64, index: i64, key: bool, consume: bool) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let index = usize::try_from(index).map_err(|_| INVALID_MAP)?;
+        let entry = map
+            .entries
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_MAP)?;
+        if entry.key_taken != (!key && consume) {
+            return Err(INVALID_MAP);
+        }
+        let (bits, owned) = if key {
+            (entry.key, map.key_strings)
+        } else {
+            (entry.value, map.value_owned)
+        };
+        if !consume {
+            return if owned {
+                self.clone_value(bits)
+            } else {
+                Ok(bits)
+            };
+        }
+        let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
+        let slot = map.entries.get_mut(index).ok_or(INVALID_MAP)?;
+        if key {
+            slot.as_mut().ok_or(INVALID_MAP)?.key_taken = true;
+        } else {
+            *slot = None;
+        }
+        Ok(bits)
+    }
+    fn clone_map(&mut self, id: u64) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let (entries, key_strings, value_owned) =
+            (map.entries.clone(), map.key_strings, map.value_owned);
+        let output = self.new_map(u32::from(key_strings), u32::from(value_owned))?;
+        if let Err(error) = self
+            .maps
+            .get_mut(&output)
+            .ok_or(INVALID_MAP)?
+            .entries
+            .try_reserve_exact(entries.len())
+            .map_err(|_| EXHAUSTED)
+        {
+            self.drop_value(output)?;
+            return Err(error);
+        }
+        for entry in entries {
+            let Some(entry) = entry else {
+                self.maps
+                    .get_mut(&output)
+                    .ok_or(INVALID_MAP)?
+                    .entries
+                    .push(None);
+                continue;
+            };
+            if entry.key_taken {
+                self.drop_value(output)?;
+                return Err(INVALID_MAP);
+            }
+            let key = if key_strings {
+                match self.clone_value(entry.key) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                entry.key
+            };
+            let value = if value_owned {
+                match self.clone_value(entry.value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if key_strings {
+                            self.drop_value(key)?;
+                        }
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                entry.value
+            };
+            self.maps
+                .get_mut(&output)
+                .ok_or(INVALID_MAP)?
+                .entries
+                .push(Some(NativeMapEntry {
+                    key,
+                    value,
+                    key_taken: false,
+                }));
+        }
+        Ok(output)
+    }
+    fn map_from_lists(
+        &mut self,
+        keys: u64,
+        values: u64,
+        key_strings: u32,
+        value_owned: u32,
+    ) -> LeafResult<u64> {
+        if key_strings > 1 || value_owned > 1 {
+            return Err(INVALID_MAP);
+        }
+        let key_list = self.lists.get(&keys).ok_or(INVALID_LIST)?;
+        let value_list = self.lists.get(&values).ok_or(INVALID_LIST)?;
+        if key_list.owned != (key_strings != 0) || value_list.owned != (value_owned != 0) {
+            return Err(INVALID_MAP);
+        }
+        let (key_elements, value_elements) =
+            (key_list.elements.clone(), value_list.elements.clone());
+        let output = self.new_map(key_strings, value_owned)?;
+        for (key, value) in key_elements.into_iter().zip(value_elements) {
+            let Some(key) = key else {
+                self.drop_value(output)?;
+                return Err(INVALID_LIST);
+            };
+            let Some(value) = value else {
+                self.drop_value(output)?;
+                return Err(INVALID_LIST);
+            };
+            let key = if key_strings != 0 {
+                match self.clone_value(key) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                key
+            };
+            let value = if value_owned != 0 {
+                match self.clone_value(value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if key_strings != 0 {
+                            self.drop_value(key)?;
+                        }
+                        self.drop_value(output)?;
+                        return Err(error);
+                    }
+                }
+            } else {
+                value
+            };
+            if let Err(error) = self.map_insert(output, key, value) {
+                if key_strings != 0 {
+                    self.drop_value(key)?;
+                }
+                if value_owned != 0 {
+                    self.drop_value(value)?;
+                }
+                self.drop_value(output)?;
+                return Err(error);
+            }
+        }
+        self.drop_value(keys)?;
+        self.drop_value(values)?;
+        Ok(output)
     }
     fn set_position(&self, id: u64, key: u64) -> LeafResult<Option<usize>> {
         let set = self.sets.get(&id).ok_or(INVALID_SET)?;
@@ -886,6 +1186,9 @@ impl NativeValues {
         if self.sets.contains_key(&id) {
             return self.clone_set(id);
         }
+        if self.maps.contains_key(&id) {
+            return self.clone_map(id);
+        }
         if let Some(sum) = self.sums.get(&id) {
             let (tag, bits, owned) = (sum.tag, sum.bits, sum.owned);
             let bits = if owned { self.clone_value(bits)? } else { bits };
@@ -928,6 +1231,18 @@ impl NativeValues {
             if set.strings {
                 for value in set.elements.into_iter().flatten() {
                     self.drop_value(value)?;
+                }
+            }
+            return Ok(0);
+        }
+        if let Some(map) = self.maps.remove(&id) {
+            self.maps_destroyed += 1;
+            for entry in map.entries.into_iter().flatten() {
+                if map.key_strings && !entry.key_taken {
+                    self.drop_value(entry.key)?;
+                }
+                if map.value_owned {
+                    self.drop_value(entry.value)?;
                 }
             }
             return Ok(0);
@@ -1291,6 +1606,32 @@ leaves! {
             let element = set.elements.get(usize::try_from(index).map_err(|_| INVALID_SET)?)
                 .copied().flatten().ok_or(INVALID_SET)?;
             if set.strings { s.retain(element) } else { Ok(element) } };
+    MapNew, jett_rt_v1_map_new, false, (key_strings: u32 => I32, value_owned: u32 => I32), u64 => I64,
+        |s| s.new_map(key_strings, value_owned);
+    MapInsert, jett_rt_v1_map_insert, false, (map: u64 => I64, key: u64 => I64, value: u64 => I64), u64 => I64,
+        |s| s.map_insert(map, key, value);
+    MapAppendLiteral, jett_rt_v1_map_append_literal, false, (map: u64 => I64, key: u64 => I64, value: u64 => I64), u64 => I64,
+        |s| s.map_append_literal(map, key, value);
+    MapRemove, jett_rt_v1_map_remove, false, (map: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.map_remove(map, key);
+    MapHas, jett_rt_v1_map_has, false, (map: u64 => I64, key: u64 => I64), u32 => I32,
+        |s| Ok(u32::from(s.map_position(map, key)?.is_some()));
+    MapLength, jett_rt_v1_map_length, false, (map: u64 => I64), i64 => I64,
+        |s| Ok(s.maps.get(&map).ok_or(INVALID_MAP)?.entries.len() as i64);
+    MapGet, jett_rt_v1_map_get, false, (map: u64 => I64, key: u64 => I64), u64 => I64,
+        |s| s.map_get(map, key);
+    MapClone, jett_rt_v1_map_clone, false, (map: u64 => I64), u64 => I64,
+        |s| s.clone_map(map);
+    MapFromLists, jett_rt_v1_map_from_lists, false, (keys: u64 => I64, values: u64 => I64, key_strings: u32 => I32, value_owned: u32 => I32), u64 => I64,
+        |s| s.map_from_lists(keys, values, key_strings, value_owned);
+    MapKeyTake, jett_rt_v1_map_key_take, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, true, true);
+    MapKeyClone, jett_rt_v1_map_key_clone, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, true, false);
+    MapValueTake, jett_rt_v1_map_value_take, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, false, true);
+    MapValueClone, jett_rt_v1_map_value_clone, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| s.map_element(map, index, false, false);
     ListLength, jett_rt_v1_list_length, false, (value: u64 => I64), i64 => I64,
         |s| Ok(s.lists.get(&value).ok_or(INVALID_LIST)?.elements.len() as i64);
     ListAppend, jett_rt_v1_list_append, false, (value: u64 => I64, bits: u64 => I64), u64 => I64,
@@ -2234,6 +2575,48 @@ mod tests {
         assert_eq!(values.strings[&first].references, 2);
         values.drop_value(taken).unwrap();
         values.drop_value(borrowed).unwrap();
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn map_literal_duplicates_and_insert_have_distinct_semantics_and_exact_cleanup() {
+        let mut values = NativeValues::default();
+        let map = values.new_map(1, 1).unwrap();
+        let first = values.insert("same".into()).unwrap();
+        let second = values.insert("same".into()).unwrap();
+        let old = values.insert("old".into()).unwrap();
+        let newer = values.insert("new".into()).unwrap();
+        values.map_append_literal(map, first, old).unwrap();
+        values.map_append_literal(map, second, newer).unwrap();
+        assert_eq!(values.maps[&map].entries.len(), 2);
+        assert_eq!(values.map_position(map, first), Ok(Some(0)));
+        let replacement_key = values.insert("same".into()).unwrap();
+        let replacement = values.insert("replacement".into()).unwrap();
+        values
+            .map_insert(map, replacement_key, replacement)
+            .unwrap();
+        assert!(!values.strings.contains_key(&replacement_key));
+        assert!(!values.strings.contains_key(&old));
+        let copy = values.clone_map(map).unwrap();
+        values.map_remove(map, first).unwrap();
+        assert!(values.maps[&map].entries.is_empty());
+        assert_eq!(values.map_position(copy, second), Ok(Some(0)));
+        values.drop_value(map).unwrap();
+        values.drop_value(copy).unwrap();
+        assert_eq!((values.maps_created, values.maps_destroyed), (2, 2));
+        assert!(values.is_empty());
+    }
+    #[test]
+    fn partial_map_iteration_releases_only_remaining_fields() {
+        let mut values = NativeValues::default();
+        let key = values.insert("key".into()).unwrap();
+        let value = values.insert("value".into()).unwrap();
+        let map = values.new_map(1, 1).unwrap();
+        values.map_insert(map, key, value).unwrap();
+        let taken_key = values.map_element(map, 0, true, true).unwrap();
+        values.drop_value(map).unwrap();
+        assert!(!values.strings.contains_key(&value));
+        assert!(values.strings.contains_key(&taken_key));
+        values.drop_value(taken_key).unwrap();
         assert!(values.is_empty());
     }
 }

@@ -473,6 +473,7 @@ fn clif_type(
         | ScalarKind::Sum
         | ScalarKind::List
         | ScalarKind::Set
+        | ScalarKind::Map
         | ScalarKind::Struct
         | ScalarKind::Enum
         | ScalarKind::Bitfield
@@ -712,36 +713,56 @@ impl Translator<'_, '_> {
                 let value = self.argument(&source_expr, true)?;
                 let value = self.scalar(value, statement.span)?;
                 let set = matches!(self.types.resolve(ty), Type::Set(_));
-                let output =
-                    if let StatementKind::SequenceGet { index, consume, .. } = statement.kind {
-                        let index = self
-                            .builder
-                            .use_var(self.variables[index.index() as usize].unwrap());
-                        let leaf = if set {
-                            if consume {
-                                NativeLeaf::SetElementTake
-                            } else {
-                                NativeLeaf::SetElementClone
+                let map = matches!(self.types.resolve(ty), Type::Map(..));
+                let output = if let StatementKind::SequenceGet {
+                    index,
+                    consume,
+                    part,
+                    ..
+                } = statement.kind
+                {
+                    let index = self
+                        .builder
+                        .use_var(self.variables[index.index() as usize].unwrap());
+                    let leaf = if map {
+                        match (part, consume) {
+                            (jett_mir::SequencePart::Key, true) => NativeLeaf::MapKeyTake,
+                            (jett_mir::SequencePart::Key, false) => NativeLeaf::MapKeyClone,
+                            (jett_mir::SequencePart::Value, true) => NativeLeaf::MapValueTake,
+                            (jett_mir::SequencePart::Value, false) => NativeLeaf::MapValueClone,
+                            _ => {
+                                return Err(
+                                    self.unsupported(statement.span, "map iteration projection")
+                                );
                             }
-                        } else if consume {
-                            NativeLeaf::ListElementTake
+                        }
+                    } else if set {
+                        if consume {
+                            NativeLeaf::SetElementTake
                         } else {
-                            NativeLeaf::ListElementClone
-                        };
-                        let bits = self.leaf(leaf, &[value, index], true)?;
-                        self.unpack_payload(
-                            bits,
-                            self.local_types[target.index() as usize].ty,
-                            statement.span,
-                        )?
+                            NativeLeaf::SetElementClone
+                        }
+                    } else if consume {
+                        NativeLeaf::ListElementTake
                     } else {
-                        let leaf = if set {
-                            NativeLeaf::SetLength
-                        } else {
-                            NativeLeaf::ListLength
-                        };
-                        LoweredValue::Scalar(self.leaf(leaf, &[value], true)?)
+                        NativeLeaf::ListElementClone
                     };
+                    let bits = self.leaf(leaf, &[value, index], true)?;
+                    self.unpack_payload(
+                        bits,
+                        self.local_types[target.index() as usize].ty,
+                        statement.span,
+                    )?
+                } else {
+                    let leaf = if map {
+                        NativeLeaf::MapLength
+                    } else if set {
+                        NativeLeaf::SetLength
+                    } else {
+                        NativeLeaf::ListLength
+                    };
+                    LoweredValue::Scalar(self.leaf(leaf, &[value], true)?)
+                };
                 self.define_local(*target, output, statement.span)
             }
 
@@ -1079,6 +1100,7 @@ impl Translator<'_, '_> {
                     Type::Bytes => NativeLeaf::BytesClone,
                     Type::List(_) => NativeLeaf::ListClone,
                     Type::Set(_) => NativeLeaf::SetClone,
+                    Type::Map(..) => NativeLeaf::MapClone,
                     Type::Struct(_) => NativeLeaf::StructClone,
                     Type::Enum(_) => NativeLeaf::StructClone,
                     Type::Bitfield(_) => NativeLeaf::StructClone,
@@ -1123,8 +1145,8 @@ impl Translator<'_, '_> {
             ExpressionKind::ListConstruct { elements } => {
                 self.construct_list(elements, expression.ty, expression.span)
             }
-            ExpressionKind::MapConstruct { .. } => {
-                Err(self.unsupported(expression.span, "map construction"))
+            ExpressionKind::MapConstruct { entries } => {
+                self.construct_map(entries, expression.ty, expression.span)
             }
             ExpressionKind::ResultOk(value) | ExpressionKind::OptionalSome(value) => {
                 self.construct_sum(true, Some(value), expression.span)
@@ -1397,6 +1419,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Sum
             | ScalarKind::List
             | ScalarKind::Set
+            | ScalarKind::Map
             | ScalarKind::Struct
             | ScalarKind::Enum
             | ScalarKind::Bitfield

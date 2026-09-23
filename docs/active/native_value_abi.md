@@ -229,7 +229,21 @@ initialized element slots for consuming iteration, so an early exit drops only
 the elements still in the set. Borrowed iteration clones strings without moving
 the source set. The native/interpreter fixture covers these paths, including
 duplicate content and cleanup at context destruction. Primitive-backed
-refinement elements and map ownership remain guarded.
+refinement elements remain guarded.
+
+Native maps use distinct ordered owner handles with exact key and value
+ownership flags. Literal construction appends every source entry, including
+duplicate keys; `map.insert` replaces the first matching value and preserves
+the earlier key, while `map.remove` removes every matching entry. String keys
+compare by content. `map.from_lists` zips to the shorter input, replaces
+duplicate keys, and consumes both lists only after a successful result.
+Lookup clones owned values into an optional sum. Explicit map clone recursively
+clones owned entries and releases a partial prefix on failure. Consuming
+iteration transfers each key and value separately; an interrupted iteration
+drops only fields still owned by the map. Borrowed iteration clones supported
+scalar and string fields. Native/interpreter execution fixtures and runtime
+cleanup tests cover these paths. Primitive-backed refinement keys, projected
+move-only views, and callback-bearing map helpers remain guarded.
 
 The remaining string intrinsics now have typed native leaves. Replace reuses
 the grapheme split matcher and checks output capacity before assembly; empty

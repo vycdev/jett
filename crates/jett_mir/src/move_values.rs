@@ -15,6 +15,7 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::Optional(_)
             | Type::List(_)
             | Type::Set(_)
+            | Type::Map(..)
             | Type::Struct(_)
             | Type::Enum(_)
             | Type::Bitfield(_)
@@ -22,7 +23,15 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
 }
 
 pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
-    (index == 1 && matches!(id, IntrinsicId::SetRemove | IntrinsicId::SetContains))
+    (index == 1
+        && matches!(
+            id,
+            IntrinsicId::SetRemove
+                | IntrinsicId::SetContains
+                | IntrinsicId::MapRemove
+                | IntrinsicId::MapHas
+                | IntrinsicId::MapGet
+        ))
         || (index == 0
             && matches!(
                 id,
@@ -36,6 +45,8 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                     | IntrinsicId::ListSum
                     | IntrinsicId::SetLength
                     | IntrinsicId::SetContains
+                    | IntrinsicId::MapLength
+                    | IntrinsicId::MapHas
             ))
 }
 
@@ -377,6 +388,12 @@ impl Flow<'_> {
             ExpressionKind::ListConstruct { elements } => {
                 for element in elements {
                     self.expr(element, false)?;
+                }
+            }
+            ExpressionKind::MapConstruct { entries } => {
+                for entry in entries {
+                    self.expr(&entry.key, false)?;
+                    self.expr(&entry.value, false)?;
                 }
             }
             ExpressionKind::StringInterpolation(segments) => {
