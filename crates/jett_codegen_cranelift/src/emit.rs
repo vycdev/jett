@@ -512,6 +512,7 @@ fn clif_type(
         | ScalarKind::Enum
         | ScalarKind::Bitfield
         | ScalarKind::Machine
+        | ScalarKind::Function
         | ScalarKind::Stdout
         | ScalarKind::Clock
         | ScalarKind::Random
@@ -1079,8 +1080,29 @@ impl Translator<'_, '_> {
                 })?;
                 Ok(LoweredValue::Scalar(value))
             }
-            ExpressionKind::FunctionRef(_) => {
-                Err(self.unsupported(expression.span, "function value"))
+            ExpressionKind::FunctionRef(function) => {
+                let native_id = self
+                    .declarations
+                    .get(*function)
+                    .ok_or_else(|| {
+                        contract_error(
+                            self.symbol,
+                            expression.span,
+                            "function value target is not reachable",
+                        )
+                    })?
+                    .native_id;
+                let reference = self
+                    .module
+                    .declare_func_in_func(native_id, self.builder.func);
+                let pointer_type = self.module.target_config().pointer_type();
+                let address = self.builder.ins().func_addr(pointer_type, reference);
+                let address = if pointer_type == ir::types::I64 {
+                    address
+                } else {
+                    self.builder.ins().uextend(ir::types::I64, address)
+                };
+                Ok(LoweredValue::Scalar(address))
             }
             ExpressionKind::Unary { op, value } => {
                 let lowered_value = self.expression(value)?;
@@ -1180,9 +1202,11 @@ impl Translator<'_, '_> {
                 expression.ty,
                 expression.span,
             ),
-            ExpressionKind::IndirectCall { .. } => {
-                Err(self.unsupported(expression.span, "indirect call"))
-            }
+            ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+            } => self.indirect_call(callee, args, evaluation_order, expression),
             ExpressionKind::StructConstruct {
                 fields,
                 evaluation_order,
@@ -1389,6 +1413,140 @@ impl Translator<'_, '_> {
         }
     }
 
+    fn indirect_call(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        evaluation_order: &[usize],
+        expression: &Expression,
+    ) -> Result<LoweredValue, CodegenError> {
+        let Type::Function {
+            params,
+            return_type,
+        } = self.types.resolve(callee.ty)
+        else {
+            return Err(contract_error(
+                self.symbol,
+                expression.span,
+                "indirect call has no function type",
+            ));
+        };
+        let params = params.clone();
+        let return_type = *return_type;
+        let lowered_callee = self.expression(callee)?;
+        let address = self.scalar(lowered_callee, callee.span)?;
+        let pointer_type = self.module.target_config().pointer_type();
+        let address = if pointer_type == ir::types::I64 {
+            address
+        } else {
+            self.builder.ins().ireduce(pointer_type, address)
+        };
+        let invalid_order = || {
+            contract_error(
+                self.symbol,
+                expression.span,
+                "indirect call evaluation order is not a permutation",
+            )
+        };
+        let indexed = args.iter().enumerate().collect::<Vec<_>>();
+        let evaluated = reordered_map(
+            &indexed,
+            evaluation_order,
+            |(_, argument)| {
+                if is_linear(self.types, argument.ty)
+                    && matches!(argument.kind, ExpressionKind::View(_))
+                {
+                    let cloned = Expression {
+                        kind: ExpressionKind::Clone(Box::new((*argument).clone())),
+                        ty: argument.ty,
+                        span: argument.span,
+                    };
+                    self.expression(&cloned)
+                } else {
+                    self.argument(argument, false)
+                }
+            },
+            invalid_order,
+        )?;
+        let context = self
+            .builder
+            .try_use_var(self.runtime_context)
+            .map_err(|error| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    format!("cannot read native runtime context: {error}"),
+                )
+            })?;
+        let mut native_args = vec![context];
+        for (argument, value) in args.iter().zip(evaluated) {
+            match value {
+                LoweredValue::Scalar(value) => native_args.push(value),
+                LoweredValue::Owned(value, slot) => {
+                    if is_linear(self.types, argument.ty) {
+                        self.clear_slot(slot);
+                    }
+                    native_args.push(value);
+                }
+                LoweredValue::Nothing => {
+                    if scalar_kind(self.types, argument.ty, "nothing argument")?
+                        != ScalarKind::Nothing
+                    {
+                        return Err(contract_error(
+                            self.symbol,
+                            argument.span,
+                            "non-nothing indirect argument produced no value",
+                        ));
+                    }
+                }
+            }
+        }
+        let mut signature = self.module.make_signature();
+        signature
+            .params
+            .push(runtime_context_abi_param(self.module));
+        for param in params {
+            if let Some(ty) = clif_type(self.types, param, "indirect call parameter")? {
+                signature.params.push(AbiParam::new(ty));
+            }
+        }
+        if let Some(ty) = clif_type(self.types, return_type, "indirect call result")? {
+            signature.returns.push(AbiParam::new(ty));
+        }
+        let signature = self.builder.import_signature(signature);
+        let call = self
+            .builder
+            .ins()
+            .call_indirect(signature, address, &native_args);
+        let results = self.builder.func.dfg.inst_results(call).to_vec();
+        self.check_failure()?;
+        if scalar_kind(self.types, expression.ty, "indirect call result")? == ScalarKind::Nothing {
+            return if results.is_empty() {
+                Ok(LoweredValue::Nothing)
+            } else {
+                Err(contract_error(
+                    self.symbol,
+                    expression.span,
+                    "nothing indirect call produced a value",
+                ))
+            };
+        }
+        let value = results.first().copied().ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                expression.span,
+                "value-returning indirect call produced no value",
+            )
+        })?;
+        if is_linear(self.types, expression.ty) {
+            self.own_linear(value)
+        } else if is_string(self.types, expression.ty) {
+            self.own(value)
+        } else {
+            Ok(LoweredValue::Scalar(value))
+        }
+    }
+
     fn binary(
         &mut self,
         left: Value,
@@ -1520,6 +1678,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Enum
             | ScalarKind::Bitfield
             | ScalarKind::Machine
+            | ScalarKind::Function
             | ScalarKind::Stdout
             | ScalarKind::Clock
             | ScalarKind::Random

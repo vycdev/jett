@@ -133,7 +133,25 @@ export function find[T](view items: list[T], predicate: function(T) returns bool
             return some(clone item)
     return none
 export function sort_by[T](items: list[T], key_function: function(T) returns int64) returns list[T]:
-    return list.__sort_by[T](items, key_function)
+    mutable list[int64] keys = list.new[int64]()
+    for item in view items:
+        keys = list.append[int64](keys, key_function(clone item))
+    mutable list[T] sorted = items
+    int64 length = list.length[int64](view keys)
+    mutable int64 pass = 0
+    while pass < length:
+        mutable int64 index = 1
+        while index < length:
+            int64 left = list.get[int64](view keys, index - 1) handle:
+                default 0
+            int64 right = list.get[int64](view keys, index) handle:
+                default 0
+            if left > right:
+                keys = list.swap[int64](keys, index - 1, index)
+                sorted = list.swap[T](sorted, index - 1, index)
+            index = index + 1
+        pass = pass + 1
+    return sorted
 export function all[T](view items: list[T], predicate: function(T) returns bool) returns bool:
     for item in view items:
         if not predicate(clone item):

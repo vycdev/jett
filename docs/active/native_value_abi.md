@@ -405,6 +405,16 @@ cloned at that call boundary. MIR ownership analysis and temporary capacity
 account for the clone; an ordinary move-only field projection into an owner
 still requires an explicit source `clone`.
 
+Named function values use a native function address in the scalar carrier.
+Indirect calls use the checked signature plus the hidden runtime context,
+preserve source argument order, and apply the same runtime-failure and owned
+result handling as direct calls. View-parameter function values and inline
+closures remain guarded. The `list.sort_by` callback now runs in `.jett` over
+one precomputed key per item, then performs stable swaps of parallel key and
+item lists. This avoids invoking Jett callbacks while a runtime collection
+lock is held. The current implementation uses quadratic comparisons and swaps;
+larger-list performance remains a follow-up.
+
 Borrowed sequence tokens now end on each CFG edge leaving the loop region,
 including handler default edges that bypass the ordinary loop exit. Split edges
 end only that loop token, preserving outer loans. Nested iterable element IDs

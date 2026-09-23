@@ -371,6 +371,7 @@ fn visit(
         | ExpressionKind::Float(_)
         | ExpressionKind::Bool(_)
         | ExpressionKind::String(_)
+        | ExpressionKind::FunctionRef(_)
         | ExpressionKind::Nothing => {}
         ExpressionKind::Binary { left, right, .. } => {
             visit(left, reads, temporaries, types, program, false)?;
@@ -450,6 +451,17 @@ fn visit(
                 }
             }
         }
+        ExpressionKind::IndirectCall { callee, args, .. } => {
+            visit(callee, reads, temporaries, types, program, false)?;
+            for argument in args {
+                visit(argument, reads, temporaries, types, program, false)?;
+                if matches!(argument.kind, ExpressionKind::View(_))
+                    && crate::move_values::is_linear(types, argument.ty)
+                {
+                    *temporaries += 1;
+                }
+            }
+        }
         ExpressionKind::Intrinsic {
             intrinsic, args, ..
         } => {
@@ -488,6 +500,16 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
     }
     if let Type::Secret(inner) | Type::Refinement { base: inner, .. } = types.resolve(ty) {
         return copy_plan_type(types, *inner);
+    }
+    if let Type::Function {
+        params,
+        return_type,
+    } = types.resolve(ty)
+    {
+        for param in params {
+            copy_plan_type(types, *param)?;
+        }
+        return copy_plan_type(types, *return_type);
     }
     if matches!(
         types.resolve(ty),
@@ -540,6 +562,15 @@ fn plan_type_inner(
         match types.resolve(ty) {
             Type::Secret(inner) | Type::Refinement { base: inner, .. } => {
                 return plan_type_inner(types, *inner, program, seen);
+            }
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                for param in params {
+                    plan_type_inner(types, *param, program, seen)?;
+                }
+                return plan_type_inner(types, *return_type, program, seen);
             }
             Type::Bytes => return Ok(()),
             Type::Struct(id) => {

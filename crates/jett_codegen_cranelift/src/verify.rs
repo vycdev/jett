@@ -25,6 +25,7 @@ pub(crate) enum ScalarKind {
     Enum,
     Bitfield,
     Machine,
+    Function,
     Stdout,
     Clock,
     Random,
@@ -197,6 +198,18 @@ fn scalar_kind_inner(
                 }
             }
             ScalarKind::Machine
+        }
+        Type::Function {
+            params,
+            return_type,
+        } => {
+            if seen.insert(ty) {
+                for param in params {
+                    scalar_kind_inner(types, *param, "function value parameter".into(), seen)?;
+                }
+                scalar_kind_inner(types, *return_type, "function value result".into(), seen)?;
+            }
+            ScalarKind::Function
         }
         Type::List(inner) => {
             if *inner != TypeInterner::NEVER {
@@ -408,7 +421,11 @@ impl Verifier<'_> {
                     statement.span,
                     expected,
                     function.local(*target).unwrap().ty,
-                    "sequence target type mismatch",
+                    &format!(
+                        "sequence target type mismatch: expected {}, got {}",
+                        self.types.type_name(expected),
+                        self.types.type_name(function.local(*target).unwrap().ty)
+                    ),
                 )
             }
 
@@ -714,8 +731,51 @@ impl Verifier<'_> {
                     "local expression type does not match local metadata",
                 )
             }
-            ExpressionKind::FunctionRef(_) => {
-                Err(self.unsupported(function, expression.span, "function value"))
+            ExpressionKind::FunctionRef(target) => {
+                let Some(callee) = self
+                    .program
+                    .functions
+                    .get(target.index() as usize)
+                    .filter(|callee| callee.id == *target)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "function value target is absent",
+                    ));
+                };
+                let Type::Function {
+                    params,
+                    return_type,
+                } = self.types.resolve(expression.ty)
+                else {
+                    return Err(self.expression_kind_error(function, expression, "function value"));
+                };
+                if params.len() != callee.params.len()
+                    || params
+                        .iter()
+                        .zip(&callee.params)
+                        .any(|(expected, actual)| *expected != actual.ty)
+                    || *return_type != callee.return_type
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "function value signature does not match target",
+                    ));
+                }
+                if callee
+                    .params
+                    .iter()
+                    .any(|param| param.mode == jett_mir::ParamMode::View)
+                {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "function value with view parameter",
+                    ));
+                }
+                Ok(())
             }
             ExpressionKind::Unary { op, value } => {
                 self.expression(function, value)?;
@@ -911,8 +971,39 @@ impl Verifier<'_> {
                 crate::values::verify_intrinsic(*intrinsic, args, expression.ty, self.types)
                     .map_err(|message| self.contract_error(function, expression.span, message))
             }
-            ExpressionKind::IndirectCall { .. } => {
-                Err(self.unsupported(function, expression.span, "indirect call"))
+            ExpressionKind::IndirectCall { callee, args, .. } => {
+                self.expression(function, callee)?;
+                let Type::Function {
+                    params,
+                    return_type,
+                } = self.types.resolve(callee.ty)
+                else {
+                    return Err(self.expression_kind_error(function, expression, "indirect call"));
+                };
+                if params.len() != args.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "indirect call argument count does not match function type",
+                    ));
+                }
+                for (argument, expected) in args.iter().zip(params) {
+                    self.expression(function, argument)?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        *expected,
+                        argument.ty,
+                        "indirect call argument type mismatch",
+                    )?;
+                }
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *return_type,
+                    expression.ty,
+                    "indirect call result type mismatch",
+                )
             }
             ExpressionKind::StructConstruct {
                 struct_type,
@@ -1488,6 +1579,7 @@ impl Verifier<'_> {
                         | ScalarKind::Struct
                         | ScalarKind::Bitfield
                         | ScalarKind::Machine
+                        | ScalarKind::Function
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {

@@ -1913,7 +1913,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .error(name.span, "binding has no resolved definition");
             return None;
         };
-        let Some(ty) = self.parent.check.definition_types.get(&definition).copied() else {
+        let Some(ty) = self
+            .expression_types
+            .get(&name.span)
+            .copied()
+            .or_else(|| self.parent.check.definition_types.get(&definition).copied())
+        else {
             self.parent.error(name.span, "binding has no checked type");
             return None;
         };
@@ -3679,6 +3684,43 @@ function main() returns nothing:
             panic!("expected second inferred generic call target");
         };
         assert_eq!(function, string_identity.id);
+    }
+
+    #[test]
+    fn keeps_generic_loop_binding_types_separate() {
+        let program = lower_source(
+            r#"namespace app
+function count[T](items: list[T]) returns int64:
+    mutable int64 total = 0
+    for item in view items:
+        total = total + 1
+    return total
+function main() returns nothing:
+    int64 numbers = count[int64](list(1, 2))
+    int64 words = count[string](list("one", "two"))
+"#,
+        );
+        let mut binding_types = program
+            .functions
+            .iter()
+            .filter(|function| function.identity.declaration.name == "count")
+            .map(|function| {
+                let item = function
+                    .locals
+                    .iter()
+                    .find(|local| local.name == "item")
+                    .expect("generic loop binding should lower");
+                (function.identity.type_arguments[0], item.ty)
+            })
+            .collect::<Vec<_>>();
+        binding_types.sort_by_key(|(argument, _)| argument.index());
+        assert_eq!(
+            binding_types,
+            [
+                (TypeInterner::INT64, TypeInterner::INT64),
+                (TypeInterner::STRING, TypeInterner::STRING),
+            ]
+        );
     }
 
     #[test]

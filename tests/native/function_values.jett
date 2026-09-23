@@ -1,0 +1,39 @@
+namespace app
+struct Entry:
+    key: int64
+    label: string
+function entry_key(entry: Entry) returns int64:
+    return entry.key
+function increment(value: int64) returns int64:
+    return value + 1
+function double(value: int64) returns int64:
+    return value * 2
+function negate(value: int64) returns int64:
+    return 0 - value
+function apply(callback: function(int64) returns int64, value: int64) returns int64:
+    return callback(value)
+function choose(increment_first: bool) returns function(int64) returns int64:
+    if increment_first:
+        return increment
+    return double
+function main() returns nothing:
+    function(int64) returns int64 chosen = choose(true)
+    list[int64] mapped = list.map[int64, int64](list(1, 2, 3), increment)
+    optional[int64] last = list.get[int64](mapped, 2)
+    int64 final_value = last handle:
+        default 0
+    list[int64] sorted = list.sort_by[int64](list(1, 2, 3), negate)
+    optional[int64] first = list.get[int64](sorted, 0)
+    int64 first_value = first handle:
+        default 0
+    list[Entry] stable = list.sort_by[Entry](list(Entry(key: 1, label: "a"), Entry(key: 1, label: "b"), Entry(key: 0, label: "z")), entry_key)
+    optional[Entry] first_entry = list.get[Entry](view stable, 0)
+    Entry earliest = first_entry handle:
+        default Entry(key: 0, label: "missing")
+    optional[Entry] second_entry = list.get[Entry](view stable, 1)
+    Entry next = second_entry handle:
+        default Entry(key: 0, label: "missing")
+    optional[Entry] third_entry = list.get[Entry](view stable, 2)
+    Entry final = third_entry handle:
+        default Entry(key: 0, label: "missing")
+    println(apply(chosen, 7), apply(choose(false), 7), final_value, first_value, earliest.label, next.label, final.label)

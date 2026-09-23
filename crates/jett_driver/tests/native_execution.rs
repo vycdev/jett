@@ -87,6 +87,20 @@ fn native_scalar_entry_links_and_executes_without_source_tree() {
     assert_eq!(output.stderr, b"");
 }
 
+#[test]
+fn native_named_function_callbacks_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/function_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("function_values");
+    build_host_executable(&fixture, &launcher(), &binary).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty());
+}
+
 struct ExecutionChild(std::process::Child);
 
 impl Drop for ExecutionChild {

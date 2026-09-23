@@ -382,6 +382,20 @@ impl Flow<'_> {
                 }
                 self.loans = saved;
             }
+            ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+            } => {
+                self.expr(callee, false)?;
+                let saved = self.loans.clone();
+                for &index in evaluation_order {
+                    let explicit_view = matches!(args[index].kind, ExpressionKind::View(_))
+                        && is_linear(self.types, args[index].ty);
+                    self.expr(&args[index], explicit_view)?;
+                }
+                self.loans = saved;
+            }
             ExpressionKind::Intrinsic {
                 intrinsic,
                 args,
@@ -484,6 +498,7 @@ impl Flow<'_> {
             | ExpressionKind::Float(_)
             | ExpressionKind::Bool(_)
             | ExpressionKind::String(_)
+            | ExpressionKind::FunctionRef(_)
             | ExpressionKind::Nothing => {}
             _ => return Err("expression needs explicit native ownership lowering".into()),
         }

@@ -8636,6 +8636,7 @@ impl<'a> TypeChecker<'a> {
         // Bind the loop variable (key for maps, element for lists/strings).
         if let Some(def_id) = self.declaration_def_id(for_stmt.variable.span) {
             self.type_env.insert(def_id, elem_type);
+            self.record_expression_type(for_stmt.variable.span, elem_type);
             self.record_closure_local(def_id);
         }
 
@@ -8648,6 +8649,7 @@ impl<'a> TypeChecker<'a> {
             };
             if let Some(def_id) = self.declaration_def_id(val_var.span) {
                 self.type_env.insert(def_id, val_type);
+                self.record_expression_type(val_var.span, val_type);
                 self.record_closure_local(def_id);
             }
         }
