@@ -2,6 +2,7 @@
 //! Every pointer must refer to a live stationary ABI context, except literal
 //! bytes which are borrowed for the call. No Rust value crosses this ABI.
 use super::*;
+use crate::encoding;
 use std::cmp::Ordering as CompareOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
 use unicode_segmentation::UnicodeSegmentation;
@@ -581,6 +582,32 @@ impl NativeValues {
                         Err(error)
                     }
                 }
+            }
+        }
+    }
+    fn byte_result(&mut self, decoded: Result<Vec<u8>, String>) -> LeafResult<u64> {
+        let (tag, payload) = match decoded {
+            Ok(bytes) => (SUM_SUCCESS, self.insert_bytes(bytes)?),
+            Err(error) => (SUM_FAILURE, self.insert(error)?),
+        };
+        match self.sum(tag, payload, true) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.drop_value(payload)?;
+                Err(error)
+            }
+        }
+    }
+    fn string_result(&mut self, decoded: Result<String, String>) -> LeafResult<u64> {
+        let (tag, payload) = match decoded {
+            Ok(text) => (SUM_SUCCESS, self.insert(text)?),
+            Err(error) => (SUM_FAILURE, self.insert(error)?),
+        };
+        match self.sum(tag, payload, true) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.drop_value(payload)?;
+                Err(error)
             }
         }
     }
@@ -1692,6 +1719,21 @@ leaves! {
                 else { (0..raw.len()).step_by(2).map(|i| u8::from_str_radix(&raw[i..i+2], 16).map_err(|_| "bytes.from_hex: expected hex string")).collect::<Result<Vec<_>, _>>() };
             let (tag, payload) = match decoded { Ok(data) => (SUM_SUCCESS, s.insert_bytes(data)?), Err(error) => (SUM_FAILURE, s.insert(error.to_owned())?) };
             match s.sum(tag, payload, true) { Ok(v) => Ok(v), Err(e) => { s.drop_value(payload)?; Err(e) } } };
+
+    EncodingBase64Encode, jett_rt_v1_encoding_base64_encode, false, (value: u64 => I64), u64 => I64,
+        |s| { let encoded = encoding::base64_encode(s.bytes(value)?); s.insert(encoded) };
+    EncodingBase64Decode, jett_rt_v1_encoding_base64_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::base64_decode(s.text(value)?).map_err(str::to_owned); s.byte_result(decoded) };
+    EncodingHexDecode, jett_rt_v1_encoding_hex_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::encoding_hex_decode(s.text(value)?).map_err(str::to_owned); s.byte_result(decoded) };
+    EncodingUrlEncode, jett_rt_v1_encoding_url_encode, false, (value: u64 => I64), u64 => I64,
+        |s| { let encoded = encoding::percent_encode(s.text(value)?, false); s.insert(encoded) };
+    EncodingUrlDecode, jett_rt_v1_encoding_url_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::percent_decode(s.text(value)?, false).map_err(str::to_owned); s.string_result(decoded) };
+    EncodingFormEncode, jett_rt_v1_encoding_form_encode, false, (value: u64 => I64), u64 => I64,
+        |s| { let encoded = encoding::percent_encode(s.text(value)?, true); s.insert(encoded) };
+    EncodingFormDecode, jett_rt_v1_encoding_form_decode, false, (value: u64 => I64), u64 => I64,
+        |s| { let decoded = encoding::percent_decode(s.text(value)?, true).map_err(str::to_owned); s.string_result(decoded) };
 
     DropValue, jett_rt_v1_value_drop, true, (value: u64 => I64), u32 => I32,
         |s| s.drop_value(value);

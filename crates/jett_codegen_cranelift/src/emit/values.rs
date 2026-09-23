@@ -822,7 +822,10 @@ impl Translator<'_, '_> {
             let v = self.leaf(leaf, &arguments, true)?;
             return match leaf {
                 NativeLeaf::BytesLength => Ok(LoweredValue::Scalar(v)),
-                NativeLeaf::BytesToHex => self.own(v),
+                NativeLeaf::BytesToHex
+                | NativeLeaf::EncodingBase64Encode
+                | NativeLeaf::EncodingUrlEncode
+                | NativeLeaf::EncodingFormEncode => self.own(v),
                 _ => self.own_linear(v),
             };
         }

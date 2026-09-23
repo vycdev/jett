@@ -1,5 +1,6 @@
 //! Backend-neutral runtime services for Jett execution contexts.
 
+pub mod encoding;
 pub mod graphics;
 pub mod native_abi;
 

@@ -241,6 +241,12 @@ pub(crate) fn verify_intrinsic(
         IntrinsicId::BytesGet => Some((vec![T::BYTES, T::INT64], Type::Optional(T::INT64))),
         IntrinsicId::BytesToString => Some((vec![T::BYTES], Type::Result(T::STRING, T::STRING))),
         IntrinsicId::BytesFromHex => Some((vec![T::STRING], Type::Result(T::BYTES, T::STRING))),
+        IntrinsicId::EncodingBase64Decode | IntrinsicId::EncodingHexDecode => {
+            Some((vec![T::STRING], Type::Result(T::BYTES, T::STRING)))
+        }
+        IntrinsicId::EncodingUrlDecode | IntrinsicId::EncodingFormDecode => {
+            Some((vec![T::STRING], Type::Result(T::STRING, T::STRING)))
+        }
         _ => None,
     };
     if let Some((parameters, expected)) = sum_signature {
@@ -256,6 +262,10 @@ pub(crate) fn verify_intrinsic(
         IntrinsicId::BytesConcat => (&[T::BYTES, T::BYTES], T::BYTES),
         IntrinsicId::BytesSlice => (&[T::BYTES, T::INT64, T::INT64], T::BYTES),
         IntrinsicId::BytesToHex => (&[T::BYTES], T::STRING),
+        IntrinsicId::EncodingBase64Encode => (&[T::BYTES], T::STRING),
+        IntrinsicId::EncodingUrlEncode | IntrinsicId::EncodingFormEncode => {
+            (&[T::STRING], T::STRING)
+        }
         IntrinsicId::StringCharCount => (&[T::STRING], T::INT64),
         IntrinsicId::StringIndexOf => {
             if args.len() == 2
@@ -379,6 +389,13 @@ pub(crate) fn bytes_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
         IntrinsicId::BytesGet => NativeLeaf::BytesGet,
         IntrinsicId::BytesToString => NativeLeaf::BytesToString,
         IntrinsicId::BytesFromHex => NativeLeaf::BytesFromHex,
+        IntrinsicId::EncodingBase64Encode => NativeLeaf::EncodingBase64Encode,
+        IntrinsicId::EncodingBase64Decode => NativeLeaf::EncodingBase64Decode,
+        IntrinsicId::EncodingHexDecode => NativeLeaf::EncodingHexDecode,
+        IntrinsicId::EncodingUrlEncode => NativeLeaf::EncodingUrlEncode,
+        IntrinsicId::EncodingUrlDecode => NativeLeaf::EncodingUrlDecode,
+        IntrinsicId::EncodingFormEncode => NativeLeaf::EncodingFormEncode,
+        IntrinsicId::EncodingFormDecode => NativeLeaf::EncodingFormDecode,
         _ => return None,
     })
 }

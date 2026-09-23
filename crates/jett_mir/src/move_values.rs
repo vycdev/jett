@@ -40,6 +40,7 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                     | IntrinsicId::BytesToHex
                     | IntrinsicId::BytesToString
                     | IntrinsicId::BytesGet
+                    | IntrinsicId::EncodingBase64Encode
                     | IntrinsicId::ListLength
                     | IntrinsicId::ListGetClone
                     | IntrinsicId::ListSum

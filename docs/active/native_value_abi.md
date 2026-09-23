@@ -128,6 +128,12 @@ addition to both registries being empty. Runtime tests separately prove byte
 storage independence, exact destruction and byte-only leak detection. This is
 not evidence for resource finalizers or full native parity.
 
+Encoding leaves borrow their byte or string input and return an owned string
+or an owned `result` with an owned byte/string payload. Native and interpreter
+call the same base64, strict hex, URL, and form kernels, including validation
+precedence and UTF-8 errors. Failed sum allocation drops the newly created
+payload before propagating terminal failure.
+
 ## Result and optional ownership and handlers
 
 Native sums have separate context-associated, move-only handles. Their internal
