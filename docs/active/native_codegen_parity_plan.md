@@ -283,6 +283,7 @@ lowering alone never changes an execution row to complete.
 | Strings and bytes | covered | all current string intrinsics, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
 | Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; transparent secret/refinement representation; machines and validating refinements pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte roundtrip covered; width validation, payload-enum equality and other aggregate kinds pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive list sorting and sets, and primitive-key maps with owned values | compiled list access, reverse/repeat, scalar iteration and sort; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; projected views, contextual empty-list conversion, refinements, and callback helpers pending |
+| Numeric aggregates | covered | `math.average` and `math.median` for `list[int64]`, `list[uint64]`, and `list[float64]` | native/interpreter differential fixtures cover all three element types and overflow-safe floating-point extremes; empty-list error contract covered |
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
@@ -299,7 +300,7 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 77 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 78 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 15 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison in `native_execution_windows` |
 | Runtime contracts | 22 | 25 | exhaustive runtime-contract probe; matched behavior and checked native-value cleanup |
 
@@ -307,7 +308,7 @@ These counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 77. Four string/comptime fixtures began emitting
+unmarked row and now proves 78. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -348,6 +349,11 @@ and `uint64_checked_expression_runtime_types.jett`. The last also passes a
 supplemental native/interpreter dispatch execution check. Fixture membership
 and denominators are unchanged. Unit and payload enums also pass dedicated
 native/interpreter differential fixtures, including recursive owned payloads.
+Native `math.average` and `math.median` over integer and floating-point lists
+add `math_extra.jett` object emission. They share the interpreter's floating-point
+reduction kernels and pass differential execution for ordinary and extreme values;
+the empty-list runtime error is checked directly. The fixture has no `main`, so
+the tracked native-main count is unchanged.
 Native arithmetic now accepts a nonzero refinement as the right operand of
 integer division or modulo when its base matches the left operand. This is
 covered by an object-emission test; `integer_nonzero_proofs.jett` still needs

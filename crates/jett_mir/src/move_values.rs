@@ -94,6 +94,8 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                     | IntrinsicId::ListLength
                     | IntrinsicId::ListGetClone
                     | IntrinsicId::ListSum
+                    | IntrinsicId::MathAverage
+                    | IntrinsicId::MathMedian
                     | IntrinsicId::SetLength
                     | IntrinsicId::SetContains
                     | IntrinsicId::MapLength

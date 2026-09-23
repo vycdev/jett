@@ -4,6 +4,7 @@ pub mod crypto;
 pub mod csv;
 pub mod encoding;
 pub mod graphics;
+pub mod math;
 pub mod native_abi;
 
 use std::any::Any;

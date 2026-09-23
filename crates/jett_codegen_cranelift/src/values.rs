@@ -167,6 +167,16 @@ pub(crate) fn verify_intrinsic(
             Err("invalid native CSV intrinsic signature".into())
         };
     }
+    if matches!(id, IntrinsicId::MathAverage | IntrinsicId::MathMedian) {
+        return if args.len() == 1
+            && result == T::FLOAT64
+            && math_aggregate_kind(types, args[0].ty).is_some()
+        {
+            Ok(())
+        } else {
+            Err(format!("invalid native numeric list signature for {id}"))
+        };
+    }
     if let Some(leaf) = math_leaf(id, args.first().map(|a| a.ty)) {
         let parameters = &leaf.parameters()[1..];
         let native_type = |ty| match ty {
@@ -585,6 +595,18 @@ pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<Na
         Type::Float64 => NativeSortKind::Float64,
         Type::Bool => NativeSortKind::Bool,
         Type::String => NativeSortKind::String,
+        _ => return None,
+    })
+}
+
+pub(crate) fn math_aggregate_kind(types: &TypeInterner, list: TypeId) -> Option<NativeSortKind> {
+    let Type::List(element) = types.resolve(list) else {
+        return None;
+    };
+    Some(match *element {
+        TypeInterner::INT64 => NativeSortKind::Int64,
+        TypeInterner::UINT64 => NativeSortKind::Uint64,
+        TypeInterner::FLOAT64 => NativeSortKind::Float64,
         _ => return None,
     })
 }

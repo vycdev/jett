@@ -830,6 +830,25 @@ impl Translator<'_, '_> {
                 _ => self.own_linear(v),
             };
         }
+        if matches!(id, IntrinsicId::MathAverage | IntrinsicId::MathMedian) {
+            let list = self.scalar(evaluated[0], span)?;
+            let kind = crate::values::math_aggregate_kind(self.types, args[0].ty)
+                .ok_or_else(|| self.unsupported(span, "numeric list kind"))?;
+            let kind = self
+                .builder
+                .ins()
+                .iconst(ir::types::I32, i64::from(kind as u32));
+            let leaf = if id == IntrinsicId::MathAverage {
+                NativeLeaf::MathAverage
+            } else {
+                NativeLeaf::MathMedian
+            };
+            return Ok(LoweredValue::Scalar(self.leaf(
+                leaf,
+                &[list, kind],
+                true,
+            )?));
+        }
         if let Some(leaf) = crate::values::math_leaf(id, args.first().map(|a| a.ty)) {
             let arguments = evaluated
                 .iter()

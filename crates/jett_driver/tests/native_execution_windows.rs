@@ -132,6 +132,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("csv", "../../tests/native/csv.jett"),
         ("secret_values", "../../tests/native/secret_values.jett"),
         ("crypto", "../../tests/native/crypto.jett"),
+        ("math_aggregate", "../../tests/native/math_aggregate.jett"),
         (
             "nested_handle_view_call",
             "../../tests/run_pass/uint64_checked_expression_runtime_main.jett",
@@ -210,6 +211,28 @@ fn native_uint64_checked_expression_dispatch_matches_interpreter() {
     let binary = directory.path().join("program.exe");
     build_host_executable(&source_path, launcher(), &binary)
         .expect("compile uint64 dispatch fixture");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_math_aggregates_preserve_interpreter_extremes() {
+    let source = include_str!("../../../tests/run_pass/math_extra.jett");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let source_path = directory.path().join("math_extra.jett");
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\nfunction main() returns nothing:\n    println(average_test(), average_finite_extremes_test(), average_preserves_small_residual_test(), median_odd_test(), median_even_test(), median_finite_extremes_test())\n"
+        ),
+    )
+    .expect("write math aggregate fixture with an executable entry");
+    let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&source_path, launcher(), &binary)
+        .expect("compile math aggregate fixture");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());

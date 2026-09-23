@@ -1,0 +1,10 @@
+namespace app
+
+function main() returns nothing:
+    list[int64] signed_average = list(-3, 1, 8)
+    list[int64] signed_median = list(-3, 1, 8, 11)
+    list[uint64] unsigned_average = list(2, 4, 6)
+    list[uint64] unsigned_median = list(2, 4, 6, 8)
+    list[float64] float_average = list(1.0, 2.0, 3.0)
+    list[float64] float_median = list(1.0, 2.0, 3.0, 4.0)
+    println(math.average(signed_average), math.median(signed_median), math.average(unsigned_average), math.median(unsigned_median), math.average(float_average), math.median(float_median))

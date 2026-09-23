@@ -780,6 +780,26 @@ impl Verifier<'_> {
                     ));
                 }
                 let list_generic = crate::values::list_intrinsic(*intrinsic);
+                let math_aggregate_generic = matches!(
+                    intrinsic,
+                    jett_hir::IntrinsicId::MathAverage | jett_hir::IntrinsicId::MathMedian
+                );
+                if math_aggregate_generic
+                    && type_arguments.as_slice()
+                        != [args
+                            .first()
+                            .and_then(|arg| match self.types.resolve(arg.ty) {
+                                Type::List(element) => Some(*element),
+                                _ => None,
+                            })
+                            .unwrap_or(TypeInterner::ERROR)]
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "numeric list intrinsic type argument differs from element",
+                    ));
+                }
                 if list_generic
                     && type_arguments.as_slice()
                         != [crate::values::list_element(
@@ -825,6 +845,7 @@ impl Verifier<'_> {
                 }
                 if !numeric_generic
                     && !list_generic
+                    && !math_aggregate_generic
                     && !set_generic
                     && !map_generic
                     && !type_arguments.is_empty()
@@ -832,7 +853,7 @@ impl Verifier<'_> {
                     return Err(self.unsupported(
                         function,
                         expression.span,
-                        "generic native intrinsic",
+                        format!("generic native intrinsic {intrinsic}"),
                     ));
                 }
                 crate::values::verify_intrinsic(*intrinsic, args, expression.ty, self.types)

@@ -5,6 +5,7 @@ use super::*;
 use crate::crypto;
 use crate::csv;
 use crate::encoding;
+use crate::math;
 use std::cmp::Ordering as CompareOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
 use subtle::ConstantTimeEq;
@@ -1138,6 +1139,35 @@ impl NativeValues {
         }
         Ok(id)
     }
+
+    fn math_numbers(&self, id: u64, raw_kind: u32, empty: Failure) -> LeafResult<Vec<f64>> {
+        let kind = NativeSortKind::from_raw(raw_kind)?;
+        if !matches!(
+            kind,
+            NativeSortKind::Int64 | NativeSortKind::Uint64 | NativeSortKind::Float64
+        ) {
+            return Err(INVALID_LIST);
+        }
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        if list.owned {
+            return Err(INVALID_LIST);
+        }
+        if list.elements.is_empty() {
+            return Err(empty);
+        }
+        list.elements
+            .iter()
+            .map(|value| {
+                let bits = (*value).ok_or(INVALID_LIST)?;
+                Ok(match kind {
+                    NativeSortKind::Int64 => (bits as i64) as f64,
+                    NativeSortKind::Uint64 => bits as f64,
+                    NativeSortKind::Float64 => f64::from_bits(bits),
+                    _ => unreachable!("numeric kind checked above"),
+                })
+            })
+            .collect()
+    }
     fn string_list(&mut self, parts: Vec<String>) -> LeafResult<u64> {
         let mut elements = Vec::new();
         elements
@@ -1717,6 +1747,15 @@ leaves! {
         |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
             if list.owned { return Err(INVALID_LIST); }
             Ok(list.elements.iter().flatten().fold(0_i64, |acc, bits| acc.wrapping_add(*bits as i64))) };
+
+    MathAverage, jett_rt_v1_math_average, false, (value: u64 => I64, kind: u32 => I32), f64 => F64,
+        |s| { let numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average: list is empty"))?;
+            Ok(math::float_average(&numbers)) };
+    MathMedian, jett_rt_v1_math_median, false, (value: u64 => I64, kind: u32 => I32), f64 => F64,
+        |s| { let mut numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.median: list is empty"))?;
+            numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(CompareOrdering::Equal));
+            let middle = numbers.len() / 2;
+            Ok(if numbers.len() % 2 == 0 { math::float_midpoint(numbers[middle - 1], numbers[middle]) } else { numbers[middle] }) };
 
     ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
@@ -2405,6 +2444,38 @@ mod tests {
             jett_rt_v1_list_new(context.pointer(), 0);
         }
         context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn empty_numeric_aggregates_report_their_checked_runtime_errors() {
+        for (operation, expected) in [
+            (
+                jett_rt_v1_math_average
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.average: list is empty".as_slice(),
+            ),
+            (
+                jett_rt_v1_math_median
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.median: list is empty".as_slice(),
+            ),
+        ] {
+            let context = Context::new();
+            unsafe {
+                let list = jett_rt_v1_list_new(context.pointer(), 0);
+                assert_eq!(
+                    operation(context.pointer(), list, NativeSortKind::Float64 as u32),
+                    0.0
+                );
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                let state = lock_unpoisoned(&lease.entry.state);
+                assert_eq!(
+                    state.as_ref().unwrap().values.failure,
+                    Some((JettRuntimeStatusV1::INVALID_ARGUMENT, expected))
+                );
+                drop(state);
+                jett_rt_v1_value_drop(context.pointer(), list);
+            }
+        }
     }
     #[test]
     fn consuming_list_elements_transfer_identity_and_drop_only_initialized_slots() {
