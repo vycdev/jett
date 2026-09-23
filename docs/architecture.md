@@ -860,6 +860,9 @@ only for struct and bitfield kinds; an alias remains a distinct total probe.
 `type.bitfield_layout` and `type.bitfield_fields` likewise lower checked
 bitfield layout snapshots into `TypeBitfield` and `TypeBitfieldField` values;
 other kinds produce an empty layout, including source aliases.
+`type.variants` lowers checked enum variant snapshots and their payload-field
+metadata into `TypeVariant` values; non-enum kinds, including aliases, produce
+an empty list.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 

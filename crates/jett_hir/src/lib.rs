@@ -18,7 +18,7 @@ use jett_typecheck::{
 };
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionTypeInfo,
-    Type, TypeId,
+    ReflectionVariantInfo, Type, TypeId,
 };
 
 mod type_validation;
@@ -2380,6 +2380,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     | IntrinsicId::TypeFields
                     | IntrinsicId::TypeBitfieldFields
                     | IntrinsicId::TypeBitfieldLayout
+                    | IntrinsicId::TypeVariants
             ) {
                 if !lowered_args.is_empty()
                     || type_arguments.len() != 1
@@ -2422,6 +2423,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     ),
                     IntrinsicId::TypeBitfieldLayout => self.lower_reflection_bitfield_layout(
                         type_arguments[0],
+                        &info.kind,
+                        ty,
+                        call_span,
+                    ),
+                    IntrinsicId::TypeVariants => self.lower_reflection_type_variants(
+                        type_arguments[0],
+                        &info.type_name,
                         &info.kind,
                         ty,
                         call_span,
@@ -2638,7 +2646,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             .iter()
             .map(|field| {
                 Some(Expression {
-                    kind: self.lower_reflection_type_field(field, owner_name, field_ty, span)?,
+                    kind: self
+                        .lower_reflection_type_field(field, owner_name, None, field_ty, span)?,
                     ty: field_ty,
                     span,
                 })
@@ -2651,6 +2660,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         &mut self,
         field: &ReflectionFieldInfo,
         owner_name: &str,
+        owner_member: Option<&str>,
         ty: TypeId,
         span: Span,
     ) -> Option<ExpressionKind> {
@@ -2704,6 +2714,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             span,
         )?;
         let type_info = self.lower_reflection_type_info(&field.type_info, field_types[9], span)?;
+        let owner_member = match owner_member {
+            Some(member) => {
+                let Type::Optional(string_ty) = self.parent.check.interner.resolve(field_types[2])
+                else {
+                    self.parent
+                        .error(span, "reflected owner member is not optional string");
+                    return None;
+                };
+                ExpressionKind::OptionalSome(Box::new(string_field(member, *string_ty)))
+            }
+            None => ExpressionKind::OptionalNone,
+        };
         let fields = vec![
             Expression {
                 kind: ExpressionKind::Int(index),
@@ -2712,7 +2734,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             },
             string_field(owner_name, field_types[1]),
             Expression {
-                kind: ExpressionKind::OptionalNone,
+                kind: owner_member,
                 ty: field_types[2],
                 span,
             },
@@ -2729,6 +2751,156 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Expression {
                 kind: type_info,
                 ty: field_types[9],
+                span,
+            },
+        ];
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields,
+            evaluation_order: (0..expected.len()).collect(),
+            validates_refinements: false,
+        })
+    }
+
+    fn lower_reflection_type_variants(
+        &mut self,
+        owner_ty: TypeId,
+        owner_name: &str,
+        owner_kind: &str,
+        list_ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::List(variant_ty) = self.parent.check.interner.resolve(list_ty) else {
+            self.parent
+                .error(span, "type.variants result is not a list");
+            return None;
+        };
+        let variant_ty = *variant_ty;
+        if owner_kind != "enum" {
+            return Some(ExpressionKind::ListConstruct {
+                elements: Vec::new(),
+            });
+        }
+        let Some(variants) = self
+            .parent
+            .check
+            .reflection_metadata
+            .get_type_variants_for_id(owner_ty)
+            .map(<[_]>::to_vec)
+        else {
+            self.parent
+                .error(span, "type.variants has no checked variant metadata");
+            return None;
+        };
+        let elements = variants
+            .iter()
+            .map(|variant| {
+                Some(Expression {
+                    kind: self
+                        .lower_reflection_type_variant(variant, owner_name, variant_ty, span)?,
+                    ty: variant_ty,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::ListConstruct { elements })
+    }
+
+    fn lower_reflection_type_variant(
+        &mut self,
+        variant: &ReflectionVariantInfo,
+        owner_name: &str,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent
+                .error(span, "type.variants element is not TypeVariant");
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = [
+            "index",
+            "owner_type",
+            "name",
+            "discriminant",
+            "has_secret",
+            "fields",
+        ];
+        if definition.name != "TypeVariant"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent
+                .error(span, "type.variants has no checked TypeVariant layout");
+            return None;
+        }
+        let field_types = definition
+            .fields
+            .iter()
+            .map(|(_, field_ty)| *field_ty)
+            .collect::<Vec<_>>();
+        let Type::List(field_ty) = self.parent.check.interner.resolve(field_types[5]) else {
+            self.parent.error(span, "TypeVariant fields are not a list");
+            return None;
+        };
+        let field_ty = *field_ty;
+        let Ok(index) = i128::try_from(variant.index) else {
+            self.parent
+                .error(span, "reflected variant index is too large");
+            return None;
+        };
+        let field_values = variant
+            .fields
+            .iter()
+            .map(|field| {
+                Some(Expression {
+                    kind: self.lower_reflection_type_field(
+                        field,
+                        owner_name,
+                        Some(&variant.name),
+                        field_ty,
+                        span,
+                    )?,
+                    ty: field_ty,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let fields = vec![
+            Expression {
+                kind: ExpressionKind::Int(index),
+                ty: field_types[0],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::String(owner_name.to_string()),
+                ty: field_types[1],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::String(variant.name.clone()),
+                ty: field_types[2],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::Int(variant.discriminant.into()),
+                ty: field_types[3],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::Bool(variant.has_secret),
+                ty: field_types[4],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::ListConstruct {
+                    elements: field_values,
+                },
+                ty: field_types[5],
                 span,
             },
         ];

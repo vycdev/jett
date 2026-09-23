@@ -281,6 +281,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ),
         ("type_info", "../../tests/native/type_info.jett"),
         ("type_fields", "../../tests/native/type_fields.jett"),
+        ("type_variants", "../../tests/native/type_variants.jett"),
         (
             "bitfield_reflection",
             "../../tests/native/bitfield_reflection.jett",
