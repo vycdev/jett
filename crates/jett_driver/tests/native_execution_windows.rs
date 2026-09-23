@@ -263,6 +263,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/contextual_generic_empty_list.jett",
         ),
         ("machine_values", "../../tests/native/machine_values.jett"),
+        ("uuid_values", "../../tests/native/uuid_values.jett"),
         ("list_sort", "../../tests/native/list_sort.jett"),
         ("set_values", "../../tests/native/set_values.jett"),
         ("map_values", "../../tests/native/map_values.jett"),
@@ -302,6 +303,9 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+        if name == "uuid_values" {
+            assert_eq!(expected.stdout, "true true true true\n");
+        }
         let directory = tempfile::tempdir().expect("isolated execution directory");
         let binary = directory.path().join("program.exe");
         build_host_executable(&fixture, launcher(), &binary)

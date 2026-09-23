@@ -415,6 +415,7 @@ pub(crate) fn verify_intrinsic(
         IntrinsicId::RandomBounded => (&[T::RANDOM, T::INT64, T::INT64], T::INT64),
         IntrinsicId::RandomUnitFloat64 => (&[T::RANDOM], T::FLOAT64),
         IntrinsicId::RandomBool => (&[T::RANDOM], T::BOOL),
+        IntrinsicId::UuidNew => (&[], T::STRING),
         IntrinsicId::StringFromInt64 => (&[T::INT64], T::STRING),
         IntrinsicId::StringFromUint64 => (&[T::UINT64], T::STRING),
         IntrinsicId::StringFromFloat64 => (&[T::FLOAT64], T::STRING),

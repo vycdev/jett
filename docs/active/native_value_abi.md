@@ -26,6 +26,11 @@ bounded-integer, unit-float, and boolean leaves share their provider logic with
 the interpreter, including rejection sampling and invalid/exhausted script
 failures. Collection algorithms remain in `stdlib/random.jett`. Exact
 consumption of a successful native test script remains pending.
+`uuid.new` has a separate owned-string leaf matching the interpreter's current
+UUID v4 behavior. Both call a shared formatter after sampling OS entropy; the
+native leaf reports entropy failure through the runtime status and owns the
+resulting string in the current context. The broader UUID generation policy is
+still tracked separately from this implementation slice.
 Environment authority is another context-bound token. The shared runtime
 captures immutable user arguments and environment entries before entering
 `main`; a test-only `JETT_NATIVE_TEST_ENVIRONMENT_SNAPSHOT_V1` channel can

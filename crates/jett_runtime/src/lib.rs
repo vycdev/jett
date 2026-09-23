@@ -9,6 +9,7 @@ pub mod graphics;
 pub mod math;
 pub mod native_abi;
 pub mod random;
+pub mod uuid;
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};

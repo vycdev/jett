@@ -9446,36 +9446,11 @@ impl Interpreter {
             // -- UUID operations (stdlib/uuid.jett) ---------------------------
             IntrinsicId::UuidNew => {
                 require_args!(name, 0, args);
-                // Generate a UUID v4 using rand
-                let mut rng = rand::thread_rng();
-                let mut b = [0u8; 16];
-                for byte in b.iter_mut() {
-                    *byte = rand::Rng::r#gen(&mut rng);
-                }
-                // Set version 4 bits
-                b[6] = (b[6] & 0x0F) | 0x40;
-                // Set variant bits
-                b[8] = (b[8] & 0x3F) | 0x80;
-                let uuid = format!(
-                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                    b[0],
-                    b[1],
-                    b[2],
-                    b[3],
-                    b[4],
-                    b[5],
-                    b[6],
-                    b[7],
-                    b[8],
-                    b[9],
-                    b[10],
-                    b[11],
-                    b[12],
-                    b[13],
-                    b[14],
-                    b[15]
-                );
-                Some(Ok(Value::String(uuid)))
+                Some(
+                    jett_runtime::uuid::new_v4()
+                        .map(Value::String)
+                        .map_err(str::to_owned),
+                )
             }
 
             IntrinsicId::StringIndexOf if self.current_function_trusted_stdlib => {

@@ -1,0 +1,14 @@
+namespace app
+function main() returns nothing:
+    string id = uuid.new()
+    optional[string] version_char = string.char_at(id, 14)
+    string version = version_char handle:
+        default ""
+    optional[string] variant_char = string.char_at(id, 19)
+    string variant = variant_char handle:
+        default ""
+    optional[string] first_separator = string.char_at(id, 8)
+    string separator = first_separator handle:
+        default ""
+    bool valid_variant = variant == "8" or variant == "9" or variant == "a" or variant == "b"
+    println(string.char_count(id) == 36, version == "4", separator == "-", valid_variant)

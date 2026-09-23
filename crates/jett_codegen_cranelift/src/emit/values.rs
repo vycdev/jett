@@ -905,6 +905,10 @@ impl Translator<'_, '_> {
             };
         }
         match id {
+            IntrinsicId::UuidNew => {
+                let value = self.leaf(NativeLeaf::UuidNew, &[], true)?;
+                self.own(value)
+            }
             IntrinsicId::ClockNow => {
                 let authority = self.scalar(evaluated[0], span)?;
                 Ok(LoweredValue::Scalar(self.leaf(

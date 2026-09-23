@@ -300,7 +300,7 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 95 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 96 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 22 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
@@ -312,7 +312,7 @@ The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 95. Four string/comptime fixtures began emitting
+unmarked row and now proves 96. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -410,6 +410,10 @@ narrowing. A dedicated native/interpreter fixture exercises transitions,
 borrowed field access and three-state branch narrowing. A runtime guard checks
 the tag before treating a bare machine local as a narrowed state. JSON machine
 fixtures remain blocked by generic JSON operations.
+The `uuid.new` intrinsic now shares UUID v4 formatting and OS entropy handling
+between interpreter and native runtime. This adds the `string_chars.jett`
+object gate; a dedicated native executable checks its version, variant,
+separators, and length without comparing random identifiers across runs.
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

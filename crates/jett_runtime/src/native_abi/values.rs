@@ -2290,6 +2290,10 @@ leaves! {
             let value = s.random_provider.as_mut().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, random::ENTROPY_UNAVAILABLE.as_bytes()))?
                 .boolean().map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
             Ok(u32::from(value)) };
+    UuidNew, jett_rt_v1_uuid_new, false, (), u64 => I64,
+        |s| { let value = crate::uuid::new_v4()
+            .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?;
+            s.insert(value) };
     GrantEnvironment, jett_rt_v1_grant_environment, false, (), u64 => I64,
         |s| { if let Some(token) = s.environment { return Ok(token); }
             if s.environment_snapshot.is_none() {
