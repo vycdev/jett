@@ -22,6 +22,13 @@ and early exits. Zero slots permit conditional initialization without releasing
 an uninitialized value. The initial string slice did not establish move-only ownership. Later sections
 describe bytes, sums, lists and user structs; resource ownership remains unproven.
 
+Native string search shares one linear grapheme-boundary scanner with split.
+`string.index_of` returns an optional int64 handle with a non-owning index
+payload, including index zero for an empty needle. `string.count` returns the
+number of non-overlapping matches and zero for an empty needle. The scanner
+rejects byte matches that begin or end inside a grapheme, matching the
+interpreter's string contract.
+
 A context-local first terminal failure (fixed status plus static message) is
 separate from Jett result.fail. Fallible leaf and compiled calls are followed
 by a failure edge, which releases live temporaries/locals before returning a

@@ -414,11 +414,29 @@ fn native_split<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
         return parts;
     }
 
-    if delimiter.len() > haystack.len() {
-        return vec![haystack];
+    let mut parts = Vec::new();
+    let mut part_start = 0;
+    native_scan_grapheme_matches(haystack, delimiter, |start, end, _| {
+        parts.push(&haystack[part_start..start]);
+        part_start = end;
+        true
+    });
+    parts.push(&haystack[part_start..]);
+    parts
+}
+
+/// Visit non-overlapping matches whose start and end are grapheme boundaries.
+/// Returning false stops after the current match, as index_of requires.
+fn native_scan_grapheme_matches(
+    haystack: &str,
+    needle: &str,
+    mut visit: impl FnMut(usize, usize, usize) -> bool,
+) {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return;
     }
     let boundaries = native_grapheme_boundaries(haystack);
-    let needle = delimiter.as_bytes();
+    let needle = needle.as_bytes();
     let mut prefix = vec![0; needle.len()];
     for index in 1..needle.len() {
         let mut matched = prefix[index - 1];
@@ -431,8 +449,6 @@ fn native_split<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
         prefix[index] = matched;
     }
 
-    let mut parts = Vec::new();
-    let mut part_start = 0;
     let mut matched = 0;
     let mut start_boundary = 0;
     let mut end_boundary = 0;
@@ -458,16 +474,15 @@ fn native_split<'a>(haystack: &'a str, delimiter: &str) -> Vec<&'a str> {
             end_boundary += 1;
         }
         if boundaries[start_boundary] == start && boundaries[end_boundary] == end {
-            parts.push(&haystack[part_start..start]);
-            part_start = end;
+            if !visit(start, end, start_boundary) {
+                return;
+            }
             matched = 0;
         } else {
             // A rejected byte match can overlap a later valid grapheme match.
             matched = prefix[matched - 1];
         }
     }
-    parts.push(&haystack[part_start..]);
-    parts
 }
 
 fn native_grapheme_boundaries(s: &str) -> Vec<usize> {
@@ -800,6 +815,27 @@ leaves! {
         };
     CharCount, jett_rt_v1_string_char_count, false, (value: u64 => I64), u64 => I64,
         |s| Ok(s.text(value)?.graphemes(true).count() as u64);
+    StringIndexOf, jett_rt_v1_string_index_of, false, (value: u64 => I64, needle: u64 => I64), u64 => I64,
+        |s| {
+            let mut index = if s.text(needle)?.is_empty() { Some(0) } else { None };
+            native_scan_grapheme_matches(s.text(value)?, s.text(needle)?, |_, _, offset| {
+                index = Some(offset);
+                false
+            });
+            match index {
+                Some(offset) => s.sum(SUM_SUCCESS, offset as u64, false),
+                None => s.sum(SUM_FAILURE, 0, false),
+            }
+        };
+    StringCount, jett_rt_v1_string_count, false, (value: u64 => I64, needle: u64 => I64), u64 => I64,
+        |s| {
+            let mut count = 0_u64;
+            native_scan_grapheme_matches(s.text(value)?, s.text(needle)?, |_, _, _| {
+                count += 1;
+                true
+            });
+            Ok(count)
+        };
     Slice, jett_rt_v1_string_slice, false, (value: u64 => I64, start: i64 => I64, end: i64 => I64), u64 => I64,
         |s| {
             let parts = s.text(value)?.graphemes(true).collect::<Vec<_>>();

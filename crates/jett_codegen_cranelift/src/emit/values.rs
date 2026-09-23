@@ -465,7 +465,8 @@ impl Translator<'_, '_> {
                 .collect::<Result<Vec<_>, _>>()?;
             let value = self.leaf(leaf, &native_args, true)?;
             return match leaf {
-                NativeLeaf::CharCount => Ok(LoweredValue::Scalar(value)),
+                NativeLeaf::CharCount | NativeLeaf::StringCount => Ok(LoweredValue::Scalar(value)),
+                NativeLeaf::StringIndexOf => self.own_linear(value),
                 NativeLeaf::IsAlpha | NativeLeaf::IsNumeric => Ok(LoweredValue::Scalar(
                     self.builder.ins().ireduce(ir::types::I8, value),
                 )),

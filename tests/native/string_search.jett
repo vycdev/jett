@@ -1,0 +1,10 @@
+namespace app
+function index_or_missing(value: string, needle: string) returns int64:
+    int64 index = string.index_of(value, needle) handle:
+        default -1
+    return index
+function main() returns nothing:
+    println(index_or_missing("x🙂🙂y", "🙂"), string.count("x🙂🙂y", "🙂"))
+    println(index_or_missing("á", "a"), index_or_missing("á", "á"))
+    println(index_or_missing("abc", ""), string.count("abc", ""))
+    println(index_or_missing("aaaa", "aa"), string.count("aaaa", "aa"))

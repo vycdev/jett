@@ -106,6 +106,21 @@ fn native_string_fixtures_match_interpreter_output() {
     }
 }
 
+#[test]
+fn native_string_search_respects_grapheme_boundaries() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/string_search.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("string search oracle");
+    assert_eq!(expected.stdout, "1 2\n-1 0\n0 0\n0 2\n");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("program");
+    build_host_executable(&fixture, &launcher(), &binary).expect("compile native string search");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
 fn run_source(source: &str) -> std::process::Output {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("values.jett");

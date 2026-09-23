@@ -158,6 +158,16 @@ pub(crate) fn verify_intrinsic(
         IntrinsicId::BytesSlice => (&[T::BYTES, T::INT64, T::INT64], T::BYTES),
         IntrinsicId::BytesToHex => (&[T::BYTES], T::STRING),
         IntrinsicId::StringCharCount => (&[T::STRING], T::INT64),
+        IntrinsicId::StringIndexOf => {
+            if args.len() == 2
+                && args.iter().all(|arg| arg.ty == T::STRING)
+                && matches!(types.resolve(result), Type::Optional(inner) if *inner == T::INT64)
+            {
+                return Ok(());
+            }
+            return Err("invalid native string index signature".into());
+        }
+        IntrinsicId::StringCount => (&[T::STRING, T::STRING], T::INT64),
         IntrinsicId::StringSlice => (&[T::STRING, T::INT64, T::INT64], T::STRING),
         IntrinsicId::StringUpper
         | IntrinsicId::StringLower
@@ -194,6 +204,8 @@ pub(crate) fn string_leaf(id: IntrinsicId) -> Option<NativeLeaf> {
         IntrinsicId::StringSplit => NativeLeaf::StringSplit,
         IntrinsicId::StringJoin => NativeLeaf::StringJoin,
         IntrinsicId::StringCharCount => NativeLeaf::CharCount,
+        IntrinsicId::StringIndexOf => NativeLeaf::StringIndexOf,
+        IntrinsicId::StringCount => NativeLeaf::StringCount,
         IntrinsicId::StringSlice => NativeLeaf::Slice,
         IntrinsicId::StringUpper => NativeLeaf::Upper,
         IntrinsicId::StringLower => NativeLeaf::Lower,

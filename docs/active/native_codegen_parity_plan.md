@@ -355,6 +355,10 @@ release; context destruction is a leak check, not a program-long value arena.
 Ordinary Jett calls, branches, loops, argument evaluation, and string interpolation
 are emitted code. Typed runtime leaves implement string storage, formatting,
 grapheme slicing/counting, selected Unicode operations, stdout, and numeric kernels.
+Native `string.index_of` and `string.count` search only at grapheme boundaries;
+the former returns an owned optional value and the latter counts non-overlapping
+matches. Both share the native split scanner. The same interpreter differential
+fixture is wired into the Linux GNU and Windows MSVC execution suites.
 They consume no interpreter Value, AST, HIR, or source operation names. Exact checked
 IntrinsicId and concrete numeric type arguments select the native leaf signature.
 
