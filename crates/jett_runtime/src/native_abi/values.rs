@@ -1840,6 +1840,9 @@ leaves! {
             *slot = Some(NativeField { bits, owned: owned != 0 }); Ok(0) };
     StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.struct_field(value, index)?.bits);
+    MachineExpectState, jett_rt_v1_machine_expect_state, false, (value: u64 => I64, state: u64 => I64), u32 => I32,
+        |s| { if s.struct_field(value, 0)?.bits == state { Ok(0) }
+            else { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"machine state does not match narrowed type")) } };
     StructTake, jett_rt_v1_struct_take, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.take_struct_field(value, index)?.bits);
     StructClone, jett_rt_v1_struct_clone, false, (value: u64 => I64), u64 => I64,
@@ -3009,6 +3012,31 @@ mod tests {
             assert_ne!(jett_rt_v1_struct_new(context.pointer(), 0), 0);
         }
         context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn machine_state_guard_fails_before_projecting_a_wrong_payload() {
+        let context = Context::new();
+        unsafe {
+            let pointer = context.pointer();
+            let value = jett_rt_v1_struct_new(pointer, 1);
+            assert_eq!(jett_rt_v1_struct_init(pointer, value, 0, 1, 0), 0);
+            assert_eq!(jett_rt_v1_machine_expect_state(pointer, value, 1), 0);
+            assert_ne!(jett_rt_v1_machine_expect_state(pointer, value, 2), 0);
+            assert_ne!(jett_rt_v1_value_status(pointer), 0);
+            jett_rt_v1_value_drop(pointer, value);
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(
+                values.failure,
+                Some((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"machine state does not match narrowed type".as_slice()
+                ))
+            );
+            assert!(values.is_empty());
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
     }
     #[test]
     fn bitfield_decode_rolls_back_each_owned_allocation() {

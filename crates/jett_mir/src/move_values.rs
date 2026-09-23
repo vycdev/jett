@@ -57,6 +57,8 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::Struct(_)
             | Type::Enum(_)
             | Type::Bitfield(_)
+            | Type::Machine(_)
+            | Type::MachineState { .. }
     )
 }
 
@@ -424,6 +426,20 @@ impl Flow<'_> {
                     self.expr(payload, false)?;
                 }
             }
+            ExpressionKind::MachineConstruct { payloads, .. } => {
+                for payload in payloads {
+                    self.expr(payload, false)?;
+                }
+            }
+            ExpressionKind::MachineTransition {
+                source, payloads, ..
+            } => {
+                self.expr(source, false)?;
+                for payload in payloads {
+                    self.expr(payload, false)?;
+                }
+            }
+            ExpressionKind::StateIs { value, .. } => self.expr(value, true)?,
             ExpressionKind::BitfieldConstruct {
                 fields,
                 evaluation_order,

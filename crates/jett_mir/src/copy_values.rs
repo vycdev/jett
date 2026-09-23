@@ -319,6 +319,9 @@ fn visit(
             | ExpressionKind::MapConstruct { .. }
             | ExpressionKind::StructConstruct { .. }
             | ExpressionKind::EnumConstruct { .. } => true,
+            ExpressionKind::MachineConstruct { .. } | ExpressionKind::MachineTransition { .. } => {
+                true
+            }
             ExpressionKind::BitfieldConstruct { .. } => true,
             _ => false,
         });
@@ -383,6 +386,22 @@ fn visit(
             for payload in payloads {
                 visit(payload, reads, temporaries, types, program, false)?;
             }
+        }
+        ExpressionKind::MachineConstruct { payloads, .. } if program.is_some() => {
+            for payload in payloads {
+                visit(payload, reads, temporaries, types, program, false)?;
+            }
+        }
+        ExpressionKind::MachineTransition {
+            source, payloads, ..
+        } if program.is_some() => {
+            visit(source, reads, temporaries, types, program, false)?;
+            for payload in payloads {
+                visit(payload, reads, temporaries, types, program, false)?;
+            }
+        }
+        ExpressionKind::StateIs { value, .. } if program.is_some() => {
+            visit(value, reads, temporaries, types, program, true)?;
         }
         ExpressionKind::BitfieldConstruct { fields, .. } if program.is_some() => {
             for field in fields {
@@ -532,6 +551,14 @@ fn plan_type_inner(
             Type::Enum(id) => {
                 for variant in &types.resolve_enum(*id).variants {
                     for (_, field) in &variant.fields {
+                        plan_type_inner(types, *field, program, seen)?;
+                    }
+                }
+                return Ok(());
+            }
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                for state in &types.resolve_machine(*id).states {
+                    for (_, field) in &state.fields {
                         plan_type_inner(types, *field, program, seen)?;
                     }
                 }

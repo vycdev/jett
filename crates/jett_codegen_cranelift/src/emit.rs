@@ -511,6 +511,7 @@ fn clif_type(
         | ScalarKind::Struct
         | ScalarKind::Enum
         | ScalarKind::Bitfield
+        | ScalarKind::Machine
         | ScalarKind::Stdout
         | ScalarKind::Clock
         | ScalarKind::Random
@@ -1061,6 +1062,7 @@ impl Translator<'_, '_> {
                 };
                 if let Some(slot) = self.local_slots[local.index() as usize] {
                     let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
+                    self.expect_machine_state(local.index() as usize, expression.ty, v)?;
                     if is_linear(self.types, expression.ty) {
                         self.clear_slot(slot);
                         return self.own_linear(v);
@@ -1158,6 +1160,7 @@ impl Translator<'_, '_> {
                     Type::Struct(_) => NativeLeaf::StructClone,
                     Type::Enum(_) => NativeLeaf::StructClone,
                     Type::Bitfield(_) => NativeLeaf::StructClone,
+                    Type::Machine(_) | Type::MachineState { .. } => NativeLeaf::StructClone,
                     _ => NativeLeaf::SumClone,
                 };
                 let cloned = self.leaf(leaf, &[v], true)?;
@@ -1190,11 +1193,17 @@ impl Translator<'_, '_> {
                 evaluation_order,
                 ..
             } => self.construct_struct(fields, evaluation_order, expression.span),
-            ExpressionKind::MachineConstruct { .. } => {
-                Err(self.unsupported(expression.span, "machine construction"))
-            }
-            ExpressionKind::MachineTransition { .. } => {
-                Err(self.unsupported(expression.span, "machine transition"))
+            ExpressionKind::MachineConstruct {
+                state, payloads, ..
+            } => self.construct_tagged_record(state.index(), payloads, expression.span),
+            ExpressionKind::MachineTransition {
+                source,
+                target,
+                payloads,
+                ..
+            } => {
+                self.expression(source)?;
+                self.construct_tagged_record(target.index(), payloads, expression.span)
             }
             ExpressionKind::ListConstruct { elements } => {
                 self.construct_list(elements, expression.ty, expression.span)
@@ -1214,14 +1223,26 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::EnumConstruct {
                 variant, payloads, ..
-            } => self.construct_enum(*variant, payloads, expression.span),
+            } => self.construct_tagged_record(variant.index(), payloads, expression.span),
             ExpressionKind::StringInterpolation(segments) => {
                 self.interpolate(segments, expression.span)
             }
             ExpressionKind::Declassify(value) => self.expression(value),
             ExpressionKind::Coarsen(_) => Err(self.unsupported(expression.span, "coarsen")),
-            ExpressionKind::StateIs { .. } => {
-                Err(self.unsupported(expression.span, "machine state test"))
+            ExpressionKind::StateIs { value, state } => {
+                let borrowed = self.argument(value, true)?;
+                let machine = self.scalar(borrowed, value.span)?;
+                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                let tag = self.leaf(NativeLeaf::StructField, &[machine, zero], true)?;
+                let expected = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I64, i64::from(state.index()));
+                Ok(LoweredValue::Scalar(self.builder.ins().icmp(
+                    IntCC::Equal,
+                    tag,
+                    expected,
+                )))
             }
             ExpressionKind::Run(_) | ExpressionKind::Join(_) | ExpressionKind::Cancel(_) => {
                 Err(self.unsupported(expression.span, "task operation"))
@@ -1233,7 +1254,15 @@ impl Translator<'_, '_> {
                 Err(self.unsupported(expression.span, "actor operation"))
             }
             ExpressionKind::Field { base, field, .. } => {
-                self.struct_field(base, field.index(), expression.ty, expression.span)
+                let index = if matches!(
+                    self.types.resolve(representation_type(self.types, base.ty)),
+                    Type::MachineState { .. }
+                ) {
+                    field.index() + 1
+                } else {
+                    field.index()
+                };
+                self.struct_field(base, index, expression.ty, expression.span)
             }
         }
     }
@@ -1490,6 +1519,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Struct
             | ScalarKind::Enum
             | ScalarKind::Bitfield
+            | ScalarKind::Machine
             | ScalarKind::Stdout
             | ScalarKind::Clock
             | ScalarKind::Random

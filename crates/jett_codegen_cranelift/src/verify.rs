@@ -24,6 +24,7 @@ pub(crate) enum ScalarKind {
     Struct,
     Enum,
     Bitfield,
+    Machine,
     Stdout,
     Clock,
     Random,
@@ -186,6 +187,16 @@ fn scalar_kind_inner(
                 }
             }
             ScalarKind::Bitfield
+        }
+        Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+            if seen.insert(ty) {
+                for state in &types.resolve_machine(*id).states {
+                    for (_, field) in &state.fields {
+                        scalar_kind_inner(types, *field, "machine payload".into(), seen)?;
+                    }
+                }
+            }
+            ScalarKind::Machine
         }
         Type::List(inner) => {
             if *inner != TypeInterner::NEVER {
@@ -671,6 +682,30 @@ impl Verifier<'_> {
                         "expression local is absent from the local table",
                     )
                 })?;
+                if let (
+                    Type::Machine(machine),
+                    Type::MachineState {
+                        machine: narrowed, ..
+                    },
+                ) = (
+                    self.types.resolve(local.ty),
+                    self.types.resolve(expression.ty),
+                ) && machine == narrowed
+                {
+                    return Ok(());
+                }
+                if let (
+                    Type::MachineState {
+                        machine: narrowed, ..
+                    },
+                    Type::Machine(machine),
+                ) = (
+                    self.types.resolve(local.ty),
+                    self.types.resolve(expression.ty),
+                ) && machine == narrowed
+                {
+                    return Ok(());
+                }
                 self.require_same_type(
                     function,
                     expression.span,
@@ -973,11 +1008,144 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
-            ExpressionKind::MachineConstruct { .. } => {
-                Err(self.unsupported(function, expression.span, "machine construction"))
+            ExpressionKind::MachineConstruct {
+                state_type,
+                state,
+                payloads,
+            } => {
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *state_type,
+                    expression.ty,
+                    "machine construction type mismatch",
+                )?;
+                let Type::MachineState {
+                    machine,
+                    state: declared_state,
+                } = self.types.resolve(*state_type)
+                else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "machine construction",
+                    ));
+                };
+                if declared_state.index() != state.index() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine constructor state mismatch",
+                    ));
+                }
+                let definition = self
+                    .types
+                    .resolve_machine(*machine)
+                    .state(*declared_state)
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            expression.span,
+                            "machine constructor state is missing",
+                        )
+                    })?;
+                if payloads.len() != definition.fields.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine constructor payload count mismatch",
+                    ));
+                }
+                for (payload, (_, expected)) in payloads.iter().zip(&definition.fields) {
+                    self.expression(function, payload)?;
+                    self.require_same_type(
+                        function,
+                        payload.span,
+                        *expected,
+                        payload.ty,
+                        "machine constructor payload type mismatch",
+                    )?;
+                }
+                Ok(())
             }
-            ExpressionKind::MachineTransition { .. } => {
-                Err(self.unsupported(function, expression.span, "machine transition"))
+            ExpressionKind::MachineTransition {
+                source,
+                state_type,
+                target,
+                payloads,
+            } => {
+                self.expression(function, source)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    *state_type,
+                    expression.ty,
+                    "machine transition type mismatch",
+                )?;
+                let Type::MachineState {
+                    machine,
+                    state: declared_target,
+                } = self.types.resolve(*state_type)
+                else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "machine transition",
+                    ));
+                };
+                if declared_target.index() != target.index() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition target mismatch",
+                    ));
+                }
+                let Type::MachineState {
+                    machine: source_machine,
+                    state: source_state,
+                } = self.types.resolve(source.ty)
+                else {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "transition from unqualified machine state",
+                    ));
+                };
+                let definition = self.types.resolve_machine(*machine);
+                if source_machine != machine
+                    || !definition.has_transition(*source_state, *declared_target)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition edge is not declared",
+                    ));
+                }
+                let target_definition = definition.state(*declared_target).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition target is missing",
+                    )
+                })?;
+                if payloads.len() != target_definition.fields.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine transition payload count mismatch",
+                    ));
+                }
+                for (payload, (_, expected)) in payloads.iter().zip(&target_definition.fields) {
+                    self.expression(function, payload)?;
+                    self.require_same_type(
+                        function,
+                        payload.span,
+                        *expected,
+                        payload.ty,
+                        "machine transition payload type mismatch",
+                    )?;
+                }
+                Ok(())
             }
             ExpressionKind::ListConstruct { elements } => {
                 let Type::List(element) = self.types.resolve(expression.ty) else {
@@ -1135,8 +1303,33 @@ impl Verifier<'_> {
             ExpressionKind::Coarsen(_) => {
                 Err(self.unsupported(function, expression.span, "coarsen"))
             }
-            ExpressionKind::StateIs { .. } => {
-                Err(self.unsupported(function, expression.span, "machine state test"))
+            ExpressionKind::StateIs { value, state } => {
+                self.expression(function, value)?;
+                let machine = match self.types.resolve(value.ty) {
+                    Type::Machine(machine) | Type::MachineState { machine, .. } => *machine,
+                    _ => {
+                        return Err(self.expression_kind_error(
+                            function,
+                            expression,
+                            "machine state test",
+                        ));
+                    }
+                };
+                if kind != ScalarKind::Bool
+                    || self
+                        .types
+                        .resolve_machine(machine)
+                        .states
+                        .get(state.index() as usize)
+                        .is_none()
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "machine state test has an invalid result or state",
+                    ));
+                }
+                Ok(())
             }
             ExpressionKind::Run(_) | ExpressionKind::Join(_) | ExpressionKind::Cancel(_) => {
                 Err(self.unsupported(function, expression.span, "task operation"))
@@ -1173,6 +1366,12 @@ impl Verifier<'_> {
                         .fields
                         .get(field.index() as usize)
                         .map(|field| field.ty),
+                    Type::MachineState { machine, state } => self
+                        .types
+                        .resolve_machine(*machine)
+                        .state(*state)
+                        .and_then(|state| state.fields.get(field.index() as usize))
+                        .map(|(_, ty)| *ty),
                     _ => {
                         return Err(self.unsupported(
                             function,
@@ -1288,6 +1487,7 @@ impl Verifier<'_> {
                         | ScalarKind::Map
                         | ScalarKind::Struct
                         | ScalarKind::Bitfield
+                        | ScalarKind::Machine
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {
@@ -1312,7 +1512,13 @@ impl Verifier<'_> {
         actual: TypeId,
         message: &str,
     ) -> Result<(), CodegenError> {
-        if expected == actual {
+        if expected == actual
+            || matches!(
+                (self.types.resolve(expected), self.types.resolve(actual)),
+                (Type::Machine(expected), Type::MachineState { machine: actual, .. })
+                    if expected == actual
+            )
+        {
             Ok(())
         } else {
             Err(self.contract_error(function, span, message))

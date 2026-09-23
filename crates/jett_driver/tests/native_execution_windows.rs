@@ -262,6 +262,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "contextual_generic_empty_list",
             "../../tests/native/contextual_generic_empty_list.jett",
         ),
+        ("machine_values", "../../tests/native/machine_values.jett"),
         ("list_sort", "../../tests/native/list_sort.jett"),
         ("set_values", "../../tests/native/set_values.jett"),
         ("map_values", "../../tests/native/map_values.jett"),

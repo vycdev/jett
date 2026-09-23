@@ -373,11 +373,21 @@ Native/interpreter fixtures cover roundtrips and decode failures, while runtime
 allocation-boundary tests cover partial-owner cleanup. Dynamic field-width
 validation still requires bitfield-specific native lowering.
 
+Machine values also use owned records: slot zero stores the dense state tag,
+followed by that state's payload fields. Construction initializes an empty
+record before evaluating payloads; a transition consumes its source and builds
+the declared target state. State tests borrow the record. Reading a field of a
+state-qualified machine projects the corresponding payload slot, and narrowing
+a bare machine local checks its tag before projection. Clone and destruction
+recursively handle owned payloads. The dedicated native/interpreter fixture
+covers construction, transition, two- and three-state branches, payload reads,
+and bare-machine narrowing; the runtime guard test rejects a mismatched tag
+while preserving cleanup.
+
 This is not full aggregate parity. Refinement-validating constructors, owned
 escape of a move-only projected view (without clone), field-place assignment,
-borrowed iteration yielding compound views, payload-enum equality, bitfield
-width validation, and machines remain
-unsupported. Composite explicit comptime constants still require baking. Source
+borrowed iteration yielding compound views, payload-enum equality, and bitfield
+width validation remain unsupported. Composite explicit comptime constants still require baking. Source
 validity and interpreter field-copy behavior do not authorize native implicit
 copies of move-only fields; those unresolved ownership paths stay guarded.
 

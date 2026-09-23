@@ -1,5 +1,5 @@
 use super::*;
-use jett_hir::{IntrinsicId, MapEntry, StringSegment, VariantId};
+use jett_hir::{IntrinsicId, MapEntry, StringSegment};
 use jett_types::BitfieldFieldKind;
 use std::collections::BTreeSet;
 
@@ -68,9 +68,9 @@ impl Translator<'_, '_> {
         let _ = span;
         Ok(record)
     }
-    pub(super) fn construct_enum(
+    pub(super) fn construct_tagged_record(
         &mut self,
-        variant: VariantId,
+        tag: u32,
         payloads: &[Expression],
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
@@ -80,10 +80,7 @@ impl Translator<'_, '_> {
         let handle = self.leaf(NativeLeaf::StructNew, &[count], true)?;
         let record = self.own_linear(handle)?;
         let zero = self.builder.ins().iconst(ir::types::I64, 0);
-        let tag = self
-            .builder
-            .ins()
-            .iconst(ir::types::I64, i64::from(variant.index()));
+        let tag = self.builder.ins().iconst(ir::types::I64, i64::from(tag));
         let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
         self.leaf(NativeLeaf::StructInit, &[handle, zero, tag, borrowed], true)?;
         for (field, payload) in payloads.iter().enumerate() {
@@ -651,12 +648,38 @@ impl Translator<'_, '_> {
                                 CodegenError::Backend("borrow has no place".into())
                             })?)
                         };
+                    self.expect_machine_state(local.index() as usize, expression.ty, v)?;
                     return Ok(LoweredValue::Scalar(v));
                 }
                 _ => {}
             }
         }
         self.expression(expression)
+    }
+    pub(super) fn expect_machine_state(
+        &mut self,
+        local_index: usize,
+        expression_type: TypeId,
+        value: Value,
+    ) -> Result<(), CodegenError> {
+        if let (
+            Type::Machine(machine),
+            Type::MachineState {
+                machine: narrowed,
+                state,
+            },
+        ) = (
+            self.types.resolve(self.local_types[local_index].ty),
+            self.types.resolve(expression_type),
+        ) && machine == narrowed
+        {
+            let expected = self
+                .builder
+                .ins()
+                .iconst(ir::types::I64, i64::from(state.index()));
+            self.leaf(NativeLeaf::MachineExpectState, &[value, expected], true)?;
+        }
+        Ok(())
     }
     pub(super) fn drop_slot(&mut self, slot: ir::StackSlot) -> Result<(), CodegenError> {
         let value = self.builder.ins().stack_load(ir::types::I64, slot, 0);

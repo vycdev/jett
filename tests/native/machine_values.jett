@@ -1,0 +1,40 @@
+namespace app
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function describe(view session: Session) returns string:
+    if session at logged_in:
+        return session.user_id
+    return "guest"
+function login_if_guest(session: Session) returns Session:
+    if session at guest:
+        return Session.transition(session, logged_in, "Lin")
+    return session
+machine Review:
+    states:
+        draft(reason: string)
+        approved(user_id: string)
+        rejected(reason: string)
+    transitions:
+        draft to approved
+        approved to rejected
+function review_label(review: Review) returns string:
+    if review at approved:
+        return review.user_id
+    else if not(review at draft):
+        return review.reason
+    else:
+        return review.reason
+function main() returns nothing:
+    Session at guest start = Session(guest)
+    println(start at guest)
+    Session at logged_in logged = Session.transition(start, logged_in, "Ada")
+    println(logged at logged_in, logged.user_id)
+    Session session = login_if_guest(Session(guest))
+    println(describe(view session), session at logged_in)
+    println(review_label(Review(approved, "Lin")))
+    println(review_label(Review(draft, "pending")))
+    println(review_label(Review(rejected, "policy")))
