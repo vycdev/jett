@@ -182,7 +182,9 @@ fn scalar_kind_inner(
             ScalarKind::Bitfield
         }
         Type::List(inner) => {
-            scalar_kind_inner(types, *inner, "list element".into(), seen)?;
+            if *inner != TypeInterner::NEVER {
+                scalar_kind_inner(types, *inner, "list element".into(), seen)?;
+            }
             ScalarKind::List
         }
         Type::Set(inner) => {

@@ -523,6 +523,7 @@ fn plan_type_inner(
                 }
                 return Ok(());
             }
+            Type::List(inner) if *inner == TypeInterner::NEVER => return Ok(()),
             Type::Optional(inner) | Type::List(inner) | Type::Set(inner) => {
                 return plan_type_inner(types, *inner, program, seen);
             }

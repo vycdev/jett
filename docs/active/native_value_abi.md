@@ -213,6 +213,12 @@ constants, after source arguments are evaluated in their checked order. Zero ste
 and oversized output are terminal failures (not ordinary result.fail), matching
 interpreter diagnostics and unwinding live bytes/sum/list owners in callers.
 
+An unconstrained `list()` may have the uninhabited element type `never`. Its
+native handle has no owned elements and supports empty-list length and emptiness
+checks. The backend still rejects a value-producing `never` projection and a
+conversion into another list element layout until it can update nested owner
+metadata without leaking later inserted values.
+
 String chars/words/lines/split are typed segmentation leaves returning genuinely
 owned list[string] storage. Partial construction releases every inserted string
 and the list on allocation failure. Join borrows its native list input for the
