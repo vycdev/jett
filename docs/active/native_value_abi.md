@@ -408,6 +408,10 @@ Iteration over a list, set, or map projected through struct fields also borrows
 the root struct for the loop and clones each binding. The projected collection
 is never placed in an owning temporary, and the parent remains available after
 the loop. This does not permit an owning assignment from the projected field.
+Native `type.variant_value[T]` borrows the enum, reads its runtime tag, and
+selects a compiler-built `TypeVariant` from checked variant metadata. The
+selected record is deep-cloned into an owned result before temporary metadata
+records are released; no payload field is read or moved by this selection.
 
 Named function values use a native function address in the scalar carrier.
 Indirect calls use the checked signature plus the hidden runtime context,

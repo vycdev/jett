@@ -2345,7 +2345,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             });
         }
 
-        let (lowered_args, evaluation_order) =
+        let (mut lowered_args, mut evaluation_order) =
             self.lower_arguments_in_parameter_order(args, call_span)?;
         if matches!(
             self.resolved_expression_kind(callee),
@@ -2436,6 +2436,43 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     ),
                     _ => unreachable!(),
                 };
+            }
+            if intrinsic == IntrinsicId::TypeVariantValue
+                && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| info.kind == "enum")
+            {
+                let result_ty = self.expression_types.get(&call_span).copied()?;
+                let info = &reflection_arguments[0];
+                let variants = self
+                    .parent
+                    .check
+                    .reflection_metadata
+                    .get_type_variants_for_id(type_arguments[0])
+                    .map(<[_]>::to_vec);
+                let Some(variants) = variants else {
+                    self.parent.error(
+                        call_span,
+                        "type.variant_value has no checked variant metadata",
+                    );
+                    return None;
+                };
+                for variant in &variants {
+                    let kind = self.lower_reflection_type_variant(
+                        variant,
+                        &info.type_name,
+                        result_ty,
+                        call_span,
+                    )?;
+                    evaluation_order.push(lowered_args.len());
+                    lowered_args.push(Expression {
+                        kind,
+                        ty: result_ty,
+                        span: call_span,
+                    });
+                }
             }
             Some(ExpressionKind::Intrinsic {
                 intrinsic,

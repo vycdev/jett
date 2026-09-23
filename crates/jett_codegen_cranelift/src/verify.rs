@@ -985,6 +985,41 @@ impl Verifier<'_> {
                     }
                     return Ok(());
                 }
+                if *intrinsic == jett_hir::IntrinsicId::TypeVariantValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.variant_value has no checked enum type",
+                        ));
+                    };
+                    let Type::Enum(enum_id) = self.types.resolve(owner_ty) else {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.variant_value of non-enum type",
+                        ));
+                    };
+                    let variants = &self.types.resolve_enum(*enum_id).variants;
+                    let valid = type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && reflection_arguments[0].kind == "enum"
+                        && !variants.is_empty()
+                        && args.len() == variants.len() + 1
+                        && args[0].ty == owner_ty
+                        && args[1..].iter().all(|arg| arg.ty == expression.ty)
+                        && matches!(self.types.resolve(expression.ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeVariant");
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.variant_value operands",
+                        ))
+                    };
+                }
                 let numeric_generic = matches!(
                     intrinsic,
                     jett_hir::IntrinsicId::MathKernelAbs

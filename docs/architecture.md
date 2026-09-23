@@ -863,6 +863,9 @@ other kinds produce an empty layout, including source aliases.
 `type.variants` lowers checked enum variant snapshots and their payload-field
 metadata into `TypeVariant` values; non-enum kinds, including aliases, produce
 an empty list.
+For a concrete enum, `type.variant_value` carries those same checked snapshots
+as hidden HIR operands. Native code reads the enum tag, selects the matching
+snapshot, and returns an owned clone without consuming the enum or its payload.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 

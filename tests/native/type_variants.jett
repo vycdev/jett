@@ -19,3 +19,10 @@ function main() returns nothing:
     println(list.length[TypeVariant](view aliases))
     list[TypeVariant] primitive = type.variants[int64]()
     println(list.length[TypeVariant](view primitive))
+    Choice scored = Choice.score(42)
+    TypeVariant selected = type.variant_value[Choice](view scored)
+    println(selected.index, selected.owner_type, selected.name, selected.discriminant, selected.has_secret)
+    for field in selected.fields:
+        println(field.name, field.type_name)
+    TypeVariant empty = type.variant_value[Choice](Choice.empty)
+    println(empty.index, empty.name, list.length[TypeField](empty.fields))

@@ -104,6 +104,7 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                     | IntrinsicId::MapLength
                     | IntrinsicId::MapHas
                     | IntrinsicId::MapGet
+                    | IntrinsicId::TypeVariantValue
             ))
 }
 

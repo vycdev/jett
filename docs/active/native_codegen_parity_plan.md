@@ -289,7 +289,7 @@ lowering alone never changes an execution row to complete.
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | named function addresses and indirect calls for supported signatures; inline closures pending | named callbacks passed, returned, and invoked through indirect calls; inline closures pending |
-| Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.fields` and `type.variants` lists, and bitfield layout and field metadata covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, struct fields, enum variant and payload-field metadata, and bitfield metadata match the interpreter; alias field and variant probes remain empty as required; other aggregate reflection pending |
+| Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.fields` and `type.variants` lists, active `type.variant_value`, and bitfield layout and field metadata covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, struct fields, enum variant and payload-field metadata, active enum variant selection, and bitfield metadata match the interpreter; alias field and variant probes remain empty as required; other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
@@ -307,6 +307,10 @@ The current fixture gates are therefore:
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. They provide
 a stable progress measure toward the stated native parity goal.
+Active `type.variant_value` selection now matches native/interpreter output for
+payload and empty variants. The exhaustive checkpoint stays at 98 object gates:
+`json_tree_reflection_variant_metadata.jett` advances to the next unsupported
+intrinsic, `type.variant_field_value`, before its object can pass.
 
 The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns

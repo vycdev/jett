@@ -873,6 +873,21 @@ impl Translator<'_, '_> {
                 _ => unreachable!(),
             };
         }
+        if id == IntrinsicId::TypeVariantValue {
+            let value = self.scalar(evaluated[0], span)?;
+            let zero = self.builder.ins().iconst(ir::types::I64, 0);
+            let tag = self.leaf(NativeLeaf::StructField, &[value, zero], true)?;
+            let mut selected = self.scalar(evaluated[1], span)?;
+            for (index, variant) in evaluated.iter().enumerate().skip(2) {
+                let index = i64::try_from(index - 1)
+                    .map_err(|_| self.unsupported(span, "enum variant index"))?;
+                let matches = self.builder.ins().icmp_imm(IntCC::Equal, tag, index);
+                let variant = self.scalar(*variant, span)?;
+                selected = self.builder.ins().select(matches, variant, selected);
+            }
+            let cloned = self.leaf(NativeLeaf::StructClone, &[selected], true)?;
+            return self.own_linear(cloned);
+        }
         if id == IntrinsicId::Range {
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let one = self.builder.ins().iconst(ir::types::I64, 1);
