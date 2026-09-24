@@ -102,3 +102,17 @@ function json_parse_native_secret_tree(raw: string) returns result[secret[JsonTr
         return fail(error)
     secret[JsonTree] secret_tree = tree
     return ok(secret_tree)
+function json_parse_native_enum[T](raw: string) returns result[T, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    TypeInfo info = type.info[T]()
+    return json_decode_tree_enum_reflected[T](view tree, info.type_name)
+function json_parse_exact_native_enum[T](raw: string) returns result[T, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    TypeInfo info = type.info[T]()
+    nothing checked = json_validate_exact_enum_reflected[T](view tree, info.type_name) handle error:
+        return fail(error)
+    return json_decode_tree_enum_reflected[T](view tree, info.type_name)
+function json_serialize_native_enum[T](view value: T) returns string:
+    return json_serialize_public_enum_reflected[T](view value)

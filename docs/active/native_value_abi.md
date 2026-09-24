@@ -517,6 +517,10 @@ an inner local to its secret wrapper while retaining the type-checker's
 prohibition on implicit secret exposure. Public record serialization omits
 direct secret fields. Raw `secret[json.JsonTree]` uses a dedicated trusted
 `.jett` parser with the same open-shape exact-parse policy as `JsonTree`.
+Supported top-level enums call checked generic `.jett` parse and serialize
+hooks. Payload decoding constructs the selected variant inside its reflected
+variant loop; raw `JsonTree` keeps its dedicated wire path. Nested enum source
+dispatch remains pending.
 Reflected `comptime type` dispatch borrows its runtime `TypeInfo` selector.
 The runtime leaf derives a recursive structural identity, unwrapping aliases;
 native branches compare it with the checker-owned identity of each specialized

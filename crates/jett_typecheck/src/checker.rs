@@ -2919,8 +2919,38 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn native_json_enum_source_supported(&self, ty: TypeId) -> bool {
+        let Type::Enum(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        let definition = self.interner.resolve_enum(*id);
+        definition.name != "json.JsonTree"
+            && definition
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .all(|(_, field_ty)| {
+                    self.native_json_source_supported(*field_ty, &mut HashSet::new())
+                })
+    }
+
     fn native_json_parse_source_supported(&self, ty: TypeId) -> bool {
         self.native_json_parse_source_supported_inner(ty, &mut HashSet::new())
+    }
+
+    fn native_json_enum_parse_supported(&self, ty: TypeId) -> bool {
+        let Type::Enum(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        let definition = self.interner.resolve_enum(*id);
+        definition.name != "json.JsonTree"
+            && definition
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .all(|(_, field_ty)| {
+                    self.native_json_parse_source_supported_inner(*field_ty, &mut HashSet::new())
+                })
     }
 
     fn native_json_parse_source_supported_inner(
@@ -11753,6 +11783,31 @@ impl<'a> TypeChecker<'a> {
             args,
             return_type,
         );
+
+        if matches!(
+            callee_name.as_deref(),
+            Some("json.serialize" | "json.serialize_public")
+        ) && let Some(&value_ty) = checked_arg_types.first()
+            && self.native_json_enum_source_supported(value_ty)
+        {
+            self.check_source_facade_instantiation(
+                "json.json_serialize_native_enum",
+                value_ty,
+                span,
+            );
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && self.native_json_enum_parse_supported(*value_ty)
+        {
+            let source = if name == "json.parse" {
+                "json.json_parse_native_enum"
+            } else {
+                "json.json_parse_exact_native_enum"
+            };
+            self.check_source_facade_instantiation(source, *value_ty, span);
+        }
 
         if let Some(name @ ("json.serialize" | "json.serialize_public")) = callee_name.as_deref()
             && let Some(&value_ty) = checked_arg_types.first()

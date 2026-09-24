@@ -2694,6 +2694,27 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     evaluation_order,
                 });
             }
+            let enum_json_source = match intrinsic {
+                IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic => {
+                    Some("json_serialize_native_enum")
+                }
+                IntrinsicId::JsonParse => Some("json_parse_native_enum"),
+                IntrinsicId::JsonParseExact => Some("json_parse_exact_native_enum"),
+                _ => None,
+            };
+            if let Some(name) = enum_json_source
+                && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && self.is_non_raw_json_enum(type_arguments[0])
+                && let Some(function) =
+                    self.trusted_stdlib_generic_function("json", name, call_span)
+            {
+                return Some(ExpressionKind::Call {
+                    function,
+                    args: lowered_args,
+                    evaluation_order,
+                });
+            }
             if matches!(
                 intrinsic,
                 IntrinsicId::JsonParse | IntrinsicId::JsonParseExact
@@ -4217,7 +4238,17 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             .get(&span)
             .is_some_and(|generic| generic.definition != definition)
         {
-            return true;
+            let redirected_json = self.is_trusted_stdlib_intrinsic(definition, span)
+                && matches!(
+                    self.intrinsic_ids.get(&span).copied(),
+                    Some(
+                        IntrinsicId::JsonParse
+                            | IntrinsicId::JsonParseExact
+                            | IntrinsicId::JsonSerialize
+                            | IntrinsicId::JsonSerializePublic
+                    )
+                );
+            return !redirected_json;
         }
         let key = self.generic_calls.get(&span).map_or_else(
             || FunctionKey::Definition {
@@ -4246,6 +4277,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn is_secret_raw_json_tree(&self, ty: TypeId) -> bool {
         matches!(self.parent.check.interner.resolve(ty), Type::Secret(inner) if self.is_raw_json_tree(*inner))
+    }
+
+    fn is_non_raw_json_enum(&self, ty: TypeId) -> bool {
+        matches!(self.parent.check.interner.resolve(ty), Type::Enum(_))
+            && !self.is_raw_json_tree(ty)
     }
 
     fn native_json_primitive_parser(&self, ty: TypeId) -> Option<&'static str> {
@@ -4359,6 +4395,42 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     definition,
                     concrete_args: Vec::new(),
                     specialization: CheckedGenericSpecialization::default(),
+                })
+                .copied()
+        })
+    }
+
+    fn trusted_stdlib_generic_function(
+        &self,
+        namespace: &str,
+        name: &str,
+        span: Span,
+    ) -> Option<FunctionId> {
+        let checked = self.generic_calls.get(&span)?;
+        self.parent.module.items.iter().find_map(|item| {
+            let Item::Function(function) = item else {
+                return None;
+            };
+            if function.name.name != name || function.type_params.is_empty() {
+                return None;
+            }
+            let definition = self
+                .parent
+                .definition_at(function.name.span, DefKind::Function)?;
+            if definition != checked.definition {
+                return None;
+            }
+            let declared = self.parent.resolve.scope_table.def(definition);
+            if declared.namespace.as_deref() != Some(namespace)
+                || self.parent.origins.get(&function.name.span.file) != Some(&SourceOrigin::Stdlib)
+            {
+                return None;
+            }
+            self.function_ids
+                .get(&FunctionKey::Definition {
+                    definition,
+                    concrete_args: checked.concrete_args.clone(),
+                    specialization: checked.specialization.clone(),
                 })
                 .copied()
         })

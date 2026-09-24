@@ -1,0 +1,47 @@
+namespace app
+enum Direction:
+    north
+    south
+enum Shape:
+    point(x: int64, y: int64)
+    empty
+struct Profile:
+    name: string
+enum Event:
+    recorded(profile: Profile)
+    idle
+function parse_unit() returns string:
+    Direction direction = json.parse[Direction]("\"north\"") handle error:
+        return error
+    return json.serialize[Direction](view direction)
+function parse_payload() returns string:
+    Shape shape = json.parse[Shape]("{{\"point\":[3,4]}}") handle error:
+        return error
+    return json.serialize[Shape](view shape)
+function serialize_payload() returns string:
+    Shape shape = Shape.point(5, 6)
+    return json.serialize_public[Shape](view shape)
+function parse_bad_payload() returns string:
+    Shape shape = json.parse_exact[Shape]("{{\"point\":[3]}}") handle error:
+        return error
+    return json.serialize[Shape](view shape)
+function parse_unknown() returns string:
+    Direction direction = json.parse[Direction]("\"east\"") handle error:
+        return error
+    return json.serialize[Direction](view direction)
+function parse_exact_nested() returns string:
+    Event event = json.parse_exact[Event]("{{\"recorded\":[{{\"name\":\"Ada\"}}]}}") handle error:
+        return error
+    return json.serialize[Event](view event)
+function parse_exact_nested_extra() returns string:
+    Event event = json.parse_exact[Event]("{{\"recorded\":[{{\"name\":\"Ada\",\"extra\":1}}]}}") handle error:
+        return error
+    return json.serialize[Event](view event)
+function main() returns nothing:
+    println(parse_unit())
+    println(parse_payload())
+    println(serialize_payload())
+    println(parse_bad_payload())
+    println(parse_unknown())
+    println(parse_exact_nested())
+    println(parse_exact_nested_extra())
