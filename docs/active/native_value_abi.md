@@ -351,10 +351,13 @@ construct a checked `JsonTree` variant and call the same source serializer;
 string payloads are cloned before the tree takes ownership. A literal
 `nothing` constructs the null variant. Checked `json.parse` and `json.parse_exact`
 calls for `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing`
-lower to private stdlib source decoders after compiler policy checks. They
-parse through `JsonTree` and its strict scalar accessors, preserving source
-error messages and ownership. Narrow numeric and structured parsing still
-require native lowering.
+lower to private stdlib source decoders after compiler policy checks. Lists,
+string-keyed maps, and optionals composed recursively of these leaves use
+checked source decoders as well. They parse through `JsonTree` and its strict
+accessors, preserving source error messages and ownership. A linked differential
+fixture checks successful values, nested cleanup, and element/key error paths.
+Narrow numeric leaves, result wrappers, and named aggregates still require
+native parse lowering.
 
 Concrete structs, lists, string-keyed maps, optionals, and results composed of
 supported primitive values use specialized checked stdlib serialization. The

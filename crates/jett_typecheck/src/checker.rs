@@ -2898,6 +2898,24 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn native_json_parse_source_supported(&self, ty: TypeId) -> bool {
+        match self.interner.resolve(ty) {
+            Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Int64
+            | Type::Uint64
+            | Type::Float64 => true,
+            Type::List(element) => self.native_json_parse_source_supported(*element),
+            Type::Map(key, value) if *key == TypeInterner::STRING => {
+                self.native_json_parse_source_supported(*value)
+            }
+            Type::Optional(inner) => self.native_json_parse_source_supported(*inner),
+            _ => false,
+        }
+    }
+
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
         if expected == got
             || expected == TypeInterner::ERROR
@@ -11672,6 +11690,17 @@ impl<'a> TypeChecker<'a> {
             && self.native_json_source_supported(value_ty, &mut HashSet::new())
         {
             self.check_source_facade_instantiation(name, value_ty, span);
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && matches!(
+                self.interner.resolve(*value_ty),
+                Type::List(_) | Type::Map(_, _) | Type::Optional(_)
+            )
+            && self.native_json_parse_source_supported(*value_ty)
+        {
+            self.check_source_facade_instantiation(name, *value_ty, span);
         }
 
         if let Some(callee_name) = callee_name.as_deref() {
