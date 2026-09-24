@@ -1248,6 +1248,56 @@ impl Translator<'_, '_> {
                     return Ok(LoweredValue::Scalar(value));
                 }
                 if operand_kind == ScalarKind::Enum {
+                    let Type::Enum(enum_id) = self.types.resolve(left.ty) else {
+                        return Err(self.unsupported(expression.span, "enum equality type"));
+                    };
+                    let variants = &self.types.resolve_enum(*enum_id).variants;
+                    if variants.iter().any(|variant| !variant.fields.is_empty()) {
+                        let mut layout = b"JE\x01".to_vec();
+                        let count = u32::try_from(variants.len())
+                            .map_err(|_| self.unsupported(expression.span, "enum variant count"))?;
+                        layout.extend_from_slice(&count.to_le_bytes());
+                        for variant in variants {
+                            let count = u32::try_from(variant.fields.len()).map_err(|_| {
+                                self.unsupported(expression.span, "enum equality field count")
+                            })?;
+                            layout.extend_from_slice(&count.to_le_bytes());
+                            for (_, field_ty) in &variant.fields {
+                                let kind = match scalar_kind(
+                                    self.types,
+                                    *field_ty,
+                                    "enum equality payload",
+                                )? {
+                                    ScalarKind::SignedInteger(_)
+                                    | ScalarKind::UnsignedInteger(_)
+                                    | ScalarKind::Bool => b'i',
+                                    ScalarKind::Float(32) => b'f',
+                                    ScalarKind::Float(64) => b'd',
+                                    ScalarKind::String => b's',
+                                    _ => {
+                                        return Err(self.unsupported(
+                                            expression.span,
+                                            "enum equality payload type",
+                                        ));
+                                    }
+                                };
+                                layout.push(kind);
+                            }
+                        }
+                        let (pointer, length) = self.static_data(&layout)?;
+                        let value = self.leaf(
+                            NativeLeaf::EnumEqual,
+                            &[left_value, right_value, pointer, length],
+                            true,
+                        )?;
+                        let value = self.builder.ins().ireduce(ir::types::I8, value);
+                        let value = if *op == BinaryOp::NotEqual {
+                            self.builder.ins().bxor_imm(value, 1)
+                        } else {
+                            value
+                        };
+                        return Ok(LoweredValue::Scalar(value));
+                    }
                     let zero = self.builder.ins().iconst(ir::types::I64, 0);
                     let left_tag = self.leaf(NativeLeaf::StructField, &[left_value, zero], true)?;
                     let right_tag =

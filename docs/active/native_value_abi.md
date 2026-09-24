@@ -411,10 +411,10 @@ drops the remaining record. Clone and cleanup recursively handle owned
 payloads, including nested enums. Switch validation rejects duplicate, invalid
 and non-exhaustive arms. Native/interpreter differential fixtures cover unit,
 scalar, string and recursive owned payloads, multiple bindings and an `other`
-arm. Equality compares tags for unit enums; payload-enum equality remains
-guarded until typed field comparison is implemented.
-Tag comparison borrows unit-enum operands, including projected aggregate fields,
-so it leaves their owners available after the expression.
+arm. Equality borrows both enum operands, compares dense tags, then compares
+the selected variant's scalar payloads. Integer and boolean payloads compare
+their value bits, floating-point payloads use IEEE equality, and strings compare
+their text. Aggregate payload equality remains guarded.
 
 Bitfield values use the same typed record storage for fields, including owned
 payload fields. Native construction, field projection, clone and cleanup match
@@ -439,7 +439,8 @@ while preserving cleanup.
 
 This is not full aggregate parity. Refinement-validating constructors,
 field-place assignment, borrowed iteration yielding compound views,
-payload-enum equality, and bitfield width validation remain unsupported.
+payload-enum equality for aggregate fields, and bitfield width validation remain
+unsupported.
 Composite explicit comptime constants still require baking.
 
 Borrowed native list and map iteration over move-only elements materializes an

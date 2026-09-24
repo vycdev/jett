@@ -1,0 +1,24 @@
+namespace app
+enum Value:
+    empty
+    number(value: int64)
+    tiny(value: uint8)
+    fraction(value: float64)
+    small(value: float32)
+    text(value: string)
+    pair(first: bool, second: string)
+function main() returns nothing:
+    println(Value.empty == Value.empty)
+    println(Value.empty == Value.number(0))
+    println(Value.number(7) == Value.number(7))
+    println(Value.number(7) != Value.number(8))
+    println(Value.number(7) == Value.fraction(7.0))
+    println(Value.tiny(255) == Value.tiny(255))
+    println(Value.fraction(1.5) == Value.fraction(1.5))
+    println(Value.fraction(-0.0) == Value.fraction(0.0))
+    float64 nan = 0.0 / 0.0
+    println(Value.fraction(nan) == Value.fraction(nan))
+    println(Value.small(1.5) == Value.small(1.5))
+    println(Value.text("a") == Value.text("b"))
+    println(Value.pair(true, "same") == Value.pair(true, "same"))
+    println(Value.pair(true, "same") != Value.pair(false, "same"))

@@ -1660,6 +1660,55 @@ impl NativeValues {
             .flatten()
             .ok_or(INVALID_STRUCT)
     }
+    fn enum_equal(&self, left: u64, right: u64, layout: &[u8]) -> LeafResult<u32> {
+        let mut cursor = BitfieldLayoutCursor {
+            bytes: layout,
+            position: 0,
+        };
+        if cursor.take(3).map_err(|_| INVALID_STRUCT)? != b"JE\x01" {
+            return Err(INVALID_STRUCT);
+        }
+        let count = usize::try_from(cursor.u32().map_err(|_| INVALID_STRUCT)?)
+            .map_err(|_| INVALID_STRUCT)?;
+        if count > layout.len() {
+            return Err(INVALID_STRUCT);
+        }
+        let left_tag =
+            usize::try_from(self.struct_field(left, 0)?.bits).map_err(|_| INVALID_STRUCT)?;
+        let right_tag =
+            usize::try_from(self.struct_field(right, 0)?.bits).map_err(|_| INVALID_STRUCT)?;
+        if left_tag >= count || right_tag >= count {
+            return Err(INVALID_STRUCT);
+        }
+        let mut equal = left_tag == right_tag;
+        for variant in 0..count {
+            let fields = usize::try_from(cursor.u32().map_err(|_| INVALID_STRUCT)?)
+                .map_err(|_| INVALID_STRUCT)?;
+            let kinds = cursor.take(fields).map_err(|_| INVALID_STRUCT)?;
+            if variant != left_tag || !equal {
+                continue;
+            }
+            for (index, kind) in kinds.iter().enumerate() {
+                let slot = u64::try_from(index + 1).map_err(|_| INVALID_STRUCT)?;
+                let left_value = self.struct_field(left, slot)?.bits;
+                let right_value = self.struct_field(right, slot)?.bits;
+                let same = match kind {
+                    b'i' => left_value == right_value,
+                    b'f' => f32::from_bits(left_value as u32) == f32::from_bits(right_value as u32),
+                    b'd' => f64::from_bits(left_value) == f64::from_bits(right_value),
+                    b's' => self.text(left_value)? == self.text(right_value)?,
+                    _ => return Err(INVALID_STRUCT),
+                };
+                if !same {
+                    equal = false;
+                }
+            }
+        }
+        if cursor.position != layout.len() {
+            return Err(INVALID_STRUCT);
+        }
+        Ok(u32::from(equal))
+    }
     fn reflected_field_index(
         &self,
         actual: u64,
@@ -2711,6 +2760,12 @@ leaves! {
         };
     Equal, jett_rt_v1_string_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
         |s| Ok(u32::from(s.text(left)? == s.text(right)?));
+    EnumEqual, jett_rt_v1_enum_equal, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.enum_equal(left, right, layout) };
     FromInt, jett_rt_v1_string_from_int, false, (value: i64 => I64), u64 => I64,
         |s| s.insert(value.to_string());
     FromUint, jett_rt_v1_string_from_uint, false, (value: u64 => I64), u64 => I64,

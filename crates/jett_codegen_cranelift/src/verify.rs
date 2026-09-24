@@ -2048,9 +2048,19 @@ impl Verifier<'_> {
                 .resolve_enum(*id)
                 .variants
                 .iter()
-                .any(|variant| !variant.fields.is_empty())
+                .flat_map(|variant| &variant.fields)
+                .any(|(_, field_ty)| {
+                    !matches!(
+                        scalar_kind(self.types, *field_ty, "enum equality payload"),
+                        Ok(ScalarKind::SignedInteger(_)
+                            | ScalarKind::UnsignedInteger(_)
+                            | ScalarKind::Float(32 | 64)
+                            | ScalarKind::Bool
+                            | ScalarKind::String)
+                    )
+                })
         {
-            return Err(self.unsupported(function, expression.span, "payload enum equality"));
+            return Err(self.unsupported(function, expression.span, "enum equality payload type"));
         }
         if matches!(op, BinaryOp::Divide | BinaryOp::Modulo)
             && operand.is_integer()

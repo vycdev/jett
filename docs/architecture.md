@@ -2692,8 +2692,11 @@ frame owners and propagate it to the launcher. Context destruction checks for le
 native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
+Payload enum equality compares the selected variant's integer, boolean,
+floating-point, and string fields through the native value ABI; aggregate
+payload fields remain outside that comparison path.
 
-The full native parity gate is still incomplete: 127/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 129/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
