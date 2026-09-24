@@ -41,6 +41,10 @@ const INVALID_REFLECTED_MACHINE_FIELD: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"type.machine_field_value: field metadata does not match the active state and requested type",
 );
+const INVALID_TYPE_INFO: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid reflected TypeInfo for native type dispatch",
+);
 const INVALID_LIST: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native list handle",
@@ -1471,6 +1475,48 @@ impl NativeValues {
         }
         Ok(index)
     }
+    fn type_info_identity(&self, value: u64, depth: usize) -> LeafResult<String> {
+        if depth >= 64 {
+            return Err(INVALID_TYPE_INFO);
+        }
+        let type_name = self.text(self.struct_field(value, 0)?.bits)?;
+        let kind = self.text(self.struct_field(value, 1)?.bits)?;
+        let secret = self.struct_field(value, 4)?.bits;
+        if secret > 1 {
+            return Err(INVALID_TYPE_INFO);
+        }
+        let arguments = self
+            .lists
+            .get(&self.struct_field(value, 5)?.bits)
+            .ok_or(INVALID_TYPE_INFO)?;
+        if kind == "alias" {
+            let [Some(base)] = arguments.elements.as_slice() else {
+                return Err(INVALID_TYPE_INFO);
+            };
+            return self.type_info_identity(*base, depth + 1);
+        }
+        let name = match kind {
+            "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
+            "struct" if !arguments.elements.is_empty() => type_name
+                .split_once('[')
+                .map_or(type_name, |(base, _)| base),
+            _ => type_name,
+        };
+        let mut identity = format!(
+            "{}:{}{}:{}{}:{}",
+            kind.len(),
+            kind,
+            name.len(),
+            name,
+            secret,
+            arguments.elements.len(),
+        );
+        for argument in &arguments.elements {
+            identity
+                .push_str(&self.type_info_identity(argument.ok_or(INVALID_TYPE_INFO)?, depth + 1)?);
+        }
+        Ok(identity)
+    }
     fn take_struct_field(&mut self, id: u64, index: u64) -> LeafResult<NativeField> {
         self.structs
             .get_mut(&id)
@@ -1992,6 +2038,11 @@ leaves! {
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_VARIANT_FIELD);
     ReflectedMachineFieldIndex, jett_rt_v1_reflected_machine_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_MACHINE_FIELD);
+    TypeInfoMatches, jett_rt_v1_type_info_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
+            if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
+            let expected = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(expected, length) } };
+            Ok(u32::from(s.type_info_identity(actual, 0)?.as_bytes() == expected)) };
     MachineExpectState, jett_rt_v1_machine_expect_state, false, (value: u64 => I64, state: u64 => I64), u32 => I32,
         |s| { if s.struct_field(value, 0)?.bits == state { Ok(0) }
             else { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"machine state does not match narrowed type")) } };

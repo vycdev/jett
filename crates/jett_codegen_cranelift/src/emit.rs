@@ -1036,8 +1036,41 @@ impl Translator<'_, '_> {
             TerminatorKind::ForEach { .. } => {
                 Err(self.unsupported(terminator.span, "for-each loop"))
             }
-            TerminatorKind::ReflectedTypeDispatch { .. } => {
-                Err(self.unsupported(terminator.span, "reflected type dispatch"))
+            TerminatorKind::ReflectedTypeDispatch {
+                type_info,
+                arms,
+                otherwise,
+            } => {
+                let lowered = self.argument(type_info, true)?;
+                let type_info = self.scalar(lowered, terminator.span)?;
+                let dispatch_temporaries = self.next_temporary;
+                for arm in arms {
+                    let (expected, length) = self.static_bytes(&arm.canonical_identity)?;
+                    let matches = self.leaf(
+                        NativeLeaf::TypeInfoMatches,
+                        &[type_info, expected, length],
+                        true,
+                    )?;
+                    let selected = self.builder.create_block();
+                    let next = self.builder.create_block();
+                    self.builder.ins().brif(matches, selected, &[], next, &[]);
+                    self.builder.switch_to_block(selected);
+                    self.drop_temporaries()?;
+                    let target = block_for(
+                        self.blocks,
+                        arm.target.index(),
+                        terminator.span,
+                        self.symbol,
+                    )?;
+                    self.builder.ins().jump(target, &[]);
+                    self.next_temporary = dispatch_temporaries;
+                    self.builder.switch_to_block(next);
+                }
+                self.drop_temporaries()?;
+                let otherwise =
+                    block_for(self.blocks, otherwise.index(), terminator.span, self.symbol)?;
+                self.builder.ins().jump(otherwise, &[]);
+                Ok(())
             }
         }
     }

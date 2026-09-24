@@ -166,6 +166,8 @@ pub struct ReflectedTypeDispatchArm {
     pub iteration_index: usize,
     /// Canonical concrete type identity matched against the runtime `TypeInfo`.
     pub bound_type: TypeId,
+    /// Checker-owned structural identity for native runtime selection.
+    pub canonical_identity: String,
     pub target: BlockId,
 }
 
@@ -519,6 +521,12 @@ impl FunctionValidator<'_, '_> {
                 let mut bound_types = std::collections::HashSet::new();
                 let mut targets = std::collections::HashSet::new();
                 for arm in arms {
+                    if arm.canonical_identity.is_empty() {
+                        self.error(
+                            terminator.span,
+                            "reflected type dispatch arm has no checked identity",
+                        );
+                    }
                     if !iteration_indexes.insert(arm.iteration_index) {
                         self.error(
                             terminator.span,
@@ -1171,6 +1179,7 @@ impl Builder {
             .map(|(arm, target)| ReflectedTypeDispatchArm {
                 iteration_index: arm.iteration_index,
                 bound_type: arm.bound_type,
+                canonical_identity: arm.canonical_identity.clone(),
                 target: *target,
             })
             .collect();

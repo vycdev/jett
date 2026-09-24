@@ -430,6 +430,11 @@ Static machine layout, state, and transition reflection materializes checked
 metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;
 alias and non-machine total probes produce empty values.
+Reflected `comptime type` dispatch borrows its runtime `TypeInfo` selector.
+The runtime leaf derives a recursive structural identity, unwrapping aliases;
+native branches compare it with the checker-owned identity of each specialized
+arm. The selector remains live until the selected edge releases expression
+temporaries, and only that arm executes.
 
 Named function values use a native function address in the scalar carrier.
 Indirect calls use the checked signature plus the hidden runtime context,

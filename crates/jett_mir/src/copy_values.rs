@@ -105,6 +105,16 @@ impl CopyValuePlan {
                 TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
                     visit(v, &mut reads, &mut temporaries, types, program, false)?
                 }
+                TerminatorKind::ReflectedTypeDispatch { type_info, .. } if program.is_some() => {
+                    visit(
+                        type_info,
+                        &mut reads,
+                        &mut temporaries,
+                        types,
+                        program,
+                        true,
+                    )?;
+                }
                 TerminatorKind::Switch {
                     scrutinee,
                     variants,

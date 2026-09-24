@@ -220,6 +220,35 @@ pub struct ReflectionTypeInfo {
 }
 
 impl ReflectionTypeInfo {
+    /// Structural identity used by native dispatch for compiler-produced
+    /// `TypeInfo` values. Source aliases are transparent to the bound type.
+    pub fn canonical_identity(&self) -> String {
+        if self.kind == "alias" && self.args.len() == 1 {
+            return self.args[0].canonical_identity();
+        }
+        let name = match self.kind.as_str() {
+            "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
+            "struct" if !self.args.is_empty() => self
+                .type_name
+                .split_once('[')
+                .map_or(self.type_name.as_str(), |(base, _)| base),
+            _ => &self.type_name,
+        };
+        let mut identity = format!(
+            "{}:{}{}:{}{}:{}",
+            self.kind.len(),
+            self.kind,
+            name.len(),
+            name,
+            u8::from(self.has_secret),
+            self.args.len(),
+        );
+        for argument in &self.args {
+            identity.push_str(&argument.canonical_identity());
+        }
+        identity
+    }
+
     pub fn kind_tag_variant(kind: &str) -> &'static str {
         match kind {
             "primitive" => "primitive_type",
@@ -468,6 +497,24 @@ mod tests {
                 0, 0, state_name, 0, state_name,
             )],
         )
+    }
+
+    #[test]
+    fn canonical_identity_unwraps_aliases_inside_generic_types() {
+        let string = info("string", "primitive");
+        let alias =
+            ReflectionTypeInfo::new("app.Label", "alias", None, false, vec![string.clone()]);
+        let canonical = ReflectionTypeInfo::new("list[string]", "list", None, false, vec![string]);
+        let with_alias =
+            ReflectionTypeInfo::new("list[app.Label]", "list", None, false, vec![alias]);
+        assert_eq!(
+            canonical.canonical_identity(),
+            with_alias.canonical_identity()
+        );
+        assert_ne!(
+            info("app.First", "struct").canonical_identity(),
+            info("app.Second", "struct").canonical_identity(),
+        );
     }
 
     #[test]

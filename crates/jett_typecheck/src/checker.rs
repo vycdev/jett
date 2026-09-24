@@ -490,7 +490,7 @@ struct TypeChecker<'a> {
     /// reflected primitive facts.
     reflection_type_primitive_value_scopes: Vec<HashMap<DefId, String>>,
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
-    reflected_field_type_scopes: Vec<HashMap<String, Vec<TypeId>>>,
+    reflected_field_type_scopes: Vec<HashMap<String, Vec<(TypeId, ReflectionTypeInfo)>>>,
     /// Trusted TypeInfo types currently available from direct reflected `args` loops.
     reflected_type_info_scopes: Vec<HashMap<String, Vec<TypeId>>>,
     /// Trusted TypeVariant owners currently available from direct `type.variants[T]()` loops.
@@ -7487,7 +7487,21 @@ impl<'a> TypeChecker<'a> {
                 return;
             }
 
-            let body = self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+            let namespace = self.current_function_name.as_deref().and_then(|name| {
+                name.rsplit_once('.')
+                    .map(|(namespace, _)| namespace.to_string())
+            });
+            let reflection = self.reflection_type_info_for_type_expr(
+                bound_type_expr,
+                namespace.as_deref(),
+                bound_ty,
+            );
+            let body = self.check_comptime_type_bind_body(
+                &bind.name.name,
+                bound_ty,
+                reflection,
+                &bind.body,
+            );
             self.record_comptime_type_bindings(
                 bind.span,
                 vec![CheckedComptimeTypeBinding {
@@ -7509,8 +7523,26 @@ impl<'a> TypeChecker<'a> {
             let arg_types = self.type_info_arg_types_for_type_expr(source_type_expr);
             if let Some(&bound_ty) = arg_types.get(index) {
                 if bound_ty != TypeInterner::ERROR {
-                    let body =
-                        self.check_comptime_type_bind_body(&bind.name.name, bound_ty, &bind.body);
+                    let namespace = self.current_function_name.as_deref().and_then(|name| {
+                        name.rsplit_once('.')
+                            .map(|(namespace, _)| namespace.to_string())
+                    });
+                    let source_info = self.reflection_type_info_for_type_expr(
+                        source_type_expr,
+                        namespace.as_deref(),
+                        source_ty,
+                    );
+                    let reflection = source_info
+                        .args
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| self.reflection_type_info_for_type(bound_ty));
+                    let body = self.check_comptime_type_bind_body(
+                        &bind.name.name,
+                        bound_ty,
+                        reflection,
+                        &bind.body,
+                    );
                     self.record_comptime_type_bindings(
                         bind.span,
                         vec![CheckedComptimeTypeBinding {
@@ -7530,13 +7562,15 @@ impl<'a> TypeChecker<'a> {
         }
 
         if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
-            if let Some(field_types) = self.reflected_field_types_for_name(field_name) {
+            if let Some(field_types) = self.reflected_field_candidates_for_name(field_name) {
                 let mut bindings = Vec::new();
-                for (iteration_index, field_ty) in field_types.into_iter().enumerate() {
+                for (iteration_index, (field_ty, reflection)) in field_types.into_iter().enumerate()
+                {
                     if field_ty != TypeInterner::ERROR {
                         let body = self.check_comptime_type_bind_body(
                             &bind.name.name,
                             field_ty,
+                            reflection,
                             &bind.body,
                         );
                         bindings.push(CheckedComptimeTypeBinding {
@@ -7561,6 +7595,7 @@ impl<'a> TypeChecker<'a> {
                         let body = self.check_comptime_type_bind_body(
                             &bind.name.name,
                             info_ty,
+                            self.reflection_type_info_for_type(info_ty),
                             &bind.body,
                         );
                         bindings.push(CheckedComptimeTypeBinding {
@@ -7586,6 +7621,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         name: &str,
         bound_ty: TypeId,
+        reflection: ReflectionTypeInfo,
         body: &Block,
     ) -> CheckedBodyFacts {
         // The same source spans may be checked repeatedly for different
@@ -7594,16 +7630,35 @@ impl<'a> TypeChecker<'a> {
         // remains in the legacy flat maps for interpreter compatibility.
         self.clear_checked_body_facts(body.span);
         let previous = self.type_var_subst.insert(name.to_string(), bound_ty);
+        let previous_reflection = self
+            .type_var_reflections
+            .insert(name.to_string(), reflection);
         self.check_block(body);
         if let Some(previous) = previous {
             self.type_var_subst.insert(name.to_string(), previous);
         } else {
             self.type_var_subst.remove(name);
         }
+        if let Some(previous) = previous_reflection {
+            self.type_var_reflections.insert(name.to_string(), previous);
+        } else {
+            self.type_var_reflections.remove(name);
+        }
         self.checked_body_facts(body.span)
     }
 
     fn reflected_field_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
+        self.reflected_field_type_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .map(|candidates| candidates.iter().map(|(ty, _)| *ty).collect())
+    }
+
+    fn reflected_field_candidates_for_name(
+        &self,
+        name: &str,
+    ) -> Option<Vec<(TypeId, ReflectionTypeInfo)>> {
         self.reflected_field_type_scopes
             .iter()
             .rev()
@@ -7798,6 +7853,56 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn reflected_field_infos_for_owner(&self, owner_ty: TypeId) -> Vec<ReflectionTypeInfo> {
+        match self.interner.resolve(owner_ty) {
+            Type::Struct(_) | Type::Bitfield(_) => self
+                .reflection_fields_by_id
+                .get(&owner_ty)
+                .map(|(_, fields)| fields.iter().map(|field| field.type_info.clone()).collect())
+                .unwrap_or_default(),
+            Type::Enum(_) => self
+                .reflection_variants_by_id
+                .get(&owner_ty)
+                .map(|(_, variants)| {
+                    variants
+                        .iter()
+                        .flat_map(|variant| {
+                            variant.fields.iter().map(|field| field.type_info.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Type::Machine(_) => self
+                .reflection_machines_by_id
+                .get(&owner_ty)
+                .map(|(_, machine)| {
+                    machine
+                        .states
+                        .iter()
+                        .flat_map(|state| state.fields.iter().map(|field| field.type_info.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Type::MachineState { machine, state } => {
+                let base_ty = self.interner.type_ids().find(
+                    |ty| matches!(self.interner.resolve(*ty), Type::Machine(id) if id == machine),
+                );
+                base_ty
+                    .and_then(|ty| self.reflection_machines_by_id.get(&ty))
+                    .and_then(|(_, machine)| machine.states.get(state.index() as usize))
+                    .map(|state| {
+                        state
+                            .fields
+                            .iter()
+                            .map(|field| field.type_info.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn reflected_variant_field_types_for_owner(&self, owner_ty: TypeId) -> Vec<TypeId> {
         match self.interner.resolve(owner_ty) {
             Type::Enum(eid) => self
@@ -7905,9 +8010,25 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn push_reflected_field_type_scope(&mut self, field_name: &str, field_types: Vec<TypeId>) {
+    fn push_reflected_field_type_scope(
+        &mut self,
+        field_name: &str,
+        field_types: Vec<TypeId>,
+        source_infos: Vec<ReflectionTypeInfo>,
+    ) {
+        let candidates = field_types
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                let info = source_infos
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| self.reflection_type_info_for_type(ty));
+                (ty, info)
+            })
+            .collect();
         let mut scope = HashMap::new();
-        scope.insert(field_name.to_string(), field_types);
+        scope.insert(field_name.to_string(), candidates);
         self.reflected_field_type_scopes.push(scope);
     }
 
@@ -8811,7 +8932,8 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.reflected_field_types_for_owner(owner_ty)
             };
-            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            let infos = self.reflected_field_infos_for_owner(owner_ty);
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
             true
         } else if let Some(owner_ty_expr) = comptime_type_variant_fields_binding(&for_stmt.iterable)
         {
@@ -8821,7 +8943,8 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.reflected_variant_field_types_for_owner(owner_ty)
             };
-            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            let infos = self.reflected_field_infos_for_owner(owner_ty);
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
             true
         } else if let Some(owner_ty_expr) = comptime_type_machine_fields_binding(&for_stmt.iterable)
         {
@@ -8831,7 +8954,8 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.reflected_machine_field_types_for_owner(owner_ty)
             };
-            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+            let infos = self.reflected_field_infos_for_owner(owner_ty);
+            self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
             true
         } else if let Some(fields_owner_name) =
             reflected_machine_state_fields_binding(&for_stmt.iterable)
@@ -8839,12 +8963,14 @@ impl<'a> TypeChecker<'a> {
         {
             if let Some(owner_ty) = self.reflected_machine_state_owner_for_name(fields_owner_name) {
                 let field_types = self.reflected_machine_field_types_for_owner(owner_ty);
-                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+                let infos = self.reflected_field_infos_for_owner(owner_ty);
+                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
                 true
             } else if let Some(owner_ty) = self.reflected_variant_owner_for_name(fields_owner_name)
             {
                 let field_types = self.reflected_variant_field_types_for_owner(owner_ty);
-                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types);
+                let infos = self.reflected_field_infos_for_owner(owner_ty);
+                self.push_reflected_field_type_scope(&for_stmt.variable.name, field_types, infos);
                 true
             } else {
                 false

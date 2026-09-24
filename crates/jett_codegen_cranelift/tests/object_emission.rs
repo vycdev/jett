@@ -660,7 +660,7 @@ function checked(value: bool) returns bool:
 }
 
 #[test]
-fn rejects_reflected_type_dispatch_explicitly() {
+fn rejects_reflected_type_dispatch_without_type_info() {
     let (mut program, types) = lower_source(
         r#"namespace app
 function choose(value: bool) returns int64:
@@ -685,18 +685,19 @@ function choose(value: bool) returns int64:
         arms: vec![ReflectedTypeDispatchArm {
             iteration_index: 0,
             bound_type: TypeInterner::BOOL,
+            canonical_identity: "4:bool0:0:0".to_string(),
             target,
         }],
         otherwise,
     };
 
     let error = emit_host_object(&program, &types)
-        .expect_err("reflected dispatch is outside the scalar backend slice");
+        .expect_err("reflected dispatch must select a checked TypeInfo");
 
     assert!(matches!(
         error,
-        CodegenError::UnsupportedMir { construct, .. }
-            if construct == "reflected type dispatch"
+        CodegenError::InvalidMirContract { message, .. }
+            if message == "invalid checked reflected type dispatch"
     ));
 }
 

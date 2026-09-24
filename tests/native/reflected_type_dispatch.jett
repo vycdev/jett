@@ -1,0 +1,16 @@
+namespace app
+type Label = string
+struct Record:
+    label: Label
+    count: int64
+    tags: list[Label]
+function describe(view value: Record) returns string:
+    mutable list[string] parts = list.new[string]()
+    for field in type.fields[Record]():
+        comptime type Field = field.type_info:
+            Field copied = type.field_value[Record, Field](view value, view field)
+            parts = list.append[string](parts, "{field.name}:{type.name[Field]()}")
+    return string.join(parts, ";")
+function main() returns nothing:
+    Record value = Record(label: "Ada", count: 7, tags: list("a", "b"))
+    println(describe(view value))

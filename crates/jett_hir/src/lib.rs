@@ -221,6 +221,9 @@ pub struct ReflectedTypeArm {
     /// diagnostics and for backends that can dispatch on loop ordinals.
     pub iteration_index: usize,
     pub bound_type: TypeId,
+    /// Canonical identity of the checker-selected bound type, including
+    /// nested type arguments while treating source aliases transparently.
+    pub canonical_identity: String,
     pub body: Block,
 }
 
@@ -1857,9 +1860,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             if !bound_types.insert(checked.bound_type) {
                 continue;
             }
+            let Some(info) = self
+                .parent
+                .check
+                .reflection_metadata
+                .get_type_info_for_id(checked.bound_type)
+            else {
+                self.parent.error(
+                    binding.span,
+                    "reflected type dispatch has no checked bound-type metadata",
+                );
+                return None;
+            };
             arms.push(ReflectedTypeArm {
                 iteration_index,
                 bound_type: checked.bound_type,
+                canonical_identity: info.canonical_identity(),
                 body: self.lower_block_with_checked_facts(&binding.body, checked.body),
             });
         }

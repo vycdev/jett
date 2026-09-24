@@ -331,6 +331,9 @@ impl Flow<'_> {
                 self.expr(v, false)?
             }
             TerminatorKind::Switch { scrutinee, .. } => self.expr(scrutinee, false)?,
+            TerminatorKind::ReflectedTypeDispatch { type_info, .. } => {
+                self.expr(type_info, true)?
+            }
             TerminatorKind::Return(None)
             | TerminatorKind::Goto(_)
             | TerminatorKind::Unreachable => {}

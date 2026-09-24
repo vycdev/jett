@@ -788,7 +788,7 @@ impl Translator<'_, '_> {
         self.drop_temporaries()?;
         self.drop_dead_locals(&BTreeSet::new())
     }
-    pub(super) fn literal(&mut self, text: &str) -> Result<LoweredValue, CodegenError> {
+    pub(super) fn static_bytes(&mut self, text: &str) -> Result<(Value, Value), CodegenError> {
         let data = self
             .module
             .declare_anonymous_data(false, false)
@@ -806,6 +806,10 @@ impl Translator<'_, '_> {
         let reference = self.module.declare_data_in_func(data, self.builder.func);
         let pointer = self.builder.ins().global_value(ir::types::I64, reference);
         let length = self.builder.ins().iconst(ir::types::I64, text.len() as i64);
+        Ok((pointer, length))
+    }
+    pub(super) fn literal(&mut self, text: &str) -> Result<LoweredValue, CodegenError> {
+        let (pointer, length) = self.static_bytes(text)?;
         let value = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
         self.own(value)
     }

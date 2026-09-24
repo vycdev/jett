@@ -741,8 +741,28 @@ impl Verifier<'_> {
             TerminatorKind::ForEach { .. } => {
                 Err(self.unsupported(function, terminator.span, "for-each loop"))
             }
-            TerminatorKind::ReflectedTypeDispatch { .. } => {
-                Err(self.unsupported(function, terminator.span, "reflected type dispatch"))
+            TerminatorKind::ReflectedTypeDispatch {
+                type_info, arms, ..
+            } => {
+                let valid_type_info = matches!(self.types.resolve(type_info.ty), Type::Struct(id)
+                    if self.types.resolve_struct(*id).name == "TypeInfo");
+                let identities = arms
+                    .iter()
+                    .map(|arm| arm.canonical_identity.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                if valid_type_info
+                    && !arms.is_empty()
+                    && arms.iter().all(|arm| !arm.canonical_identity.is_empty())
+                    && identities.len() == arms.len()
+                {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "invalid checked reflected type dispatch",
+                    ))
+                }
             }
         }
     }

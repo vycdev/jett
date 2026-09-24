@@ -881,6 +881,12 @@ Static `type.machine_layout`, `type.machine_states`, and
 `type.machine_transitions` lower checked state and edge snapshots into ordinary
 `TypeMachine`, `TypeMachineState`, and `TypeMachineTransition` values. Alias and
 non-machine probes produce empty layouts and lists.
+Reflected `comptime type` loops carry one checker-specialized MIR arm per
+concrete bound type. HIR records a canonical identity from checked `TypeInfo`
+metadata for each arm; native code compares the borrowed runtime `TypeInfo`
+recursively before selecting exactly one arm. Source aliases are transparent
+to dispatch identity while their source-aware names remain available inside
+the selected body.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 
