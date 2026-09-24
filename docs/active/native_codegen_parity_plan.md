@@ -300,14 +300,18 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 155 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 156 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 155/182 (85.2%), a useful progress measure rather than a
+gate is currently 156/182 (85.7%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
+The ownership checker now treats `ok`, `fail`, and `some` payloads as moves.
+The secret-bearing JSON policy fixture explicitly clones a payload used in
+both result arms and now emits a native object; the 207-row audit gained that
+one object gate without losing any previous pass.
 Self-recursive structs with a finite base and supported fields now specialize
 the source JSON serializer, parser, and exact validator. The eligibility walk
 accepts a revisited struct without skipping checks of its other fields, and

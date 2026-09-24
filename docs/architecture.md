@@ -804,7 +804,8 @@ concrete method bodies; struct construction records canonical field order and
 refinement validation; struct field access uses dense field IDs; list/map
 constructors preserve lexical element order; and pipelines become nested
 checked calls with the piped value as synthetic argument 1. Result, optional,
-and refinement-boundary handles are explicit typed HIR operations; their
+and refinement-boundary handles are explicit typed HIR operations; owned
+`ok`, `fail`, and `some` payloads transfer ownership into the wrapper. Their
 failure blocks distinguish local `default` fallback from function `return`,
 and step-local handles wrap only their intermediate pipeline call. Enum
 construction carries a dense checked variant ID and payloads; exhaustive

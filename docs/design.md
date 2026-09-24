@@ -1956,6 +1956,10 @@ Garbage collection is too slow for native-speed code. C-style manual memory (`ma
 
 When a variable is passed into a function, it is **consumed** (moved) and immediately becomes invalid in the current scope. If the LLM tries to use it again on the next line, the compiler rejects it. If the LLM wants to keep it, it must explicitly clone.
 
+Wrapping an owned value with `ok(value)`, `fail(value)`, or `some(value)` also
+consumes it. Use `clone value` inside the wrapper when the original must remain
+available.
+
 ```
 function send_message(view net: Network, connection: Connection, payload: Payload) returns nothing:
     Network.send(view net, connection, payload)

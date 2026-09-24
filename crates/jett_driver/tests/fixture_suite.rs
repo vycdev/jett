@@ -1209,6 +1209,10 @@ compile_fail_fixture!(
     "ownership_collection_literals_move_elements.jett"
 );
 compile_fail_fixture!(
+    compile_fail_ownership_result_optional_wrappers_move_payloads,
+    "ownership_result_optional_wrappers_move_payloads.jett"
+);
+compile_fail_fixture!(
     compile_fail_math_sum_consumes_list,
     "math_sum_consumes_list.jett"
 );

@@ -646,7 +646,7 @@ impl<'a> OwnershipChecker<'a> {
                 self.states = self.merge_fallthrough_states(&success_state, &fallthrough_states);
             }
             Expr::Ok(inner, _) | Expr::Fail(inner, _) | Expr::Some(inner, _) => {
-                self.check_expr_ownership(inner);
+                self.consume_expr(inner, inner.span());
             }
             Expr::Default(inner, _) => {
                 self.check_expr_ownership(inner);
