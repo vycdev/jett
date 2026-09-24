@@ -252,8 +252,14 @@ clones owned elements. Lists have separate creation/destruction counters and
 leak checks, including lists with no owning elements. Scalar, string, bytes,
 sum and nested-list elements are supported; named structs/maps/sets are not.
 
-New/length/append/get and primitive sort are typed native leaves. Sort reorders
-the uniquely owned list in place, comparing signed and unsigned widths,
+Insert-at transfers its element into the uniquely owned list after a valid
+index and successful capacity reservation. Remove-at drops the removed owned
+element exactly once and returns the same list handle. Invalid indices leave
+the input list owned by the caller. The native terminal-failure message for an
+invalid index still omits the numeric index included by the interpreter.
+
+New/length/append/insert/remove/get and primitive sort are typed native leaves.
+Sort reorders the uniquely owned list in place, comparing signed and unsigned widths,
 floating-point values, bools, and owned strings with interpreter semantics.
 First/last/is_empty/reverse/repeat and math.sum run their actual compiled Jett
 bodies. list.sum[int64] is a typed wrapping numeric leaf. Contextual conversion

@@ -36,7 +36,12 @@ impl Translator<'_, '_> {
             .temporary_slots
             .get(self.next_temporary)
             .ok_or_else(|| {
-                CodegenError::Backend("MIR temporary ownership bound exceeded".into())
+                CodegenError::Backend(format!(
+                    "MIR temporary ownership bound exceeded in `{}`: needed at least {}, planned {}",
+                    self.symbol,
+                    self.next_temporary + 1,
+                    self.temporary_slots.len()
+                ))
             })?;
         self.next_temporary += 1;
         self.builder.ins().stack_store(value, *slot, 0);
@@ -581,6 +586,28 @@ impl Translator<'_, '_> {
                 };
                 self.clear_slot(slot);
                 self.own_linear(value)
+            }
+            IntrinsicId::ListInsertAt => {
+                let LoweredValue::Owned(list, list_slot) = values[0] else {
+                    return Err(self.unsupported(span, "insert requires owning list"));
+                };
+                let index = self.scalar(values[1], span)?;
+                let (bits, _) = self.payload_bits(values[2]);
+                let inserted = self.leaf(NativeLeaf::ListInsertAt, &[list, index, bits], true)?;
+                self.clear_slot(list_slot);
+                if let LoweredValue::Owned(_, value_slot) = values[2] {
+                    self.clear_slot(value_slot);
+                }
+                self.own_linear(inserted)
+            }
+            IntrinsicId::ListRemoveAt => {
+                let LoweredValue::Owned(list, slot) = values[0] else {
+                    return Err(self.unsupported(span, "remove requires owning list"));
+                };
+                let index = self.scalar(values[1], span)?;
+                let removed = self.leaf(NativeLeaf::ListRemoveAt, &[list, index], true)?;
+                self.clear_slot(slot);
+                self.own_linear(removed)
             }
             IntrinsicId::ListSort => {
                 let Type::List(element) = self.types.resolve(result_type) else {

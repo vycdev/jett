@@ -361,6 +361,7 @@ fn visit(
         ExpressionKind::String(_)
         | ExpressionKind::Local(_)
         | ExpressionKind::Call { .. }
+        | ExpressionKind::IndirectCall { .. }
         | ExpressionKind::Field { .. }
             if crate::move_values::is_string(types, value.ty) =>
         {

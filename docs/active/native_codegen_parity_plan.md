@@ -282,7 +282,7 @@ lowering alone never changes an execution row to complete.
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics, direct Unicode-scalar string iteration, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, scalar `for` loops, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
 | Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, and base-value refinement predicates; struct-field and secret-backed refinement validation pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte roundtrip; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer and owned-string refinements; width validation, payload-enum equality and broader refinement boundaries pending |
-| Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive and indexed-row list sorting, sortedness checks and sets, and primitive-backed refinement keys and set elements | compiled list access, reverse/repeat, scalar iteration and sort; stable `list.sort_by` and `list.group_by` with named callbacks; indexed-row sorting for interpreter-supported key types; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; borrowed iteration through nested struct-field collection paths; refinement string and integer keys and set elements; one contextual generic empty-list path covered; other projected views, collection shape conversions, and callback helpers pending |
+| Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive and indexed-row list sorting, sortedness checks and sets, and primitive-backed refinement keys and set elements | compiled list access, insert/remove, reverse/repeat, scalar iteration and sort; stable `list.sort_by` and `list.group_by` with named callbacks; indexed-row sorting for interpreter-supported key types; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; borrowed iteration through nested struct-field collection paths; refinement string and integer keys and set elements; one contextual generic empty-list path covered; other projected views, collection shape conversions, and callback helpers pending |
 | Numeric aggregates | covered | `math.average` and `math.median` for `list[int64]`, `list[uint64]`, and `list[float64]` | native/interpreter differential fixtures cover all three element types and overflow-safe floating-point extremes; empty-list error contract covered |
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 117 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 118 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 117/182 (64.3%), a useful progress measure rather than a
-claim that 64.3% of the language has native support.
+gate is currently 118/182 (64.8%), a useful progress measure rather than a
+claim that 64.8% of the language has native support.
 Active `type.variant_value` selection matches native/interpreter output for
 payload and empty variants. Reflected `type.field_value` and
 `type.variant_field_value` now read checked struct, bitfield, and enum payload
@@ -483,6 +483,14 @@ use the same native function-address path. This adds object gates for
 covers inline list callbacks, returned callbacks, zero-argument functions,
 and nested capture-free functions. Closures that read enclosing locals remain
 guarded until the native function value can carry an environment.
+Checked `list.insert_at` and `list.remove_at` leaves transfer list and element
+ownership on success, including owned bytes elements. An indirect callback
+returning a string now receives a planned owning temporary. Together these add
+`list_extras.jett` to the object gate; linked differential fixtures cover valid
+insert/remove positions and string-returning `list.map`. Invalid-index failures
+currently report a static native message without the index, so exact diagnostic
+parity remains pending.
+
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

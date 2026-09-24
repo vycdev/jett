@@ -250,6 +250,16 @@ pub(crate) fn verify_intrinsic(
             IntrinsicId::ListAppend => {
                 args.len() == 2 && list(args[0].ty) && args[1].ty == element && list(result)
             }
+            IntrinsicId::ListInsertAt => {
+                args.len() == 3
+                    && list(args[0].ty)
+                    && args[1].ty == T::INT64
+                    && args[2].ty == element
+                    && list(result)
+            }
+            IntrinsicId::ListRemoveAt => {
+                args.len() == 2 && list(args[0].ty) && args[1].ty == T::INT64 && list(result)
+            }
             IntrinsicId::ListLength => args.len() == 1 && list(args[0].ty) && result == T::INT64,
             IntrinsicId::ListGetClone => {
                 args.len() == 2
@@ -547,6 +557,8 @@ pub(crate) fn list_intrinsic(id: IntrinsicId) -> bool {
         IntrinsicId::ListNew
             | IntrinsicId::ListLength
             | IntrinsicId::ListAppend
+            | IntrinsicId::ListInsertAt
+            | IntrinsicId::ListRemoveAt
             | IntrinsicId::ListGetClone
             | IntrinsicId::ListSum
             | IntrinsicId::ListSort

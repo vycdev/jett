@@ -11,6 +11,10 @@ function main() returns nothing:
     int64 last = list.get[int64](doubled, 1) handle:
         default 0
     println(last)
+    list[string] labels = list.map[int64, string](list(1, 2), function(value: int64) returns string: return "v{value}")
+    string label = list.get[string](view labels, 1) handle:
+        default "missing"
+    println(label)
     function(int64) returns int64 callback = triple()
     println(callback(5))
     function() returns int64 seven = function() returns int64: return 7

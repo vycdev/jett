@@ -1,0 +1,31 @@
+namespace app
+function numbers() returns string:
+    mutable list[int64] values = list.insert_at[int64](list(2, 4), 0, 1)
+    values = list.insert_at[int64](values, 2, 3)
+    values = list.insert_at[int64](values, 4, 5)
+    values = list.remove_at[int64](values, 1)
+    int64 first = list.get[int64](view values, 0) handle:
+        default -1
+    int64 middle = list.get[int64](view values, 1) handle:
+        default -1
+    int64 last = list.get[int64](view values, 3) handle:
+        default -1
+    return "{first}:{middle}:{last}:{list.length[int64](view values)}"
+function words() returns string:
+    mutable list[string] values = list.insert_at[string](list("b", "c"), 0, "a")
+    values = list.remove_at[string](values, 1)
+    string first = list.get[string](view values, 0) handle:
+        default "missing"
+    string last = list.get[string](view values, 1) handle:
+        default "missing"
+    return "{first}:{last}"
+function binary() returns string:
+    mutable list[bytes] values = list.insert_at[bytes](list(bytes.from_string("A"), bytes.from_string("B")), 1, bytes.from_string("X"))
+    values = list.remove_at[bytes](values, 0)
+    bytes first = list.get[bytes](view values, 0) handle:
+        default bytes.new()
+    return bytes.to_hex(view first)
+function main() returns nothing:
+    println(numbers())
+    println(words())
+    println(binary())

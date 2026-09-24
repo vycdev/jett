@@ -274,6 +274,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/list_source_values.jett",
         ),
         ("list_sort", "../../tests/native/list_sort.jett"),
+        (
+            "list_insert_remove",
+            "../../tests/native/list_insert_remove.jett",
+        ),
         ("set_values", "../../tests/native/set_values.jett"),
         ("map_values", "../../tests/native/map_values.jett"),
         (

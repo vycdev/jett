@@ -2101,6 +2101,21 @@ leaves! {
 
     ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
+    ListInsertAt, jett_rt_v1_list_insert_at, false, (value: u64 => I64, index: i64 => I64, bits: u64 => I64), u64 => I64,
+        |s| { let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__insert_at: index out of bounds".as_slice());
+            let index = usize::try_from(index).map_err(|_| invalid)?;
+            let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            if index > list.elements.len() { return Err(invalid); }
+            list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+            list.elements.insert(index, Some(bits)); Ok(value) };
+    ListRemoveAt, jett_rt_v1_list_remove_at, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__remove_at: index out of bounds".as_slice());
+            let index = usize::try_from(index).map_err(|_| invalid)?;
+            let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let bits = list.elements.get(index).copied().flatten().ok_or(invalid)?;
+            if list.owned { s.drop_value(bits)?; }
+            s.lists.get_mut(&value).ok_or(INVALID_LIST)?.elements.remove(index);
+            Ok(value) };
     ListSort, jett_rt_v1_list_sort, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
         |s| s.sort_list(value, kind);
     ListSortByIndex, jett_rt_v1_list_sort_by_index, false, (value: u64 => I64, index: i64 => I64, kind: u32 => I32), u64 => I64,
@@ -2999,6 +3014,65 @@ mod tests {
             assert_eq!((values.lists_created, values.lists_destroyed), (2, 2));
             assert!(values.is_empty());
         }
+    }
+    #[test]
+    fn list_insert_remove_transfers_owned_elements_and_rejects_invalid_indices() {
+        let context = Context::new();
+        unsafe {
+            let first = jett_rt_v1_bytes_new(context.pointer());
+            let second = jett_rt_v1_bytes_new(context.pointer());
+            let list = jett_rt_v1_list_new(context.pointer(), 1);
+            assert_eq!(
+                jett_rt_v1_list_insert_at(context.pointer(), list, 0, first),
+                list
+            );
+            assert_eq!(
+                jett_rt_v1_list_insert_at(context.pointer(), list, 1, second),
+                list
+            );
+            assert_eq!(jett_rt_v1_list_remove_at(context.pointer(), list, 0), list);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.lists[&list].elements, vec![Some(second)]);
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 1));
+            drop(state);
+            jett_rt_v1_value_drop(context.pointer(), list);
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
+            assert!(values.is_empty());
+        }
+
+        let context = Context::new();
+        unsafe {
+            let list = jett_rt_v1_list_new(context.pointer(), 0);
+            assert_eq!(jett_rt_v1_list_append(context.pointer(), list, 7), list);
+            assert_eq!(jett_rt_v1_list_insert_at(context.pointer(), list, 2, 9), 0);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.lists[&list].elements, vec![Some(7)]);
+            assert!(values.failure.is_some());
+            drop(state);
+            jett_rt_v1_value_drop(context.pointer(), list);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+
+        let context = Context::new();
+        unsafe {
+            let list = jett_rt_v1_list_new(context.pointer(), 0);
+            assert_eq!(jett_rt_v1_list_append(context.pointer(), list, 7), list);
+            assert_eq!(jett_rt_v1_list_remove_at(context.pointer(), list, -1), 0);
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.lists[&list].elements, vec![Some(7)]);
+            assert!(values.failure.is_some());
+            drop(state);
+            jett_rt_v1_value_drop(context.pointer(), list);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
     }
     #[test]
     fn list_only_leak_fails_context_destruction() {
