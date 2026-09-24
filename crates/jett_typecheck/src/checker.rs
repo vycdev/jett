@@ -2885,8 +2885,10 @@ impl<'a> TypeChecker<'a> {
             Type::Refinement { base, .. } => self.native_json_source_supported(*base, visiting),
             Type::Enum(id) if self.interner.resolve_enum(*id).name == "json.JsonTree" => true,
             Type::Struct(id) => {
+                // A checked finite self-reference reuses the same source
+                // specialization; the remaining fields still decide support.
                 if !visiting.insert(ty) {
-                    return false;
+                    return true;
                 }
                 let supported =
                     self.interner
@@ -3034,8 +3036,9 @@ impl<'a> TypeChecker<'a> {
                 self.native_json_parse_source_supported_inner(*base, visiting)
             }
             Type::Struct(id) => {
+                // Source decode may recurse through the same finite struct.
                 if !visiting.insert(ty) {
-                    return false;
+                    return true;
                 }
                 let supported =
                     self.interner

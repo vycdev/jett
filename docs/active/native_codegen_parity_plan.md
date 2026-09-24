@@ -300,14 +300,20 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 154 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 155 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 154/182 (84.6%), a useful progress measure rather than a
+gate is currently 155/182 (85.2%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
+Self-recursive structs with a finite base and supported fields now specialize
+the source JSON serializer, parser, and exact validator. The eligibility walk
+accepts a revisited struct without skipping checks of its other fields, and
+the existing checked specialization cache keeps the generated call graph
+finite. A linked native/interpreter test round-trips a nested `Node` through
+`json.parse_exact`; `recursive_owned_values.jett` joins the object gate.
 Generic record helpers instantiated for aliases and other non-record kinds now
 emit an empty native builder that preserves handled construction failures.
 The checker also keeps the reflected source kind in scoped `comptime type`
@@ -427,7 +433,8 @@ retains that explicit unsupported boundary.
 The checked source JSON decoder now specializes concrete structs and aliases
 before its general reflection fallback. The recursive native parse gate accepts
 structs whose fields are already supported, including nested structs and
-collections, while retaining the refinement and recursive-type boundaries.
+collections, while retaining the refinement and recursive-type boundaries at
+that checkpoint.
 Linked native/interpreter cases cover renamed fields, nested and list values,
 alias targets and alias-typed fields, handled shape errors, and exact unknown
 fields. Seven more run-pass fixtures emit native objects, reaching 127/182;

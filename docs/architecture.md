@@ -2742,8 +2742,11 @@ secret local without allowing an implicit secret-to-public conversion.
 Widening a state-qualified machine local to a bare machine consumes the source
 unless it is cloned.
 Direct and field-level aliases take the source alias branch before
-construction, while refinement-validating and recursive structs stay outside
-this native path.
+construction. A self-recursive struct with supported fields remains eligible
+for source JSON serialization and parsing: the eligibility walk treats a
+revisited struct as an already checked edge, and checked function
+specializations form a finite recursive call graph. Refinement-validating
+construction remains outside this native path.
 The public compiler policy still runs before the source decoder.
 The interpreter handoff omits checked expression types at generic source spans
 whose concrete instantiations disagree, so a later unsigned instantiation

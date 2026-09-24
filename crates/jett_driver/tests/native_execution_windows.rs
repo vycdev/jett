@@ -515,6 +515,31 @@ fn native_alias_json_parse_matches_interpreter() {
 }
 
 #[test]
+fn native_recursive_struct_json_matches_interpreter() {
+    let source = include_str!("../../../tests/run_pass/recursive_owned_values.jett");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let source_path = directory.path().join("recursive_json.jett");
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\nfunction recursive_json_summary() returns string:\n    Node tail = Node(value: 1, next: none)\n    Node original = Node(value: 2, next: some(tail))\n    string encoded = json.serialize[Node](view original)\n    Node decoded = json.parse_exact[Node](encoded) handle error:\n        return error\n    Node next = decoded.next handle:\n        return \"missing next\"\n    return \"{{decoded.value}}:{{next.value}}:{{encoded}}\"\nfunction main() returns nothing:\n    println(recursive_json_summary())\n"
+        ),
+    )
+    .expect("write recursive JSON executable");
+    let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "2:1:{\"value\":2,\"next\":{\"value\":1,\"next\":null}}\n"
+    );
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&source_path, launcher(), &binary).expect("compile recursive JSON");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_uint64_checked_expression_dispatch_matches_interpreter() {
     let source =
         include_str!("../../../tests/run_pass/uint64_checked_expression_runtime_types.jett");

@@ -3724,6 +3724,11 @@ The compiler makes every JSON-data struct compatible with `json.serialize[Type](
 
 The LLM does not write parsing functions. The LLM does not import a serialization library. The compiler sees the struct definition and generates everything. For fields that need custom naming (e.g., mapping to camelCase APIs), Jett uses an inline `serialize` keyword on the field itself (see Custom Field Naming below) — not a separate annotation syntax.
 
+A self-recursive JSON-data struct uses the same `json.serialize`, `json.parse`,
+and `json.parse_exact` contracts as a non-recursive struct. Its finite base
+value ends runtime traversal; the source decoder and serializer may call their
+own checked specialization again for a nested value.
+
 **Using auto-generated serialization:**
 
 ```
