@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 137 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 138 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 137/182 (75.3%), a useful progress measure rather than a
-claim that 75.3% of the language has native support.
+gate is currently 138/182 (75.8%), a useful progress measure rather than a
+claim that 75.8% of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
 finish. This adds `type_construction_machine.jett` to the object gate; a linked
@@ -572,10 +572,15 @@ linked fixture checks direct secret parsing, closed-shape parsing, public
 omission of record and machine secrets, and handled exact-parse errors. Native
 MIR verification permits only the checked promotion from an inner local to its
 `secret` wrapper. This adds `json_parse_machine_envelope.jett` and
-`json_stdlib_bridge_delegation.jett` to the object gate. The current exhaustive
-Windows gate is 137/182 emitted objects, 23/30 main outcomes, 25/25 runtime
-contracts, and 182/182 typed lowerings. Raw `secret[json.JsonTree]`,
-refinements, and other JSON shapes remain.
+`json_stdlib_bridge_delegation.jett` to the object gate. That exhaustive
+Windows gate reached 137/182 emitted objects. A dedicated trusted `.jett` raw
+parser now returns `secret[json.JsonTree]` for both public parse spellings;
+`parse_exact` retains the raw tree's open-shape policy. The linked fixture
+checks successful and malformed input, and
+`json_parse_exact_secret_edges.jett` joins the object gate. The current
+exhaustive Windows gate is 138/182 emitted objects, 23/30 main outcomes,
+25/25 runtime contracts, and 182/182 typed lowerings. Refinements and other
+JSON shapes remain.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

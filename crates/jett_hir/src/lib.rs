@@ -2699,6 +2699,26 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 IntrinsicId::JsonParse | IntrinsicId::JsonParseExact
             ) && type_arguments.len() == 1
                 && lowered_args.len() == 1
+                && self.is_secret_raw_json_tree(type_arguments[0])
+            {
+                let Some(function) =
+                    self.trusted_stdlib_function("json", "json_parse_native_secret_tree")
+                else {
+                    self.parent
+                        .error(call_span, "trusted secret raw JSON source is missing");
+                    return None;
+                };
+                return Some(ExpressionKind::Call {
+                    function,
+                    args: lowered_args,
+                    evaluation_order,
+                });
+            }
+            if matches!(
+                intrinsic,
+                IntrinsicId::JsonParse | IntrinsicId::JsonParseExact
+            ) && type_arguments.len() == 1
+                && lowered_args.len() == 1
                 && let Some(name) = self.native_json_primitive_parser(type_arguments[0])
             {
                 let Some(function) = self.trusted_stdlib_function("json", name) else {
@@ -4222,6 +4242,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn is_raw_json_tree(&self, ty: TypeId) -> bool {
         matches!(self.parent.check.interner.resolve(ty), Type::Enum(id) if self.parent.check.interner.resolve_enum(*id).name == "json.JsonTree")
+    }
+
+    fn is_secret_raw_json_tree(&self, ty: TypeId) -> bool {
+        matches!(self.parent.check.interner.resolve(ty), Type::Secret(inner) if self.is_raw_json_tree(*inner))
     }
 
     fn native_json_primitive_parser(&self, ty: TypeId) -> Option<&'static str> {

@@ -515,8 +515,8 @@ The decoder now also reaches supported `secret[T]` values and secret-bearing
 record and machine fields. MIR verification accepts the checked promotion of
 an inner local to its secret wrapper while retaining the type-checker's
 prohibition on implicit secret exposure. Public record serialization omits
-direct secret fields. Raw `secret[json.JsonTree]` remains outside this source
-decoder path.
+direct secret fields. Raw `secret[json.JsonTree]` uses a dedicated trusted
+`.jett` parser with the same open-shape exact-parse policy as `JsonTree`.
 Reflected `comptime type` dispatch borrows its runtime `TypeInfo` selector.
 The runtime leaf derives a recursive structural identity, unwrapping aliases;
 native branches compare it with the checker-owned identity of each specialized

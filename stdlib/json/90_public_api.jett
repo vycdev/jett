@@ -97,3 +97,8 @@ function json_parse_native_nothing(raw: string) returns result[nothing, string]:
     if json_tree_is_null(view tree) == false:
         return fail("expected null, got {json_tree_kind(view tree)}")
     return ok(nothing)
+function json_parse_native_secret_tree(raw: string) returns result[secret[JsonTree], string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    secret[JsonTree] secret_tree = tree
+    return ok(secret_tree)
