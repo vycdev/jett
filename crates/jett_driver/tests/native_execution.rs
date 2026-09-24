@@ -158,6 +158,20 @@ fn native_json_enum_raw_source_matches_interpreter() {
 }
 
 #[test]
+fn native_json_pipeline_source_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_pipeline_source.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("json_pipeline_source");
+    build_host_executable(&fixture, &launcher(), &binary).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_list_source_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/list_source_values.jett");

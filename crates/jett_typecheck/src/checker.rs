@@ -9934,6 +9934,23 @@ impl<'a> TypeChecker<'a> {
             return_type,
         );
 
+        if let Some(name @ ("json.serialize" | "json.serialize_public")) = callee_name.as_deref()
+            && matches!(
+                self.interner.resolve(current_ty),
+                Type::Struct(_)
+                    | Type::Refinement { .. }
+                    | Type::Machine(_)
+                    | Type::MachineState { .. }
+                    | Type::List(_)
+                    | Type::Map(_, _)
+                    | Type::Optional(_)
+                    | Type::Result(_, _)
+            )
+            && self.native_json_source_supported(current_ty, &mut HashSet::new())
+        {
+            self.check_source_facade_instantiation(name, current_ty, step.span);
+        }
+
         if let Some(callee_name) = callee_name.as_deref()
             && tainted_return
             && Self::is_secret_liftable_call(callee_name, callee_is_pure)

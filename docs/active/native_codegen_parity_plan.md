@@ -300,13 +300,13 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 149 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 150 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 149/182 (81.9%), a useful progress measure rather than a
+gate is currently 150/182 (82.4%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
@@ -622,6 +622,12 @@ serialization, and unit comparisons. `json_enum_bitfield_exact_edges.jett` and
 `json_parse_collection_edges.jett` join the object gate. The current exhaustive
 Windows checkpoint is 149/182 objects, 23/30 main outcomes, 25/25 runtime
 contracts, and 182/182 typed lowerings.
+Pipeline calls to `json.serialize` and `json.serialize_public` now select the
+same checked source serializer as direct calls for supported structured types.
+A linked native/interpreter fixture covers both forms, and `pipeline_into.jett`
+joins the object gate. The current exhaustive Windows checkpoint is 150/182
+objects, 23/30 main outcomes, 25/25 runtime contracts, and 182/182 typed
+lowerings.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
