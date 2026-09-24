@@ -5,7 +5,7 @@ use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
 use jett_mir::{
     Function, Program, SequenceSource, Statement, StatementKind, Terminator, TerminatorKind,
 };
-use jett_types::{Type, TypeId, TypeInterner};
+use jett_types::{BitfieldFieldKind, Type, TypeId, TypeInterner};
 
 use crate::reachability::reachable_function_ids;
 use crate::{CodegenError, symbol_name};
@@ -54,6 +54,43 @@ fn native_constructible_struct(types: &TypeInterner, ty: TypeId) -> bool {
         .fields
         .iter()
         .all(|(_, field_ty)| !matches!(types.resolve(*field_ty), Type::Refinement { .. }))
+}
+
+fn native_constructible_bitfield(types: &TypeInterner, ty: TypeId) -> bool {
+    let Type::Bitfield(id) = types.resolve(ty) else {
+        return false;
+    };
+    types
+        .resolve_bitfield(*id)
+        .fields
+        .iter()
+        .all(|field| match field.kind {
+            BitfieldFieldKind::Bits { width } if width <= 64 => match types.resolve(field.ty) {
+                Type::Int64 | Type::Uint64 => true,
+                Type::Enum(enum_id) => types
+                    .resolve_enum(*enum_id)
+                    .variants
+                    .iter()
+                    .all(|variant| variant.fields.is_empty()),
+                _ => false,
+            },
+            BitfieldFieldKind::Payload => {
+                !matches!(types.resolve(field.ty), Type::Refinement { .. })
+            }
+            _ => false,
+        })
+}
+
+fn native_constructible_record(types: &TypeInterner, ty: TypeId) -> bool {
+    native_constructible_struct(types, ty) || native_constructible_bitfield(types, ty)
+}
+
+fn native_constructible_record_kind(types: &TypeInterner, ty: TypeId) -> Option<&'static str> {
+    match types.resolve(ty) {
+        Type::Struct(_) if native_constructible_struct(types, ty) => Some("struct"),
+        Type::Bitfield(_) if native_constructible_bitfield(types, ty) => Some("bitfield"),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1055,12 +1092,26 @@ impl Verifier<'_> {
                     return Ok(());
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructStart {
+                    let record_fields =
+                        type_arguments
+                            .first()
+                            .and_then(|ty| match self.types.resolve(*ty) {
+                                Type::Struct(id) => {
+                                    Some(("struct", self.types.resolve_struct(*id).fields.len()))
+                                }
+                                Type::Bitfield(id) => Some((
+                                    "bitfield",
+                                    self.types.resolve_bitfield(*id).fields.len(),
+                                )),
+                                _ => None,
+                            });
                     let valid = args.is_empty()
                         && type_arguments.len() == 1
-                        && matches!(self.types.resolve(type_arguments[0]), Type::Struct(id)
-                            if reflection_arguments.len() == self.types.resolve_struct(*id).fields.len() + 1)
-                        && reflection_arguments[0].kind == "struct"
-                        && native_constructible_struct(self.types, type_arguments[0])
+                        && record_fields.is_some_and(|(kind, count)| {
+                            reflection_arguments.len() == count + 1
+                                && reflection_arguments[0].kind == kind
+                        })
+                        && native_constructible_record(self.types, type_arguments[0])
                         && expression.ty == TypeInterner::TYPE_CONSTRUCTION;
                     return if valid {
                         Ok(())
@@ -1076,8 +1127,8 @@ impl Verifier<'_> {
                     let valid = args.len() == 3
                         && type_arguments.len() == 2
                         && reflection_arguments.len() == 2
-                        && reflection_arguments[0].kind == "struct"
-                        && native_constructible_struct(self.types, type_arguments[0])
+                        && native_constructible_record_kind(self.types, type_arguments[0])
+                            == Some(reflection_arguments[0].kind.as_str())
                         && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
                         && matches!(self.types.resolve(args[1].ty), Type::Struct(id)
                             if self.types.resolve_struct(*id).name == "TypeField")
@@ -1098,8 +1149,8 @@ impl Verifier<'_> {
                     let valid = args.len() == 1
                         && type_arguments.len() == 1
                         && reflection_arguments.len() == 1
-                        && reflection_arguments[0].kind == "struct"
-                        && native_constructible_struct(self.types, type_arguments[0])
+                        && native_constructible_record_kind(self.types, type_arguments[0])
+                            == Some(reflection_arguments[0].kind.as_str())
                         && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
                         && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
                             if *ok == type_arguments[0] && *err == TypeInterner::STRING);

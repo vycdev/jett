@@ -2848,7 +2848,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 && type_arguments.len() == 1
                 && reflection_arguments
                     .first()
-                    .is_some_and(|info| info.kind == "struct")
+                    .is_some_and(|info| matches!(info.kind.as_str(), "struct" | "bitfield"))
             {
                 let Some(fields) = self
                     .parent

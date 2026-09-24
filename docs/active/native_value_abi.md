@@ -480,7 +480,7 @@ metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;
 alias and non-machine total probes produce empty values.
 Native `TypeConstruction` is a move-only handle backed by a partially filled
-owned struct record and checked field layout metadata. The HIR handoff keeps
+owned record and checked field layout metadata. The HIR handoff keeps
 each field's source type spelling alongside its canonical value type, so
 alias-typed fields validate against reflected metadata without weakening the
 provided value check. `construct_put` borrows
@@ -490,8 +490,10 @@ put transfers the builder through the result. `construct_finish` checks the
 owner and every required field, then transfers the completed record into its
 result or drops the incomplete builder on a handled error. Deep cloning copies
 both populated fields and builder metadata. Context destruction checks that
-no builder metadata or owned fields remain. Only concrete structs without
-refinement-validating construction use this native path so far.
+no builder metadata or owned fields remain. Concrete structs without
+refinement-validating construction and bitfields with supported integer or
+unit-enum bit fields use this path. Bitfield finish checks widths and reports
+handled errors for out-of-range values; enum and machine builders remain open.
 The checked `.jett` JSON decoder now reaches that builder for supported
 concrete structs. It selects the struct or alias branch before unrelated
 generic decoder bodies, so direct aliases decode through their base struct

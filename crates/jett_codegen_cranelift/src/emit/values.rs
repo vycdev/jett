@@ -849,14 +849,32 @@ impl Translator<'_, '_> {
         reflection_arguments: &[ReflectionTypeInfo],
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
-        let Type::Struct(id) = self.types.resolve(owner) else {
-            return Err(self.unsupported(span, "reflected construction owner"));
+        let fields = match self.types.resolve(owner) {
+            Type::Struct(id) => self
+                .types
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), *ty))
+                .collect::<Vec<_>>(),
+            Type::Bitfield(id) => self
+                .types
+                .resolve_bitfield(*id)
+                .fields
+                .iter()
+                .map(|field| (field.name.clone(), field.ty))
+                .collect::<Vec<_>>(),
+            _ => return Err(self.unsupported(span, "reflected construction owner")),
         };
-        let fields = &self.types.resolve_struct(*id).fields;
         if reflection_arguments.len() != fields.len() + 1 {
             return Err(self.unsupported(span, "checked construction field metadata"));
         }
-        let mut layout = b"JC\x02".to_vec();
+        let bitfield = matches!(self.types.resolve(owner), Type::Bitfield(_));
+        let mut layout = if bitfield {
+            b"JC\x03".to_vec()
+        } else {
+            b"JC\x02".to_vec()
+        };
         fn encode_name(layout: &mut Vec<u8>, name: &str) -> Result<(), CodegenError> {
             let length = u32::try_from(name.len()).map_err(|_| {
                 CodegenError::Backend("reflected construction name is too long".into())
@@ -873,6 +891,34 @@ impl Translator<'_, '_> {
             encode_name(&mut layout, name)?;
             encode_name(&mut layout, &field_info.type_name)?;
             encode_name(&mut layout, &self.types.type_name(*field_ty))?;
+        }
+        if let Type::Bitfield(id) = self.types.resolve(owner) {
+            for field in &self.types.resolve_bitfield(*id).fields {
+                match field.kind {
+                    BitfieldFieldKind::Payload => layout.push(0),
+                    BitfieldFieldKind::Bits { width } => {
+                        let kind = match self.types.resolve(field.ty) {
+                            Type::Int64 => 1,
+                            Type::Uint64 => 2,
+                            Type::Enum(_) => 3,
+                            _ => return Err(self.unsupported(span, "reflected bitfield field")),
+                        };
+                        layout.push(kind);
+                        layout.extend_from_slice(&u32::from(width).to_le_bytes());
+                        if let Type::Enum(enum_id) = self.types.resolve(field.ty) {
+                            let definition = self.types.resolve_enum(*enum_id);
+                            encode_name(&mut layout, &definition.name)?;
+                            let count = u32::try_from(definition.variants.len())
+                                .map_err(|_| self.unsupported(span, "bitfield enum variants"))?;
+                            layout.extend_from_slice(&count.to_le_bytes());
+                            for variant in &definition.variants {
+                                encode_name(&mut layout, &variant.name)?;
+                                layout.extend_from_slice(&variant.discriminant.to_le_bytes());
+                            }
+                        }
+                    }
+                }
+            }
         }
         let (pointer, length) = self.static_data(&layout)?;
         let builder = self.leaf(NativeLeaf::BuilderNew, &[pointer, length], true)?;

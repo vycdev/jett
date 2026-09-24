@@ -187,6 +187,14 @@ struct NativeBuilderInfo {
     field_names: Vec<String>,
     field_type_names: Vec<String>,
     field_types: Vec<String>,
+    validation: Vec<BuilderFieldValidation>,
+}
+#[derive(Clone)]
+enum BuilderFieldValidation {
+    None,
+    SignedBits(u32),
+    UnsignedBits(u32),
+    EnumBits(u32, String, Vec<(String, i64)>),
 }
 struct NativeList {
     elements: Vec<Option<u64>>,
@@ -1457,7 +1465,12 @@ impl NativeValues {
             bytes: layout,
             position: 0,
         };
-        if cursor.take(3).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)? != b"JC\x02" {
+        let version: [u8; 3] = cursor
+            .take(3)
+            .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+            .try_into()
+            .expect("three bytes");
+        if !matches!(&version, b"JC\x02" | b"JC\x03") {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
         let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
@@ -1483,6 +1496,50 @@ impl NativeValues {
             field_type_names.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
             field_types.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
         }
+        let mut validation = Vec::new();
+        validation.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        if &version == b"JC\x03" {
+            for _ in 0..count {
+                let kind = cursor.byte().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let rule = match kind {
+                    0 => BuilderFieldValidation::None,
+                    1 | 2 | 3 => {
+                        let width = cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                        if width > 64 {
+                            return Err(INVALID_CONSTRUCTION_LAYOUT);
+                        }
+                        match kind {
+                            1 => BuilderFieldValidation::SignedBits(width),
+                            2 => BuilderFieldValidation::UnsignedBits(width),
+                            _ => {
+                                let name =
+                                    cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                                let variants = usize::try_from(
+                                    cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?,
+                                )
+                                .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                                if variants > layout.len() {
+                                    return Err(INVALID_CONSTRUCTION_LAYOUT);
+                                }
+                                let mut values = Vec::new();
+                                values.try_reserve_exact(variants).map_err(|_| EXHAUSTED)?;
+                                for _ in 0..variants {
+                                    values.push((
+                                        cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?,
+                                        cursor.i64().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?,
+                                    ));
+                                }
+                                BuilderFieldValidation::EnumBits(width, name, values)
+                            }
+                        }
+                    }
+                    _ => return Err(INVALID_CONSTRUCTION_LAYOUT),
+                };
+                validation.push(rule);
+            }
+        } else {
+            validation.resize(count, BuilderFieldValidation::None);
+        }
         if cursor.position != layout.len() {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
@@ -1494,6 +1551,7 @@ impl NativeValues {
                 field_names,
                 field_type_names,
                 field_types,
+                validation,
             },
         );
         Ok(id)
@@ -1647,6 +1705,58 @@ impl NativeValues {
                 0,
                 false,
             );
+        }
+        for (index, rule) in info.validation.iter().enumerate() {
+            let bits = self.struct_field(builder, index as u64)?.bits;
+            let field_name = &info.field_names[index];
+            let bitfield_name = &info.owner;
+            let message = match rule {
+                BuilderFieldValidation::None => None,
+                BuilderFieldValidation::SignedBits(width) => {
+                    let value = bits as i64;
+                    let max = if *width == 64 {
+                        u64::MAX
+                    } else {
+                        (1_u64 << width) - 1
+                    };
+                    (value < 0 || bits > max).then(|| format!(
+                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{value}'"
+                    ))
+                }
+                BuilderFieldValidation::UnsignedBits(width) => {
+                    let max = if *width == 64 {
+                        u64::MAX
+                    } else {
+                        (1_u64 << width) - 1
+                    };
+                    (bits > max).then(|| format!(
+                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{bits}'"
+                    ))
+                }
+                BuilderFieldValidation::EnumBits(width, enum_name, variants) => {
+                    let tag = usize::try_from(self.struct_field(bits, 0)?.bits)
+                        .map_err(|_| INVALID_CONSTRUCTION)?;
+                    let (variant_name, discriminant) =
+                        variants.get(tag).ok_or(INVALID_CONSTRUCTION)?;
+                    if *discriminant < 0 {
+                        Some(format!(
+                            "enum '{enum_name}.{variant_name}' has negative discriminant {discriminant}"
+                        ))
+                    } else {
+                        let max = if *width == 64 {
+                            u64::MAX
+                        } else {
+                            (1_u64 << width) - 1
+                        };
+                        ((*discriminant as u64) > max).then(|| format!(
+                            "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold enum variant '{enum_name}.{variant_name}'"
+                        ))
+                    }
+                }
+            };
+            if let Some(message) = message {
+                return self.builder_failure(message, builder, 0, false);
+            }
         }
         let result = self.sum(SUM_SUCCESS, builder, true)?;
         self.builders.remove(&builder);
