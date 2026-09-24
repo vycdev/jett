@@ -2701,7 +2701,7 @@ move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
 reflection/JSON, actors/tasks, other capabilities, and clean Windows release
 verification are not established by this slice.
 Native JSON parsing now checks and emits the stdlib decoder for lists,
-string-keyed maps, and optionals recursively composed of supported primitive
+string-keyed maps, optionals, and results recursively composed of supported primitive
 leaves. The public compiler policy still runs before the source decoder.
 The fixture counts above are unchanged because remaining JSON shapes block
 their run-pass objects.

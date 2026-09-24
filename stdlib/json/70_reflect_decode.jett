@@ -56,6 +56,8 @@ function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, str
         return json_decode_tree_map_reflected[T](view raw)
     else if kind == TypeKind.optional_type:
         return json_decode_tree_optional_reflected[T](view raw)
+    else if kind == TypeKind.result_type:
+        return json_decode_tree_result_reflected[T](view raw)
     else if kind == TypeKind.primitive_type:
         return json_decode_tree_checked_primitive[T](view raw)
     else:
@@ -360,17 +362,17 @@ function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeObj
         return fail("expected result object with key 'ok' or 'fail'")
     return ok(JsonTreeObjectField(key: key, value: value))
 function json_decode_tree_result_reflected[T](view raw: JsonTree) returns result[T, string]:
-    JsonTreeObjectField payload = json_tree_result_payload(view raw) handle error:
-        return fail(error)
-    if payload.key == "ok":
-        comptime type Ok = type.arg[T](0):
-            Ok item = json_decode_tree_reflected[Ok](view payload.value) handle error:
-                return fail("ok: {error}")
-            return ok(ok(item))
     comptime type Err = type.arg[T](1):
-        Err failure = json_decode_tree_reflected[Err](view payload.value) handle error:
-            return fail("fail: {error}")
-        return ok(fail(failure))
+        comptime type Ok = type.arg[T](0):
+            JsonTreeObjectField payload = json_tree_result_payload(view raw) handle error:
+                return fail(error)
+            if payload.key == "ok":
+                Ok item = json_decode_tree_reflected[Ok](view payload.value) handle error:
+                    return fail("ok: {error}")
+                return ok(ok(item))
+            Err failure = json_decode_tree_reflected[Err](view payload.value) handle error:
+                return fail("fail: {error}")
+            return ok(fail(failure))
 function json_decode_tree_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
     if json_tree_is_string(view raw) == true:
         return json_decode_tree_enum_string_reflected[T](view raw, type_name)

@@ -2912,6 +2912,10 @@ impl<'a> TypeChecker<'a> {
                 self.native_json_parse_source_supported(*value)
             }
             Type::Optional(inner) => self.native_json_parse_source_supported(*inner),
+            Type::Result(ok, err) => {
+                self.native_json_parse_source_supported(*ok)
+                    && self.native_json_parse_source_supported(*err)
+            }
             _ => false,
         }
     }
@@ -11696,7 +11700,7 @@ impl<'a> TypeChecker<'a> {
             && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
             && matches!(
                 self.interner.resolve(*value_ty),
-                Type::List(_) | Type::Map(_, _) | Type::Optional(_)
+                Type::List(_) | Type::Map(_, _) | Type::Optional(_) | Type::Result(_, _)
             )
             && self.native_json_parse_source_supported(*value_ty)
         {

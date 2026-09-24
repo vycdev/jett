@@ -129,17 +129,17 @@ function json_validate_exact_optional_reflected[T](view raw: JsonTree) returns r
     comptime type Inner = type.arg[T](0):
         return json_validate_exact_reflected[Inner](view raw)
 function json_validate_exact_result_reflected[T](view raw: JsonTree) returns result[nothing, string]:
-    JsonTreeObjectField payload = json_tree_result_payload(view raw) handle error:
-        return fail(error)
-    if payload.key == "ok":
-        comptime type Ok = type.arg[T](0):
-            nothing checked = json_validate_exact_reflected[Ok](view payload.value) handle error:
-                return fail("ok: {error}")
-            return ok(nothing)
     comptime type Err = type.arg[T](1):
-        nothing checked = json_validate_exact_reflected[Err](view payload.value) handle error:
-            return fail("fail: {error}")
-        return ok(nothing)
+        comptime type Ok = type.arg[T](0):
+            JsonTreeObjectField payload = json_tree_result_payload(view raw) handle error:
+                return fail(error)
+            if payload.key == "ok":
+                nothing checked = json_validate_exact_reflected[Ok](view payload.value) handle error:
+                    return fail("ok: {error}")
+                return ok(nothing)
+            nothing checked = json_validate_exact_reflected[Err](view payload.value) handle error:
+                return fail("fail: {error}")
+            return ok(nothing)
 function json_validate_exact_enum_reflected[T](view raw: JsonTree, type_name: string) returns result[nothing, string]:
     if json_tree_is_string(view raw) == true:
         return json_validate_exact_enum_string_reflected[T](view raw, type_name)
