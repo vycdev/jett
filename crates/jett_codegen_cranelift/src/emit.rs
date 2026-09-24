@@ -1358,8 +1358,16 @@ impl Translator<'_, '_> {
             ExpressionKind::StructConstruct {
                 fields,
                 evaluation_order,
+                validates_refinements,
                 ..
-            } => self.construct_struct(fields, evaluation_order, expression.span),
+            } => {
+                let record = self.construct_struct(fields, evaluation_order, expression.span)?;
+                if *validates_refinements {
+                    self.construct_sum_value(true, record, expression.span)
+                } else {
+                    Ok(record)
+                }
+            }
             ExpressionKind::BitfieldConstruct {
                 fields,
                 evaluation_order,

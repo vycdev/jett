@@ -494,6 +494,46 @@ fn native_alias_construction_matches_interpreter() {
 }
 
 #[test]
+fn native_refined_struct_builder_matches_interpreter() {
+    let source = include_str!("../../../tests/run_pass/type_construction_builder.jett");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let source_path = directory.path().join("refined_struct_builder.jett");
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\nfunction main() returns nothing:\n    println(clone_user_by_reflection(), clone_generic_box_by_reflection(), clone_refined_user_by_reflection(), missing_field_message(), duplicate_field_message(), mismatched_metadata_message(), mismatched_finish_target_message())\n"
+        ),
+    )
+    .expect("write reflected builder executable");
+    let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&source_path, launcher(), &binary)
+        .expect("compile reflected builder executable");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_refined_struct_base_value_requires_predicate_lowering() {
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let source_path = directory.path().join("refined_struct_base.jett");
+    std::fs::write(
+        &source_path,
+        "namespace test\ntype NonEmpty = string where string.char_count(value) > 0\nstruct User:\n    name: NonEmpty\nfunction main() returns nothing:\n    string raw = \"Ada\"\n    User user = User(name: raw) handle error:\n        return nothing\n    println(coarsen user.name)\n",
+    )
+    .expect("write base-value constructor fixture");
+    let binary = directory.path().join("program.exe");
+    let error = build_host_executable(&source_path, launcher(), &binary)
+        .expect_err("base-value field still requires predicate lowering");
+    assert!(
+        format!("{error:?}").contains("struct refinement validation from a base value"),
+        "unexpected native error: {error:?}"
+    );
+}
+
+#[test]
 fn native_alias_json_parse_matches_interpreter() {
     let source = include_str!("../../../tests/run_pass/reflection_type_id_duplicate_aliases.jett");
     let directory = tempfile::tempdir().expect("isolated execution directory");

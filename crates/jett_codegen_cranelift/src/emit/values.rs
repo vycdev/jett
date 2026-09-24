@@ -309,6 +309,14 @@ impl Translator<'_, '_> {
         } else {
             LoweredValue::Nothing
         };
+        self.construct_sum_value(success, value, span)
+    }
+    pub(super) fn construct_sum_value(
+        &mut self,
+        success: bool,
+        value: LoweredValue,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
         let (bits, owned) = self.payload_bits(value);
         let tag = self
             .builder

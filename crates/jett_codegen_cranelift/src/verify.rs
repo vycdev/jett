@@ -1680,19 +1680,24 @@ impl Verifier<'_> {
                 ..
             } => {
                 if *validates_refinements {
-                    return Err(self.unsupported(
+                    let valid_result = matches!(self.types.resolve(expression.ty),
+                        Type::Result(ok, err) if *ok == *struct_type && *err == TypeInterner::STRING);
+                    if !valid_result {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "refinement-validating struct construction must return result[Struct, string]",
+                        ));
+                    }
+                } else {
+                    self.require_same_type(
                         function,
                         expression.span,
-                        "struct refinement validation",
-                    ));
+                        *struct_type,
+                        expression.ty,
+                        "struct construction type mismatch",
+                    )?;
                 }
-                self.require_same_type(
-                    function,
-                    expression.span,
-                    *struct_type,
-                    expression.ty,
-                    "struct construction type mismatch",
-                )?;
                 let Type::Struct(id) = self.types.resolve(*struct_type) else {
                     return Err(self.expression_kind_error(
                         function,
@@ -1701,6 +1706,17 @@ impl Verifier<'_> {
                     ));
                 };
                 let layout = &self.types.resolve_struct(*id).fields;
+                if *validates_refinements
+                    && !layout
+                        .iter()
+                        .any(|(_, ty)| matches!(self.types.resolve(*ty), Type::Refinement { .. }))
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "refinement-validating struct has no refinement field",
+                    ));
+                }
                 if fields.len() != layout.len() {
                     return Err(self.contract_error(
                         function,
@@ -1710,6 +1726,19 @@ impl Verifier<'_> {
                 }
                 for (field, (_, ty)) in fields.iter().zip(layout) {
                     self.expression(function, field)?;
+                    // An exact refinement value passed its predicate at the
+                    // earlier boundary. Base values still need native predicate
+                    // invocation and must not silently acquire that type.
+                    if *validates_refinements
+                        && matches!(self.types.resolve(*ty), Type::Refinement { .. })
+                        && field.ty != *ty
+                    {
+                        return Err(self.unsupported(
+                            function,
+                            field.span,
+                            "struct refinement validation from a base value",
+                        ));
+                    }
                     self.require_same_type(
                         function,
                         field.span,

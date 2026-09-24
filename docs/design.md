@@ -524,6 +524,10 @@ User user = User(name: name, email: email, age: age) handle error:
     return fail("invalid user data: {error}")
 ```
 
+A field that already has its refinement type carries the established invariant
+into the struct constructor. The constructor still has the same fallible result
+type and `handle` requirement.
+
 **Refinement type constraints must be self-contained.** The `where` clause can only reference `value` (the value being constrained) and call pure functions with literal or constant arguments. Constraints cannot take external parameters — there is no `type Password[min: int64] = string where string.char_count(value) > min`. This keeps `[]` unambiguous: it always means generics, never parameterized constraints.
 
 **For parameterized validation, use functions.** If validation rules depend on runtime values (e.g., a minimum password length from config), write a regular function that returns `result[T, string]`:
