@@ -108,6 +108,7 @@ fn expression(expr: &mut Expression, values: &HashMap<Span, Value>) {
         | E::OptionalSome(value)
         | E::Declassify(value)
         | E::Coarsen(value)
+        | E::RefinementValidated(value)
         | E::StateIs { value, .. }
         | E::Run(value)
         | E::Join(value)

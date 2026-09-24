@@ -281,7 +281,7 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics, direct Unicode-scalar string iteration, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, scalar `for` loops, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machine construction, transitions, state tests and state fields; transparent secret/refinement representation and explicit `coarsen`; validating refinements pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte roundtrip; machine state narrowing, transitions and owned payload cleanup covered; width validation, payload-enum equality and validating refinements pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, and base-value refinement predicates; struct-field and secret-backed refinement validation pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus unit-enum equality; bitfield field ownership, clone and byte roundtrip; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer and owned-string refinements; width validation, payload-enum equality and broader refinement boundaries pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive and indexed-row list sorting, sortedness checks and sets, and primitive-key maps with owned values | compiled list access, reverse/repeat, scalar iteration and sort; stable `list.sort_by` and `list.group_by` with named callbacks; indexed-row sorting and sortedness for interpreter-supported key types; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; borrowed iteration through nested struct-field collection paths; one contextual generic empty-list path covered; other projected views, collection shape conversions, refinements, and callback helpers pending |
 | Numeric aggregates | covered | `math.average` and `math.median` for `list[int64]`, `list[uint64]`, and `list[float64]` | native/interpreter differential fixtures cover all three element types and overflow-safe floating-point extremes; empty-list error contract covered |
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 108 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 109 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 108/182 (59.3%), a useful progress measure rather than a
-claim that 59.3% of the language has native support.
+gate is currently 109/182 (59.9%), a useful progress measure rather than a
+claim that 59.9% of the language has native support.
 Active `type.variant_value` selection matches native/interpreter output for
 payload and empty variants. Reflected `type.field_value` and
 `type.variant_field_value` now read checked struct, bitfield, and enum payload
@@ -340,7 +340,7 @@ The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 108. Four string/comptime fixtures began emitting
+unmarked row and now proves 109. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -352,6 +352,13 @@ adds one object and native `main`; primitive list sort adds
 Scoped breakpoint bindings add `breakpoint_basic.jett` to both native object
 and linked `main` gates; multi-binding and non-`int64` breakpoint values remain
 explicitly unsupported.
+Compiler-owned predicate functions and CFG lowering for base-value refinement
+boundaries add `integer_nonzero_proofs.jett` to the native object gate. The
+native/interpreter fixture covers ordered ancestor predicates, false-result
+messages, owned-string cleanup, and successful transfers. The remaining
+refinement fixtures advance to JSON intrinsics or primitive-backed sets;
+predicate runtime failures, secret-backed inputs, already-refined inputs, and
+refinement validation inside struct construction remain pending.
 Checked integer/float conversion adds `conversions.jett`.
 Native empty `list[never]` length/emptiness support adds `list_operations.jett`.
 Borrowed enum matching, explicit view-to-owner cloning at direct calls, and
@@ -427,8 +434,8 @@ native bitfield fixture compares the decoded enum field twice before using its
 parent again. General owning projection of move-only fields remains guarded.
 Native arithmetic now accepts a nonzero refinement as the right operand of
 integer division or modulo when its base matches the left operand. This is
-covered by an object-emission test; `integer_nonzero_proofs.jett` still needs
-native refinement-handler control flow before its full object can emit.
+covered by an object-emission test and the now-emitting
+`integer_nonzero_proofs.jett` fixture.
 Fixed-width bitfield values, collection payload ownership and byte roundtrips
 also pass a dedicated native/interpreter fixture, including network order,
 native order, enum discriminants, trailing payload bytes, decode errors and

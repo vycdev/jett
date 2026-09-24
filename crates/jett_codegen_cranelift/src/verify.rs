@@ -1806,6 +1806,25 @@ impl Verifier<'_> {
                     Err(self.expression_kind_error(function, expression, "coarsen"))
                 }
             }
+            ExpressionKind::RefinementValidated(value) => {
+                self.expression(function, value)?;
+                let mut current = expression.ty;
+                let mut valid = false;
+                while let Type::Refinement { base, .. } = self.types.resolve(current) {
+                    if *base == value.ty
+                        || matches!(self.types.resolve(*base), Type::Secret(inner) if *inner == value.ty)
+                    {
+                        valid = true;
+                        break;
+                    }
+                    current = *base;
+                }
+                if valid {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "validated refinement"))
+                }
+            }
             ExpressionKind::StateIs { value, state } => {
                 self.expression(function, value)?;
                 let machine = match self.types.resolve(value.ty) {

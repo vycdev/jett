@@ -25,6 +25,7 @@ pub fn symbol_name(
         DeclarationKind::Function => 'f',
         DeclarationKind::Method => 'm',
         DeclarationKind::ActorHandler => 'h',
+        DeclarationKind::RefinementPredicate => 'r',
     });
     canonical.push_str(&identity.type_arguments.len().to_string());
     canonical.push('_');

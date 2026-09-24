@@ -12,7 +12,9 @@ pub(crate) fn reachable_function_ids(program: &Program) -> Result<Vec<FunctionId
     let mut pending = Vec::new();
 
     for function in &program.functions {
-        if matches!(function.identity.declaration.origin, SourceOrigin::Project) {
+        if matches!(function.identity.declaration.origin, SourceOrigin::Project)
+            && function.identity.declaration.kind != hir::DeclarationKind::RefinementPredicate
+        {
             mark_reachable(
                 program,
                 function.id,
@@ -252,6 +254,7 @@ fn collect_expression_references(
         | ExpressionKind::Comptime(value)
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
+        | ExpressionKind::RefinementValidated(value)
         | ExpressionKind::Run(value)
         | ExpressionKind::Join(value)
         | ExpressionKind::Cancel(value)

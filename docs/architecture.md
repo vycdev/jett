@@ -817,7 +817,12 @@ markers are also covered. Bitfield and state-machine construction, transitions,
 and fields carry explicit checked types plus dense field/state IDs. Native
 `coarsen` verifies a checked refinement ancestor and transfers its base
 representation, including ownership of aggregate payloads, without a wrapper.
-Fallible refinement construction still requires native predicate lowering.
+For base-value refinement boundaries, HIR now lowers each checked predicate to
+a compiler-owned pure function. MIR calls ancestor predicates in base-first
+order and branches to the source `handle error` block on a false result;
+successful construction transfers the original value through an explicit
+validated-refinement expression. Predicate runtime failures, already-refined
+or secret-backed inputs, and validating struct fields remain future slices.
 Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
 lexical evaluation order after type checking has authorized them. The shared
 registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,

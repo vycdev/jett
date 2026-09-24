@@ -460,6 +460,7 @@ fn visit(
         }
         ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
+        | ExpressionKind::RefinementValidated(value)
         | ExpressionKind::Unary { value, .. } => {
             visit(value, reads, temporaries, types, program, false)?
         }

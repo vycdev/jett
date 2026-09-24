@@ -1343,6 +1343,7 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::Declassify(value) => self.expression(value),
             ExpressionKind::Coarsen(value) => self.expression(value),
+            ExpressionKind::RefinementValidated(value) => self.expression(value),
             ExpressionKind::StateIs { value, state } => {
                 let borrowed = self.argument(value, true)?;
                 let machine = self.scalar(borrowed, value.span)?;

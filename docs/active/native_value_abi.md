@@ -191,6 +191,14 @@ return owned digests; the interpreter and native runtime use
 the same SHA-256, SHA-512, MD5, and HMAC-SHA-256 kernels behind public `.jett`
 wrappers. The HMAC result retains its secret type in MIR and native ownership.
 
+At a base-value refinement `handle error` boundary, HIR supplies one checked
+predicate function per refinement ancestor. MIR calls them in base-first order
+with a clone of the candidate, branches on each result, and transfers the
+candidate into the refined output only after all predicates pass. A false
+result creates the interpreter's type-specific error string and enters the
+source failure block. Predicate evaluation failures and secret-backed or
+already-refined inputs still require native parity work.
+
 ## Result and optional ownership and handlers
 
 Native sums have separate context-associated, move-only handles. Their internal

@@ -187,6 +187,7 @@ impl BackendTypeValidator<'_> {
             | ExpressionKind::Comptime(value)
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
+            | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value)
@@ -296,11 +297,23 @@ impl BackendTypeValidator<'_> {
             } => {
                 self.expression(target, function_name);
                 match kind {
-                    HandleKind::Refinement { refined_type } => self.type_id(
-                        *refined_type,
-                        expression.span,
-                        format!("function `{function_name}` refinement handle target"),
-                    ),
+                    HandleKind::Refinement {
+                        refined_type,
+                        predicates,
+                    } => {
+                        self.type_id(
+                            *refined_type,
+                            expression.span,
+                            format!("function `{function_name}` refinement handle target"),
+                        );
+                        for predicate in predicates {
+                            self.type_id(
+                                predicate.refined_type,
+                                expression.span,
+                                format!("function `{function_name}` refinement predicate type"),
+                            );
+                        }
+                    }
                     HandleKind::Result | HandleKind::Optional => {}
                 }
                 self.block(failure, function_name);

@@ -321,6 +321,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/numeric_conversions.jett",
         ),
         (
+            "refinement_validation",
+            "../../tests/native/refinement_validation.jett",
+        ),
+        (
             "empty_never_list",
             "../../tests/native/empty_never_list.jett",
         ),

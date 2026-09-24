@@ -19,7 +19,7 @@ use jett_typecheck::{
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
     ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,
-    ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId,
+    ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId, TypeInterner,
 };
 
 mod type_validation;
@@ -91,6 +91,7 @@ pub enum DeclarationKind {
     Function,
     Method,
     ActorHandler,
+    RefinementPredicate,
 }
 
 /// One concrete in-memory function identity. Type arguments and checked
@@ -327,6 +328,8 @@ pub enum ExpressionKind {
     Comptime(Box<Expression>),
     Declassify(Box<Expression>),
     Coarsen(Box<Expression>),
+    /// Compiler-owned conversion after every required refinement predicate passed.
+    RefinementValidated(Box<Expression>),
     StateIs {
         value: Box<Expression>,
         state: StateId,
@@ -360,11 +363,22 @@ pub enum ExpressionKind {
     Clone(Box<Expression>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandleKind {
     Result,
     Optional,
-    Refinement { refined_type: TypeId },
+    Refinement {
+        refined_type: TypeId,
+        predicates: Vec<RefinementPredicate>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefinementPredicate {
+    pub refined_type: TypeId,
+    pub type_name: String,
+    pub function: FunctionId,
+    pub input_type: TypeId,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -635,6 +649,7 @@ impl Validator<'_> {
             | ExpressionKind::Comptime(value)
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
+            | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value) => self.expression(value),
@@ -713,11 +728,22 @@ impl Validator<'_> {
             }
             ExpressionKind::Handle {
                 target,
+                kind,
                 error_local,
                 failure,
                 ..
             } => {
                 self.expression(target);
+                if let HandleKind::Refinement { predicates, .. } = kind {
+                    for predicate in predicates {
+                        if predicate.function.index() as usize >= self.program.functions.len() {
+                            self.error(
+                                expression.span,
+                                "refinement predicate is outside HIR function table",
+                            );
+                        }
+                    }
+                }
                 if let Some(local) = error_local {
                     self.check_local(*local, expression.span);
                 }
@@ -812,6 +838,13 @@ struct ActorHandlerSource<'a> {
     message_index: usize,
 }
 
+struct RefinementSource<'a> {
+    id: FunctionId,
+    definition: DefId,
+    alias: &'a ast::TypeAlias,
+    ty: TypeId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FunctionKey {
     Definition {
@@ -831,6 +864,8 @@ struct Lowerer<'a> {
     origins: &'a HashMap<FileId, SourceOrigin>,
     functions: Vec<FunctionSource<'a>>,
     actor_handlers: Vec<ActorHandlerSource<'a>>,
+    refinement_sources: Vec<RefinementSource<'a>>,
+    refinement_function_ids: HashMap<TypeId, FunctionId>,
     function_ids: HashMap<FunctionKey, FunctionId>,
     errors: Vec<LowerError>,
 }
@@ -849,6 +884,8 @@ impl<'a> Lowerer<'a> {
             origins,
             functions: Vec::new(),
             actor_handlers: Vec::new(),
+            refinement_sources: Vec::new(),
+            refinement_function_ids: HashMap::new(),
             function_ids: HashMap::new(),
             errors: Vec::new(),
         }
@@ -866,6 +903,12 @@ impl<'a> Lowerer<'a> {
         let actor_handlers = std::mem::take(&mut self.actor_handlers);
         for source in actor_handlers {
             if let Some(function) = self.lower_actor_handler(source) {
+                functions.push(function);
+            }
+        }
+        let refinement_sources = std::mem::take(&mut self.refinement_sources);
+        for source in refinement_sources {
+            if let Some(function) = self.lower_refinement_predicate(source) {
                 functions.push(function);
             }
         }
@@ -1006,6 +1049,42 @@ impl<'a> Lowerer<'a> {
                     message_index,
                 });
             }
+        }
+        for item in &self.module.items {
+            let Item::TypeAlias(alias) = item else {
+                continue;
+            };
+            if alias.constraint.is_none() {
+                continue;
+            }
+            let Some(definition) = self.definition_at(alias.name.span, DefKind::Type) else {
+                self.error(alias.name.span, "refinement has no resolved definition");
+                continue;
+            };
+            let declared = self.resolve.scope_table.def(definition);
+            let canonical = match &declared.namespace {
+                Some(namespace) if !namespace.is_empty() => {
+                    format!("{namespace}.{}", alias.name.name)
+                }
+                _ => alias.name.name.clone(),
+            };
+            let Some(ty) = self.check.interner.type_ids().find(|id| {
+                matches!(self.check.interner.resolve(*id), Type::Refinement { name, .. } if name == &canonical)
+            }) else {
+                self.error(alias.name.span, "checked refinement type is missing");
+                continue;
+            };
+            let id = FunctionId(
+                (self.functions.len() + self.actor_handlers.len() + self.refinement_sources.len())
+                    as u32,
+            );
+            self.refinement_function_ids.insert(ty, id);
+            self.refinement_sources.push(RefinementSource {
+                id,
+                definition,
+                alias,
+                ty,
+            });
         }
     }
 
@@ -1422,6 +1501,91 @@ impl<'a> Lowerer<'a> {
             locals,
             body,
             span: source.handler.span,
+        })
+    }
+
+    fn lower_refinement_predicate(&mut self, source: RefinementSource<'a>) -> Option<Function> {
+        let constraint = source.alias.constraint.as_ref()?;
+        let origin = match self.origins.get(&source.alias.span.file) {
+            Some(origin) => origin.clone(),
+            None => {
+                self.error(source.alias.span, "source origin is missing for refinement");
+                return None;
+            }
+        };
+        let Some(value_definition) = self.definition_at(constraint.span(), DefKind::Variable)
+        else {
+            self.error(
+                constraint.span(),
+                "refinement value has no resolved definition",
+            );
+            return None;
+        };
+        let mut input_type = source.ty;
+        while let Type::Refinement { base, .. } = self.check.interner.resolve(input_type) {
+            input_type = *base;
+        }
+        if let Type::Secret(inner) = self.check.interner.resolve(input_type) {
+            input_type = *inner;
+        }
+        let function_ids = self.function_ids.clone();
+        let mut lowerer = BodyLowerer::new(
+            self,
+            &function_ids,
+            self.check.type_map.clone(),
+            self.check.generic_calls.clone(),
+            self.check.intrinsic_ids.clone(),
+            self.check.intrinsic_type_arguments.clone(),
+            self.check.intrinsic_reflection_arguments.clone(),
+            self.check.call_argument_orders.clone(),
+            self.check.method_calls.clone(),
+            self.check.struct_constructions.clone(),
+            self.check.pipeline_step_call_types.clone(),
+            HashMap::new(),
+            facts_in_span(&self.check.comptime_type_bindings, source.alias.span),
+        );
+        let local = lowerer.allocate_local(
+            value_definition,
+            "value",
+            input_type,
+            false,
+            constraint.span(),
+        );
+        let result = lowerer.lower_expression(constraint)?;
+        lowerer.reject_unconsumed_comptime_type_bindings();
+        let locals = lowerer.locals;
+        let declared = self.resolve.scope_table.def(source.definition);
+        Some(Function {
+            id: source.id,
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin,
+                    namespace: declared.namespace.clone().unwrap_or_default(),
+                    name: source.alias.name.name.clone(),
+                    kind: DeclarationKind::RefinementPredicate,
+                },
+                type_arguments: Vec::new(),
+                specialization: CheckedGenericSpecialization::default(),
+            },
+            source_definition: Some(source.definition),
+            params: vec![Param {
+                local,
+                name: "value".to_string(),
+                ty: input_type,
+                mode: ParamMode::Owned,
+                mutable: false,
+                span: constraint.span(),
+            }],
+            return_type: TypeInterner::BOOL,
+            locals,
+            body: Block {
+                statements: vec![Statement {
+                    kind: StatementKind::Return(Some(result)),
+                    span: constraint.span(),
+                }],
+                span: source.alias.span,
+            },
+            span: source.alias.span,
         })
     }
 
@@ -2304,8 +2468,41 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 Type::Refinement { .. }
             ) =>
             {
+                let mut predicates = Vec::new();
+                let mut current = output_type;
+                while let Type::Refinement { name, base } =
+                    self.parent.check.interner.resolve(current)
+                {
+                    let Some(function) = self.parent.refinement_function_ids.get(&current).copied()
+                    else {
+                        self.parent
+                            .error(span, "refinement has no checked predicate function");
+                        return None;
+                    };
+                    predicates.push(RefinementPredicate {
+                        refined_type: current,
+                        type_name: name.clone(),
+                        function,
+                        input_type: {
+                            let mut input = current;
+                            while let Type::Refinement { base, .. } =
+                                self.parent.check.interner.resolve(input)
+                            {
+                                input = *base;
+                            }
+                            if let Type::Secret(inner) = self.parent.check.interner.resolve(input) {
+                                *inner
+                            } else {
+                                input
+                            }
+                        },
+                    });
+                    current = *base;
+                }
+                predicates.reverse();
                 HandleKind::Refinement {
                     refined_type: output_type,
+                    predicates,
                 }
             }
             _ => {
@@ -2316,6 +2513,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 return None;
             }
         };
+        self.visible_bindings.push(HashMap::new());
         let error_local = if let Some(name) = error_name {
             let Some(definition) = self.parent.definition_at(name.span, DefKind::Variable) else {
                 self.parent
@@ -2332,6 +2530,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             None
         };
         let failure = self.lower_block(failure);
+        self.visible_bindings.pop();
         Some(Expression {
             kind: ExpressionKind::Handle {
                 target: Box::new(target),
@@ -5413,7 +5612,11 @@ function positive_or_one(raw: int64, fallback: Positive) returns Positive:
             panic!("expected refinement local");
         };
         let ExpressionKind::Handle {
-            kind: HandleKind::Refinement { refined_type },
+            kind:
+                HandleKind::Refinement {
+                    refined_type,
+                    ref predicates,
+                },
             error_local: Some(error_local),
             ..
         } = value.kind
@@ -5421,7 +5624,13 @@ function positive_or_one(raw: int64, fallback: Positive) returns Positive:
             panic!("expected refinement boundary handle");
         };
         assert_eq!(refined_type, value.ty);
+        assert_eq!(predicates.len(), 1);
+        assert_eq!(predicates[0].type_name, "app.Positive");
         assert_eq!(function.locals[error_local.index() as usize].name, "error");
+        assert_eq!(
+            program.functions[1].identity.declaration.kind,
+            DeclarationKind::RefinementPredicate
+        );
     }
 
     #[test]

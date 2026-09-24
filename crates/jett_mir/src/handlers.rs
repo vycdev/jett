@@ -6,7 +6,7 @@ use jett_types::TypeInterner;
 fn has_extractable_handle(expression: &Expression) -> bool {
     match &expression.kind {
         ExpressionKind::Handle {
-            kind: HandleKind::Result | HandleKind::Optional,
+            kind: HandleKind::Result | HandleKind::Optional | HandleKind::Refinement { .. },
             ..
         } => true,
         ExpressionKind::View(value) => has_extractable_handle(value),
@@ -33,6 +33,21 @@ impl Builder {
             lowered.kind = ExpressionKind::View(Box::new(self.lower_value(value)));
             return lowered;
         }
+        if let ExpressionKind::Handle {
+            target,
+            kind: HandleKind::Refinement { predicates, .. },
+            error_local,
+            failure,
+        } = &expression.kind
+        {
+            return self.lower_refinement_handle(
+                expression,
+                target,
+                predicates,
+                *error_local,
+                failure,
+            );
+        }
         if let ExpressionKind::Call {
             function,
             args,
@@ -50,7 +65,7 @@ impl Builder {
                 || !unique_order
                 || evaluation_order.iter().any(|&index| index >= args.len())
                 || args.iter().any(|arg| {
-                    matches!(&arg.kind, ExpressionKind::View(inner) if !matches!(&inner.kind, ExpressionKind::Local(_) | ExpressionKind::Handle { kind: HandleKind::Result | HandleKind::Optional, .. }))
+                    matches!(&arg.kind, ExpressionKind::View(inner) if !matches!(&inner.kind, ExpressionKind::Local(_) | ExpressionKind::Handle { kind: HandleKind::Result | HandleKind::Optional | HandleKind::Refinement { .. }, .. }))
                 })
             {
                 return expression.clone();
@@ -157,6 +172,127 @@ impl Builder {
         self.handlers.pop();
         // A failure path must yield or exit; never fabricate an initialized
         // payload for an invalid fallthrough.
+        if self.open() {
+            self.terminate(TerminatorKind::Unreachable, span);
+        }
+        self.current = continuation;
+        Expression {
+            kind: ExpressionKind::Local(output),
+            ty: expression.ty,
+            span,
+        }
+    }
+
+    fn lower_refinement_handle(
+        &mut self,
+        expression: &Expression,
+        target: &Expression,
+        predicates: &[hir::RefinementPredicate],
+        error_local: Option<LocalId>,
+        failure: &hir::Block,
+    ) -> Expression {
+        if predicates.is_empty()
+            || predicates
+                .iter()
+                .any(|predicate| predicate.input_type != target.ty)
+        {
+            return expression.clone();
+        }
+        let span = expression.span;
+        let value = self.lower_value(target);
+        let source = self.temporary(target.ty, span);
+        self.push(
+            StatementKind::Let {
+                local: source,
+                value,
+            },
+            span,
+        );
+        let failed = self.new_block(failure.span);
+        let continuation = self.new_block(span);
+        let output = self.temporary(expression.ty, span);
+
+        for predicate in predicates {
+            let input = Expression {
+                kind: ExpressionKind::Clone(Box::new(Expression {
+                    kind: ExpressionKind::Local(source),
+                    ty: target.ty,
+                    span,
+                })),
+                ty: target.ty,
+                span,
+            };
+            let passed = self.temporary(TypeInterner::BOOL, span);
+            self.push(
+                StatementKind::Let {
+                    local: passed,
+                    value: Expression {
+                        kind: ExpressionKind::Call {
+                            function: predicate.function,
+                            args: vec![input],
+                            evaluation_order: vec![0],
+                        },
+                        ty: TypeInterner::BOOL,
+                        span,
+                    },
+                },
+                span,
+            );
+            let next = self.new_block(span);
+            let rejected = self.new_block(span);
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition: Expression {
+                        kind: ExpressionKind::Local(passed),
+                        ty: TypeInterner::BOOL,
+                        span,
+                    },
+                    then_block: next,
+                    else_block: rejected,
+                },
+                span,
+            );
+            self.current = rejected;
+            if let Some(error_local) = error_local {
+                self.push(
+                    StatementKind::Let {
+                        local: error_local,
+                        value: Expression {
+                            kind: ExpressionKind::String(format!(
+                                "refinement type constraint failed for '{}'",
+                                predicate.type_name
+                            )),
+                            ty: TypeInterner::STRING,
+                            span,
+                        },
+                    },
+                    span,
+                );
+            }
+            self.terminate(TerminatorKind::Goto(failed), span);
+            self.current = next;
+        }
+
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::RefinementValidated(Box::new(Expression {
+                        kind: ExpressionKind::Local(source),
+                        ty: target.ty,
+                        span,
+                    })),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
+        self.current = failed;
+        self.handlers.push((output, continuation));
+        self.lower_block(failure);
+        self.handlers.pop();
         if self.open() {
             self.terminate(TerminatorKind::Unreachable, span);
         }

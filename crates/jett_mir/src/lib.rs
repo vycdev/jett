@@ -692,6 +692,7 @@ impl FunctionValidator<'_, '_> {
             | hir::ExpressionKind::Comptime(value)
             | hir::ExpressionKind::Declassify(value)
             | hir::ExpressionKind::Coarsen(value)
+            | hir::ExpressionKind::RefinementValidated(value)
             | hir::ExpressionKind::Run(value)
             | hir::ExpressionKind::Join(value)
             | hir::ExpressionKind::Cancel(value)
