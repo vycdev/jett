@@ -1,0 +1,24 @@
+namespace app
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield Header:
+    version: 4 bits
+    protocol: 8 bits as Protocol
+bitfield WideHeader:
+    sequence: 64 bits
+bitfield Packet:
+    kind: 8 bits
+    payload: list[uint8]
+function main() returns nothing:
+    Header header = Header(version: 4, protocol: Protocol.tcp)
+    println(json.serialize[Header](view header))
+    println(json.serialize_public[Header](view header))
+    WideHeader wide = WideHeader(sequence: 18446744073709551615)
+    println(json.serialize[WideHeader](view wide))
+    mutable list[uint8] payload = list.new[uint8]()
+    payload = list.append[uint8](payload, 1)
+    payload = list.append[uint8](payload, 127)
+    payload = list.append[uint8](payload, 255)
+    Packet packet = Packet(kind: 42, payload: payload)
+    println(json.serialize_public[Packet](view packet))

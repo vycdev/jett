@@ -2936,6 +2936,27 @@ impl<'a> TypeChecker<'a> {
                 })
     }
 
+    fn native_json_bitfield_source_supported(&self, ty: TypeId) -> bool {
+        let Type::Bitfield(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        self.interner
+            .resolve_bitfield(*id)
+            .fields
+            .iter()
+            .all(|field| match self.interner.resolve(field.ty) {
+                Type::Enum(enum_id) => {
+                    let definition = self.interner.resolve_enum(*enum_id);
+                    definition.name != "json.JsonTree"
+                        && definition
+                            .variants
+                            .iter()
+                            .all(|variant| variant.fields.is_empty())
+                }
+                _ => self.native_json_source_supported(field.ty, &mut HashSet::new()),
+            })
+    }
+
     fn native_json_parse_source_supported(&self, ty: TypeId) -> bool {
         self.native_json_parse_source_supported_inner(ty, &mut HashSet::new())
     }
@@ -11797,6 +11818,19 @@ impl<'a> TypeChecker<'a> {
         {
             self.check_source_facade_instantiation(
                 "json.json_serialize_native_enum",
+                value_ty,
+                span,
+            );
+        }
+
+        if matches!(
+            callee_name.as_deref(),
+            Some("json.serialize" | "json.serialize_public")
+        ) && let Some(&value_ty) = checked_arg_types.first()
+            && self.native_json_bitfield_source_supported(value_ty)
+        {
+            self.check_source_facade_instantiation(
+                "json.json_serialize_native_bitfield",
                 value_ty,
                 span,
             );

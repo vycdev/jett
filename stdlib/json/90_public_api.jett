@@ -119,3 +119,16 @@ function json_parse_exact_native_enum[T](raw: string) returns result[T, string]:
     return json_decode_tree_enum_reflected[T](view tree, info.type_name)
 function json_serialize_native_enum[T](view value: T) returns string:
     return json_serialize_public_enum_reflected[T](view value)
+function json_serialize_native_bitfield_field[Field](view item: Field) returns string:
+    if type.kind_tag[Field]() == TypeKind.enum_type:
+        return json_serialize_native_enum[Field](view item)
+    else:
+        return json_serialize_public_reflected[Field](view item)
+function json_serialize_native_bitfield[T](view value: T) returns string:
+    mutable list[string] fields = list.new[string]()
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            Field item = type.field_value[T, Field](view value, view field)
+            string encoded = json_serialize_native_bitfield_field[Field](view item)
+            fields = list.append[string](fields, json_stdlib_object_entry(field.serialize_name, encoded))
+    return json_stdlib_object_from_parts(fields)

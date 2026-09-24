@@ -2718,6 +2718,27 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
             if matches!(
                 intrinsic,
+                IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic
+            ) && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && matches!(
+                    self.parent.check.interner.resolve(type_arguments[0]),
+                    Type::Bitfield(_)
+                )
+                && let Some(function) = self.trusted_stdlib_generic_function(
+                    "json",
+                    "json_serialize_native_bitfield",
+                    call_span,
+                )
+            {
+                return Some(ExpressionKind::Call {
+                    function,
+                    args: lowered_args,
+                    evaluation_order,
+                });
+            }
+            if matches!(
+                intrinsic,
                 IntrinsicId::JsonParse | IntrinsicId::JsonParseExact
             ) && type_arguments.len() == 1
                 && lowered_args.len() == 1

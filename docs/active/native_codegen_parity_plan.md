@@ -306,7 +306,7 @@ The current fixture gates are therefore:
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 143/182 (78.6%), a useful progress measure rather than a
+gate is currently 144/182 (79.1%), a useful progress measure rather than a
 claim that 77.5% of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
@@ -596,10 +596,14 @@ adds one object; the Windows gate reached 142/182 emitted objects. Checked
 source serialization now handles `bytes` through a trusted hex-string hook and
 records containing raw `json.JsonTree` fields through an owned clone. A linked
 interpreter/native fixture covers both public serialization spellings and raw
-tree payloads. `json_serialize_public.jett` joins the object gate; the current
-exhaustive Windows gate is 143/182 emitted objects, 23/30 main outcomes, 25/25
-runtime contracts, and 182/182 typed lowerings. Nested enum source dispatch,
-bitfield JSON, refinement-validating struct fields, and other JSON shapes remain.
+tree payloads. `json_serialize_public.jett` joins the object gate; the Windows
+gate reached 143/182 emitted objects. Supported bitfields now serialize through
+a checked source hook that dispatches unit-enum fields separately from ordinary
+fields. A linked fixture covers enum-backed bits, wide integers, and list
+payloads. `json_serialize.jett` joins the object gate; the current exhaustive
+Windows gate is 144/182 emitted objects, 23/30 main outcomes, 25/25 runtime
+contracts, and 182/182 typed lowerings. Nested enum parsing, bitfield JSON
+parsing, refinement-validating struct fields, and other JSON shapes remain.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
