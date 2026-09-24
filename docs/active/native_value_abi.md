@@ -491,6 +491,10 @@ result or drops the incomplete builder on a handled error. Deep cloning copies
 both populated fields and builder metadata. Context destruction checks that
 no builder metadata or owned fields remain. Only concrete structs without
 refinement-validating construction use this native path so far.
+The checked `.jett` JSON decoder now reaches that builder for supported
+concrete structs. It selects the struct or alias branch before unrelated
+generic decoder bodies, so direct aliases decode through their base struct
+and alias-typed fields retain their checked metadata names.
 Reflected `comptime type` dispatch borrows its runtime `TypeInfo` selector.
 The runtime leaf derives a recursive structural identity, unwrapping aliases;
 native branches compare it with the checker-owned identity of each specialized

@@ -2899,6 +2899,14 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn native_json_parse_source_supported(&self, ty: TypeId) -> bool {
+        self.native_json_parse_source_supported_inner(ty, &mut HashSet::new())
+    }
+
+    fn native_json_parse_source_supported_inner(
+        &self,
+        ty: TypeId,
+        visiting: &mut HashSet<TypeId>,
+    ) -> bool {
         match self.interner.resolve(ty) {
             Type::String
             | Type::Bool
@@ -2907,18 +2915,39 @@ impl<'a> TypeChecker<'a> {
             | Type::Int64
             | Type::Uint64
             | Type::Float64 => true,
-            Type::List(element) => self.native_json_parse_source_supported(*element),
+            Type::List(element) => {
+                self.native_json_parse_source_supported_inner(*element, visiting)
+            }
             Type::Set(element) => matches!(
                 self.interner.resolve(*element),
                 Type::String | Type::Bool | Type::Int64 | Type::Uint64
             ),
             Type::Map(key, value) if *key == TypeInterner::STRING => {
-                self.native_json_parse_source_supported(*value)
+                self.native_json_parse_source_supported_inner(*value, visiting)
             }
-            Type::Optional(inner) => self.native_json_parse_source_supported(*inner),
+            Type::Optional(inner) => {
+                self.native_json_parse_source_supported_inner(*inner, visiting)
+            }
             Type::Result(ok, err) => {
-                self.native_json_parse_source_supported(*ok)
-                    && self.native_json_parse_source_supported(*err)
+                self.native_json_parse_source_supported_inner(*ok, visiting)
+                    && self.native_json_parse_source_supported_inner(*err, visiting)
+            }
+            Type::Struct(id) => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported =
+                    self.interner
+                        .resolve_struct(*id)
+                        .fields
+                        .iter()
+                        .all(|(_, field_ty)| {
+                            !matches!(self.interner.resolve(*field_ty), Type::Refinement { .. })
+                                && self
+                                    .native_json_parse_source_supported_inner(*field_ty, visiting)
+                        });
+                visiting.remove(&ty);
+                supported
             }
             _ => false,
         }
@@ -11704,7 +11733,8 @@ impl<'a> TypeChecker<'a> {
             && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
             && matches!(
                 self.interner.resolve(*value_ty),
-                Type::List(_)
+                Type::Struct(_)
+                    | Type::List(_)
                     | Type::Set(_)
                     | Type::Map(_, _)
                     | Type::Optional(_)

@@ -2693,19 +2693,19 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
-The full native parity gate is still incomplete: 118/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 127/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
 move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
-reflection/JSON, actors/tasks, other capabilities, and clean Windows release
+remaining reflection/JSON shapes, actors/tasks, other capabilities, and clean Windows release
 verification are not established by this slice.
-Native JSON parsing now checks and emits the stdlib decoder for lists,
-sets of supported hashable primitives, string-keyed maps, optionals, and results
-recursively composed of supported primitive
-leaves. The public compiler policy still runs before the source decoder.
-The fixture counts above are unchanged because remaining JSON shapes block
-their run-pass objects.
+Native JSON parsing now checks and emits the stdlib decoder for concrete
+structs, lists, sets of supported hashable primitives, string-keyed maps,
+optionals, and results recursively composed of supported leaves. Direct and
+field-level aliases take the source alias branch before construction, while
+refinement-validating and recursive structs stay outside this native path.
+The public compiler policy still runs before the source decoder.
 The interpreter handoff omits checked expression types at generic source spans
 whose concrete instantiations disagree, so a later unsigned instantiation
 cannot coerce an earlier signed call's values.

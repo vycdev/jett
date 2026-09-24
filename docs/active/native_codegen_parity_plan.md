@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
-| JSON and trusted stdlib hooks | covered | checked `JsonTree` parse/parse-exact and serialize calls use trusted raw stdlib functions; scalar string, bool, and numeric serialization constructs a checked `JsonTree` for the same serializer; supported structs, lists, string-keyed maps, optionals, and results specialize the checked source serializer; checked `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing` parsing calls use private source decoders; lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; other structured serialization and parsing remain pending | native/interpreter raw-tree, primitive-serialization, primitive-parse, structured serialization, collection-parse, set-parse, and result-parse fixtures cover object/array values, parse errors, UTF-8, escaping, integer widths, bools, finite/nonfinite floats, bytes, literal `nothing`, renamed fields, direct/nested collections, result branches, and owned cleanup; other concrete JSON types pending |
+| JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs and collections specialize the checked source serializer; primitive parse calls use private source decoders; concrete structs, lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, primitive and structured parsing, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 The current fixture gates are therefore:
@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 120 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 127 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 120/182 (65.9%), a useful progress measure rather than a
-claim that 65.9% of the language has native support.
+gate is currently 127/182 (69.8%), a useful progress measure rather than a
+claim that 69.8% of the language has native support.
 Active `type.variant_value` selection matches native/interpreter output for
 payload and empty variants. Reflected `type.field_value` and
 `type.variant_field_value` now read checked struct, bitfield, and enum payload
@@ -397,11 +397,19 @@ returns handled metadata and duplicate-field errors, and `construct_finish`
 returns a constructed struct or a handled missing-field or owner error. A linked
 native/interpreter fixture covers ordinary and generic structs, alias-typed
 fields, successful construction, error messages, builder cloning, and cleanup.
-The object gate
-adds `json_reflection_flat_decoder.jett` and
+The object gate adds `json_reflection_flat_decoder.jett` and
 `reflection_type_id_duplicate_construction.jett`, reaching 120/182. Alias,
 refinement-validating, bitfield, enum, and machine construction remain later
 native slices; the verifier retains their explicit unsupported boundaries.
+The checked source JSON decoder now specializes concrete structs and aliases
+before its general reflection fallback. The recursive native parse gate accepts
+structs whose fields are already supported, including nested structs and
+collections, while retaining the refinement and recursive-type boundaries.
+Linked native/interpreter cases cover renamed fields, nested and list values,
+alias targets and alias-typed fields, handled shape errors, and exact unknown
+fields. Seven more run-pass fixtures emit native objects, reaching 127/182;
+enum, bitfield, machine, secret, refinement, and narrow-numeric parsing still
+need their own checked native paths.
 Checked integer/float conversion adds `conversions.jett`.
 Native empty `list[never]` length/emptiness support adds `list_operations.jett`.
 Borrowed enum matching, explicit view-to-owner cloning at direct calls, and

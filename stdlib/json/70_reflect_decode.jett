@@ -60,6 +60,10 @@ function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, str
         return json_decode_tree_optional_reflected[T](view raw)
     else if kind == TypeKind.result_type:
         return json_decode_tree_result_reflected[T](view raw)
+    else if kind == TypeKind.struct_type:
+        return json_decode_tree_record_reflected[T](view raw, info.type_name)
+    else if kind == TypeKind.alias_type:
+        return json_decode_tree_alias_reflected[T](view raw)
     else if kind == TypeKind.primitive_type:
         return json_decode_tree_checked_primitive[T](view raw)
     else:
