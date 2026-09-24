@@ -916,8 +916,10 @@ concrete owner and canonical interface in their identity.
 
 Native JSON lowering currently bridges checked `JsonTree` calls to trusted raw
 stdlib functions. For primitive serialization it constructs a checked
-`JsonTree` variant and uses the same source serializer. This is an interim
-lowering path while concrete generic JSON bodies remain unavailable to native
+`JsonTree` variant and uses the same source serializer. Primitive parsing for
+`string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing` calls
+private stdlib decoders over that tree. This is an interim lowering path while
+other concrete generic JSON bodies remain unavailable to native
 specialization; the compiler-owned public policy gates still run first.
 
 ---
@@ -2689,8 +2691,8 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
-The full native parity gate is still incomplete: 70/182 genuine objects, 14/30
-main outcomes, and 20/25 runtime contracts, with 182/182 typed lowering. See
+The full native parity gate is still incomplete: 113/182 genuine objects, 23/30
+main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
 move-only value/drop elaboration, handlers, aggregates, collections, callbacks,

@@ -280,6 +280,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "json_generic_primitives",
             "../../tests/native/json_generic_primitives.jett",
         ),
+        (
+            "json_generic_parse_primitives",
+            "../../tests/native/json_generic_parse_primitives.jett",
+        ),
         ("encoding", "../../tests/native/encoding.jett"),
         ("csv", "../../tests/native/csv.jett"),
         ("secret_values", "../../tests/native/secret_values.jett"),

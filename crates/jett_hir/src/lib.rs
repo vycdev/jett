@@ -2646,6 +2646,24 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
             if matches!(
                 intrinsic,
+                IntrinsicId::JsonParse | IntrinsicId::JsonParseExact
+            ) && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && let Some(name) = self.native_json_primitive_parser(type_arguments[0])
+            {
+                let Some(function) = self.trusted_stdlib_function("json", name) else {
+                    self.parent
+                        .error(call_span, "trusted primitive JSON parser is missing");
+                    return None;
+                };
+                return Some(ExpressionKind::Call {
+                    function,
+                    args: lowered_args,
+                    evaluation_order,
+                });
+            }
+            if matches!(
+                intrinsic,
                 IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic
             ) && type_arguments.len() == 1
                 && lowered_args.len() == 1
@@ -4098,6 +4116,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn is_raw_json_tree(&self, ty: TypeId) -> bool {
         matches!(self.parent.check.interner.resolve(ty), Type::Enum(id) if self.parent.check.interner.resolve_enum(*id).name == "json.JsonTree")
+    }
+
+    fn native_json_primitive_parser(&self, ty: TypeId) -> Option<&'static str> {
+        match self.parent.check.interner.resolve(ty) {
+            Type::String => Some("json_parse_native_string"),
+            Type::Bool => Some("json_parse_native_bool"),
+            Type::Int64 => Some("json_parse_native_int64"),
+            Type::Uint64 => Some("json_parse_native_uint64"),
+            Type::Float64 => Some("json_parse_native_float64"),
+            Type::Bytes => Some("json_parse_native_bytes"),
+            Type::Nothing => Some("json_parse_native_nothing"),
+            _ => None,
+        }
     }
 
     fn lower_primitive_json_serialization(

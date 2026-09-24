@@ -344,7 +344,12 @@ accepts every valid `JsonTree` shape. String, bool, and numeric serialization
 construct a checked `JsonTree` variant and call the same source serializer;
 string payloads are cloned before the tree takes ownership. A literal
 `nothing` constructs the null variant. Other concrete generic JSON types
-still require native lowering.
+still require native lowering. Checked `json.parse` and `json.parse_exact`
+calls for `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing`
+lower to private stdlib source decoders after compiler policy checks. They
+parse through `JsonTree` and its strict scalar accessors, preserving source
+error messages and ownership. Narrow numeric and structured types still
+require native lowering.
 
 The remaining string intrinsics now have typed native leaves. Replace reuses
 the grapheme split matcher and checks output capacity before assembly; empty

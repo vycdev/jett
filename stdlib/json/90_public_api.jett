@@ -63,3 +63,37 @@ export function serialize[T](view value: T) returns string:
     return json_serialize_reflected[T](view value)
 export function serialize_public[T](view value: T) returns string:
     return json_serialize_public_reflected[T](view value)
+function json_parse_native_string(raw: string) returns result[string, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    return json_tree_as_string(view tree)
+function json_parse_native_bool(raw: string) returns result[bool, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    return json_tree_as_bool(view tree)
+function json_parse_native_int64(raw: string) returns result[int64, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    return json_tree_as_int64(view tree)
+function json_parse_native_uint64(raw: string) returns result[uint64, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    return json_tree_as_uint64(view tree)
+function json_parse_native_float64(raw: string) returns result[float64, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    return json_tree_as_float64(view tree)
+function json_parse_native_bytes(raw: string) returns result[bytes, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    string raw_hex = json_tree_as_string(view tree) handle error:
+        return fail(error)
+    bytes item = bytes.from_hex(raw_hex) handle error:
+        return fail("expected hex bytes string")
+    return ok(item)
+function json_parse_native_nothing(raw: string) returns result[nothing, string]:
+    JsonTree tree = parse_raw(raw) handle error:
+        return fail(error)
+    if json_tree_is_null(view tree) == false:
+        return fail("expected null, got {json_tree_kind(view tree)}")
+    return ok(nothing)

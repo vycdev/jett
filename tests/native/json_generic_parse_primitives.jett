@@ -1,0 +1,44 @@
+namespace app
+function parsed_string(raw: string) returns string:
+    string value = json.parse[string](raw) handle error:
+        return "error:{error}"
+    return "ok:{value}"
+function parsed_bool(raw: string) returns string:
+    bool value = json.parse_exact[bool](raw) handle error:
+        return "error:{error}"
+    return "ok:{value}"
+function parsed_int(raw: string) returns string:
+    int64 value = json.parse[int64](raw) handle error:
+        return "error:{error}"
+    return "ok:{value}"
+function parsed_uint(raw: string) returns string:
+    uint64 value = json.parse_exact[uint64](raw) handle error:
+        return "error:{error}"
+    return "ok:{string.from_uint64(value)}"
+function parsed_float(raw: string) returns string:
+    float64 value = json.parse[float64](raw) handle error:
+        return "error:{error}"
+    return "ok:{value}"
+function parsed_bytes(raw: string) returns string:
+    bytes value = json.parse_exact[bytes](raw) handle error:
+        return "error:{error}"
+    return "ok:{bytes.to_hex(value)}"
+function parsed_nothing(raw: string) returns string:
+    nothing value = json.parse[nothing](raw) handle error:
+        return "error:{error}"
+    return "ok"
+function main() returns nothing:
+    println(parsed_string("\"Ada\\n€\""))
+    println(parsed_string("42"))
+    println(parsed_bool("true"))
+    println(parsed_bool("0"))
+    println(parsed_int("-9223372036854775808"))
+    println(parsed_int("18446744073709551615"))
+    println(parsed_uint("18446744073709551615"))
+    println(parsed_uint("-1"))
+    println(parsed_float("-2.5"))
+    println(parsed_float("\"wrong\""))
+    println(parsed_bytes("\"0x4869\""))
+    println(parsed_bytes("\"bad\""))
+    println(parsed_nothing("null"))
+    println(parsed_nothing("false"))

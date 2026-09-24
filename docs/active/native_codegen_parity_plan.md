@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
-| JSON and trusted stdlib hooks | covered | checked `JsonTree` parse/parse-exact and serialize calls use trusted raw stdlib functions; scalar string, bool, and numeric serialization constructs a checked `JsonTree` for the same serializer; structured and scalar parsing remain pending | native/interpreter raw-tree and primitive-serialization fixtures cover object/array values, parse errors, UTF-8, escaping, integer widths, bools, finite/nonfinite floats, and literal `nothing`; other concrete JSON types pending |
+| JSON and trusted stdlib hooks | covered | checked `JsonTree` parse/parse-exact and serialize calls use trusted raw stdlib functions; scalar string, bool, and numeric serialization constructs a checked `JsonTree` for the same serializer; checked `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing` parsing calls use private source decoders; narrower numerics and structured parsing remain pending | native/interpreter raw-tree, primitive-serialization, and primitive-parse fixtures cover object/array values, parse errors, UTF-8, escaping, integer widths, bools, finite/nonfinite floats, bytes, and literal `nothing`; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 The current fixture gates are therefore:
@@ -366,8 +366,13 @@ and maps, integer-refinement sets, and boolean set/map lookup and removal.
 Checked raw-tree JSON bridging adds `json_parse_error_parity.jett`,
 `json_parse_success_parity.jett`, and `json_tree_value.jett` to object
 emission. Primitive serialization uses the same trusted raw serializer in
-native/interpreter execution fixtures. Structured JSON and scalar parsing
-remain the dominant JSON object blockers.
+native/interpreter execution fixtures. Private source decoders now handle
+checked scalar parses for `string`, `bool`, `int64`, `uint64`, `float64`,
+`bytes`, and `nothing`, including both public parse entrypoints. A dedicated
+native/interpreter fixture checks values and shape/range errors. This moves
+`json_parse_exact_primitive_edges.jett` to its later narrow-numeric parse
+blocker, but does not yet add an object gate. Narrow numeric and structured
+JSON parsing remain blockers.
 Checked integer/float conversion adds `conversions.jett`.
 Native empty `list[never]` length/emptiness support adds `list_operations.jett`.
 Borrowed enum matching, explicit view-to-owner cloning at direct calls, and
