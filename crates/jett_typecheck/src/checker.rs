@@ -2957,6 +2957,27 @@ impl<'a> TypeChecker<'a> {
             })
     }
 
+    fn native_json_bitfield_parse_supported(&self, ty: TypeId) -> bool {
+        let Type::Bitfield(id) = self.interner.resolve(ty) else {
+            return false;
+        };
+        self.interner
+            .resolve_bitfield(*id)
+            .fields
+            .iter()
+            .all(|field| match self.interner.resolve(field.ty) {
+                Type::Enum(enum_id) => {
+                    let definition = self.interner.resolve_enum(*enum_id);
+                    definition.name != "json.JsonTree"
+                        && definition
+                            .variants
+                            .iter()
+                            .all(|variant| variant.fields.is_empty())
+                }
+                _ => self.native_json_parse_source_supported_inner(field.ty, &mut HashSet::new()),
+            })
+    }
+
     fn native_json_parse_source_supported(&self, ty: TypeId) -> bool {
         self.native_json_parse_source_supported_inner(ty, &mut HashSet::new())
     }
@@ -2987,6 +3008,7 @@ impl<'a> TypeChecker<'a> {
             | Type::Bytes
             | Type::Nothing
             | Type::Int64
+            | Type::Uint8
             | Type::Uint64
             | Type::Float64 => true,
             Type::List(element) => {
@@ -11844,6 +11866,18 @@ impl<'a> TypeChecker<'a> {
                 "json.json_parse_native_enum"
             } else {
                 "json.json_parse_exact_native_enum"
+            };
+            self.check_source_facade_instantiation(source, *value_ty, span);
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && self.native_json_bitfield_parse_supported(*value_ty)
+        {
+            let source = if name == "json.parse" {
+                "json.json_parse_native_bitfield"
+            } else {
+                "json.json_parse_exact_native_bitfield"
             };
             self.check_source_facade_instantiation(source, *value_ty, span);
         }

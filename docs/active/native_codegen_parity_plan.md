@@ -306,7 +306,7 @@ The current fixture gates are therefore:
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 144/182 (79.1%), a useful progress measure rather than a
+gate is currently 147/182 (80.8%), a useful progress measure rather than a
 claim that 77.5% of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
@@ -600,10 +600,19 @@ tree payloads. `json_serialize_public.jett` joins the object gate; the Windows
 gate reached 143/182 emitted objects. Supported bitfields now serialize through
 a checked source hook that dispatches unit-enum fields separately from ordinary
 fields. A linked fixture covers enum-backed bits, wide integers, and list
-payloads. `json_serialize.jett` joins the object gate; the current exhaustive
-Windows gate is 144/182 emitted objects, 23/30 main outcomes, 25/25 runtime
-contracts, and 182/182 typed lowerings. Nested enum parsing, bitfield JSON
-parsing, refinement-validating struct fields, and other JSON shapes remain.
+payloads. `json_serialize.jett` joins the object gate; the Windows gate reached
+144/182 emitted objects. Dedicated checked bitfield parse and exact-parse
+hooks now decode ordinary fields and unit-enum annotations through reflected
+construction. A bounded source decoder converts checked JSON integers to
+`uint8` for bitfield payload lists and supported other JSON shapes. Linked
+native/interpreter cases cover valid payloads, missing fields, enum shape
+errors, range errors, and exact unknown-field errors.
+`json_bitfield_shapes.jett`, `namespace_duplicate_leaf_types.jett`, and
+`reflection_type_id_duplicate_named_owners.jett` join the object gate. The
+current exhaustive Windows gate is 147/182 emitted objects, 23/30 main
+outcomes, 25/25 runtime contracts, and 182/182 typed lowerings. Enum payloads
+containing raw JSON, other narrow numeric shapes, refinement-validating struct
+fields, and other JSON shapes remain.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

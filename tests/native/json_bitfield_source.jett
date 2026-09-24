@@ -10,6 +10,60 @@ bitfield WideHeader:
 bitfield Packet:
     kind: 8 bits
     payload: list[uint8]
+function parse_header() returns string:
+    Header header = json.parse[Header]("{{\"version\":4,\"protocol\":\"tcp\"}}") handle error:
+        return error
+    return json.serialize[Header](view header)
+function parse_header_exact() returns string:
+    Header header = json.parse_exact[Header]("{{\"version\":5,\"protocol\":\"udp\"}}") handle error:
+        return error
+    return json.serialize_public[Header](view header)
+function parse_wide_header() returns string:
+    WideHeader header = json.parse[WideHeader]("{{\"sequence\":18446744073709551615}}") handle error:
+        return error
+    return json.serialize[WideHeader](view header)
+function parse_header_missing_field() returns string:
+    Header header = json.parse[Header]("{{\"version\":4}}") handle error:
+        return error
+    return json.serialize[Header](view header)
+function parse_header_numeric_enum() returns string:
+    Header header = json.parse[Header]("{{\"version\":4,\"protocol\":6}}") handle error:
+        return error
+    return json.serialize[Header](view header)
+function parse_wide_extra_field() returns string:
+    WideHeader header = json.parse_exact[WideHeader]("{{\"sequence\":1,\"extra\":2}}") handle error:
+        return error
+    return json.serialize[WideHeader](view header)
+function parse_packet() returns string:
+    Packet packet = json.parse[Packet]("{{\"kind\":42,\"payload\":[1,127,255]}}") handle error:
+        return error
+    return json.serialize[Packet](view packet)
+function parse_packet_range_error() returns string:
+    Packet packet = json.parse[Packet]("{{\"kind\":42,\"payload\":[256]}}") handle error:
+        return error
+    return json.serialize[Packet](view packet)
+function parse_packet_exact_extra_field() returns string:
+    Packet packet = json.parse_exact[Packet]("{{\"kind\":42,\"payload\":[1],\"extra\":true}}") handle error:
+        return error
+    return json.serialize[Packet](view packet)
+function parse_uint8() returns string:
+    uint8 value = json.parse[uint8]("255") handle error:
+        return error
+    return "{value}"
+function parse_uint8_list() returns string:
+    list[uint8] values = json.parse[list[uint8]]("[0,128,255]") handle error:
+        return error
+    uint8 first = list.get[uint8](view values, 0) handle:
+        return "missing"
+    uint8 second = list.get[uint8](view values, 1) handle:
+        return "missing"
+    uint8 third = list.get[uint8](view values, 2) handle:
+        return "missing"
+    return "{first}:{second}:{third}"
+function parse_uint8_range_error() returns string:
+    uint8 value = json.parse[uint8]("256") handle error:
+        return error
+    return "{value}"
 function main() returns nothing:
     Header header = Header(version: 4, protocol: Protocol.tcp)
     println(json.serialize[Header](view header))
@@ -22,3 +76,7 @@ function main() returns nothing:
     payload = list.append[uint8](payload, 255)
     Packet packet = Packet(kind: 42, payload: payload)
     println(json.serialize_public[Packet](view packet))
+    println(parse_header(), parse_header_exact(), parse_wide_header())
+    println(parse_header_missing_field(), parse_header_numeric_enum(), parse_wide_extra_field())
+    println(parse_packet(), parse_packet_range_error(), parse_packet_exact_extra_field())
+    println(parse_uint8(), parse_uint8_list(), parse_uint8_range_error())

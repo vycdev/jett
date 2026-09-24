@@ -5,6 +5,8 @@ mutual:
     function json_decode_tree_checked_primitive[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_checked_other_primitive[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_checked_numeric[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_uint8_reflected(view raw: JsonTree) returns result[uint8, string]
+    function json_uint8_from_bounded_int64(value: int64) returns uint8
     function json_decode_tree_other_reflected[T](view raw: JsonTree, view info: TypeInfo) returns result[T, string]
     function json_decode_tree_raw_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_alias_reflected[T](view raw: JsonTree) returns result[T, string]
@@ -128,8 +130,31 @@ function json_decode_tree_checked_numeric[T](view raw: JsonTree) returns result[
             return fail(error)
         T typed = item
         return ok(typed)
+    else if primitive == TypePrimitive.uint8_type:
+        uint8 item = json_decode_tree_uint8_reflected(view raw) handle error:
+            return fail(error)
+        T typed = item
+        return ok(typed)
     else:
         return json_decode_tree_primitive_reflected[T](view raw, primitive)
+function json_decode_tree_uint8_reflected(view raw: JsonTree) returns result[uint8, string]:
+    int64 item = json_tree_as_int64(view raw) handle error:
+        return fail(error)
+    if item < 0 or item > 255:
+        return fail("expected uint8 in range 0..255")
+    return ok(json_uint8_from_bounded_int64(item))
+function json_uint8_from_bounded_int64(value: int64) returns uint8:
+    mutable int64 remaining = value
+    mutable int64 place = 128
+    mutable uint8 place_value = 128
+    mutable uint8 converted = 0
+    while place > 0:
+        if remaining >= place:
+            remaining = remaining - place
+            converted = converted + place_value
+        place = place / 2
+        place_value = place_value / 2
+    return converted
 function json_decode_tree_other_reflected[T](view raw: JsonTree, view info: TypeInfo) returns result[T, string]:
     TypeKind kind = info.kind_tag
     TypePrimitive primitive = info.primitive_tag handle:

@@ -2716,20 +2716,23 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     evaluation_order,
                 });
             }
-            if matches!(
-                intrinsic,
-                IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic
-            ) && type_arguments.len() == 1
+            let bitfield_json_source = match intrinsic {
+                IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic => {
+                    Some("json_serialize_native_bitfield")
+                }
+                IntrinsicId::JsonParse => Some("json_parse_native_bitfield"),
+                IntrinsicId::JsonParseExact => Some("json_parse_exact_native_bitfield"),
+                _ => None,
+            };
+            if let Some(name) = bitfield_json_source
+                && type_arguments.len() == 1
                 && lowered_args.len() == 1
                 && matches!(
                     self.parent.check.interner.resolve(type_arguments[0]),
                     Type::Bitfield(_)
                 )
-                && let Some(function) = self.trusted_stdlib_generic_function(
-                    "json",
-                    "json_serialize_native_bitfield",
-                    call_span,
-                )
+                && let Some(function) =
+                    self.trusted_stdlib_generic_function("json", name, call_span)
             {
                 return Some(ExpressionKind::Call {
                     function,
@@ -4334,6 +4337,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             Type::String => Some("json_parse_native_string"),
             Type::Bool => Some("json_parse_native_bool"),
             Type::Int64 => Some("json_parse_native_int64"),
+            Type::Uint8 => Some("json_parse_native_uint8"),
             Type::Uint64 => Some("json_parse_native_uint64"),
             Type::Float64 => Some("json_parse_native_float64"),
             Type::Bytes => Some("json_parse_native_bytes"),
