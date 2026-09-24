@@ -29,6 +29,14 @@ const INVALID_STRUCT: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native struct handle or field",
 );
+const INVALID_REFLECTED_FIELD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"type.field_value: field metadata does not match the checked owner and requested type",
+);
+const INVALID_REFLECTED_VARIANT_FIELD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"type.variant_field_value: field metadata does not match the active variant and requested type",
+);
 const INVALID_LIST: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native list handle",
@@ -1423,6 +1431,42 @@ impl NativeValues {
             .flatten()
             .ok_or(INVALID_STRUCT)
     }
+    fn reflected_field_index(
+        &self,
+        actual: u64,
+        expected: u64,
+        mismatch: Failure,
+    ) -> LeafResult<u64> {
+        if expected == 0 {
+            return Err(mismatch);
+        }
+        let index = self.struct_field(actual, 0)?.bits;
+        if index != self.struct_field(expected, 0)?.bits {
+            return Err(mismatch);
+        }
+        for position in [1, 3, 4] {
+            let actual_text = self.text(self.struct_field(actual, position)?.bits)?;
+            let expected_text = self.text(self.struct_field(expected, position)?.bits)?;
+            if actual_text != expected_text {
+                return Err(mismatch);
+            }
+        }
+        let actual_member = self
+            .sums
+            .get(&self.struct_field(actual, 2)?.bits)
+            .ok_or(mismatch)?;
+        let expected_member = self
+            .sums
+            .get(&self.struct_field(expected, 2)?.bits)
+            .ok_or(mismatch)?;
+        if actual_member.tag != expected_member.tag
+            || (actual_member.tag == SUM_SUCCESS
+                && self.text(actual_member.bits)? != self.text(expected_member.bits)?)
+        {
+            return Err(mismatch);
+        }
+        Ok(index)
+    }
     fn take_struct_field(&mut self, id: u64, index: u64) -> LeafResult<NativeField> {
         self.structs
             .get_mut(&id)
@@ -1938,6 +1982,10 @@ leaves! {
             *slot = Some(NativeField { bits, owned: owned != 0 }); Ok(0) };
     StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.struct_field(value, index)?.bits);
+    ReflectedFieldIndex, jett_rt_v1_reflected_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_FIELD);
+    ReflectedVariantFieldIndex, jett_rt_v1_reflected_variant_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_VARIANT_FIELD);
     MachineExpectState, jett_rt_v1_machine_expect_state, false, (value: u64 => I64, state: u64 => I64), u32 => I32,
         |s| { if s.struct_field(value, 0)?.bits == state { Ok(0) }
             else { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"machine state does not match narrowed type")) } };
@@ -3027,6 +3075,89 @@ mod tests {
             assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
             assert!(values.is_empty());
         }
+    }
+    #[test]
+    fn reflected_field_validation_checks_owner_member_name_and_type() {
+        fn metadata(
+            values: &mut NativeValues,
+            index: u64,
+            owner: &str,
+            member: Option<&str>,
+            name: &str,
+            ty: &str,
+        ) -> u64 {
+            let owner = values.insert(owner.to_owned()).unwrap();
+            let member = match member {
+                Some(member) => {
+                    let text = values.insert(member.to_owned()).unwrap();
+                    values.sum(SUM_SUCCESS, text, true).unwrap()
+                }
+                None => values.sum(SUM_FAILURE, 0, false).unwrap(),
+            };
+            let name = values.insert(name.to_owned()).unwrap();
+            let ty = values.insert(ty.to_owned()).unwrap();
+            let record = values.new_struct(5).unwrap();
+            values.structs.get_mut(&record).unwrap().fields = vec![
+                Some(NativeField {
+                    bits: index,
+                    owned: false,
+                }),
+                Some(NativeField {
+                    bits: owner,
+                    owned: true,
+                }),
+                Some(NativeField {
+                    bits: member,
+                    owned: true,
+                }),
+                Some(NativeField {
+                    bits: name,
+                    owned: true,
+                }),
+                Some(NativeField {
+                    bits: ty,
+                    owned: true,
+                }),
+            ];
+            record
+        }
+
+        let mut values = NativeValues::default();
+        let expected = metadata(&mut values, 2, "Shape", Some("circle"), "radius", "float64");
+        let matching = metadata(&mut values, 2, "Shape", Some("circle"), "radius", "float64");
+        let wrong_owner = metadata(&mut values, 2, "Other", Some("circle"), "radius", "float64");
+        let wrong_member = metadata(&mut values, 2, "Shape", Some("square"), "radius", "float64");
+        let wrong_name = metadata(&mut values, 2, "Shape", Some("circle"), "size", "float64");
+        let wrong_type = metadata(&mut values, 2, "Shape", Some("circle"), "radius", "int64");
+        let wrong_index = metadata(&mut values, 1, "Shape", Some("circle"), "radius", "float64");
+        assert_eq!(
+            values.reflected_field_index(matching, expected, INVALID_REFLECTED_VARIANT_FIELD),
+            Ok(2)
+        );
+        for candidate in [
+            wrong_owner,
+            wrong_member,
+            wrong_name,
+            wrong_type,
+            wrong_index,
+        ] {
+            assert_eq!(
+                values.reflected_field_index(candidate, expected, INVALID_REFLECTED_VARIANT_FIELD),
+                Err(INVALID_REFLECTED_VARIANT_FIELD)
+            );
+        }
+        for record in [
+            expected,
+            matching,
+            wrong_owner,
+            wrong_member,
+            wrong_name,
+            wrong_type,
+            wrong_index,
+        ] {
+            values.drop_value(record).unwrap();
+        }
+        assert!(values.is_empty());
     }
     #[test]
     fn struct_take_transfers_a_field_without_dropping_it_with_the_record() {

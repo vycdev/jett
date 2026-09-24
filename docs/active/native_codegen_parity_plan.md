@@ -289,7 +289,7 @@ lowering alone never changes an execution row to complete.
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | named function addresses and indirect calls for supported signatures; inline closures pending | named callbacks passed, returned, and invoked through indirect calls; inline closures pending |
-| Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.fields` and `type.variants` lists, active `type.variant_value`, and bitfield layout and field metadata covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, struct fields, enum variant and payload-field metadata, active enum variant selection, and bitfield metadata match the interpreter; alias field and variant probes remain empty as required; other aggregate reflection pending |
+| Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.fields` and `type.variants` lists, active `type.variant_value`, reflected struct/bitfield and enum payload field values, and bitfield layout and field metadata covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, struct fields, enum variant and payload-field metadata, active enum variant selection, reflected field values, and bitfield metadata match the interpreter on positive cases; alias field and variant probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
@@ -300,26 +300,34 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 100 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 104 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 22 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
-runtime semantics: fixtures differ in size, overlap, and coverage. They provide
-a stable progress measure toward the stated native parity goal.
+runtime semantics: fixtures differ in size, overlap, and coverage. The object
+gate is currently 104/182 (57.1%), a useful progress measure rather than a
+claim that 57.1% of the language has native support.
 Active `type.variant_value` selection matches native/interpreter output for
-payload and empty variants. `json_tree_reflection_variant_metadata.jett` now
-advances to the next unsupported intrinsic, `type.variant_field_value`.
+payload and empty variants. Reflected `type.field_value` and
+`type.variant_field_value` now read checked struct, bitfield, and enum payload
+fields in dedicated native/interpreter fixtures, including owned and secret
+payloads. Metadata mismatches fail safely, but their exact diagnostics and
+alias-equivalence behavior still need interpreter parity.
 Owned struct-field reads deep-clone the selected value while projected views
 remain borrowed. This adds `generic_reflection_branch_specialization.jett` and
 `generic_reflection_match_specialization.jett` to the object gate; other affected
 reflection fixtures advance to later unsupported intrinsics.
+Reflected field reads add object gates for `bitfield_uint64_reflection.jett`,
+`json_reflection_flat_serializer.jett`, `type_reflection.jett`, and
+`json_tree_reflection_variant_metadata.jett`. The latter now emits an object;
+`type_info_reflection.jett` advances to `type.machine_state_value`.
 
 The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 100. Four string/comptime fixtures began emitting
+unmarked row and now proves 104. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield

@@ -2,7 +2,21 @@ namespace app
 struct User:
     id: string serialize "userId"
     token: secret[string]
+    tags: list[int64]
 type UserAlias = User
+function reflected_values() returns nothing:
+    User user = User(id: "Ada", token: "key", tags: list(2, 4))
+    for field in type.fields[app.User]():
+        if field.name == "id":
+            string id = type.field_value[app.User, string](view user, view field)
+            println(id, user.id)
+        if field.name == "token":
+            secret[string] token = type.field_value[app.User, secret[string]](view user, view field)
+            println(secret.redact(token), secret.redact(user.token))
+        if field.name == "tags":
+            mutable list[int64] tags = type.field_value[app.User, list[int64]](view user, view field)
+            tags = list.append[int64](tags, 6)
+            println(list.length[int64](view tags), list.length[int64](view user.tags))
 function main() returns nothing:
     list[TypeField] fields = type.fields[app.User]()
     println("field count", list.length[TypeField](view fields))
@@ -11,3 +25,4 @@ function main() returns nothing:
     list[TypeField] aliases = type.fields[app.UserAlias]()
     for field in aliases:
         println(field.owner_type, field.name)
+    reflected_values()

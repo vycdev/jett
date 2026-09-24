@@ -866,6 +866,12 @@ an empty list.
 For a concrete enum, `type.variant_value` carries those same checked snapshots
 as hidden HIR operands. Native code reads the enum tag, selects the matching
 snapshot, and returns an owned clone without consuming the enum or its payload.
+`type.field_value` and `type.variant_field_value` likewise carry checked
+`TypeField` snapshots as hidden operands. Native code selects a candidate by
+field index and, for enums, the active variant tag; a runtime leaf validates
+the supplied metadata against that candidate before reading the borrowed
+source. The result receives its own ownership where required. Native mismatch
+diagnostics and alias-equivalence checks still need interpreter parity.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 

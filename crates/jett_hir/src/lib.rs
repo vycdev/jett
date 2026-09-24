@@ -2474,6 +2474,82 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     });
                 }
             }
+            if intrinsic == IntrinsicId::TypeFieldValue
+                && type_arguments.len() == 2
+                && lowered_args.len() == 2
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| matches!(info.kind.as_str(), "struct" | "bitfield"))
+            {
+                let info = &reflection_arguments[0];
+                let fields = self
+                    .parent
+                    .check
+                    .reflection_metadata
+                    .get_type_fields_for_id(type_arguments[0])
+                    .map(<[_]>::to_vec);
+                let Some(fields) = fields else {
+                    self.parent
+                        .error(call_span, "type.field_value has no checked field metadata");
+                    return None;
+                };
+                let field_ty = lowered_args[1].ty;
+                for field in &fields {
+                    let kind = self.lower_reflection_type_field(
+                        field,
+                        &info.type_name,
+                        None,
+                        field_ty,
+                        call_span,
+                    )?;
+                    evaluation_order.push(lowered_args.len());
+                    lowered_args.push(Expression {
+                        kind,
+                        ty: field_ty,
+                        span: call_span,
+                    });
+                }
+            }
+            if intrinsic == IntrinsicId::TypeVariantFieldValue
+                && type_arguments.len() == 2
+                && lowered_args.len() == 2
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| info.kind == "enum")
+            {
+                let info = &reflection_arguments[0];
+                let variants = self
+                    .parent
+                    .check
+                    .reflection_metadata
+                    .get_type_variants_for_id(type_arguments[0])
+                    .map(<[_]>::to_vec);
+                let Some(variants) = variants else {
+                    self.parent.error(
+                        call_span,
+                        "type.variant_field_value has no checked variant metadata",
+                    );
+                    return None;
+                };
+                let field_ty = lowered_args[1].ty;
+                for variant in &variants {
+                    for field in &variant.fields {
+                        let kind = self.lower_reflection_type_field(
+                            field,
+                            &info.type_name,
+                            Some(&variant.name),
+                            field_ty,
+                            call_span,
+                        )?;
+                        evaluation_order.push(lowered_args.len());
+                        lowered_args.push(Expression {
+                            kind,
+                            ty: field_ty,
+                            span: call_span,
+                        });
+                    }
+                }
+            }
             Some(ExpressionKind::Intrinsic {
                 intrinsic,
                 type_arguments,

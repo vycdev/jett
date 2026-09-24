@@ -1020,6 +1020,95 @@ impl Verifier<'_> {
                         ))
                     };
                 }
+                if *intrinsic == jett_hir::IntrinsicId::TypeFieldValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.field_value has no checked owner type",
+                        ));
+                    };
+                    let (field_count, owner_kind) = match self.types.resolve(owner_ty) {
+                        Type::Struct(id) => (self.types.resolve_struct(*id).fields.len(), "struct"),
+                        Type::Bitfield(id) => {
+                            (self.types.resolve_bitfield(*id).fields.len(), "bitfield")
+                        }
+                        _ => {
+                            return Err(self.unsupported(
+                                function,
+                                expression.span,
+                                "type.field_value of non-struct type",
+                            ));
+                        }
+                    };
+                    let field_ty = args.get(1).map(|arg| arg.ty);
+                    let valid_field_ty = field_ty.is_some_and(|ty| {
+                        matches!(self.types.resolve(ty), Type::Struct(id)
+                        if self.types.resolve_struct(*id).name == "TypeField")
+                    });
+                    let valid = type_arguments.len() == 2
+                        && type_arguments[1] == expression.ty
+                        && reflection_arguments.len() == 2
+                        && reflection_arguments[0].kind == owner_kind
+                        && args.len() == field_count + 2
+                        && args[0].ty == owner_ty
+                        && valid_field_ty
+                        && args[2..].iter().all(|arg| Some(arg.ty) == field_ty);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.field_value operands",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeVariantFieldValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.variant_field_value has no checked enum type",
+                        ));
+                    };
+                    let Type::Enum(enum_id) = self.types.resolve(owner_ty) else {
+                        return Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.variant_field_value of non-enum type",
+                        ));
+                    };
+                    let field_count = self
+                        .types
+                        .resolve_enum(*enum_id)
+                        .variants
+                        .iter()
+                        .map(|variant| variant.fields.len())
+                        .sum::<usize>();
+                    let field_ty = args.get(1).map(|arg| arg.ty);
+                    let valid_field_ty = field_ty.is_some_and(|ty| {
+                        matches!(self.types.resolve(ty), Type::Struct(id)
+                        if self.types.resolve_struct(*id).name == "TypeField")
+                    });
+                    let valid = type_arguments.len() == 2
+                        && type_arguments[1] == expression.ty
+                        && reflection_arguments.len() == 2
+                        && reflection_arguments[0].kind == "enum"
+                        && args.len() == field_count + 2
+                        && args[0].ty == owner_ty
+                        && valid_field_ty
+                        && args[2..].iter().all(|arg| Some(arg.ty) == field_ty);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.variant_field_value operands",
+                        ))
+                    };
+                }
                 let numeric_generic = matches!(
                     intrinsic,
                     jett_hir::IntrinsicId::MathKernelAbs

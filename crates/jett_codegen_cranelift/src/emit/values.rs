@@ -935,6 +935,114 @@ impl Translator<'_, '_> {
             let cloned = self.leaf(NativeLeaf::StructClone, &[selected], true)?;
             return self.own_linear(cloned);
         }
+        if id == IntrinsicId::TypeFieldValue {
+            let field_types = match self.types.resolve(args[0].ty) {
+                Type::Struct(id) => self
+                    .types
+                    .resolve_struct(*id)
+                    .fields
+                    .iter()
+                    .map(|(_, ty)| *ty)
+                    .collect::<Vec<_>>(),
+                Type::Bitfield(id) => self
+                    .types
+                    .resolve_bitfield(*id)
+                    .fields
+                    .iter()
+                    .map(|field| field.ty)
+                    .collect::<Vec<_>>(),
+                _ => return Err(self.unsupported(span, "reflected field owner")),
+            };
+            let metadata = self.scalar(evaluated[1], span)?;
+            let zero = self.builder.ins().iconst(ir::types::I64, 0);
+            let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
+            let mut expected = zero;
+            for (index, field_ty) in field_types.iter().enumerate() {
+                if representation_type(self.types, *field_ty)
+                    != representation_type(self.types, result_type)
+                    || jett_mir::move_values::is_secret(self.types, *field_ty)
+                        != jett_mir::move_values::is_secret(self.types, result_type)
+                {
+                    continue;
+                }
+                let candidate = self.scalar(evaluated[index + 2], span)?;
+                let index = i64::try_from(index)
+                    .map_err(|_| self.unsupported(span, "reflected field index"))?;
+                let matches = self
+                    .builder
+                    .ins()
+                    .icmp_imm(IntCC::Equal, requested_index, index);
+                expected = self.builder.ins().select(matches, candidate, expected);
+            }
+            let checked_index =
+                self.leaf(NativeLeaf::ReflectedFieldIndex, &[metadata, expected], true)?;
+            let owner = self.scalar(evaluated[0], span)?;
+            let bits = self.leaf(NativeLeaf::StructField, &[owner, checked_index], true)?;
+            if is_linear(self.types, result_type) {
+                return self.clone_linear(LoweredValue::Scalar(bits), result_type, span);
+            }
+            if is_string(self.types, result_type) {
+                let owned = self.leaf(NativeLeaf::Retain, &[bits], true)?;
+                return self.own(owned);
+            }
+            return self.unpack_payload(bits, result_type, span);
+        }
+        if id == IntrinsicId::TypeVariantFieldValue {
+            let Type::Enum(enum_id) = self.types.resolve(args[0].ty) else {
+                return Err(self.unsupported(span, "reflected variant field owner"));
+            };
+            let variants = self.types.resolve_enum(*enum_id).variants.clone();
+            let owner = self.scalar(evaluated[0], span)?;
+            let metadata = self.scalar(evaluated[1], span)?;
+            let zero = self.builder.ins().iconst(ir::types::I64, 0);
+            let tag = self.leaf(NativeLeaf::StructField, &[owner, zero], true)?;
+            let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
+            let mut expected = zero;
+            let mut argument_index = 2;
+            for (variant_index, variant) in variants.iter().enumerate() {
+                for (field_index, (_, field_ty)) in variant.fields.iter().enumerate() {
+                    let candidate = self.scalar(evaluated[argument_index], span)?;
+                    argument_index += 1;
+                    if representation_type(self.types, *field_ty)
+                        != representation_type(self.types, result_type)
+                        || jett_mir::move_values::is_secret(self.types, *field_ty)
+                            != jett_mir::move_values::is_secret(self.types, result_type)
+                    {
+                        continue;
+                    }
+                    let variant_index = i64::try_from(variant_index)
+                        .map_err(|_| self.unsupported(span, "reflected variant index"))?;
+                    let field_index = i64::try_from(field_index)
+                        .map_err(|_| self.unsupported(span, "reflected field index"))?;
+                    let variant_matches =
+                        self.builder
+                            .ins()
+                            .icmp_imm(IntCC::Equal, tag, variant_index);
+                    let field_matches =
+                        self.builder
+                            .ins()
+                            .icmp_imm(IntCC::Equal, requested_index, field_index);
+                    let matches = self.builder.ins().band(variant_matches, field_matches);
+                    expected = self.builder.ins().select(matches, candidate, expected);
+                }
+            }
+            let checked_index = self.leaf(
+                NativeLeaf::ReflectedVariantFieldIndex,
+                &[metadata, expected],
+                true,
+            )?;
+            let one = self.builder.ins().iconst(ir::types::I64, 1);
+            let slot = self.builder.ins().iadd(checked_index, one);
+            let bits = self.leaf(NativeLeaf::StructField, &[owner, slot], true)?;
+            if is_linear(self.types, result_type) {
+                return self.clone_linear(LoweredValue::Scalar(bits), result_type, span);
+            }
+            if is_string(self.types, result_type) {
+                let owned = self.leaf(NativeLeaf::Retain, &[bits], true)?;
+                return self.own(owned);
+            }
+            return self.unpack_payload(bits, result_type, span);
+        }
         if id == IntrinsicId::Range {
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let one = self.builder.ins().iconst(ir::types::I64, 1);

@@ -411,6 +411,15 @@ Native `type.variant_value[T]` borrows the enum, reads its runtime tag, and
 selects a compiler-built `TypeVariant` from checked variant metadata. The
 selected record is deep-cloned into an owned result before temporary metadata
 records are released; no payload field is read or moved by this selection.
+Native `type.field_value[T, U]` and `type.variant_field_value[T, U]` borrow the
+source value and reflected `TypeField`. Hidden compiler-built field snapshots
+identify candidates with the checked result representation and secret flag.
+Runtime validation compares the selected candidate's index, owner type, owner
+member, field name, and type name with the supplied metadata before reading
+the value slot. Linear results are deep-cloned, strings are retained, and
+scalar results are unpacked, so the source stays owned by its caller. Invalid
+metadata currently produces a static terminal error; exact interpreter
+diagnostics and alias-equivalence behavior remain parity work.
 
 Named function values use a native function address in the scalar carrier.
 Indirect calls use the checked signature plus the hidden runtime context,
