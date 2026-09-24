@@ -3031,11 +3031,30 @@ fn query_diagnostic_sources(
 }
 
 fn expression_type_names(check_result: &CheckResult) -> HashMap<Span, String> {
-    check_result
+    let mut names = check_result
         .type_map
         .iter()
         .map(|(span, ty_id)| (*span, check_result.interner.type_name(*ty_id)))
-        .collect()
+        .collect::<HashMap<_, _>>();
+    // One source expression in a generic body can have several concrete types.
+    // The root type map retains only the last check, so it cannot normalize
+    // that expression during interpretation of another instantiation.
+    let mut generic_types = HashMap::new();
+    let mut ambiguous = HashSet::new();
+    for instantiation in &check_result.generic_function_instantiations {
+        for (&span, &ty) in &instantiation.type_map {
+            if generic_types
+                .insert(span, ty)
+                .is_some_and(|previous| previous != ty)
+            {
+                ambiguous.insert(span);
+            }
+        }
+    }
+    for span in ambiguous {
+        names.remove(&span);
+    }
+    names
 }
 
 fn update_current_namespace(

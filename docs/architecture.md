@@ -2701,10 +2701,14 @@ move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
 reflection/JSON, actors/tasks, other capabilities, and clean Windows release
 verification are not established by this slice.
 Native JSON parsing now checks and emits the stdlib decoder for lists,
-string-keyed maps, optionals, and results recursively composed of supported primitive
+sets of supported hashable primitives, string-keyed maps, optionals, and results
+recursively composed of supported primitive
 leaves. The public compiler policy still runs before the source decoder.
 The fixture counts above are unchanged because remaining JSON shapes block
 their run-pass objects.
+The interpreter handoff omits checked expression types at generic source spans
+whose concrete instantiations disagree, so a later unsigned instantiation
+cannot coerce an earlier signed call's values.
 
 
 ### Native user struct slice

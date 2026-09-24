@@ -300,6 +300,7 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "json_result_parse",
             "../../tests/native/json_result_parse.jett",
         ),
+        ("json_set_parse", "../../tests/native/json_set_parse.jett"),
         (
             "json_generic_parse_primitives",
             "../../tests/native/json_generic_parse_primitives.jett",

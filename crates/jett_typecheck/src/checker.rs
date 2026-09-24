@@ -2908,6 +2908,10 @@ impl<'a> TypeChecker<'a> {
             | Type::Uint64
             | Type::Float64 => true,
             Type::List(element) => self.native_json_parse_source_supported(*element),
+            Type::Set(element) => matches!(
+                self.interner.resolve(*element),
+                Type::String | Type::Bool | Type::Int64 | Type::Uint64
+            ),
             Type::Map(key, value) if *key == TypeInterner::STRING => {
                 self.native_json_parse_source_supported(*value)
             }
@@ -11700,7 +11704,11 @@ impl<'a> TypeChecker<'a> {
             && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
             && matches!(
                 self.interner.resolve(*value_ty),
-                Type::List(_) | Type::Map(_, _) | Type::Optional(_) | Type::Result(_, _)
+                Type::List(_)
+                    | Type::Set(_)
+                    | Type::Map(_, _)
+                    | Type::Optional(_)
+                    | Type::Result(_, _)
             )
             && self.native_json_parse_source_supported(*value_ty)
         {
