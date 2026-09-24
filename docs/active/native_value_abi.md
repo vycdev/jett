@@ -472,11 +472,14 @@ type argument. Native code validates the runtime index, selects one snapshot,
 and returns an owned clone. Out-of-range errors are terminal, but their exact
 diagnostic still needs interpreter parity.
 
-Named function values use a native function address in the scalar carrier.
+Named function values and capture-free inline functions use a native function
+address in the scalar carrier. The latter extract to ordinary checked HIR/MIR
+functions with stable identities; a closure that reads an enclosing local
+retains its explicit unsupported form until the ABI carries an environment.
 Indirect calls use the checked signature plus the hidden runtime context,
 preserve source argument order, and apply the same runtime-failure and owned
-result handling as direct calls. View-parameter function values and inline
-closures remain guarded. The `list.sort_by` callback now runs in `.jett` over
+result handling as direct calls. View-parameter function values remain guarded.
+The `list.sort_by` callback now runs in `.jett` over
 one precomputed key per item, then performs stable swaps of parallel key and
 item lists. This avoids invoking Jett callbacks while a runtime collection
 lock is held. The current implementation uses quadratic comparisons and swaps;

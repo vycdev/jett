@@ -795,7 +795,7 @@ impl FunctionValidator<'_, '_> {
                 }
             }
             hir::ExpressionKind::StateIs { value, .. } => self.expression(value),
-            hir::ExpressionKind::InlineFunction { params, body } => {
+            hir::ExpressionKind::InlineFunction { params, body, .. } => {
                 for param in params {
                     self.check_local(*param, expression.span, "inline function parameter");
                 }

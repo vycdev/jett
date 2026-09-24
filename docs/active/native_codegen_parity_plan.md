@@ -288,7 +288,7 @@ lowering alone never changes an execution row to complete.
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
-| Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | named function addresses and indirect calls for supported signatures; inline closures pending | named callbacks passed, returned, and invoked through indirect calls; inline closures pending |
+| Function values, closures, and indirect calls | covered; capture-free inline bodies extract to ordinary checked functions while captured closures retain an explicit unsupported form | named and capture-free inline function addresses plus indirect calls for supported signatures; captured closures and view-parameter function values pending | named and capture-free inline callbacks passed, returned, and invoked through indirect calls; a linked fixture covers zero-argument and nested capture-free functions; captured closures pending |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 113 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 117 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 113/182 (62.1%), a useful progress measure rather than a
-claim that 62.1% of the language has native support.
+gate is currently 117/182 (64.3%), a useful progress measure rather than a
+claim that 64.3% of the language has native support.
 Active `type.variant_value` selection matches native/interpreter output for
 payload and empty variants. Reflected `type.field_value` and
 `type.variant_field_value` now read checked struct, bitfield, and enum payload
@@ -340,7 +340,7 @@ The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 113. Four string/comptime fixtures began emitting
+unmarked row and now proves 117. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -476,6 +476,13 @@ sortedness checks, and source-level `list.group_by` then unlock
 `list_source_surface.jett`. Dedicated native/interpreter programs check stable
 sorting, callback results, large unsigned values, floating-point and boolean
 keys, missing indices, and grouping.
+Capture-free inline functions now extract to ordinary checked functions and
+use the same native function-address path. This adds object gates for
+`generic_function_value_wrappers.jett`, `inline_functions.jett`,
+`list_map_extra.jett`, and `map_advanced.jett`. A linked differential fixture
+covers inline list callbacks, returned callbacks, zero-argument functions,
+and nested capture-free functions. Closures that read enclosing locals remain
+guarded until the native function value can carry an environment.
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.
 

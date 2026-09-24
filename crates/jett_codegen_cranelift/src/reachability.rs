@@ -438,10 +438,10 @@ function root() returns function(int64) returns int64:
             r#"namespace app
 function stdlib_leaf() returns int64:
     return 1
-function root() returns function(bool) returns int64:
+function root(seed: int64) returns function(bool) returns int64:
     return function(flag: bool) returns int64:
         if flag:
-            return stdlib_leaf()
+            return stdlib_leaf() + seed
         return 0
 "#,
         );
@@ -452,5 +452,26 @@ function root() returns function(bool) returns int64:
         // This exercises the extra nested HIR body that a shallow MIR walk
         // would miss; adding an enum variant also fails those matches to build.
         assert_eq!(reachable_names(&program), ["stdlib_leaf", "root"]);
+    }
+
+    #[test]
+    fn capture_free_inline_function_reaches_its_extracted_body() {
+        let mut program = lower_source(
+            r#"namespace app
+function stdlib_leaf() returns int64:
+    return 1
+function root() returns function(bool) returns int64:
+    return function(flag: bool) returns int64:
+        if flag:
+            return stdlib_leaf()
+        return 0
+"#,
+        );
+        set_origin(&mut program, "stdlib_leaf", SourceOrigin::Stdlib);
+
+        let names = reachable_names(&program);
+        assert_eq!(&names[..2], ["stdlib_leaf", "root"]);
+        assert_eq!(names.len(), 3);
+        assert!(names[2].starts_with("root$inline"));
     }
 }

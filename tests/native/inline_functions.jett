@@ -1,0 +1,20 @@
+namespace app
+function triple() returns function(int64) returns int64:
+    return function(value: int64) returns int64: return value * 3
+function main() returns nothing:
+    list[int64] selected = list.filter[int64](list(1, 2, 3, 4), function(value: int64) returns bool: return value > 2)
+    println(list.length[int64](selected))
+    function(int64) returns int64 mapper = function(value: int64) returns int64:
+        int64 product = value * 2
+        return product
+    list[int64] doubled = list.map[int64, int64](list(2, 4), mapper)
+    int64 last = list.get[int64](doubled, 1) handle:
+        default 0
+    println(last)
+    function(int64) returns int64 callback = triple()
+    println(callback(5))
+    function() returns int64 seven = function() returns int64: return 7
+    println(seven())
+    function() returns function() returns int64 make = function() returns function() returns int64: return function() returns int64: return 9
+    function() returns int64 nested = make()
+    println(nested())

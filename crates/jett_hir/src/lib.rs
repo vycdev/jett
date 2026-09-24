@@ -22,6 +22,7 @@ use jett_types::{
     ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId, TypeInterner,
 };
 
+mod inline_functions;
 mod type_validation;
 
 pub use type_validation::validate_backend_types;
@@ -339,6 +340,9 @@ pub enum ExpressionKind {
     Cancel(Box<Expression>),
     InlineFunction {
         params: Vec<LocalId>,
+        view_params: Vec<LocalId>,
+        /// First local allocated inside this closure. Earlier locals are captures.
+        local_floor: u32,
         body: Block,
     },
     ActorSpawn {
@@ -764,9 +768,34 @@ impl Validator<'_> {
                 }
             }
             ExpressionKind::StateIs { value, .. } => self.expression(value),
-            ExpressionKind::InlineFunction { params, body } => {
+            ExpressionKind::InlineFunction {
+                params,
+                view_params,
+                local_floor,
+                body,
+            } => {
+                if *local_floor as usize > self.local_count {
+                    self.error(
+                        expression.span,
+                        "inline function local floor is out of range",
+                    );
+                }
                 for param in params {
                     self.check_local(*param, expression.span);
+                    if param.index() < *local_floor {
+                        self.error(
+                            expression.span,
+                            "inline function parameter precedes its local floor",
+                        );
+                    }
+                }
+                for view_param in view_params {
+                    if !params.contains(view_param) {
+                        self.error(
+                            expression.span,
+                            "inline function view parameter is not a parameter",
+                        );
+                    }
                 }
                 self.block(body);
             }
@@ -913,6 +942,7 @@ impl<'a> Lowerer<'a> {
             }
         }
         if self.errors.is_empty() {
+            inline_functions::extract_capture_free(&mut functions, &self.check.interner);
             let program = Program { functions };
             validate(&program).map_err(|errors| {
                 errors
@@ -2365,8 +2395,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ExpressionKind::Cancel(Box::new(self.lower_expression(value)?))
             }
             Expr::InlineFn(params, _, body, _) => {
+                let local_floor = self.locals.len() as u32;
                 self.visible_bindings.push(HashMap::new());
                 let mut lowered_params = Vec::with_capacity(params.len());
+                let mut view_params = Vec::new();
                 for param in params {
                     let Some(definition) =
                         self.parent.definition_at(param.name.span, DefKind::Param)
@@ -2382,18 +2414,24 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                             .error(param.name.span, "closure parameter has no checked type");
                         return None;
                     };
-                    lowered_params.push(self.allocate_local(
+                    let local = self.allocate_local(
                         definition,
                         &param.name.name,
                         param_type,
                         param.mutable,
                         param.span,
-                    ));
+                    );
+                    lowered_params.push(local);
+                    if param.view {
+                        view_params.push(local);
+                    }
                 }
                 let body = self.lower_block(body);
                 self.visible_bindings.pop();
                 ExpressionKind::InlineFunction {
                     params: lowered_params,
+                    view_params,
+                    local_floor,
                     body,
                 }
             }
@@ -6269,7 +6307,7 @@ function main() returns nothing:
     }
 
     #[test]
-    fn lowers_inline_functions_and_indirect_calls() {
+    fn extracts_capture_free_inline_functions_and_indirect_calls() {
         let source = r#"namespace app
 function main() returns int64:
     function(int64) returns int64 double = function(value: int64) returns int64: return value * 2
@@ -6280,11 +6318,32 @@ function main() returns int64:
         let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
             panic!("expected closure local");
         };
-        assert!(matches!(value.kind, ExpressionKind::InlineFunction { .. }));
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::FunctionRef(FunctionId(1))
+        ));
+        assert_eq!(program.functions[1].params.len(), 1);
         assert!(matches!(
             main.body.statements[1].kind,
             StatementKind::Return(Some(Expression {
                 kind: ExpressionKind::IndirectCall { .. },
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn keeps_captured_inline_functions_explicit() {
+        let source = r#"namespace app
+function make(seed: int64) returns function(int64) returns int64:
+    return function(value: int64) returns int64: return value + seed
+"#;
+        let program = lower_source(source);
+        assert_eq!(program.functions.len(), 1);
+        assert!(matches!(
+            program.functions[0].body.statements[0].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::InlineFunction { .. },
                 ..
             }))
         ));

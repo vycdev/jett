@@ -266,6 +266,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("uuid_values", "../../tests/native/uuid_values.jett"),
         ("function_values", "../../tests/native/function_values.jett"),
         (
+            "inline_functions",
+            "../../tests/native/inline_functions.jett",
+        ),
+        (
             "list_source_values",
             "../../tests/native/list_source_values.jett",
         ),
