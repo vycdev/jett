@@ -270,7 +270,8 @@ pub enum ExpressionKind {
         /// with no type operands carries an empty vector.
         type_arguments: Vec<TypeId>,
         /// Checker-owned source identity for reflection operands, including
-        /// aliases that share a canonical type ID.
+        /// aliases that share a canonical type ID. Construction start also
+        /// carries the checked source type of each struct field in layout order.
         reflection_arguments: Vec<ReflectionTypeInfo>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
@@ -2658,7 +2659,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             let intrinsic = self.checked_intrinsic_id(call_span)?;
             let type_arguments =
                 self.checked_intrinsic_type_arguments(call_span, has_explicit_type_arguments)?;
-            let reflection_arguments = self
+            let mut reflection_arguments = self
                 .intrinsic_reflection_arguments
                 .get(&call_span)
                 .cloned()
@@ -2842,6 +2843,26 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         span: call_span,
                     });
                 }
+            }
+            if intrinsic == IntrinsicId::TypeConstructStart
+                && type_arguments.len() == 1
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| info.kind == "struct")
+            {
+                let Some(fields) = self
+                    .parent
+                    .check
+                    .reflection_metadata
+                    .get_type_fields_for_id(type_arguments[0])
+                else {
+                    self.parent.error(
+                        call_span,
+                        "type.construct_start has no checked field metadata",
+                    );
+                    return None;
+                };
+                reflection_arguments.extend(fields.iter().map(|field| field.type_info.clone()));
             }
             if intrinsic == IntrinsicId::TypeMachineStateValue
                 && type_arguments.len() == 1

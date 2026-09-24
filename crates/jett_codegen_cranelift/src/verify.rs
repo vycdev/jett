@@ -27,6 +27,7 @@ pub(crate) enum ScalarKind {
     Enum,
     Bitfield,
     Machine,
+    Construction,
     Function,
     Stdout,
     Clock,
@@ -42,6 +43,17 @@ impl ScalarKind {
     fn is_numeric(self) -> bool {
         self.is_integer() || matches!(self, Self::Float(_))
     }
+}
+
+fn native_constructible_struct(types: &TypeInterner, ty: TypeId) -> bool {
+    let Type::Struct(id) = types.resolve(ty) else {
+        return false;
+    };
+    types
+        .resolve_struct(*id)
+        .fields
+        .iter()
+        .all(|(_, field_ty)| !matches!(types.resolve(*field_ty), Type::Refinement { .. }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +240,7 @@ fn scalar_kind_inner(
             scalar_kind_inner(types, *value, "map value".into(), seen)?;
             ScalarKind::Map
         }
+        Type::TypeConstruction => ScalarKind::Construction,
         Type::Optional(inner) => {
             scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
             ScalarKind::Sum
@@ -1040,6 +1053,65 @@ impl Verifier<'_> {
                         ));
                     }
                     return Ok(());
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructStart {
+                    let valid = args.is_empty()
+                        && type_arguments.len() == 1
+                        && matches!(self.types.resolve(type_arguments[0]), Type::Struct(id)
+                            if reflection_arguments.len() == self.types.resolve_struct(*id).fields.len() + 1)
+                        && reflection_arguments[0].kind == "struct"
+                        && native_constructible_struct(self.types, type_arguments[0])
+                        && expression.ty == TypeInterner::TYPE_CONSTRUCTION;
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.construct_start target requiring unsupported construction validation",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructPut {
+                    let valid = args.len() == 3
+                        && type_arguments.len() == 2
+                        && reflection_arguments.len() == 2
+                        && reflection_arguments[0].kind == "struct"
+                        && native_constructible_struct(self.types, type_arguments[0])
+                        && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
+                        && matches!(self.types.resolve(args[1].ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeField")
+                        && args[2].ty == type_arguments[1]
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == TypeInterner::TYPE_CONSTRUCTION && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.construct_put target requiring unsupported construction validation",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructFinish {
+                    let valid = args.len() == 1
+                        && type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && reflection_arguments[0].kind == "struct"
+                        && native_constructible_struct(self.types, type_arguments[0])
+                        && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == type_arguments[0] && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(
+                            function,
+                            expression.span,
+                            "type.construct_finish target requiring unsupported construction validation",
+                        ))
+                    };
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeVariantValue {
                     let Some(&owner_ty) = type_arguments.first() else {

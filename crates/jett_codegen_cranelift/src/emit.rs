@@ -512,6 +512,7 @@ fn clif_type(
         | ScalarKind::Enum
         | ScalarKind::Bitfield
         | ScalarKind::Machine
+        | ScalarKind::Construction
         | ScalarKind::Function
         | ScalarKind::Stdout
         | ScalarKind::Clock
@@ -1280,12 +1281,14 @@ impl Translator<'_, '_> {
             ExpressionKind::String(text) => self.literal(text),
             ExpressionKind::Intrinsic {
                 intrinsic,
+                type_arguments,
                 reflection_arguments,
                 args,
                 evaluation_order,
                 ..
             } => self.intrinsic(
                 *intrinsic,
+                type_arguments,
                 reflection_arguments,
                 args,
                 evaluation_order,
@@ -1761,6 +1764,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Enum
             | ScalarKind::Bitfield
             | ScalarKind::Machine
+            | ScalarKind::Construction
             | ScalarKind::Function
             | ScalarKind::Stdout
             | ScalarKind::Clock

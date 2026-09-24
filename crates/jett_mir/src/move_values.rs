@@ -49,6 +49,7 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
     matches!(
         types.resolve(ty),
         Type::Bytes
+            | Type::TypeConstruction
             | Type::Result(..)
             | Type::Optional(_)
             | Type::List(_)
@@ -84,6 +85,7 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                 | IntrinsicId::MapHas
                 | IntrinsicId::MapGet
                 | IntrinsicId::TypeFieldValue
+                | IntrinsicId::TypeConstructPut
                 | IntrinsicId::TypeVariantFieldValue
                 | IntrinsicId::TypeMachineFieldValue
         ))

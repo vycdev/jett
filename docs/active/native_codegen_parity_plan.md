@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 118 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 120 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 118/182 (64.8%), a useful progress measure rather than a
-claim that 64.8% of the language has native support.
+gate is currently 120/182 (65.9%), a useful progress measure rather than a
+claim that 65.9% of the language has native support.
 Active `type.variant_value` selection matches native/interpreter output for
 payload and empty variants. Reflected `type.field_value` and
 `type.variant_field_value` now read checked struct, bitfield, and enum payload
@@ -391,6 +391,17 @@ the last specialization's type for earlier calls. A portable run-pass check
 mixes signed and unsigned set parsing to guard this behavior. The exhaustive
 object count stays at 118/182; `json_parse_collection_edges.jett` now reaches
 its named-struct result payload blocker.
+Native `TypeConstruction` now carries an owned struct builder with checked
+field layout metadata. `construct_put` transfers the builder and field value,
+returns handled metadata and duplicate-field errors, and `construct_finish`
+returns a constructed struct or a handled missing-field or owner error. A linked
+native/interpreter fixture covers ordinary and generic structs, alias-typed
+fields, successful construction, error messages, builder cloning, and cleanup.
+The object gate
+adds `json_reflection_flat_decoder.jett` and
+`reflection_type_id_duplicate_construction.jett`, reaching 120/182. Alias,
+refinement-validating, bitfield, enum, and machine construction remain later
+native slices; the verifier retains their explicit unsupported boundaries.
 Checked integer/float conversion adds `conversions.jett`.
 Native empty `list[never]` length/emptiness support adds `list_operations.jett`.
 Borrowed enum matching, explicit view-to-owner cloning at direct calls, and

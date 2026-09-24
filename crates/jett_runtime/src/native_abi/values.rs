@@ -29,6 +29,14 @@ const INVALID_STRUCT: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native struct handle or field",
 );
+const INVALID_CONSTRUCTION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native TypeConstruction builder",
+);
+const INVALID_CONSTRUCTION_LAYOUT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native TypeConstruction layout",
+);
 const INVALID_REFLECTED_FIELD: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"type.field_value: field metadata does not match the checked owner and requested type",
@@ -172,6 +180,13 @@ struct NativeField {
 }
 struct NativeStruct {
     fields: Vec<Option<NativeField>>,
+}
+#[derive(Clone)]
+struct NativeBuilderInfo {
+    owner: String,
+    field_names: Vec<String>,
+    field_type_names: Vec<String>,
+    field_types: Vec<String>,
 }
 struct NativeList {
     elements: Vec<Option<u64>>,
@@ -417,6 +432,7 @@ pub(super) struct NativeValues {
     sets: HashMap<NativeHandle, NativeSet>,
     maps: HashMap<NativeHandle, NativeMap>,
     structs: HashMap<NativeHandle, NativeStruct>,
+    builders: HashMap<NativeHandle, NativeBuilderInfo>,
     structs_created: u64,
     structs_destroyed: u64,
     lists_created: u64,
@@ -449,6 +465,7 @@ impl NativeValues {
     }
     pub(super) fn is_empty(&self) -> bool {
         self.structs.is_empty()
+            && self.builders.is_empty()
             && self.structs_created == self.structs_destroyed
             && self.strings.is_empty()
             && self.bytes.is_empty()
@@ -1435,6 +1452,206 @@ impl NativeValues {
         self.structs_created += 1;
         Ok(id)
     }
+    fn new_builder(&mut self, layout: &[u8]) -> LeafResult<u64> {
+        let mut cursor = BitfieldLayoutCursor {
+            bytes: layout,
+            position: 0,
+        };
+        if cursor.take(3).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)? != b"JC\x02" {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        let count = usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+            .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        if count > layout.len() {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let mut field_names = Vec::new();
+        let mut field_type_names = Vec::new();
+        let mut field_types = Vec::new();
+        field_names
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        field_types
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        field_type_names
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        for _ in 0..count {
+            field_names.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
+            field_type_names.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
+            field_types.push(cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?);
+        }
+        if cursor.position != layout.len() {
+            return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        let id = self.new_struct(count as u64)?;
+        self.builders.insert(
+            id,
+            NativeBuilderInfo {
+                owner,
+                field_names,
+                field_type_names,
+                field_types,
+            },
+        );
+        Ok(id)
+    }
+    fn builder_field_metadata(
+        &self,
+        field: u64,
+    ) -> LeafResult<(usize, String, Option<String>, String, String)> {
+        let index =
+            usize::try_from(self.struct_field(field, 0)?.bits).map_err(|_| INVALID_CONSTRUCTION)?;
+        let owner = self.text(self.struct_field(field, 1)?.bits)?.to_owned();
+        let member = self
+            .sums
+            .get(&self.struct_field(field, 2)?.bits)
+            .ok_or(INVALID_CONSTRUCTION)?;
+        let member = if member.tag == SUM_SUCCESS {
+            Some(self.text(member.bits)?.to_owned())
+        } else if member.tag == SUM_FAILURE {
+            None
+        } else {
+            return Err(INVALID_CONSTRUCTION);
+        };
+        let name = self.text(self.struct_field(field, 3)?.bits)?.to_owned();
+        let field_type = self.text(self.struct_field(field, 4)?.bits)?.to_owned();
+        Ok((index, owner, member, name, field_type))
+    }
+    fn builder_failure(
+        &mut self,
+        message: String,
+        builder: u64,
+        bits: u64,
+        owned: bool,
+    ) -> LeafResult<u64> {
+        let error = self.insert(message)?;
+        let result = match self.sum(SUM_FAILURE, error, true) {
+            Ok(result) => result,
+            Err(failure) => {
+                self.drop_value(error)?;
+                return Err(failure);
+            }
+        };
+        self.drop_value(builder)?;
+        if owned {
+            self.drop_value(bits)?;
+        }
+        Ok(result)
+    }
+    fn builder_put(
+        &mut self,
+        builder: u64,
+        field: u64,
+        bits: u64,
+        owned: bool,
+        expected_owner: &str,
+        provided_type: &str,
+        canonical_type: &str,
+    ) -> LeafResult<u64> {
+        let info = self
+            .builders
+            .get(&builder)
+            .cloned()
+            .ok_or(INVALID_CONSTRUCTION)?;
+        let (index, actual_owner, member, name, metadata_type) =
+            self.builder_field_metadata(field)?;
+        let error = if info.owner != expected_owner {
+            Some(format!(
+                "type.construct_put: builder for '{}' cannot construct '{}'",
+                info.owner, expected_owner
+            ))
+        } else if actual_owner != expected_owner || member.is_some() {
+            let actual_label = member.as_ref().map_or(actual_owner.clone(), |member| {
+                format!("{actual_owner}.{member}")
+            });
+            Some(format!(
+                "type.construct_put: field metadata belongs to '{actual_label}', expected '{expected_owner}'"
+            ))
+        } else if index >= info.field_names.len() {
+            Some(format!(
+                "type.construct_put: type '{expected_owner}' has no field at index {index}"
+            ))
+        } else if info.field_names[index] != name {
+            Some(format!(
+                "type.construct_put: field metadata '{name}' does not match field '{}' on '{expected_owner}'",
+                info.field_names[index]
+            ))
+        } else if info.field_type_names[index] != metadata_type
+            && info.field_types[index] != metadata_type
+        {
+            Some(format!(
+                "type.construct_put: field metadata for '{name}' has type '{metadata_type}', but '{expected_owner}' reports '{}'",
+                info.field_type_names[index]
+            ))
+        } else if info.field_types[index] != canonical_type {
+            Some(format!(
+                "type.construct_put: field '{name}' has type '{}', provided as '{provided_type}'",
+                info.field_type_names[index]
+            ))
+        } else if self
+            .structs
+            .get(&builder)
+            .and_then(|record| record.fields.get(index))
+            .and_then(|slot| slot.as_ref())
+            .is_some()
+        {
+            Some(format!(
+                "type.construct_put: field '{name}' was provided more than once"
+            ))
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            return self.builder_failure(error, builder, bits, owned);
+        }
+        let result = self.sum(SUM_SUCCESS, builder, true)?;
+        self.structs
+            .get_mut(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .fields[index] = Some(NativeField { bits, owned });
+        Ok(result)
+    }
+    fn builder_finish(&mut self, builder: u64, expected_owner: &str) -> LeafResult<u64> {
+        let info = self
+            .builders
+            .get(&builder)
+            .cloned()
+            .ok_or(INVALID_CONSTRUCTION)?;
+        if info.owner != expected_owner {
+            return self.builder_failure(
+                format!(
+                    "type.construct_finish: builder for '{}' cannot construct '{}'",
+                    info.owner, expected_owner
+                ),
+                builder,
+                0,
+                false,
+            );
+        }
+        let record = self.structs.get(&builder).ok_or(INVALID_CONSTRUCTION)?;
+        if let Some((index, _)) = record
+            .fields
+            .iter()
+            .enumerate()
+            .find(|(_, field)| field.is_none())
+        {
+            return self.builder_failure(
+                format!(
+                    "type.construct_finish: '{expected_owner}' is missing required field '{}'",
+                    info.field_names[index]
+                ),
+                builder,
+                0,
+                false,
+            );
+        }
+        let result = self.sum(SUM_SUCCESS, builder, true)?;
+        self.builders.remove(&builder);
+        Ok(result)
+    }
     fn struct_field(&self, id: u64, index: u64) -> LeafResult<NativeField> {
         self.structs
             .get(&id)
@@ -1534,6 +1751,7 @@ impl NativeValues {
     }
     fn clone_struct(&mut self, id: u64) -> LeafResult<u64> {
         let fields = self.structs.get(&id).ok_or(INVALID_STRUCT)?.fields.clone();
+        let builder = self.builders.get(&id).cloned();
         let output = self.new_struct(fields.len() as u64)?;
         for (index, field) in fields.into_iter().enumerate() {
             let Some(mut field) = field else {
@@ -1549,6 +1767,9 @@ impl NativeValues {
                 }
             }
             self.structs.get_mut(&output).ok_or(INVALID_STRUCT)?.fields[index] = Some(field);
+        }
+        if let Some(builder) = builder {
+            self.builders.insert(output, builder);
         }
         Ok(output)
     }
@@ -1585,6 +1806,7 @@ impl NativeValues {
     }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
         if let Some(value) = self.structs.remove(&id) {
+            self.builders.remove(&id);
             self.structs_destroyed += 1;
             for field in value.fields.into_iter().flatten() {
                 if field.owned {
@@ -2027,6 +2249,32 @@ macro_rules! leaves {
     }
 }
 leaves! {
+    BuilderNew, jett_rt_v1_builder_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.new_builder(layout) };
+    BuilderPut, jett_rt_v1_builder_put, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64), u64 => I64,
+        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let type_length = usize::try_from(type_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_length = usize::try_from(canonical_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
+            let provided_type = unsafe { std::slice::from_raw_parts(type_pointer as *const u8, type_length) };
+            let canonical_type = unsafe { std::slice::from_raw_parts(canonical_pointer as *const u8, canonical_length) };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
+            let provided_type = std::str::from_utf8(provided_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_type = std::str::from_utf8(canonical_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            s.builder_put(builder, field, bits, owned != 0, owner, provided_type, canonical_type) };
+    BuilderFinish, jett_rt_v1_builder_finish, false, (builder: u64 => I64, owner_pointer: u64 => I64, owner_length: u64 => I64), u64 => I64,
+        |s| { if owner_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
+            s.builder_finish(builder, owner) };
     StructNew, jett_rt_v1_struct_new, false, (count: u64 => I64), u64 => I64,
         |s| s.new_struct(count);
     StructInit, jett_rt_v1_struct_init, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,

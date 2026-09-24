@@ -604,7 +604,7 @@ fn plan_type_inner(
                 }
                 return plan_type_inner(types, *return_type, program, seen);
             }
-            Type::Bytes => return Ok(()),
+            Type::Bytes | Type::TypeConstruction => return Ok(()),
             Type::Struct(id) => {
                 for (_, field) in &types.resolve_struct(*id).fields {
                     plan_type_inner(types, *field, program, seen)?;

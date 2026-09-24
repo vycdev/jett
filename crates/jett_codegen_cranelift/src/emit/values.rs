@@ -260,7 +260,9 @@ impl Translator<'_, '_> {
             Type::List(_) => NativeLeaf::ListClone,
             Type::Set(_) => NativeLeaf::SetClone,
             Type::Map(..) => NativeLeaf::MapClone,
-            Type::Struct(_) | Type::Enum(_) | Type::Bitfield(_) => NativeLeaf::StructClone,
+            Type::Struct(_) | Type::Enum(_) | Type::Bitfield(_) | Type::TypeConstruction => {
+                NativeLeaf::StructClone
+            }
             Type::Machine(_) | Type::MachineState { .. } => NativeLeaf::StructClone,
             _ => NativeLeaf::SumClone,
         };
@@ -815,25 +817,66 @@ impl Translator<'_, '_> {
         self.drop_temporaries()?;
         self.drop_dead_locals(&BTreeSet::new())
     }
-    pub(super) fn static_bytes(&mut self, text: &str) -> Result<(Value, Value), CodegenError> {
+    pub(super) fn static_data(&mut self, bytes: &[u8]) -> Result<(Value, Value), CodegenError> {
         let data = self
             .module
             .declare_anonymous_data(false, false)
             .map_err(|e| CodegenError::Backend(e.to_string()))?;
         let mut desc = cranelift_module::DataDescription::new();
         // Object formats require storage even for an empty literal.
-        desc.define(if text.is_empty() {
+        desc.define(if bytes.is_empty() {
             vec![0].into_boxed_slice()
         } else {
-            text.as_bytes().into()
+            bytes.into()
         });
         self.module
             .define_data(data, &desc)
             .map_err(|e| CodegenError::Backend(e.to_string()))?;
         let reference = self.module.declare_data_in_func(data, self.builder.func);
         let pointer = self.builder.ins().global_value(ir::types::I64, reference);
-        let length = self.builder.ins().iconst(ir::types::I64, text.len() as i64);
+        let length = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, bytes.len() as i64);
         Ok((pointer, length))
+    }
+    pub(super) fn static_bytes(&mut self, text: &str) -> Result<(Value, Value), CodegenError> {
+        self.static_data(text.as_bytes())
+    }
+    fn construct_builder(
+        &mut self,
+        owner: TypeId,
+        reflection_arguments: &[ReflectionTypeInfo],
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let Type::Struct(id) = self.types.resolve(owner) else {
+            return Err(self.unsupported(span, "reflected construction owner"));
+        };
+        let fields = &self.types.resolve_struct(*id).fields;
+        if reflection_arguments.len() != fields.len() + 1 {
+            return Err(self.unsupported(span, "checked construction field metadata"));
+        }
+        let mut layout = b"JC\x02".to_vec();
+        fn encode_name(layout: &mut Vec<u8>, name: &str) -> Result<(), CodegenError> {
+            let length = u32::try_from(name.len()).map_err(|_| {
+                CodegenError::Backend("reflected construction name is too long".into())
+            })?;
+            layout.extend_from_slice(&length.to_le_bytes());
+            layout.extend_from_slice(name.as_bytes());
+            Ok(())
+        }
+        encode_name(&mut layout, &reflection_arguments[0].type_name)?;
+        let count = u32::try_from(fields.len())
+            .map_err(|_| CodegenError::Backend("too many reflected construction fields".into()))?;
+        layout.extend_from_slice(&count.to_le_bytes());
+        for ((name, field_ty), field_info) in fields.iter().zip(&reflection_arguments[1..]) {
+            encode_name(&mut layout, name)?;
+            encode_name(&mut layout, &field_info.type_name)?;
+            encode_name(&mut layout, &self.types.type_name(*field_ty))?;
+        }
+        let (pointer, length) = self.static_data(&layout)?;
+        let builder = self.leaf(NativeLeaf::BuilderNew, &[pointer, length], true)?;
+        self.own_linear(builder)
     }
     pub(super) fn literal(&mut self, text: &str) -> Result<LoweredValue, CodegenError> {
         let (pointer, length) = self.static_bytes(text)?;
@@ -920,6 +963,7 @@ impl Translator<'_, '_> {
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
+        type_arguments: &[TypeId],
         reflection_arguments: &[ReflectionTypeInfo],
         args: &[Expression],
         order: &[usize],
@@ -950,6 +994,66 @@ impl Translator<'_, '_> {
                 )),
                 _ => unreachable!(),
             };
+        }
+        if id == IntrinsicId::TypeConstructStart {
+            let owner = *type_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked construction type"))?;
+            return self.construct_builder(owner, reflection_arguments, span);
+        }
+        if id == IntrinsicId::TypeConstructPut {
+            let builder = self.scalar(evaluated[0], span)?;
+            let field = self.scalar(evaluated[1], span)?;
+            let (bits, owned) = self.payload_bits(evaluated[2]);
+            let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            let owner = reflection_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked construction owner"))?;
+            let field_type = reflection_arguments
+                .get(1)
+                .ok_or_else(|| self.unsupported(span, "checked construction field type"))?;
+            let (owner_pointer, owner_length) = self.static_bytes(&owner.type_name)?;
+            let (type_pointer, type_length) = self.static_bytes(&field_type.type_name)?;
+            let canonical_type = self.types.type_name(type_arguments[1]);
+            let (canonical_pointer, canonical_length) = self.static_bytes(&canonical_type)?;
+            let result = self.leaf(
+                NativeLeaf::BuilderPut,
+                &[
+                    builder,
+                    field,
+                    bits,
+                    owned,
+                    owner_pointer,
+                    owner_length,
+                    type_pointer,
+                    type_length,
+                    canonical_pointer,
+                    canonical_length,
+                ],
+                true,
+            )?;
+            for transferred in [evaluated[0], evaluated[2]] {
+                if let LoweredValue::Owned(_, slot) = transferred {
+                    self.clear_slot(slot);
+                }
+            }
+            return self.own_linear(result);
+        }
+        if id == IntrinsicId::TypeConstructFinish {
+            let builder = self.scalar(evaluated[0], span)?;
+            let owner = reflection_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked construction owner"))?;
+            let (owner_pointer, owner_length) = self.static_bytes(&owner.type_name)?;
+            let result = self.leaf(
+                NativeLeaf::BuilderFinish,
+                &[builder, owner_pointer, owner_length],
+                true,
+            )?;
+            if let LoweredValue::Owned(_, slot) = evaluated[0] {
+                self.clear_slot(slot);
+            }
+            return self.own_linear(result);
         }
         if id == IntrinsicId::TypeArg {
             let requested = self.scalar(evaluated[0], span)?;

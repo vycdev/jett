@@ -478,6 +478,19 @@ Static machine layout, state, and transition reflection materializes checked
 metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;
 alias and non-machine total probes produce empty values.
+Native `TypeConstruction` is a move-only handle backed by a partially filled
+owned struct record and checked field layout metadata. The HIR handoff keeps
+each field's source type spelling alongside its canonical value type, so
+alias-typed fields validate against reflected metadata without weakening the
+provided value check. `construct_put` borrows
+the reflected `TypeField`, consumes the builder and value, and returns an owned
+result. A handled validation failure drops both consumed owners; a successful
+put transfers the builder through the result. `construct_finish` checks the
+owner and every required field, then transfers the completed record into its
+result or drops the incomplete builder on a handled error. Deep cloning copies
+both populated fields and builder metadata. Context destruction checks that
+no builder metadata or owned fields remain. Only concrete structs without
+refinement-validating construction use this native path so far.
 Reflected `comptime type` dispatch borrows its runtime `TypeInfo` selector.
 The runtime leaf derives a recursive structural identity, unwrapping aliases;
 native branches compare it with the checker-owned identity of each specialized

@@ -2726,5 +2726,13 @@ The checker exports exact Equatable method identities for comparison expressions
 HIR turns them into ordinary direct calls (and negation for inequality), never
 structural or handle equality. See `active/native_value_abi.md` for the supported
 ownership subset and remaining projected-place/refinement/enum boundaries.
+Native reflected construction now uses the same explicit `TypeConstruction`
+builder source form for concrete structs. The checked type arguments select a
+field layout, including source alias spellings for field metadata, while runtime
+leaves own partially filled records, validate
+`TypeField` metadata, and return handled duplicate/missing-field errors.
+Builder results transfer ownership through put and finish; abandoned builders
+drop their populated fields. Other constructible aggregate kinds and structs
+requiring refinement validation remain native parity work.
 Earlier native coverage figures above describe historical slices, not the current
 release gate. The exhaustive checkpoint is recorded in the active parity plan.
