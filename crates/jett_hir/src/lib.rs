@@ -2864,6 +2864,28 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 };
                 reflection_arguments.extend(fields.iter().map(|field| field.type_info.clone()));
             }
+            if intrinsic == IntrinsicId::TypeConstructVariantStart
+                && type_arguments.len() == 1
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| info.kind == "enum")
+            {
+                let Some(variants) = self
+                    .parent
+                    .check
+                    .reflection_metadata
+                    .get_type_variants_for_id(type_arguments[0])
+                else {
+                    self.parent.error(
+                        call_span,
+                        "type.construct_variant_start has no checked variant metadata",
+                    );
+                    return None;
+                };
+                reflection_arguments.extend(variants.iter().flat_map(|variant| {
+                    variant.fields.iter().map(|field| field.type_info.clone())
+                }));
+            }
             if intrinsic == IntrinsicId::TypeMachineStateValue
                 && type_arguments.len() == 1
                 && lowered_args.len() == 1

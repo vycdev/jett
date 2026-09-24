@@ -330,6 +330,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "type_construction_bitfield",
             "../../tests/native/type_construction_bitfield.jett",
         ),
+        (
+            "type_construction_enum",
+            "../../tests/native/type_construction_enum.jett",
+        ),
         ("type_variants", "../../tests/native/type_variants.jett"),
         (
             "reflected_type_dispatch",

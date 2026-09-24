@@ -2696,7 +2696,7 @@ Payload enum equality compares the selected variant's integer, boolean,
 floating-point, and string fields through the native value ABI; aggregate
 payload fields remain outside that comparison path.
 
-The full native parity gate is still incomplete: 130/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 132/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -2730,14 +2730,15 @@ HIR turns them into ordinary direct calls (and negation for inequality), never
 structural or handle equality. See `active/native_value_abi.md` for the supported
 ownership subset and remaining projected-place/refinement/enum boundaries.
 Native reflected construction now uses the same explicit `TypeConstruction`
-builder source form for concrete structs and supported bitfields. The checked
+builder source form for concrete structs, supported bitfields, and enums. The checked
 type arguments select a
 field layout, including source alias spellings for field metadata, while runtime
 leaves own partially filled records, validate
 `TypeField` metadata, and return handled duplicate/missing-field errors.
 Builder results transfer ownership through put and finish; abandoned builders
-drop their populated fields. Bitfield finish also validates field widths. Other
-constructible aggregate kinds and structs
+drop their populated fields. Bitfield finish also validates field widths; enum
+start validates the selected variant and payload metadata. Other constructible
+aggregate kinds and structs
 requiring refinement validation remain native parity work.
 Earlier native coverage figures above describe historical slices, not the current
 release gate. The exhaustive checkpoint is recorded in the active parity plan.

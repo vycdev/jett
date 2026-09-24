@@ -85,10 +85,23 @@ fn native_constructible_record(types: &TypeInterner, ty: TypeId) -> bool {
     native_constructible_struct(types, ty) || native_constructible_bitfield(types, ty)
 }
 
-fn native_constructible_record_kind(types: &TypeInterner, ty: TypeId) -> Option<&'static str> {
+fn native_constructible_enum(types: &TypeInterner, ty: TypeId) -> bool {
+    let Type::Enum(id) = types.resolve(ty) else {
+        return false;
+    };
+    types.resolve_enum(*id).variants.iter().all(|variant| {
+        variant
+            .fields
+            .iter()
+            .all(|(_, field_ty)| !matches!(types.resolve(*field_ty), Type::Refinement { .. }))
+    })
+}
+
+fn native_constructible_builder_kind(types: &TypeInterner, ty: TypeId) -> Option<&'static str> {
     match types.resolve(ty) {
         Type::Struct(_) if native_constructible_struct(types, ty) => Some("struct"),
         Type::Bitfield(_) if native_constructible_bitfield(types, ty) => Some("bitfield"),
+        Type::Enum(_) if native_constructible_enum(types, ty) => Some("enum"),
         _ => None,
     }
 }
@@ -1123,11 +1136,42 @@ impl Verifier<'_> {
                         ))
                     };
                 }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructVariantStart {
+                    let fields =
+                        type_arguments
+                            .first()
+                            .and_then(|ty| match self.types.resolve(*ty) {
+                                Type::Enum(id) => Some(
+                                    self.types
+                                        .resolve_enum(*id)
+                                        .variants
+                                        .iter()
+                                        .map(|variant| variant.fields.len())
+                                        .sum::<usize>(),
+                                ),
+                                _ => None,
+                            });
+                    let valid = args.len() == 1
+                        && type_arguments.len() == 1
+                        && fields.is_some_and(|count| reflection_arguments.len() == count + 1)
+                        && reflection_arguments[0].kind == "enum"
+                        && native_constructible_enum(self.types, type_arguments[0])
+                        && matches!(self.types.resolve(args[0].ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeVariant")
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == TypeInterner::TYPE_CONSTRUCTION && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(function, expression.span,
+                            "type.construct_variant_start target requiring unsupported construction validation"))
+                    };
+                }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructPut {
                     let valid = args.len() == 3
                         && type_arguments.len() == 2
                         && reflection_arguments.len() == 2
-                        && native_constructible_record_kind(self.types, type_arguments[0])
+                        && native_constructible_builder_kind(self.types, type_arguments[0])
                             == Some(reflection_arguments[0].kind.as_str())
                         && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
                         && matches!(self.types.resolve(args[1].ty), Type::Struct(id)
@@ -1149,7 +1193,7 @@ impl Verifier<'_> {
                     let valid = args.len() == 1
                         && type_arguments.len() == 1
                         && reflection_arguments.len() == 1
-                        && native_constructible_record_kind(self.types, type_arguments[0])
+                        && native_constructible_builder_kind(self.types, type_arguments[0])
                             == Some(reflection_arguments[0].kind.as_str())
                         && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
                         && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)

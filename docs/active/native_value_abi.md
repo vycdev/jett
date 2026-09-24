@@ -491,9 +491,13 @@ owner and every required field, then transfers the completed record into its
 result or drops the incomplete builder on a handled error. Deep cloning copies
 both populated fields and builder metadata. Context destruction checks that
 no builder metadata or owned fields remain. Concrete structs without
-refinement-validating construction and bitfields with supported integer or
-unit-enum bit fields use this path. Bitfield finish checks widths and reports
-handled errors for out-of-range values; enum and machine builders remain open.
+refinement-validating construction, bitfields with supported integer or
+unit-enum bit fields, and enums without refinement-validating payload fields
+use this path. Enum start validates the borrowed `TypeVariant` and its payload
+field metadata, then creates an owned tagged record. Put validates each
+selected variant field, and finish reports a handled missing-payload error.
+Bitfield finish checks widths and reports handled errors for out-of-range
+values; machine builders remain open.
 The checked `.jett` JSON decoder now reaches that builder for supported
 concrete structs. It selects the struct or alias branch before unrelated
 generic decoder bodies, so direct aliases decode through their base struct

@@ -300,14 +300,18 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 130 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 132 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 130/182 (71.4%), a useful progress measure rather than a
-claim that 71.4% of the language has native support.
+gate is currently 132/182 (72.5%), a useful progress measure rather than a
+claim that 72.5% of the language has native support.
+Enum `TypeConstruction` now validates the checked `TypeVariant` and payload
+field metadata, builds the selected tag and fields, and returns handled
+owner, member, and missing-field errors. This adds native objects for
+`type_construction_enum.jett` and `json_tree_reflection_construction.jett`.
 Bitfield `TypeConstruction` now uses the native builder with checked field
 metadata and width validation at finish, adding
 `type_construction_bitfield.jett` to the object gate. A linked fixture compares
@@ -407,7 +411,7 @@ native/interpreter fixture covers ordinary and generic structs, alias-typed
 fields, successful construction, error messages, builder cloning, and cleanup.
 The object gate adds `json_reflection_flat_decoder.jett` and
 `reflection_type_id_duplicate_construction.jett`, reaching 120/182. Alias,
-refinement-validating, enum, and machine construction remain later
+refinement-validating and machine construction remain later
 native slices; the verifier retains their explicit unsupported boundaries.
 The checked source JSON decoder now specializes concrete structs and aliases
 before its general reflection fallback. The recursive native parse gate accepts
