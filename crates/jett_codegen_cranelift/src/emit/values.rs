@@ -849,6 +849,27 @@ impl Translator<'_, '_> {
         reflection_arguments: &[ReflectionTypeInfo],
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
+        fn encode_name(layout: &mut Vec<u8>, name: &str) -> Result<(), CodegenError> {
+            let length = u32::try_from(name.len()).map_err(|_| {
+                CodegenError::Backend("reflected construction name is too long".into())
+            })?;
+            layout.extend_from_slice(&length.to_le_bytes());
+            layout.extend_from_slice(name.as_bytes());
+            Ok(())
+        }
+        if let [info] = reflection_arguments
+            && !matches!(info.kind.as_str(), "struct" | "bitfield")
+        {
+            // Generic reflected code can instantiate this builder for a type
+            // whose kind is not constructible. Preserve the interpreter's
+            // handled put/finish error without inventing a record layout.
+            let mut layout = b"JC\x05".to_vec();
+            encode_name(&mut layout, &info.type_name)?;
+            encode_name(&mut layout, &info.kind)?;
+            let (pointer, length) = self.static_data(&layout)?;
+            let builder = self.leaf(NativeLeaf::BuilderNew, &[pointer, length], true)?;
+            return self.own_linear(builder);
+        }
         let fields = match self.types.resolve(owner) {
             Type::Struct(id) => self
                 .types
@@ -875,14 +896,6 @@ impl Translator<'_, '_> {
         } else {
             b"JC\x02".to_vec()
         };
-        fn encode_name(layout: &mut Vec<u8>, name: &str) -> Result<(), CodegenError> {
-            let length = u32::try_from(name.len()).map_err(|_| {
-                CodegenError::Backend("reflected construction name is too long".into())
-            })?;
-            layout.extend_from_slice(&length.to_le_bytes());
-            layout.extend_from_slice(name.as_bytes());
-            Ok(())
-        }
         encode_name(&mut layout, &reflection_arguments[0].type_name)?;
         let count = u32::try_from(fields.len())
             .map_err(|_| CodegenError::Backend("too many reflected construction fields".into()))?;

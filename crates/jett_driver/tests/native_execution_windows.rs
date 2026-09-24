@@ -480,6 +480,41 @@ fn native_generic_struct_fields_match_interpreter() {
 }
 
 #[test]
+fn native_alias_construction_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/alias_construction.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile alias construction");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_alias_json_parse_matches_interpreter() {
+    let source = include_str!("../../../tests/run_pass/reflection_type_id_duplicate_aliases.jett");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let source_path = directory.path().join("alias_json.jett");
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\nfunction main() returns nothing:\n    println(alias_reflection_summary(), account_alias_json_summary(), audit_alias_json_summary())\n"
+        ),
+    )
+    .expect("write alias JSON executable");
+    let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&source_path, launcher(), &binary).expect("compile alias JSON");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_uint64_checked_expression_dispatch_matches_interpreter() {
     let source =
         include_str!("../../../tests/run_pass/uint64_checked_expression_runtime_types.jett");

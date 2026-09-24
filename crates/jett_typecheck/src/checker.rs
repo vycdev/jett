@@ -7848,10 +7848,12 @@ impl<'a> TypeChecker<'a> {
         // contains only the current concrete expansion; the last expansion
         // remains in the legacy flat maps for interpreter compatibility.
         self.clear_checked_body_facts(body.span);
+        let kind_tag = ReflectionTypeInfo::kind_tag_variant(&reflection.kind).to_string();
         let previous = self.type_var_subst.insert(name.to_string(), bound_ty);
         let previous_reflection = self
             .type_var_reflections
             .insert(name.to_string(), reflection);
+        let previous_kind = self.type_var_kind_tags.insert(name.to_string(), kind_tag);
         self.check_block(body);
         if let Some(previous) = previous {
             self.type_var_subst.insert(name.to_string(), previous);
@@ -7862,6 +7864,11 @@ impl<'a> TypeChecker<'a> {
             self.type_var_reflections.insert(name.to_string(), previous);
         } else {
             self.type_var_reflections.remove(name);
+        }
+        if let Some(previous) = previous_kind {
+            self.type_var_kind_tags.insert(name.to_string(), previous);
+        } else {
+            self.type_var_kind_tags.remove(name);
         }
         self.checked_body_facts(body.span)
     }
@@ -8206,6 +8213,18 @@ impl<'a> TypeChecker<'a> {
         match ty {
             TypeExpr::View(inner, _) => self.type_info_arg_types_for_type_expr(inner),
             TypeExpr::StateQualified(_, _, _) => Vec::new(),
+            TypeExpr::Named(ident)
+                if self
+                    .type_var_reflections
+                    .get(&ident.name)
+                    .is_some_and(|info| info.kind == "alias") =>
+            {
+                let alias_name = &self.type_var_reflections[&ident.name].type_name;
+                let Some(alias) = self.type_aliases.get(alias_name).cloned() else {
+                    return Vec::new();
+                };
+                vec![self.resolve_type_expr(&alias.base_type)]
+            }
             TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => {
                 let alias = self
                     .type_aliases
@@ -18337,6 +18356,44 @@ function main() returns nothing:
                         && instantiation.specialization == call.specialization
                 })
         }));
+    }
+
+    #[test]
+    fn comptime_type_argument_alias_keeps_its_kind_in_generic_calls() {
+        let result = check_source_result(
+            r#"type Names = list[string]
+function classify[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return "alias"
+    return "other"
+function inspect[T]() returns string:
+    comptime type Element = type.arg[T](0):
+        return classify[Element]()
+function main() returns nothing:
+    string label = inspect[optional[Names]]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .generic_function_instantiations
+                .iter()
+                .any(|instance| {
+                    instance
+                        .specialization
+                        .type_argument_reflections
+                        .first()
+                        .is_some_and(|info| info.type_name == "Names")
+                        && instance.specialization.type_argument_kinds == ["alias_type"]
+                })
+        );
     }
 
     #[test]

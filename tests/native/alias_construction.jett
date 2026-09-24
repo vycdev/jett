@@ -1,0 +1,22 @@
+namespace models
+export struct Record:
+    id: string
+export type RecordAlias = Record
+namespace app
+function alias_put_error() returns string:
+    use models
+    mutable TypeConstruction builder = type.construct_start[models.RecordAlias]()
+    TypeField field = list.get[TypeField](type.fields[models.Record](), 0) handle:
+        return "missing base field"
+    builder = type.construct_put[models.RecordAlias, string](builder, view field, "x") handle error:
+        return error
+    return "unexpected put success"
+function alias_finish_error() returns string:
+    use models
+    TypeConstruction builder = type.construct_start[models.RecordAlias]()
+    models.RecordAlias item = type.construct_finish[models.RecordAlias](builder) handle error:
+        return error
+    return item.id
+function main() returns nothing:
+    println(alias_put_error())
+    println(alias_finish_error())

@@ -185,6 +185,7 @@ struct NativeStruct {
 struct NativeBuilderInfo {
     owner: String,
     metadata_owner: String,
+    unsupported_kind: Option<String>,
     variant: Option<String>,
     state: Option<String>,
     target_state: Option<String>,
@@ -1475,6 +1476,31 @@ impl NativeValues {
             .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
             .try_into()
             .expect("three bytes");
+        if &version == b"JC\x05" {
+            let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let kind = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if cursor.position != layout.len() {
+                return Err(INVALID_CONSTRUCTION_LAYOUT);
+            }
+            let id = self.new_struct(0)?;
+            self.builders.insert(
+                id,
+                NativeBuilderInfo {
+                    metadata_owner: owner.clone(),
+                    owner,
+                    unsupported_kind: Some(kind),
+                    variant: None,
+                    state: None,
+                    target_state: None,
+                    field_offset: 0,
+                    field_names: Vec::new(),
+                    field_type_names: Vec::new(),
+                    field_types: Vec::new(),
+                    validation: Vec::new(),
+                },
+            );
+            return Ok(id);
+        }
         if !matches!(&version, b"JC\x02" | b"JC\x03") {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
@@ -1554,6 +1580,7 @@ impl NativeValues {
             NativeBuilderInfo {
                 metadata_owner: owner.clone(),
                 owner,
+                unsupported_kind: None,
                 variant: None,
                 state: None,
                 target_state: None,
@@ -1729,6 +1756,7 @@ impl NativeValues {
             NativeBuilderInfo {
                 owner,
                 metadata_owner: expected_metadata_owner,
+                unsupported_kind: None,
                 variant: (!machine).then(|| name.clone()),
                 state: machine.then_some(name),
                 target_state,
@@ -1805,6 +1833,14 @@ impl NativeValues {
             .get(&builder)
             .cloned()
             .ok_or(INVALID_CONSTRUCTION)?;
+        if info.owner == expected_owner && info.unsupported_kind.is_some() {
+            return self.builder_failure(
+                format!("type.construct_put supports only structs, bitfields, enums, and machines, got '{expected_owner}'"),
+                builder,
+                bits,
+                owned,
+            );
+        }
         let (index, actual_owner, member, name, metadata_type) =
             self.builder_field_metadata(field)?;
         let expected_member = info.variant.as_ref().or(info.state.as_ref());
@@ -1903,6 +1939,14 @@ impl NativeValues {
                     "type.construct_finish: builder for '{}' cannot construct '{}'",
                     info.owner, expected_owner
                 ),
+                builder,
+                0,
+                false,
+            );
+        }
+        if info.unsupported_kind.is_some() {
+            return self.builder_failure(
+                format!("type.construct_finish supports only structs, bitfields, enums, and machines, got '{expected_owner}'"),
                 builder,
                 0,
                 false,

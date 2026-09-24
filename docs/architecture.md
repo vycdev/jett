@@ -863,6 +863,11 @@ Checked reflection operands also carry source-aware names, kinds, secret flags,
 and nested arguments into HIR and MIR. Scalar reflection and recursive
 `TypeInfo` construction use those facts instead of reconstructing aliases from
 canonical `TypeId`.
+The checker restores both the canonical type and source kind inside a
+`comptime type` binding. Generic calls made from that scope therefore select
+the alias branch before the underlying struct or collection branch; nested
+`type.arg` bindings resolve the aliased base while retaining its source-aware
+reflection metadata.
 `type.fields` lowers checked field snapshots into ordinary `TypeField` values
 only for struct and bitfield kinds; an alias remains a distinct total probe.
 `type.bitfield_layout` and `type.bitfield_fields` likewise lower checked
@@ -2766,6 +2771,10 @@ machines. The checked type arguments select a field layout, including source
 alias spellings for field metadata, while runtime leaves own partially filled
 records, validate `TypeField` metadata, and return handled duplicate/missing-field
 errors.
+When a generic record helper is instantiated for a non-record reflection kind,
+native code creates an empty builder that preserves the interpreter's handled
+`type.construct_put` and `type.construct_finish` errors. It does not infer a
+record layout from the canonical `TypeId` of a source alias.
 Builder results transfer ownership through put and finish; abandoned builders
 drop their populated fields. Bitfield finish also validates field widths; enum
 and machine start validate selected member and payload metadata. State-qualified

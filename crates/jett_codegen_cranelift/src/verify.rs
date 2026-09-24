@@ -1155,6 +1155,8 @@ impl Verifier<'_> {
                     return Ok(());
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructStart {
+                    let unsupported_kind = reflection_arguments.len() == 1
+                        && !matches!(reflection_arguments[0].kind.as_str(), "struct" | "bitfield");
                     let record_fields =
                         type_arguments
                             .first()
@@ -1170,11 +1172,11 @@ impl Verifier<'_> {
                             });
                     let valid = args.is_empty()
                         && type_arguments.len() == 1
-                        && record_fields.is_some_and(|(kind, count)| {
-                            reflection_arguments.len() == count + 1
-                                && reflection_arguments[0].kind == kind
-                        })
-                        && native_constructible_record(self.types, type_arguments[0])
+                        && (unsupported_kind
+                            || (record_fields.is_some_and(|(kind, count)| {
+                                reflection_arguments.len() == count + 1
+                                    && reflection_arguments[0].kind == kind
+                            }) && native_constructible_record(self.types, type_arguments[0])))
                         && expression.ty == TypeInterner::TYPE_CONSTRUCTION;
                     return if valid {
                         Ok(())
@@ -1249,16 +1251,24 @@ impl Verifier<'_> {
                     };
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructPut {
+                    let unsupported_kind = reflection_arguments.first().is_some_and(|info| {
+                        !matches!(
+                            info.kind.as_str(),
+                            "struct" | "bitfield" | "enum" | "machine" | "machine_state"
+                        )
+                    });
                     let valid = args.len() == 3
                         && type_arguments.len() == 2
                         && reflection_arguments.len() == 2
-                        && native_constructible_builder_kind(self.types, type_arguments[0])
-                            == Some(reflection_arguments[0].kind.as_str())
-                        && native_builder_value_type_supported(
-                            self.types,
-                            type_arguments[0],
-                            type_arguments[1],
-                        )
+                        && (unsupported_kind
+                            || native_constructible_builder_kind(self.types, type_arguments[0])
+                                == Some(reflection_arguments[0].kind.as_str()))
+                        && (unsupported_kind
+                            || native_builder_value_type_supported(
+                                self.types,
+                                type_arguments[0],
+                                type_arguments[1],
+                            ))
                         && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
                         && matches!(self.types.resolve(args[1].ty), Type::Struct(id)
                             if self.types.resolve_struct(*id).name == "TypeField")
@@ -1276,11 +1286,18 @@ impl Verifier<'_> {
                     };
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructFinish {
+                    let unsupported_kind = reflection_arguments.first().is_some_and(|info| {
+                        !matches!(
+                            info.kind.as_str(),
+                            "struct" | "bitfield" | "enum" | "machine" | "machine_state"
+                        )
+                    });
                     let valid = args.len() == 1
                         && type_arguments.len() == 1
                         && reflection_arguments.len() == 1
-                        && native_constructible_builder_kind(self.types, type_arguments[0])
-                            == Some(reflection_arguments[0].kind.as_str())
+                        && (unsupported_kind
+                            || native_constructible_builder_kind(self.types, type_arguments[0])
+                                == Some(reflection_arguments[0].kind.as_str()))
                         && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
                         && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
                             if *ok == type_arguments[0] && *err == TypeInterner::STRING);

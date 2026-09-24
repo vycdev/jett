@@ -300,14 +300,21 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 152 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 154 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 152/182 (83.5%), a useful progress measure rather than a
+gate is currently 154/182 (84.6%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
+Generic record helpers instantiated for aliases and other non-record kinds now
+emit an empty native builder that preserves handled construction failures.
+The checker also keeps the reflected source kind in scoped `comptime type`
+bindings, so alias JSON validation reaches the aliased base and its renamed
+fields. Linked native/interpreter fixtures cover direct alias-builder failures
+and nested alias JSON parsing. `json_parse_exact.jett` and
+`reflection_type_id_duplicate_aliases.jett` join the object gate.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
 finish. This adds `type_construction_machine.jett` to the object gate; a linked
@@ -625,7 +632,7 @@ contracts, and 182/182 typed lowerings.
 Pipeline calls to `json.serialize` and `json.serialize_public` now select the
 same checked source serializer as direct calls for supported structured types.
 A linked native/interpreter fixture covers both forms, and `pipeline_into.jett`
-joins the object gate. The current exhaustive Windows checkpoint is 150/182
+joins the object gate. That exhaustive Windows checkpoint was 150/182
 objects, 23/30 main outcomes, 25/25 runtime contracts, and 182/182 typed
 lowerings.
 Supported records with refinement fields now use the checked source JSON
@@ -635,7 +642,7 @@ that could pass an unvalidated base value into a direct refinement field;
 accepting those values requires predicate execution at builder finish. A linked
 fixture covers valid and rejected JSON, exact unknown-field errors, and reflected
 reconstruction. `json_parse.jett` and `json_parse_refinement_valid.jett` join
-the object gate. The current exhaustive Windows checkpoint is 152/182 objects,
+the object gate. That exhaustive Windows checkpoint was 152/182 objects,
 23/30 main outcomes, 25/25 runtime contracts, and 182/182 typed lowerings.
 
 Verification-only empty objects do not count. Native

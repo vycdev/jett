@@ -63,6 +63,10 @@ concrete type arguments and the checker-owned reflection-visible
 specialization facts. The latter keep source aliases and passed reflection
 facts distinct when canonical type interning intentionally gives them the same
 `TypeId`.
+Scoped types bound by `comptime type` keep their source reflection kind as well
+as their canonical type. A nested generic call or static `type.kind_tag` branch
+must still see an alias as an alias, even when its underlying `TypeId` is a
+struct or collection.
 
 Named call arguments reach HIR only as a checked permutation into canonical
 parameter order. Struct construction likewise carries canonical field order
