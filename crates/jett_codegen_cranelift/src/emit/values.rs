@@ -481,7 +481,7 @@ impl Translator<'_, '_> {
             }
             IntrinsicId::MapHas => {
                 let map = self.scalar(values[0], span)?;
-                let key = self.scalar(values[1], span)?;
+                let (key, _) = self.payload_bits(values[1]);
                 let found = self.leaf(NativeLeaf::MapHas, &[map, key], true)?;
                 Ok(LoweredValue::Scalar(
                     self.builder.ins().ireduce(ir::types::I8, found),
@@ -489,7 +489,7 @@ impl Translator<'_, '_> {
             }
             IntrinsicId::MapGet => {
                 let map = self.scalar(values[0], span)?;
-                let key = self.scalar(values[1], span)?;
+                let (key, _) = self.payload_bits(values[1]);
                 let result = self.leaf(NativeLeaf::MapGet, &[map, key], true)?;
                 self.own_linear(result)
             }
@@ -505,7 +505,7 @@ impl Translator<'_, '_> {
                 let LoweredValue::Owned(map, slot) = values[0] else {
                     return Err(self.unsupported(span, "map remove requires owner"));
                 };
-                let key = self.scalar(values[1], span)?;
+                let (key, _) = self.payload_bits(values[1]);
                 let result = self.leaf(NativeLeaf::MapRemove, &[map, key], true)?;
                 self.clear_slot(slot);
                 self.own_linear(result)
@@ -669,7 +669,7 @@ impl Translator<'_, '_> {
             }
             IntrinsicId::SetContains => {
                 let value = self.scalar(values[0], span)?;
-                let key = self.scalar(values[1], span)?;
+                let (key, _) = self.payload_bits(values[1]);
                 let found = self.leaf(NativeLeaf::SetContains, &[value, key], true)?;
                 Ok(LoweredValue::Scalar(
                     self.builder.ins().ireduce(ir::types::I8, found),

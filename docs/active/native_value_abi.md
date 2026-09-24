@@ -317,9 +317,10 @@ allocation fails. Remove drops only the removed owner. Clone retains each string
 and rolls back partial construction on failure. Native sequence lowering uses
 initialized element slots for consuming iteration, so an early exit drops only
 the elements still in the set. Borrowed iteration clones strings without moving
-the source set. The native/interpreter fixture covers these paths, including
-duplicate content and cleanup at context destruction. Primitive-backed
-refinement elements remain guarded.
+the source set. Primitive-backed refinement elements use their checked integer,
+bool, or string representation, including the string ownership flag. The
+native/interpreter fixtures cover these paths, including duplicate content and
+cleanup at context destruction.
 
 Native maps use distinct ordered owner handles with exact key and value
 ownership flags. Literal construction appends every source entry, including
@@ -331,9 +332,10 @@ Lookup clones owned values into an optional sum. Explicit map clone recursively
 clones owned entries and releases a partial prefix on failure. Consuming
 iteration transfers each key and value separately; an interrupted iteration
 drops only fields still owned by the map. Borrowed iteration clones supported
-scalar and string fields. Native/interpreter execution fixtures and runtime
-cleanup tests cover these paths. Primitive-backed refinement keys, projected
-move-only views, and callback-bearing map helpers remain guarded.
+scalar and string fields. Primitive-backed refinement keys use the same key
+bits and string ownership as their underlying type. Native/interpreter execution
+fixtures and runtime cleanup tests cover these paths. Projected move-only
+views and callback-bearing map helpers remain guarded.
 
 The remaining string intrinsics now have typed native leaves. Replace reuses
 the grapheme split matcher and checks output capacity before assembly; empty

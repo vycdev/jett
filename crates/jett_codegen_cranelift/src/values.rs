@@ -612,9 +612,11 @@ pub(crate) fn set_element(
     }
 }
 fn set_element_supported(types: &TypeInterner, element: TypeId) -> bool {
-    matches!(
-        types.resolve(element),
-        Type::Int8
+    let mut current = element;
+    for _ in 0..types.len() {
+        match types.resolve(current) {
+            Type::Refinement { base, .. } => current = *base,
+            Type::Int8
             | Type::Int16
             | Type::Int32
             | Type::Int64
@@ -623,8 +625,11 @@ fn set_element_supported(types: &TypeInterner, element: TypeId) -> bool {
             | Type::Uint32
             | Type::Uint64
             | Type::Bool
-            | Type::String
-    )
+            | Type::String => return true,
+            _ => return false,
+        }
+    }
+    false
 }
 pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
     Some(match types.resolve(element) {

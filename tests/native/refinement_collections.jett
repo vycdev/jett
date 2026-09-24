@@ -1,0 +1,48 @@
+namespace app
+type UserId = string where value != ""
+type Positive = int64 where value > 0
+function main() returns nothing:
+    UserId first = "ada" handle error:
+        return
+    UserId duplicate = "ada" handle error:
+        return
+    UserId second = "bob" handle error:
+        return
+    mutable set[UserId] ids = set.new[UserId]()
+    ids = set.add[UserId](ids, first)
+    ids = set.add[UserId](ids, duplicate)
+    ids = set.add[UserId](ids, second)
+    println(set.length[UserId](view ids))
+    UserId query = "ada" handle error:
+        return
+    println(set.contains[UserId](view ids, query))
+    UserId removal = "ada" handle error:
+        return
+    ids = set.remove[UserId](ids, removal)
+    println(set.length[UserId](view ids))
+    mutable map[UserId, int64] scores = map.new[UserId, int64]()
+    UserId map_key = "ada" handle error:
+        return
+    scores = map.insert[UserId, int64](scores, map_key, 7)
+    UserId map_query = "ada" handle error:
+        return
+    println(map.has[UserId, int64](view scores, map_query))
+    Positive seven = 7 handle error:
+        return
+    Positive another_seven = 7 handle error:
+        return
+    mutable set[Positive] numbers = set.new[Positive]()
+    numbers = set.add[Positive](numbers, seven)
+    numbers = set.add[Positive](numbers, another_seven)
+    println(set.length[Positive](view numbers))
+    mutable set[bool] flags = set.new[bool]()
+    flags = set.add[bool](flags, true)
+    println(set.contains[bool](view flags, true))
+    flags = set.remove[bool](flags, true)
+    println(set.length[bool](view flags))
+    mutable map[bool, int64] by_flag = map.new[bool, int64]()
+    by_flag = map.insert[bool, int64](by_flag, true, 9)
+    println(map.has[bool, int64](view by_flag, true))
+    println(map.get_or[bool, int64](clone by_flag, true, 0))
+    by_flag = map.remove[bool, int64](by_flag, true)
+    println(map.length[bool, int64](view by_flag))
