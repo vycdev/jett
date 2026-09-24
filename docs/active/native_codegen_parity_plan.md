@@ -555,6 +555,13 @@ fixture covers both public spellings, renamed and escaped fields, all supported
 scalar categories, nested collections, optional/result branches, and cleanup.
 Float32 fields, enums, bitfields, secrets, raw-tree fields, and other JSON
 shapes still need this source path or another checked native lowering.
+Bare machines whose state fields recursively use the supported parser leaves
+now instantiate the reflected `.jett` decoder. A linked native/interpreter
+fixture covers a populated state, an empty state, an exact-parse error, and a
+missing-field error. Empty reflected field loops lower without a body. The
+exhaustive Windows gate remains 133/182 emitted objects, 23/30 main outcomes,
+25/25 runtime contracts, and 182/182 typed lowerings; the machine fixtures in
+that gate still contain unsupported JSON shapes.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

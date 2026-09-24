@@ -2949,6 +2949,23 @@ impl<'a> TypeChecker<'a> {
                 visiting.remove(&ty);
                 supported
             }
+            Type::Machine(id) => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*id)
+                    .states
+                    .iter()
+                    .flat_map(|state| state.fields.iter())
+                    .all(|(_, field_ty)| {
+                        !matches!(self.interner.resolve(*field_ty), Type::Refinement { .. })
+                            && self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
             _ => false,
         }
     }
@@ -11734,6 +11751,7 @@ impl<'a> TypeChecker<'a> {
             && matches!(
                 self.interner.resolve(*value_ty),
                 Type::Struct(_)
+                    | Type::Machine(_)
                     | Type::List(_)
                     | Type::Set(_)
                     | Type::Map(_, _)

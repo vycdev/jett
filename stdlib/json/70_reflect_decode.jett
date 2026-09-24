@@ -42,8 +42,8 @@ mutual:
     function json_decode_tree_enum_payload_variant_reflected[T](view payload: JsonTree, type_name: string, variant: TypeVariant, payload_count: int64) returns result[T, string]
     function json_tree_machine_state_name(view raw: JsonTree) returns result[string, string]
     function json_tree_machine_payload_tree(view raw: JsonTree) returns result[JsonTree, string]
+    function json_tree_machine_parts(view raw: JsonTree) returns result[JsonTreeObjectField, string]
     function json_decode_tree_machine_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
-    function json_decode_tree_machine_payload_reflected[T](view payload: JsonTree, type_name: string, state: TypeMachineState) returns result[T, string]
     function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]
     function json_tree_record_field_value(view raw: JsonTree, view field: TypeField, owner_name: string) returns result[JsonTree, string]
     function json_decode_tree_record_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]
@@ -62,6 +62,8 @@ function json_decode_tree_reflected[T](view raw: JsonTree) returns result[T, str
         return json_decode_tree_result_reflected[T](view raw)
     else if kind == TypeKind.struct_type:
         return json_decode_tree_record_reflected[T](view raw, info.type_name)
+    else if kind == TypeKind.machine_type:
+        return json_decode_tree_machine_reflected[T](view raw, info.type_name)
     else if kind == TypeKind.alias_type:
         return json_decode_tree_alias_reflected[T](view raw)
     else if kind == TypeKind.primitive_type:
@@ -443,31 +445,35 @@ function json_tree_machine_payload_tree(view raw: JsonTree) returns result[JsonT
     if json_tree_is_object(view payload) == false:
         return fail("expected machine payload object, got {json_tree_kind(view payload)}")
     return ok(payload)
-function json_decode_tree_machine_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
+function json_tree_machine_parts(view raw: JsonTree) returns result[JsonTreeObjectField, string]:
     if json_tree_is_object(view raw) == false:
         return fail("expected machine envelope object, got {json_tree_kind(view raw)}")
     string state_name = json_tree_machine_state_name(view raw) handle error:
         return fail(error)
     JsonTree payload = json_tree_machine_payload_tree(view raw) handle error:
         return fail(error)
-    for state in type.machine_states[T]():
-        if state.name == state_name:
-            return json_decode_tree_machine_payload_reflected[T](view payload, type_name, state)
-    return fail("unknown machine state '{type_name}.{state_name}'")
-function json_decode_tree_machine_payload_reflected[T](view payload: JsonTree, type_name: string, state: TypeMachineState) returns result[T, string]:
-    mutable TypeConstruction builder = type.construct_machine_start[T](view state) handle error:
+    return ok(JsonTreeObjectField(key: state_name, value: payload))
+function json_decode_tree_machine_reflected[T](view raw: JsonTree, type_name: string) returns result[T, string]:
+    JsonTreeObjectField parts = json_tree_machine_parts(view raw) handle error:
         return fail(error)
-    string state_name = state.name
-    string owner_name = "{type_name}.{state_name}"
-    for field in state.fields:
-        comptime type Field = field.type_info:
-            JsonTree raw_field = json_tree_record_field_value(view payload, view field, owner_name) handle error:
-                return fail(error)
-            Field decoded = json_decode_tree_reflected[Field](view raw_field) handle error:
-                return fail("{state_name}.{field.serialize_name}: {error}")
-            builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
-                return fail(error)
-    return type.construct_finish[T](builder)
+    string state_name = parts.key
+    JsonTree payload = parts.value
+    for state in type.machine_states[T]():
+        if state.name != state_name:
+            continue
+        mutable TypeConstruction builder = type.construct_machine_start[T](view state) handle error:
+            return fail(error)
+        string owner_name = "{type_name}.{state_name}"
+        for field in state.fields:
+            comptime type Field = field.type_info:
+                JsonTree raw_field = json_tree_record_field_value(view payload, view field, owner_name) handle error:
+                    return fail(error)
+                Field decoded = json_decode_tree_reflected[Field](view raw_field) handle error:
+                    return fail("{state_name}.{field.serialize_name}: {error}")
+                builder = type.construct_put[T, Field](builder, view field, decoded) handle error:
+                    return fail(error)
+        return type.construct_finish[T](builder)
+    return fail("unknown machine state '{type_name}.{state_name}'")
 function json_tree_missing_field_reflected(view field: TypeField, owner_name: string) returns result[JsonTree, string]:
     if field.type_info.kind_tag == TypeKind.optional_type:
         return ok(JsonTree.null)

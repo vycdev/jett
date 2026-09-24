@@ -2027,6 +2027,15 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }),
         );
 
+        // A trusted reflection loop over no fields has no concrete body to
+        // dispatch. The runtime loop has no iterations either.
+        if bindings.is_empty() {
+            return Some(StatementKind::Scope(Block {
+                statements: Vec::new(),
+                span: binding.body.span,
+            }));
+        }
+
         if bindings.len() == 1
             && bindings[0].selection == CheckedComptimeTypeSelection::Unconditional
         {
@@ -2039,14 +2048,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             ));
         }
 
-        if bindings.is_empty()
-            || bindings.iter().any(|checked| {
-                !matches!(
-                    checked.selection,
-                    CheckedComptimeTypeSelection::ReflectedIteration(_)
-                )
-            })
-        {
+        if bindings.iter().any(|checked| {
+            !matches!(
+                checked.selection,
+                CheckedComptimeTypeSelection::ReflectedIteration(_)
+            )
+        }) {
             self.parent.error(
                 binding.span,
                 "checked comptime type binding has inconsistent selection semantics",

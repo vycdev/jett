@@ -502,7 +502,9 @@ state fields. A state-qualified target accepts the checked state builder, then
 finish reports a handled error if the selected state differs from its target.
 Machine put and finish preserve the same owned-builder cleanup contract.
 The checked `.jett` JSON decoder now reaches that builder for supported
-concrete structs. It selects the struct or alias branch before unrelated
+concrete structs and bare machines with supported state fields. An empty
+machine state performs no reflected field dispatch before finishing its
+builder. It selects the struct, machine, or alias branch before unrelated
 generic decoder bodies, so direct aliases decode through their base struct
 and alias-typed fields retain their checked metadata names.
 Reflected `comptime type` dispatch borrows its runtime `TypeInfo` selector.

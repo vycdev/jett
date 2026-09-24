@@ -1,0 +1,35 @@
+namespace app
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string, nickname: optional[string])
+    transitions:
+        guest to logged_in
+function parse_logged_in() returns string:
+    Session session = json.parse[Session]("{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"Ada\"}}}}") handle error:
+        return error
+    if session at logged_in:
+        string nickname = session.nickname handle:
+            default "none"
+        return "{session.user_id}:{nickname}"
+    return "wrong state"
+function parse_guest() returns string:
+    Session session = json.parse[Session]("{{\"state\":\"guest\",\"payload\":{{}}}}") handle error:
+        return error
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    return state.name
+function parse_exact_extra() returns string:
+    Session session = json.parse_exact[Session]("{{\"state\":\"guest\",\"payload\":{{}},\"extra\":1}}") handle error:
+        return error
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    return state.name
+function parse_missing_field() returns string:
+    Session session = json.parse[Session]("{{\"state\":\"logged_in\",\"payload\":{{}}}}") handle error:
+        return error
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    return state.name
+function main() returns nothing:
+    println(parse_logged_in())
+    println(parse_guest())
+    println(parse_exact_extra())
+    println(parse_missing_field())

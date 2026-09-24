@@ -7500,10 +7500,9 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
-The full native parity gate is still incomplete: 70/182 genuine objects, 14/30
-main outcomes, and 20/25 runtime contracts, with 182/182 typed lowering. See
+The full native parity gate is still incomplete: 133/182 genuine objects, 23/30
+main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
-move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
-reflection/JSON, actors/tasks, other capabilities, and clean Windows release
-verification are not established by this slice.
+remaining reflection/JSON shapes, actors/tasks, other capabilities, and clean
+Windows release verification are not established by this slice.

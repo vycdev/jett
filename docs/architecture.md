@@ -2705,7 +2705,11 @@ remaining reflection/JSON shapes, actors/tasks, other capabilities, and clean Wi
 verification are not established by this slice.
 Native JSON parsing now checks and emits the stdlib decoder for concrete
 structs, lists, sets of supported hashable primitives, string-keyed maps,
-optionals, and results recursively composed of supported leaves. Direct and
+optionals, results, and bare machines recursively composed of supported leaves.
+Machine parsing uses the reflected state builder; an empty state has no field
+specializations, and HIR lowers its checked empty field loop as an empty scope.
+State-qualified machine targets, secret-bearing states, refinements, and other
+unsupported field shapes remain on the generic intrinsic path. Direct and
 field-level aliases take the source alias branch before construction, while
 refinement-validating and recursive structs stay outside this native path.
 The public compiler policy still runs before the source decoder.
