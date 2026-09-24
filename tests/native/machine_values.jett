@@ -5,6 +5,7 @@ machine Session:
         logged_in(user_id: string)
     transitions:
         guest to logged_in
+type SessionAlias = Session
 function describe(view session: Session) returns string:
     if session at logged_in:
         return session.user_id
@@ -43,7 +44,18 @@ function reflect_logged(view session: Session at logged_in) returns nothing:
         if field.name == "user_id":
             string copied = type.machine_field_value[Session at logged_in, string](view session, view field)
             println(copied)
+function reflect_layout() returns nothing:
+    TypeMachine layout = type.machine_layout[Session]()
+    println(list.length[TypeMachineState](layout.states), list.length[TypeMachineTransition](layout.edges))
+    for state in type.machine_states[Session at logged_in]():
+        println(state.index, state.owner_type, state.name, state.has_secret, list.length[TypeField](state.fields))
+    for edge in type.machine_transitions[Session]():
+        println(edge.index, edge.source_index, edge.source, edge.target_index, edge.target)
+    println(list.length[TypeMachineState](type.machine_states[SessionAlias]()))
+    println(list.length[TypeMachineTransition](type.machine_transitions[int64]()))
+    println(list.length[TypeMachineState](type.machine_layout[int64]().states))
 function main() returns nothing:
+    reflect_layout()
     Session at guest start = Session(guest)
     println(start at guest)
     reflect_session(view start)

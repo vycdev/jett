@@ -18,8 +18,8 @@ use jett_typecheck::{
 };
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
-    ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionTypeInfo, ReflectionVariantInfo,
-    Type, TypeId,
+    ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,
+    ReflectionTypeInfo, ReflectionVariantInfo, Type, TypeId,
 };
 
 mod type_validation;
@@ -2381,6 +2381,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     | IntrinsicId::TypeFields
                     | IntrinsicId::TypeBitfieldFields
                     | IntrinsicId::TypeBitfieldLayout
+                    | IntrinsicId::TypeMachineLayout
+                    | IntrinsicId::TypeMachineStates
+                    | IntrinsicId::TypeMachineTransitions
                     | IntrinsicId::TypeVariants
             ) {
                 if !lowered_args.is_empty()
@@ -2435,6 +2438,27 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         ty,
                         call_span,
                     ),
+                    IntrinsicId::TypeMachineLayout => self.lower_reflection_machine_layout(
+                        type_arguments[0],
+                        &info.type_name,
+                        &info.kind,
+                        ty,
+                        call_span,
+                    ),
+                    IntrinsicId::TypeMachineStates => self.lower_reflection_machine_states(
+                        type_arguments[0],
+                        &info.type_name,
+                        &info.kind,
+                        ty,
+                        call_span,
+                    ),
+                    IntrinsicId::TypeMachineTransitions => self
+                        .lower_reflection_machine_transitions(
+                            type_arguments[0],
+                            &info.kind,
+                            ty,
+                            call_span,
+                        ),
                     _ => unreachable!(),
                 };
             }
@@ -3109,6 +3133,199 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     .error(span, "machine reflection has no checked metadata");
                 None
             })
+    }
+
+    fn reflected_machine_info(
+        &mut self,
+        owner_ty: TypeId,
+        owner_kind: &str,
+        span: Span,
+    ) -> Option<ReflectionMachineInfo> {
+        if matches!(owner_kind, "machine" | "machine_state") {
+            self.checked_reflection_machine(owner_ty, span)
+        } else {
+            Some(ReflectionMachineInfo::new(Vec::new(), Vec::new()))
+        }
+    }
+
+    fn lower_reflection_machine_layout(
+        &mut self,
+        owner_ty: TypeId,
+        owner_name: &str,
+        owner_kind: &str,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent
+                .error(span, "type.machine_layout result is not TypeMachine");
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = ["states", "edges"];
+        if definition.name != "TypeMachine"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent.error(
+                span,
+                "type.machine_layout has no checked TypeMachine layout",
+            );
+            return None;
+        }
+        let states_ty = definition.fields[0].1;
+        let edges_ty = definition.fields[1].1;
+        let fields = vec![
+            Expression {
+                kind: self.lower_reflection_machine_states(
+                    owner_ty, owner_name, owner_kind, states_ty, span,
+                )?,
+                ty: states_ty,
+                span,
+            },
+            Expression {
+                kind: self
+                    .lower_reflection_machine_transitions(owner_ty, owner_kind, edges_ty, span)?,
+                ty: edges_ty,
+                span,
+            },
+        ];
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields,
+            evaluation_order: vec![0, 1],
+            validates_refinements: false,
+        })
+    }
+
+    fn lower_reflection_machine_states(
+        &mut self,
+        owner_ty: TypeId,
+        owner_name: &str,
+        owner_kind: &str,
+        list_ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::List(state_ty) = self.parent.check.interner.resolve(list_ty) else {
+            self.parent
+                .error(span, "type.machine_states result is not a list");
+            return None;
+        };
+        let state_ty = *state_ty;
+        let machine = self.reflected_machine_info(owner_ty, owner_kind, span)?;
+        let owner_name = owner_name
+            .split_once(" at ")
+            .map_or(owner_name, |(base, _)| base);
+        let elements = machine
+            .states
+            .iter()
+            .map(|state| {
+                Some(Expression {
+                    kind: self.lower_reflection_machine_state(state, owner_name, state_ty, span)?,
+                    ty: state_ty,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::ListConstruct { elements })
+    }
+
+    fn lower_reflection_machine_transitions(
+        &mut self,
+        owner_ty: TypeId,
+        owner_kind: &str,
+        list_ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::List(edge_ty) = self.parent.check.interner.resolve(list_ty) else {
+            self.parent
+                .error(span, "type.machine_transitions result is not a list");
+            return None;
+        };
+        let edge_ty = *edge_ty;
+        let machine = self.reflected_machine_info(owner_ty, owner_kind, span)?;
+        let elements = machine
+            .edges
+            .iter()
+            .map(|edge| {
+                Some(Expression {
+                    kind: self.lower_reflection_machine_transition(edge, edge_ty, span)?,
+                    ty: edge_ty,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(ExpressionKind::ListConstruct { elements })
+    }
+
+    fn lower_reflection_machine_transition(
+        &mut self,
+        edge: &ReflectionMachineTransitionInfo,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent.error(
+                span,
+                "type.machine_transitions element is not TypeMachineTransition",
+            );
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = ["index", "source_index", "source", "target_index", "target"];
+        if definition.name != "TypeMachineTransition"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent.error(
+                span,
+                "type.machine_transitions has no checked TypeMachineTransition layout",
+            );
+            return None;
+        }
+        let mut fields = Vec::with_capacity(5);
+        for (position, value) in [
+            (0, edge.index),
+            (1, edge.source_index),
+            (3, edge.target_index),
+        ] {
+            let Ok(value) = i128::try_from(value) else {
+                self.parent
+                    .error(span, "reflected machine transition index is too large");
+                return None;
+            };
+            fields.push((
+                position,
+                Expression {
+                    kind: ExpressionKind::Int(value),
+                    ty: definition.fields[position].1,
+                    span,
+                },
+            ));
+        }
+        for (position, value) in [(2, &edge.source), (4, &edge.target)] {
+            fields.push((
+                position,
+                Expression {
+                    kind: ExpressionKind::String(value.clone()),
+                    ty: definition.fields[position].1,
+                    span,
+                },
+            ));
+        }
+        fields.sort_by_key(|(position, _)| *position);
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields: fields.into_iter().map(|(_, field)| field).collect(),
+            evaluation_order: (0..expected.len()).collect(),
+            validates_refinements: false,
+        })
     }
 
     fn lower_reflection_machine_state(

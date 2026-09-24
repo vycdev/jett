@@ -877,6 +877,10 @@ states, selecting the active state by tag and returning an owned clone.
 `type.machine_field_value` selects a checked `TypeField` by active state tag
 and field index, validates the supplied metadata, then copies the payload
 from the borrowed machine. Exact mismatch diagnostics remain pending.
+Static `type.machine_layout`, `type.machine_states`, and
+`type.machine_transitions` lower checked state and edge snapshots into ordinary
+`TypeMachine`, `TypeMachineState`, and `TypeMachineTransition` values. Alias and
+non-machine probes produce empty layouts and lists.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 
