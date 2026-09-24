@@ -420,6 +420,12 @@ the value slot. Linear results are deep-cloned, strings are retained, and
 scalar results are unpacked, so the source stays owned by its caller. Invalid
 metadata currently produces a static terminal error; exact interpreter
 diagnostics and alias-equivalence behavior remain parity work.
+Native `type.machine_state_value[T]` uses the borrowed machine tag to select
+and clone a checked `TypeMachineState` snapshot. `type.machine_field_value[T, U]`
+borrows both the machine and `TypeField`, selects a checked field snapshot by
+state tag and field index, and validates it before reading the payload slot.
+The result is cloned or retained when it owns storage. Metadata mismatches use
+a static terminal error, with exact interpreter diagnostics still pending.
 
 Named function values use a native function address in the scalar carrier.
 Indirect calls use the checked signature plus the hidden runtime context,

@@ -920,14 +920,17 @@ impl Translator<'_, '_> {
                 _ => unreachable!(),
             };
         }
-        if id == IntrinsicId::TypeVariantValue {
+        if matches!(
+            id,
+            IntrinsicId::TypeVariantValue | IntrinsicId::TypeMachineStateValue
+        ) {
             let value = self.scalar(evaluated[0], span)?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let tag = self.leaf(NativeLeaf::StructField, &[value, zero], true)?;
             let mut selected = self.scalar(evaluated[1], span)?;
             for (index, variant) in evaluated.iter().enumerate().skip(2) {
                 let index = i64::try_from(index - 1)
-                    .map_err(|_| self.unsupported(span, "enum variant index"))?;
+                    .map_err(|_| self.unsupported(span, "reflected variant or state index"))?;
                 let matches = self.builder.ins().icmp_imm(IntCC::Equal, tag, index);
                 let variant = self.scalar(*variant, span)?;
                 selected = self.builder.ins().select(matches, variant, selected);
@@ -987,11 +990,34 @@ impl Translator<'_, '_> {
             }
             return self.unpack_payload(bits, result_type, span);
         }
-        if id == IntrinsicId::TypeVariantFieldValue {
-            let Type::Enum(enum_id) = self.types.resolve(args[0].ty) else {
-                return Err(self.unsupported(span, "reflected variant field owner"));
+        if matches!(
+            id,
+            IntrinsicId::TypeVariantFieldValue | IntrinsicId::TypeMachineFieldValue
+        ) {
+            let field_groups = match (id, self.types.resolve(args[0].ty)) {
+                (IntrinsicId::TypeVariantFieldValue, Type::Enum(enum_id)) => self
+                    .types
+                    .resolve_enum(*enum_id)
+                    .variants
+                    .iter()
+                    .map(|variant| variant.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                (IntrinsicId::TypeMachineFieldValue, Type::Machine(machine_id))
+                | (
+                    IntrinsicId::TypeMachineFieldValue,
+                    Type::MachineState {
+                        machine: machine_id,
+                        ..
+                    },
+                ) => self
+                    .types
+                    .resolve_machine(*machine_id)
+                    .states
+                    .iter()
+                    .map(|state| state.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                _ => return Err(self.unsupported(span, "reflected payload field owner")),
             };
-            let variants = self.types.resolve_enum(*enum_id).variants.clone();
             let owner = self.scalar(evaluated[0], span)?;
             let metadata = self.scalar(evaluated[1], span)?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
@@ -999,8 +1025,8 @@ impl Translator<'_, '_> {
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
             let mut argument_index = 2;
-            for (variant_index, variant) in variants.iter().enumerate() {
-                for (field_index, (_, field_ty)) in variant.fields.iter().enumerate() {
+            for (variant_index, fields) in field_groups.iter().enumerate() {
+                for (field_index, field_ty) in fields.iter().enumerate() {
                     let candidate = self.scalar(evaluated[argument_index], span)?;
                     argument_index += 1;
                     if representation_type(self.types, *field_ty)
@@ -1026,11 +1052,12 @@ impl Translator<'_, '_> {
                     expected = self.builder.ins().select(matches, candidate, expected);
                 }
             }
-            let checked_index = self.leaf(
-                NativeLeaf::ReflectedVariantFieldIndex,
-                &[metadata, expected],
-                true,
-            )?;
+            let leaf = if id == IntrinsicId::TypeMachineFieldValue {
+                NativeLeaf::ReflectedMachineFieldIndex
+            } else {
+                NativeLeaf::ReflectedVariantFieldIndex
+            };
+            let checked_index = self.leaf(leaf, &[metadata, expected], true)?;
             let one = self.builder.ins().iconst(ir::types::I64, 1);
             let slot = self.builder.ins().iadd(checked_index, one);
             let bits = self.leaf(NativeLeaf::StructField, &[owner, slot], true)?;

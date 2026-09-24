@@ -1020,6 +1020,45 @@ impl Verifier<'_> {
                         ))
                     };
                 }
+                if *intrinsic == jett_hir::IntrinsicId::TypeMachineStateValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.machine_state_value has no checked machine type",
+                        ));
+                    };
+                    let (machine_id, owner_kind) = match self.types.resolve(owner_ty) {
+                        Type::Machine(id) => (*id, "machine"),
+                        Type::MachineState { machine, .. } => (*machine, "machine_state"),
+                        _ => {
+                            return Err(self.unsupported(
+                                function,
+                                expression.span,
+                                "type.machine_state_value of non-machine type",
+                            ));
+                        }
+                    };
+                    let states = &self.types.resolve_machine(machine_id).states;
+                    let valid = type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && reflection_arguments[0].kind == owner_kind
+                        && !states.is_empty()
+                        && args.len() == states.len() + 1
+                        && args[0].ty == owner_ty
+                        && args[1..].iter().all(|arg| arg.ty == expression.ty)
+                        && matches!(self.types.resolve(expression.ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeMachineState");
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.machine_state_value operands",
+                        ))
+                    };
+                }
                 if *intrinsic == jett_hir::IntrinsicId::TypeFieldValue {
                     let Some(&owner_ty) = type_arguments.first() else {
                         return Err(self.contract_error(
@@ -1106,6 +1145,55 @@ impl Verifier<'_> {
                             function,
                             expression.span,
                             "invalid checked type.variant_field_value operands",
+                        ))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeMachineFieldValue {
+                    let Some(&owner_ty) = type_arguments.first() else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "type.machine_field_value has no checked machine type",
+                        ));
+                    };
+                    let (machine_id, owner_kind) = match self.types.resolve(owner_ty) {
+                        Type::Machine(id) => (*id, "machine"),
+                        Type::MachineState { machine, .. } => (*machine, "machine_state"),
+                        _ => {
+                            return Err(self.unsupported(
+                                function,
+                                expression.span,
+                                "type.machine_field_value of non-machine type",
+                            ));
+                        }
+                    };
+                    let field_count = self
+                        .types
+                        .resolve_machine(machine_id)
+                        .states
+                        .iter()
+                        .map(|state| state.fields.len())
+                        .sum::<usize>();
+                    let field_ty = args.get(1).map(|arg| arg.ty);
+                    let valid_field_ty = field_ty.is_some_and(|ty| {
+                        matches!(self.types.resolve(ty), Type::Struct(id)
+                        if self.types.resolve_struct(*id).name == "TypeField")
+                    });
+                    let valid = type_arguments.len() == 2
+                        && type_arguments[1] == expression.ty
+                        && reflection_arguments.len() == 2
+                        && reflection_arguments[0].kind == owner_kind
+                        && args.len() == field_count + 2
+                        && args[0].ty == owner_ty
+                        && valid_field_ty
+                        && args[2..].iter().all(|arg| Some(arg.ty) == field_ty);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.machine_field_value operands",
                         ))
                     };
                 }

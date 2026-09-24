@@ -872,6 +872,11 @@ field index and, for enums, the active variant tag; a runtime leaf validates
 the supplied metadata against that candidate before reading the borrowed
 source. The result receives its own ownership where required. Native mismatch
 diagnostics and alias-equivalence checks still need interpreter parity.
+`type.machine_state_value` uses the same snapshot handoff for checked machine
+states, selecting the active state by tag and returning an owned clone.
+`type.machine_field_value` selects a checked `TypeField` by active state tag
+and field index, validates the supplied metadata, then copies the payload
+from the borrowed machine. Exact mismatch diagnostics remain pending.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 

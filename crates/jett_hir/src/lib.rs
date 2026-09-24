@@ -17,8 +17,9 @@ use jett_typecheck::{
     CheckedStaticSelection, CheckedStructConstruction,
 };
 use jett_types::{
-    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo, ReflectionTypeInfo,
-    ReflectionVariantInfo, Type, TypeId,
+    ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
+    ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionTypeInfo, ReflectionVariantInfo,
+    Type, TypeId,
 };
 
 mod type_validation;
@@ -2474,6 +2475,61 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     });
                 }
             }
+            if intrinsic == IntrinsicId::TypeMachineStateValue
+                && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| matches!(info.kind.as_str(), "machine" | "machine_state"))
+            {
+                let result_ty = self.expression_types.get(&call_span).copied()?;
+                let machine = self.checked_reflection_machine(type_arguments[0], call_span)?;
+                let owner_name = reflection_arguments[0]
+                    .type_name
+                    .split_once(" at ")
+                    .map_or(reflection_arguments[0].type_name.as_str(), |(base, _)| base);
+                for state in &machine.states {
+                    let kind = self
+                        .lower_reflection_machine_state(state, owner_name, result_ty, call_span)?;
+                    evaluation_order.push(lowered_args.len());
+                    lowered_args.push(Expression {
+                        kind,
+                        ty: result_ty,
+                        span: call_span,
+                    });
+                }
+            }
+            if intrinsic == IntrinsicId::TypeMachineFieldValue
+                && type_arguments.len() == 2
+                && lowered_args.len() == 2
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| matches!(info.kind.as_str(), "machine" | "machine_state"))
+            {
+                let machine = self.checked_reflection_machine(type_arguments[0], call_span)?;
+                let owner_name = reflection_arguments[0]
+                    .type_name
+                    .split_once(" at ")
+                    .map_or(reflection_arguments[0].type_name.as_str(), |(base, _)| base);
+                let field_ty = lowered_args[1].ty;
+                for state in &machine.states {
+                    for field in &state.fields {
+                        let kind = self.lower_reflection_type_field(
+                            field,
+                            owner_name,
+                            Some(&state.name),
+                            field_ty,
+                            call_span,
+                        )?;
+                        evaluation_order.push(lowered_args.len());
+                        lowered_args.push(Expression {
+                            kind,
+                            ty: field_ty,
+                            span: call_span,
+                        });
+                    }
+                }
+            }
             if intrinsic == IntrinsicId::TypeFieldValue
                 && type_arguments.len() == 2
                 && lowered_args.len() == 2
@@ -3014,6 +3070,135 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     elements: field_values,
                 },
                 ty: field_types[5],
+                span,
+            },
+        ];
+        Some(ExpressionKind::StructConstruct {
+            struct_type: ty,
+            fields,
+            evaluation_order: (0..expected.len()).collect(),
+            validates_refinements: false,
+        })
+    }
+
+    fn checked_reflection_machine(
+        &mut self,
+        owner_ty: TypeId,
+        span: Span,
+    ) -> Option<ReflectionMachineInfo> {
+        let machine_ty = match self.parent.check.interner.resolve(owner_ty) {
+            Type::Machine(_) => Some(owner_ty),
+            Type::MachineState { machine, .. } => self
+                .parent
+                .check
+                .interner
+                .type_ids()
+                .find(|ty| matches!(self.parent.check.interner.resolve(*ty), Type::Machine(id) if id == machine)),
+            _ => None,
+        };
+        machine_ty
+            .and_then(|machine_ty| {
+                self.parent
+                    .check
+                    .reflection_metadata
+                    .get_machine_for_id(machine_ty)
+                    .cloned()
+            })
+            .or_else(|| {
+                self.parent
+                    .error(span, "machine reflection has no checked metadata");
+                None
+            })
+    }
+
+    fn lower_reflection_machine_state(
+        &mut self,
+        state: &ReflectionMachineStateInfo,
+        owner_name: &str,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let Type::Struct(struct_id) = self.parent.check.interner.resolve(ty) else {
+            self.parent.error(
+                span,
+                "type.machine_state_value result is not TypeMachineState",
+            );
+            return None;
+        };
+        let definition = self.parent.check.interner.resolve_struct(*struct_id);
+        let expected = ["index", "owner_type", "name", "has_secret", "fields"];
+        if definition.name != "TypeMachineState"
+            || !definition
+                .fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .eq(expected)
+        {
+            self.parent.error(
+                span,
+                "type.machine_state_value has no checked TypeMachineState layout",
+            );
+            return None;
+        }
+        let field_types = definition
+            .fields
+            .iter()
+            .map(|(_, field_ty)| *field_ty)
+            .collect::<Vec<_>>();
+        let Type::List(field_ty) = self.parent.check.interner.resolve(field_types[4]) else {
+            self.parent
+                .error(span, "TypeMachineState fields are not a list");
+            return None;
+        };
+        let field_ty = *field_ty;
+        let Ok(index) = i128::try_from(state.index) else {
+            self.parent
+                .error(span, "reflected machine state index is too large");
+            return None;
+        };
+        let field_values = state
+            .fields
+            .iter()
+            .map(|field| {
+                Some(Expression {
+                    kind: self.lower_reflection_type_field(
+                        field,
+                        owner_name,
+                        Some(&state.name),
+                        field_ty,
+                        span,
+                    )?,
+                    ty: field_ty,
+                    span,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let fields = vec![
+            Expression {
+                kind: ExpressionKind::Int(index),
+                ty: field_types[0],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::String(owner_name.to_string()),
+                ty: field_types[1],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::String(state.name.clone()),
+                ty: field_types[2],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::Bool(state.has_secret),
+                ty: field_types[3],
+                span,
+            },
+            Expression {
+                kind: ExpressionKind::ListConstruct {
+                    elements: field_values,
+                },
+                ty: field_types[4],
                 span,
             },
         ];

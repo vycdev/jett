@@ -289,7 +289,7 @@ lowering alone never changes an execution row to complete.
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered, but closure bodies still require explicit MIR function extraction | named function addresses and indirect calls for supported signatures; inline closures pending | named callbacks passed, returned, and invoked through indirect calls; inline closures pending |
-| Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.fields` and `type.variants` lists, active `type.variant_value`, reflected struct/bitfield and enum payload field values, and bitfield layout and field metadata covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, struct fields, enum variant and payload-field metadata, active enum variant selection, reflected field values, and bitfield metadata match the interpreter on positive cases; alias field and variant probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
+| Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.fields` and `type.variants` lists, active enum variant and machine state metadata, reflected struct/bitfield, enum payload, and machine state field values, and bitfield layout and field metadata covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, struct fields, enum variant and payload-field metadata, active enum and machine state selection, reflected field values, and bitfield metadata match the interpreter on positive cases; alias field and variant probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
 | JSON and trusted stdlib hooks | covered | pending | pending |
@@ -320,8 +320,12 @@ remain borrowed. This adds `generic_reflection_branch_specialization.jett` and
 reflection fixtures advance to later unsupported intrinsics.
 Reflected field reads add object gates for `bitfield_uint64_reflection.jett`,
 `json_reflection_flat_serializer.jett`, `type_reflection.jett`, and
-`json_tree_reflection_variant_metadata.jett`. The latter now emits an object;
-`type_info_reflection.jett` advances to `type.machine_state_value`.
+`json_tree_reflection_variant_metadata.jett`. The latter now emits an object.
+Native machine state selection and reflected state-field reads match dedicated
+native/interpreter cases for general and state-qualified values. They move
+`json_parse_machine_envelope.jett` to the unsupported `json.parse` gate and
+`type_info_reflection.jett` to reflected type dispatch; neither adds another
+complete object gate yet.
 
 The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns

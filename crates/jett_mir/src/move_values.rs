@@ -85,6 +85,7 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                 | IntrinsicId::MapGet
                 | IntrinsicId::TypeFieldValue
                 | IntrinsicId::TypeVariantFieldValue
+                | IntrinsicId::TypeMachineFieldValue
         ))
         || (index == 0
             && matches!(
@@ -107,8 +108,10 @@ pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
                     | IntrinsicId::MapHas
                     | IntrinsicId::MapGet
                     | IntrinsicId::TypeVariantValue
+                    | IntrinsicId::TypeMachineStateValue
                     | IntrinsicId::TypeFieldValue
                     | IntrinsicId::TypeVariantFieldValue
+                    | IntrinsicId::TypeMachineFieldValue
             ))
 }
 

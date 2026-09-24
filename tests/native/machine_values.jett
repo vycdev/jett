@@ -28,11 +28,29 @@ function review_label(review: Review) returns string:
         return review.reason
     else:
         return review.reason
+function reflect_session(view session: Session) returns nothing:
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    println(state.index, state.owner_type, state.name, state.has_secret, list.length[TypeField](state.fields))
+    for field in state.fields:
+        println(field.index, field.owner_type, field.name, field.type_name)
+        if field.name == "user_id":
+            string copied = type.machine_field_value[Session, string](view session, view field)
+            println(copied)
+function reflect_logged(view session: Session at logged_in) returns nothing:
+    TypeMachineState state = type.machine_state_value[Session at logged_in](view session)
+    println(state.index, state.owner_type, state.name)
+    for field in state.fields:
+        if field.name == "user_id":
+            string copied = type.machine_field_value[Session at logged_in, string](view session, view field)
+            println(copied)
 function main() returns nothing:
     Session at guest start = Session(guest)
     println(start at guest)
+    reflect_session(view start)
     Session at logged_in logged = Session.transition(start, logged_in, "Ada")
     println(logged at logged_in, logged.user_id)
+    reflect_session(view logged)
+    reflect_logged(view logged)
     Session session = login_if_guest(Session(guest))
     println(describe(view session), session at logged_in)
     println(review_label(Review(approved, "Lin")))

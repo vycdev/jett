@@ -37,6 +37,10 @@ const INVALID_REFLECTED_VARIANT_FIELD: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"type.variant_field_value: field metadata does not match the active variant and requested type",
 );
+const INVALID_REFLECTED_MACHINE_FIELD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"type.machine_field_value: field metadata does not match the active state and requested type",
+);
 const INVALID_LIST: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native list handle",
@@ -1986,6 +1990,8 @@ leaves! {
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_FIELD);
     ReflectedVariantFieldIndex, jett_rt_v1_reflected_variant_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_VARIANT_FIELD);
+    ReflectedMachineFieldIndex, jett_rt_v1_reflected_machine_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_MACHINE_FIELD);
     MachineExpectState, jett_rt_v1_machine_expect_state, false, (value: u64 => I64, state: u64 => I64), u32 => I32,
         |s| { if s.struct_field(value, 0)?.bits == state { Ok(0) }
             else { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"machine state does not match narrowed type")) } };
