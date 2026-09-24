@@ -435,6 +435,10 @@ The runtime leaf derives a recursive structural identity, unwrapping aliases;
 native branches compare it with the checker-owned identity of each specialized
 arm. The selector remains live until the selected edge releases expression
 temporaries, and only that arm executes.
+`type.arg[T](index)` carries checked `TypeInfo` snapshots for each source-aware
+type argument. Native code validates the runtime index, selects one snapshot,
+and returns an owned clone. Out-of-range errors are terminal, but their exact
+diagnostic still needs interpreter parity.
 
 Named function values use a native function address in the scalar carrier.
 Indirect calls use the checked signature plus the hidden runtime context,

@@ -887,6 +887,10 @@ metadata for each arm; native code compares the borrowed runtime `TypeInfo`
 recursively before selecting exactly one arm. Source aliases are transparent
 to dispatch identity while their source-aware names remain available inside
 the selected body.
+`type.arg[T](index)` carries checked, source-aware `TypeInfo` snapshots for the
+type arguments of `T` as hidden HIR operands. Native code validates the runtime
+index and returns an owned clone of the selected snapshot. Exact out-of-range
+diagnostic parity remains pending.
 Interface-implementation method declarations additionally include both the
 concrete owner and canonical interface in their identity.
 

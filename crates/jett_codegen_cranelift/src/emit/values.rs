@@ -924,6 +924,23 @@ impl Translator<'_, '_> {
                 _ => unreachable!(),
             };
         }
+        if id == IntrinsicId::TypeArg {
+            let requested = self.scalar(evaluated[0], span)?;
+            let count = i64::try_from(evaluated.len() - 1)
+                .map_err(|_| self.unsupported(span, "reflected type argument count"))?;
+            let count = self.builder.ins().iconst(ir::types::I64, count);
+            let checked = self.leaf(NativeLeaf::TypeArgIndex, &[requested, count], true)?;
+            let mut selected = self.builder.ins().iconst(ir::types::I64, 0);
+            for (index, candidate) in evaluated.iter().enumerate().skip(1) {
+                let index = i64::try_from(index - 1)
+                    .map_err(|_| self.unsupported(span, "reflected type argument index"))?;
+                let matches = self.builder.ins().icmp_imm(IntCC::Equal, checked, index);
+                let candidate = self.scalar(*candidate, span)?;
+                selected = self.builder.ins().select(matches, candidate, selected);
+            }
+            let cloned = self.leaf(NativeLeaf::StructClone, &[selected], true)?;
+            return self.own_linear(cloned);
+        }
         if matches!(
             id,
             IntrinsicId::TypeVariantValue | IntrinsicId::TypeMachineStateValue

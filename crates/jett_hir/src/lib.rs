@@ -2570,6 +2570,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     }
                 }
             }
+            if intrinsic == IntrinsicId::TypeArg
+                && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && reflection_arguments.len() == 1
+            {
+                let result_ty = self.expression_types.get(&call_span).copied()?;
+                for arg_info in &reflection_arguments[0].args {
+                    let kind = self.lower_reflection_type_info(arg_info, result_ty, call_span)?;
+                    evaluation_order.push(lowered_args.len());
+                    lowered_args.push(Expression {
+                        kind,
+                        ty: result_ty,
+                        span: call_span,
+                    });
+                }
+            }
             if intrinsic == IntrinsicId::TypeFieldValue
                 && type_arguments.len() == 2
                 && lowered_args.len() == 2

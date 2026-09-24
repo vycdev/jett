@@ -1040,6 +1040,24 @@ impl Verifier<'_> {
                         ))
                     };
                 }
+                if *intrinsic == jett_hir::IntrinsicId::TypeArg {
+                    let valid = type_arguments.len() == 1
+                        && reflection_arguments.len() == 1
+                        && args.len() == reflection_arguments[0].args.len() + 1
+                        && args[0].ty == TypeInterner::INT64
+                        && args[1..].iter().all(|arg| arg.ty == expression.ty)
+                        && matches!(self.types.resolve(expression.ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeInfo");
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "invalid checked type.arg operands",
+                        ))
+                    };
+                }
                 if *intrinsic == jett_hir::IntrinsicId::TypeMachineStateValue {
                     let Some(&owner_ty) = type_arguments.first() else {
                         return Err(self.contract_error(

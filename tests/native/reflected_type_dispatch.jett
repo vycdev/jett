@@ -14,3 +14,7 @@ function describe(view value: Record) returns string:
 function main() returns nothing:
     Record value = Record(label: "Ada", count: 7, tags: list("a", "b"))
     println(describe(view value))
+    TypeInfo value_arg = type.arg[map[string, list[int64]]](1)
+    println(value_arg.type_name)
+    TypeInfo alias_base = type.arg[Label](0)
+    println(alias_base.type_name)
