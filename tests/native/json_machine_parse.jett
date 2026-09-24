@@ -18,6 +18,16 @@ function parse_guest() returns string:
         return error
     TypeMachineState state = type.machine_state_value[Session](view session)
     return state.name
+function parse_state_qualified() returns string:
+    Session at logged_in session = json.parse[Session at logged_in]("{{\"state\":\"logged_in\",\"payload\":{{\"user_id\":\"Lin\",\"nickname\":\"L\"}}}}") handle error:
+        return error
+    string nickname = session.nickname handle:
+        default "none"
+    return "{session.user_id}:{nickname}"
+function parse_state_mismatch() returns string:
+    Session at logged_in session = json.parse[Session at logged_in]("{{\"state\":\"guest\",\"payload\":{{}}}}") handle error:
+        return error
+    return session.user_id
 function parse_exact_extra() returns string:
     Session session = json.parse_exact[Session]("{{\"state\":\"guest\",\"payload\":{{}},\"extra\":1}}") handle error:
         return error
@@ -31,5 +41,7 @@ function parse_missing_field() returns string:
 function main() returns nothing:
     println(parse_logged_in())
     println(parse_guest())
+    println(parse_state_qualified())
+    println(parse_state_mismatch())
     println(parse_exact_extra())
     println(parse_missing_field())

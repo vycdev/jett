@@ -1185,6 +1185,10 @@ compile_fail_fixture!(
     "ownership_branch_partial_move.jett"
 );
 compile_fail_fixture!(
+    compile_fail_ownership_machine_state_widening_use_after_move,
+    "ownership_machine_state_widening_use_after_move.jett"
+);
+compile_fail_fixture!(
     compile_fail_immutable_reassignment,
     "immutable_reassignment.jett"
 );

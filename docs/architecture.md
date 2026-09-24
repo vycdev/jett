@@ -2696,7 +2696,7 @@ Payload enum equality compares the selected variant's integer, boolean,
 floating-point, and string fields through the native value ABI; aggregate
 payload fields remain outside that comparison path.
 
-The full native parity gate is still incomplete: 133/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 135/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -2705,12 +2705,16 @@ remaining reflection/JSON shapes, actors/tasks, other capabilities, and clean Wi
 verification are not established by this slice.
 Native JSON parsing now checks and emits the stdlib decoder for concrete
 structs, lists, sets of supported hashable primitives, string-keyed maps,
-optionals, results, and bare machines recursively composed of supported leaves.
+optionals, results, and bare or state-qualified machines recursively composed
+of supported leaves.
 Machine parsing uses the reflected state builder; an empty state has no field
 specializations, and HIR lowers its checked empty field loop as an empty scope.
-State-qualified machine targets, secret-bearing states, refinements, and other
-unsupported field shapes remain on the generic intrinsic path. Direct and
-field-level aliases take the source alias branch before construction, while
+Secret-bearing states, refinements, and other unsupported field shapes remain
+on the generic intrinsic path. Native source serialization supports bare and
+state-qualified machines with supported state fields; public serialization
+omits direct secret fields. Widening a state-qualified machine local to a bare
+machine consumes the source unless it is cloned. Direct and field-level
+aliases take the source alias branch before construction, while
 refinement-validating and recursive structs stay outside this native path.
 The public compiler policy still runs before the source decoder.
 The interpreter handoff omits checked expression types at generic source spans

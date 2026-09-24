@@ -314,6 +314,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/json_machine_parse.jett",
         ),
         (
+            "json_machine_serialize",
+            "../../tests/native/json_machine_serialize.jett",
+        ),
+        (
             "json_generic_parse_primitives",
             "../../tests/native/json_generic_parse_primitives.jett",
         ),

@@ -1,0 +1,12 @@
+# ERROR: E0400
+namespace test
+machine Session:
+    states:
+        guest
+        logged_in(user_id: string)
+    transitions:
+        guest to logged_in
+function reuse_after_state_erasure() returns string:
+    Session at logged_in active = Session(logged_in, "Ada")
+    Session erased = active
+    return active.user_id

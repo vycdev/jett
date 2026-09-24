@@ -37,6 +37,8 @@ function json_serialize_public_reflected[T](view value: T) returns string:
         return json_serialize_public_optional_reflected[T](view value)
     else if kind == TypeKind.result_type:
         return json_serialize_public_result_reflected[T](view value)
+    else if kind == TypeKind.machine_type:
+        return json_serialize_public_machine_reflected[T](view value)
     else:
         return json_serialize_public_other_reflected[T](view value, view info)
 function json_serialize_public_checked_primitive[T](view value: T) returns string:

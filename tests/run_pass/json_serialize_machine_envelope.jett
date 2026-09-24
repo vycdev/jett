@@ -25,7 +25,7 @@ function guest_session_json() returns string:
     return json.serialize[Session](view session)
 function nested_session_json() returns string:
     Session at logged_in active = Session.transition(Session(guest), logged_in, "user-3", "Bea")
-    Session logged = active
+    Session logged = clone active
     SessionBox box = SessionBox(current: active, history: list(Session(guest), logged))
     return json.serialize[SessionBox](view box)
 function public_token_json() returns string:

@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
-| JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs and collections specialize the checked source serializer; primitive parse calls use private source decoders; concrete structs, lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, primitive and structured parsing, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
+| JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, and collections specialize the checked source serializer; primitive parse calls use private source decoders; concrete structs, bare and state-qualified machines, lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, machine state envelopes and public secret omission, primitive and structured parsing, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 The current fixture gates are therefore:
@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 133 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 135 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 133/182 (73.1%), a useful progress measure rather than a
-claim that 73.1% of the language has native support.
+gate is currently 135/182 (74.2%), a useful progress measure rather than a
+claim that 74.2% of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
 finish. This adds `type_construction_machine.jett` to the object gate; a linked
@@ -555,13 +555,19 @@ fixture covers both public spellings, renamed and escaped fields, all supported
 scalar categories, nested collections, optional/result branches, and cleanup.
 Float32 fields, enums, bitfields, secrets, raw-tree fields, and other JSON
 shapes still need this source path or another checked native lowering.
-Bare machines whose state fields recursively use the supported parser leaves
-now instantiate the reflected `.jett` decoder. A linked native/interpreter
-fixture covers a populated state, an empty state, an exact-parse error, and a
-missing-field error. Empty reflected field loops lower without a body. The
-exhaustive Windows gate remains 133/182 emitted objects, 23/30 main outcomes,
-25/25 runtime contracts, and 182/182 typed lowerings; the machine fixtures in
-that gate still contain unsupported JSON shapes.
+Bare and state-qualified machines whose state fields recursively use the
+supported parser leaves now instantiate the reflected `.jett` decoder. A
+linked native/interpreter fixture covers populated and empty states, exact
+validation, a missing field, and a state-qualified mismatch. Empty reflected
+field loops lower without a body. Supported bare and state-qualified machines
+also instantiate the reflected source serializer; a linked fixture covers
+renamed payload fields, nested machine collections, and public omission of
+secret payload fields. Widening a state-qualified machine local to a bare
+machine consumes that local; reuse requires an explicit clone. These changes
+add `json_namespace_duplicate_machine_envelope.jett` and
+`json_serialize_machine_envelope.jett` to the object gate. The exhaustive
+Windows gate is now 135/182 emitted objects, 23/30 main outcomes, 25/25
+runtime contracts, and 182/182 typed lowerings. Other JSON shapes remain.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

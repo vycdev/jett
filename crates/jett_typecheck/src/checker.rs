@@ -2894,6 +2894,23 @@ impl<'a> TypeChecker<'a> {
                 visiting.remove(&ty);
                 supported
             }
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*id)
+                    .states
+                    .iter()
+                    .flat_map(|state| state.fields.iter())
+                    .all(|(_, field_ty)| {
+                        matches!(self.interner.resolve(*field_ty), Type::Secret(_))
+                            || self.native_json_source_supported(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
             _ => false,
         }
     }
@@ -2949,7 +2966,7 @@ impl<'a> TypeChecker<'a> {
                 visiting.remove(&ty);
                 supported
             }
-            Type::Machine(id) => {
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
                 if !visiting.insert(ty) {
                     return false;
                 }
@@ -6827,6 +6844,7 @@ impl<'a> TypeChecker<'a> {
                     matches!(
                         name.as_str(),
                         "type.variant_value"
+                            | "type.machine_state_value"
                             | "type.construct_start"
                             | "type.construct_variant_start"
                             | "type.construct_machine_start"
@@ -11736,6 +11754,8 @@ impl<'a> TypeChecker<'a> {
             && matches!(
                 self.interner.resolve(value_ty),
                 Type::Struct(_)
+                    | Type::Machine(_)
+                    | Type::MachineState { .. }
                     | Type::List(_)
                     | Type::Map(_, _)
                     | Type::Optional(_)
@@ -11752,6 +11772,7 @@ impl<'a> TypeChecker<'a> {
                 self.interner.resolve(*value_ty),
                 Type::Struct(_)
                     | Type::Machine(_)
+                    | Type::MachineState { .. }
                     | Type::List(_)
                     | Type::Set(_)
                     | Type::Map(_, _)

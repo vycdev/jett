@@ -36,6 +36,8 @@ struct VarInfo {
     mutable: bool,
     /// The type of the variable (used to determine whether it is implicitly copyable).
     type_id: TypeId,
+    /// Exact machine-state values are owned even when widened to a bare machine.
+    state_qualified_machine: bool,
     /// The span where the variable was consumed (for "previously consumed here" labels).
     consumed_span: Option<Span>,
 }
@@ -239,6 +241,10 @@ impl<'a> OwnershipChecker<'a> {
                     state,
                     mutable: param.mutable,
                     type_id,
+                    state_qualified_machine: matches!(
+                        param.ty,
+                        ast::TypeExpr::StateQualified(_, _, _)
+                    ),
                     consumed_span: None,
                 },
             );
@@ -303,8 +309,18 @@ impl<'a> OwnershipChecker<'a> {
 
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
         let initial_state = self.initial_task_state(&decl.value);
-        // Check the initializer expression for ownership violations.
-        self.check_expr_ownership(&decl.value);
+        // Erasing an exact machine state into another owned local transfers
+        // its value. Reusing the source requires an explicit clone.
+        if let Expr::Ident(source) = &decl.value
+            && self
+                .states
+                .get(&source.name)
+                .is_some_and(|info| info.state_qualified_machine)
+        {
+            self.consume_expr(&decl.value, decl.value.span());
+        } else {
+            self.check_expr_ownership(&decl.value);
+        }
 
         let type_id = self.resolve_type_for_ownership(&decl.ty);
         self.states.insert(
@@ -313,6 +329,7 @@ impl<'a> OwnershipChecker<'a> {
                 state: initial_state,
                 mutable: decl.mutable,
                 type_id,
+                state_qualified_machine: matches!(decl.ty, ast::TypeExpr::StateQualified(_, _, _)),
                 consumed_span: None,
             },
         );
@@ -504,6 +521,7 @@ impl<'a> OwnershipChecker<'a> {
                 },
                 mutable: false,
                 type_id: TypeInterner::ERROR, // Element type not tracked here
+                state_qualified_machine: false,
                 consumed_span: None,
             },
         );
@@ -702,6 +720,10 @@ impl<'a> OwnershipChecker<'a> {
                             },
                             mutable: param.mutable,
                             type_id,
+                            state_qualified_machine: matches!(
+                                param.ty,
+                                ast::TypeExpr::StateQualified(_, _, _)
+                            ),
                             consumed_span: None,
                         },
                     );
