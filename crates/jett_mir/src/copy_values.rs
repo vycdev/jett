@@ -458,7 +458,9 @@ fn visit(
         {
             visit(value, reads, temporaries, types, program, false)?
         }
-        ExpressionKind::Declassify(value) | ExpressionKind::Unary { value, .. } => {
+        ExpressionKind::Declassify(value)
+        | ExpressionKind::Coarsen(value)
+        | ExpressionKind::Unary { value, .. } => {
             visit(value, reads, temporaries, types, program, false)?
         }
         ExpressionKind::View(value) | ExpressionKind::Clone(value) => {

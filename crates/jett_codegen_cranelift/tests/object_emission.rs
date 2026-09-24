@@ -58,6 +58,26 @@ function remainder(value: int64, divisor: NonZeroInt) returns int64:
 }
 
 #[test]
+fn emits_coarsening_for_scalar_and_owned_refinements() {
+    let (program, types) = lower_source(
+        r#"namespace app
+type Positive = int64 where value > 0
+type AboveTen = Positive where value > 10
+type NonEmpty = string where value != ""
+function coarsen_positive(value: Positive) returns int64:
+    return coarsen value
+function coarsen_to_ancestor(value: AboveTen) returns int64:
+    return coarsen value
+function coarsen_non_empty(value: NonEmpty) returns string:
+    return coarsen value
+"#,
+    );
+
+    let object = emit_host_object(&program, &types).expect("refinement coarsen object emission");
+    assert_eq!(object.symbols.len(), 3);
+}
+
+#[test]
 fn emits_a_deterministic_host_object_for_scalar_control_flow() {
     let (program, types) = lower_source(
         r#"namespace app

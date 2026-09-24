@@ -182,8 +182,12 @@ returns false on a public length mismatch, and uses constant-time byte
 comparison for equal lengths. Wrapper-aware ownership retains and releases
 strings and transfers or clones owned bytes and aggregates as their base types.
 Explicit `declassify` transfers the same underlying value after the verifier
-checks its source `secret[T]` and destination `T`. Private crypto leaves borrow
-checked bytes and return owned digests; the interpreter and native runtime use
+checks its source `secret[T]` and destination `T`.
+Explicit `coarsen` likewise transfers the underlying value after the verifier
+walks the checked refinement ancestry to the requested base type. It creates
+no runtime wrapper and does not bypass the separate fallible validation needed
+to construct a refinement. Private crypto leaves borrow checked bytes and
+return owned digests; the interpreter and native runtime use
 the same SHA-256, SHA-512, MD5, and HMAC-SHA-256 kernels behind public `.jett`
 wrappers. The HMAC result retains its secret type in MIR and native ownership.
 

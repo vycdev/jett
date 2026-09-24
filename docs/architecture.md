@@ -814,8 +814,11 @@ arguments and explicit lexical evaluation order, core expressions, returns, bran
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
-and fields carry explicit checked types plus dense field/state IDs. Remaining
-compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
+and fields carry explicit checked types plus dense field/state IDs. Native
+`coarsen` verifies a checked refinement ancestor and transfers its base
+representation, including ownership of aggregate payloads, without a wrapper.
+Fallible refinement construction still requires native predicate lowering.
+Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
 lexical evaluation order after type checking has authorized them. The shared
 registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,
 comptime/runtime dispatch, and native codegen consume the checked ID and use

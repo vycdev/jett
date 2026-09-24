@@ -1789,8 +1789,22 @@ impl Verifier<'_> {
                     Err(self.expression_kind_error(function, expression, "declassification"))
                 }
             }
-            ExpressionKind::Coarsen(_) => {
-                Err(self.unsupported(function, expression.span, "coarsen"))
+            ExpressionKind::Coarsen(value) => {
+                self.expression(function, value)?;
+                let mut ancestor = value.ty;
+                let mut valid = false;
+                while let Type::Refinement { base, .. } = self.types.resolve(ancestor) {
+                    ancestor = *base;
+                    if ancestor == expression.ty {
+                        valid = true;
+                        break;
+                    }
+                }
+                if valid {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "coarsen"))
+                }
             }
             ExpressionKind::StateIs { value, state } => {
                 self.expression(function, value)?;

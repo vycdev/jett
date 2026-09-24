@@ -452,6 +452,7 @@ impl Flow<'_> {
                 }
             }
             ExpressionKind::Declassify(value)
+            | ExpressionKind::Coarsen(value)
             | ExpressionKind::Unary { value, .. }
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
