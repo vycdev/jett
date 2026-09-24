@@ -171,7 +171,7 @@ function json_decode_tree_other_reflected[T](view raw: JsonTree, view info: Type
         return json_decode_tree_secret_reflected[T](view raw)
     return json_decode_tree_structured_reflected[T](view raw, view info)
 function json_decode_tree_raw_reflected[T](view raw: JsonTree) returns result[T, string]:
-    T item = raw
+    T item = clone raw
     return ok(item)
 function json_decode_tree_alias_reflected[T](view raw: JsonTree) returns result[T, string]:
     comptime type Base = type.arg[T](0):

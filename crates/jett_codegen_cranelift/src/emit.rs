@@ -19,7 +19,9 @@ use jett_types::{ReflectionTypeInfo, Type, TypeId, TypeInterner};
 use target_lexicon::{HOST, Triple};
 
 use crate::CodegenError;
-use crate::verify::{ScalarKind, VerifiedProgram, scalar_kind, verify_program};
+use crate::verify::{
+    ScalarKind, VerifiedProgram, known_unit_enum_variant, scalar_kind, verify_program,
+};
 
 /// One emitted target object and its deterministic defined symbol table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1252,7 +1254,10 @@ impl Translator<'_, '_> {
                         return Err(self.unsupported(expression.span, "enum equality type"));
                     };
                     let variants = &self.types.resolve_enum(*enum_id).variants;
-                    if variants.iter().any(|variant| !variant.fields.is_empty()) {
+                    if variants.iter().any(|variant| !variant.fields.is_empty())
+                        && !known_unit_enum_variant(left)
+                        && !known_unit_enum_variant(right)
+                    {
                         let mut layout = b"JE\x01".to_vec();
                         let count = u32::try_from(variants.len())
                             .map_err(|_| self.unsupported(expression.span, "enum variant count"))?;

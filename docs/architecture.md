@@ -2693,10 +2693,12 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 Payload enum equality compares the selected variant's integer, boolean,
-floating-point, and string fields through the native value ABI; aggregate
-payload fields remain outside that comparison path.
+floating-point, and string fields through the native value ABI. Comparison
+against a known unit variant checks only the variant tag, including when other
+variants carry aggregate payloads; comparison between two unknown aggregate
+payload values remains outside that path.
 
-The full native parity gate is still incomplete: 147/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 149/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -2713,8 +2715,9 @@ Raw `secret[json.JsonTree]` uses a dedicated trusted parser; nested refinements 
 other unsupported field shapes remain on the generic intrinsic path. Top-level
 refinements with a supported base use checked source parsing and serialization;
 refinement-validating struct fields still require native builder support. Top-level
-enums with supported payload fields use dedicated checked native parse and
-serialize hooks; `json.JsonTree` retains its raw wire behavior. Supported
+enums with supported payload fields, including nested raw `json.JsonTree`, use
+dedicated checked native parse and serialize hooks. Raw trees retain their JSON
+wire behavior and are cloned when a decoder returns a borrowed tree. Supported
 bitfields use dedicated checked parse, exact-parse, and serialization hooks
 that dispatch unit-enum fields separately. Payload `list[uint8]` decoding uses
 a bounded source conversion after JSON integer range validation. Other nested

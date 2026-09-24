@@ -1,0 +1,36 @@
+namespace app
+enum Shape:
+    raw(payload: json.JsonTree)
+    circle(radius: float64)
+    empty
+function parse_raw_payload() returns string:
+    Shape shape = json.parse_exact[Shape]("{{\"raw\":[{{\"extra\":\"kept\"}}]}}") handle error:
+        return error
+    match shape:
+        raw(payload):
+            json.JsonTree extra = json.require_field(view payload, "extra") handle error:
+                return error
+            return json.as_string(view extra) handle error:
+                default error
+        circle(radius):
+            return "{radius}"
+        empty:
+            return "empty"
+function compare_raw_to_unit() returns string:
+    Shape shape = json.parse[Shape]("{{\"raw\":[[1,true,null]]}}") handle error:
+        return error
+    return "{shape == Shape.empty}:{shape != Shape.empty}:{Shape.empty == shape}:{Shape.empty != shape}:{json.serialize[Shape](view shape)}"
+function compare_empty_to_unit() returns string:
+    Shape shape = json.parse_exact[Shape]("\"empty\"") handle error:
+        return error
+    return "{shape == Shape.empty}:{shape != Shape.empty}:{Shape.empty == shape}:{Shape.empty != shape}"
+function serialize_raw_payload() returns string:
+    json.JsonTree payload = json.parse_raw("{{\"nested\":[1,2]}}") handle error:
+        return error
+    Shape shape = Shape.raw(payload)
+    return json.serialize_public[Shape](view shape)
+function main() returns nothing:
+    println(parse_raw_payload())
+    println(compare_raw_to_unit())
+    println(compare_empty_to_unit())
+    println(serialize_raw_payload())

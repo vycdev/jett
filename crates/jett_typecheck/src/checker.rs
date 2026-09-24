@@ -3029,6 +3029,7 @@ impl<'a> TypeChecker<'a> {
                     && self.native_json_parse_source_supported_inner(*err, visiting)
             }
             Type::Secret(inner) => self.native_json_parse_source_supported_inner(*inner, visiting),
+            Type::Enum(id) if self.interner.resolve_enum(*id).name == "json.JsonTree" => true,
             Type::Refinement { base, .. } => {
                 self.native_json_parse_source_supported_inner(*base, visiting)
             }

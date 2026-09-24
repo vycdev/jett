@@ -7500,7 +7500,7 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
-The full native parity gate is still incomplete: 147/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 149/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -7511,7 +7511,11 @@ including exact parse validation and serialization. Records with refined fields
 still await native construction validation.
 Native serialization of `bytes` uses the trusted hex-string source hook, and
 supported records containing raw `json.JsonTree` fields retain raw JSON wire
-values through the checked source serializer.
+values through the checked source serializer. Supported enum payloads and
+collections can also contain raw `json.JsonTree` values in the checked native
+source parser. A borrowed raw tree is cloned when returned as a decoded value.
+Native comparison against a known unit enum variant checks its tag even when
+other variants have aggregate payloads.
 Supported bitfields parse and serialize through checked source hooks that handle
 unit-enum fields and ordinary payload fields. Native uint8 JSON decoding checks
 the range before a bounded source conversion; other narrow numeric shapes remain

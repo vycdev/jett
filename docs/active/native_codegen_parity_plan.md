@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 141 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 149 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 147/182 (80.8%), a useful progress measure rather than a
-claim that 77.5% of the language has native support.
+gate is currently 149/182 (81.9%), a useful progress measure rather than a
+claim that the same fraction of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
 finish. This adds `type_construction_machine.jett` to the object gate; a linked
@@ -613,6 +613,15 @@ current exhaustive Windows gate is 147/182 emitted objects, 23/30 main
 outcomes, 25/25 runtime contracts, and 182/182 typed lowerings. Enum payloads
 containing raw JSON, other narrow numeric shapes, refinement-validating struct
 fields, and other JSON shapes remain.
+Checked source JSON parsing now accepts raw `json.JsonTree` values nested in
+supported containers and enum payloads. The raw decoder clones a borrowed tree
+when returning an owned value. A mixed-payload enum can compare with a known
+unit variant by tag without interpreting its aggregate payload. A linked
+native/interpreter fixture covers raw enum payload parsing, exact validation,
+serialization, and unit comparisons. `json_enum_bitfield_exact_edges.jett` and
+`json_parse_collection_edges.jett` join the object gate. The current exhaustive
+Windows checkpoint is 149/182 objects, 23/30 main outcomes, 25/25 runtime
+contracts, and 182/182 typed lowerings.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

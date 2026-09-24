@@ -35,6 +35,16 @@ pub(crate) enum ScalarKind {
     Environment,
 }
 
+pub(crate) fn known_unit_enum_variant(expression: &Expression) -> bool {
+    match &expression.kind {
+        ExpressionKind::EnumConstruct { payloads, .. } => payloads.is_empty(),
+        ExpressionKind::View(inner) | ExpressionKind::Clone(inner) => {
+            known_unit_enum_variant(inner)
+        }
+        _ => false,
+    }
+}
+
 impl ScalarKind {
     pub(crate) fn is_integer(self) -> bool {
         matches!(self, Self::SignedInteger(_) | Self::UnsignedInteger(_))
@@ -2189,6 +2199,8 @@ impl Verifier<'_> {
         let result = scalar_kind(self.types, expression.ty, "binary result")?;
         if operand == ScalarKind::Enum
             && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
+            && !known_unit_enum_variant(left)
+            && !known_unit_enum_variant(right)
             && let Type::Enum(id) = self.types.resolve(left.ty)
             && self
                 .types
