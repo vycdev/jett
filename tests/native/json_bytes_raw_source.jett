@@ -1,0 +1,22 @@
+namespace test
+struct RawPayload:
+    tree: json.JsonTree
+    label: string
+function serialize_bytes() returns string:
+    bytes value = bytes.from_string("Hi")
+    return json.serialize[bytes](view value)
+function serialize_public_bytes() returns string:
+    bytes value = bytes.from_string("Hi")
+    return json.serialize_public[bytes](view value)
+function serialize_raw_field() returns string:
+    json.JsonTree tree = json.parse_raw("{{\"name\":\"Ada\"}}") handle error:
+        return error
+    RawPayload payload = RawPayload(tree: tree, label: "ok")
+    return json.serialize[RawPayload](view payload)
+function serialize_public_raw_field() returns string:
+    json.JsonTree tree = json.parse_raw("[1,true,null]") handle error:
+        return error
+    RawPayload payload = RawPayload(tree: tree, label: "ok")
+    return json.serialize_public[RawPayload](view payload)
+function main() returns nothing:
+    println(serialize_bytes(), serialize_public_bytes(), serialize_raw_field(), serialize_public_raw_field())

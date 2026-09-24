@@ -2883,6 +2883,7 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Secret(_) => false,
             Type::Refinement { base, .. } => self.native_json_source_supported(*base, visiting),
+            Type::Enum(id) if self.interner.resolve_enum(*id).name == "json.JsonTree" => true,
             Type::Struct(id) => {
                 if !visiting.insert(ty) {
                     return false;

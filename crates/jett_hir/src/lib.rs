@@ -2759,6 +2759,29 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic
             ) && type_arguments.len() == 1
                 && lowered_args.len() == 1
+                && matches!(
+                    self.parent.check.interner.resolve(type_arguments[0]),
+                    Type::Bytes
+                )
+            {
+                let Some(function) =
+                    self.trusted_stdlib_function("json", "json_serialize_native_bytes")
+                else {
+                    self.parent
+                        .error(call_span, "trusted bytes JSON serializer is missing");
+                    return None;
+                };
+                return Some(ExpressionKind::Call {
+                    function,
+                    args: lowered_args,
+                    evaluation_order,
+                });
+            }
+            if matches!(
+                intrinsic,
+                IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic
+            ) && type_arguments.len() == 1
+                && lowered_args.len() == 1
                 && let Some(kind) = self.lower_primitive_json_serialization(
                     type_arguments[0],
                     &lowered_args[0],

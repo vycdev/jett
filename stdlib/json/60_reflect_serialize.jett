@@ -98,7 +98,7 @@ function json_serialize_public_other_reflected[T](view value: T, view info: Type
         return json_serialize_public_enum_reflected[T](view value)
     return json_serialize_public_non_enum_reflected[T](view value, view info)
 function json_serialize_public_raw_reflected[T](view value: T) returns string:
-    JsonTree item = value
+    JsonTree item = clone value
     return json_tree_serialize(view item)
 function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string:
     if primitive == TypePrimitive.string_type:

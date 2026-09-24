@@ -91,6 +91,9 @@ function json_parse_native_bytes(raw: string) returns result[bytes, string]:
     bytes item = bytes.from_hex(raw_hex) handle error:
         return fail("expected hex bytes string")
     return ok(item)
+function json_serialize_native_bytes(view value: bytes) returns string:
+    bytes item = clone value
+    return json_stdlib_quote("0x{bytes.to_hex(item)}")
 function json_parse_native_nothing(raw: string) returns result[nothing, string]:
     JsonTree tree = parse_raw(raw) handle error:
         return fail(error)
