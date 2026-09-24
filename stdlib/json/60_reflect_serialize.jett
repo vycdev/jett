@@ -1,6 +1,10 @@
 namespace json
 mutual:
     function json_serialize_public_reflected[T](view value: T) returns string
+    function json_serialize_public_checked_primitive[T](view value: T) returns string
+    function json_serialize_public_checked_numeric[T](view value: T) returns string
+    function json_serialize_public_checked_wide_numeric[T](view value: T) returns string
+    function json_serialize_public_other_reflected[T](view value: T, view info: TypeInfo) returns string
     function json_serialize_public_raw_reflected[T](view value: T) returns string
     function json_serialize_public_primitive[T](view value: T, primitive: TypePrimitive) returns string
     function json_serialize_public_integer_primitive[T](view value: T, primitive: TypePrimitive) returns optional[string]
@@ -21,10 +25,63 @@ mutual:
 function json_serialize_public_reflected[T](view value: T) returns string:
     TypeInfo info = type.info[T]()
     TypeKind kind = info.kind_tag
+    if kind == TypeKind.struct_type:
+        return json_serialize_public_record_reflected[T](view value)
+    else if kind == TypeKind.primitive_type:
+        return json_serialize_public_checked_primitive[T](view value)
+    else if kind == TypeKind.list_type:
+        return json_serialize_public_list_reflected[T](view value)
+    else if kind == TypeKind.map_type:
+        return json_serialize_public_map_reflected[T](view value)
+    else if kind == TypeKind.optional_type:
+        return json_serialize_public_optional_reflected[T](view value)
+    else if kind == TypeKind.result_type:
+        return json_serialize_public_result_reflected[T](view value)
+    else:
+        return json_serialize_public_other_reflected[T](view value, view info)
+function json_serialize_public_checked_primitive[T](view value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    if primitive == TypePrimitive.string_type:
+        string item = value
+        return json_stdlib_quote(item)
+    else if primitive == TypePrimitive.bool_type:
+        bool item = value
+        return "{item}"
+    else if primitive == TypePrimitive.bytes_type:
+        bytes item = clone value
+        return json_stdlib_quote("0x{bytes.to_hex(item)}")
+    else if primitive == TypePrimitive.nothing_type:
+        return "null"
+    else:
+        return json_serialize_public_checked_numeric[T](view value)
+function json_serialize_public_checked_numeric[T](view value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    if primitive == TypePrimitive.int8_type or primitive == TypePrimitive.int16_type or primitive == TypePrimitive.int32_type or primitive == TypePrimitive.int64_type:
+        return "{value}"
+    else if primitive == TypePrimitive.uint8_type or primitive == TypePrimitive.uint16_type or primitive == TypePrimitive.uint32_type:
+        return "{value}"
+    else:
+        return json_serialize_public_checked_wide_numeric[T](view value)
+function json_serialize_public_checked_wide_numeric[T](view value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    if primitive == TypePrimitive.uint64_type:
+        uint64 item = value
+        return string.from_uint64(item)
+    else if primitive == TypePrimitive.float32_type or primitive == TypePrimitive.float64_type:
+        float64 item = value
+        return "{item}"
+    else:
+        return "null"
+function json_serialize_public_other_reflected[T](view value: T, view info: TypeInfo) returns string:
+    TypeKind kind = info.kind_tag
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
-    if json_reflected_raw_type(view info):
-        return json_serialize_public_raw_reflected[T](view value)
+    if kind == TypeKind.enum_type:
+        if json_reflected_raw_type(view info):
+            return json_serialize_public_raw_reflected[T](view value)
     if primitive != TypePrimitive.unknown_type:
         return json_serialize_public_primitive[T](view value, primitive)
     if kind == TypeKind.alias_type:
@@ -124,7 +181,7 @@ function json_serialize_public_non_enum_reflected[T](view value: T, view info: T
             return json_serialize_public_record_reflected[T](view value)
 function json_serialize_public_list_reflected[T](view value: T) returns string:
     comptime type Elem = type.arg[T](0):
-        list[Elem] items = value
+        list[Elem] items = clone value
         mutable list[string] parts = list.new[string]()
         for item in items:
             parts = list.append[string](parts, json_serialize_public_reflected[Elem](view item))
@@ -138,7 +195,7 @@ function json_serialize_public_set_reflected[T](view value: T) returns string:
         return json_stdlib_array_from_parts(parts)
 function json_serialize_public_map_reflected[T](view value: T) returns string:
     comptime type Val = type.arg[T](1):
-        map[string, Val] entries = value
+        map[string, Val] entries = clone value
         mutable list[string] parts = list.new[string]()
         for key, item in entries:
             string encoded = json_serialize_public_reflected[Val](view item)
@@ -146,18 +203,18 @@ function json_serialize_public_map_reflected[T](view value: T) returns string:
         return json_stdlib_object_from_parts(parts)
 function json_serialize_public_optional_reflected[T](view value: T) returns string:
     comptime type Inner = type.arg[T](0):
-        Inner item = value handle:
+        Inner item = clone value handle:
             return "null"
         return json_serialize_public_reflected[Inner](view item)
 function json_serialize_public_result_reflected[T](view value: T) returns string:
     comptime type Ok = type.arg[T](0):
-        Ok item = value handle error:
-            comptime type Err = type.arg[T](1):
+        comptime type Err = type.arg[T](1):
+            Ok item = clone value handle error:
                 Err failure = error
                 string encoded = json_serialize_public_reflected[Err](view failure)
                 return json_stdlib_single_entry_object("fail", encoded)
-        string encoded = json_serialize_public_reflected[Ok](view item)
-        return json_stdlib_single_entry_object("ok", encoded)
+            string encoded = json_serialize_public_reflected[Ok](view item)
+            return json_stdlib_single_entry_object("ok", encoded)
 function json_serialize_public_machine_reflected[T](view value: T) returns string:
     TypeMachineState state = type.machine_state_value[T](view value)
     mutable list[string] payload_fields = list.new[string]()

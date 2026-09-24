@@ -2855,6 +2855,49 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    // Select only shapes whose reflected serializer can be checked as concrete
+    // source today; other JSON calls retain their existing intrinsic lowering.
+    fn native_json_source_supported(&self, ty: TypeId, visiting: &mut HashSet<TypeId>) -> bool {
+        match self.interner.resolve(ty) {
+            Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float64 => true,
+            Type::List(element) => self.native_json_source_supported(*element, visiting),
+            Type::Map(key, value) if *key == TypeInterner::STRING => {
+                self.native_json_source_supported(*value, visiting)
+            }
+            Type::Optional(inner) => self.native_json_source_supported(*inner, visiting),
+            Type::Result(ok, err) => {
+                self.native_json_source_supported(*ok, visiting)
+                    && self.native_json_source_supported(*err, visiting)
+            }
+            Type::Struct(id) => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_struct(*id)
+                    .fields
+                    .iter()
+                    .all(|(_, field_ty)| self.native_json_source_supported(*field_ty, visiting));
+                visiting.remove(&ty);
+                supported
+            }
+            _ => false,
+        }
+    }
+
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
         if expected == got
             || expected == TypeInterner::ERROR
@@ -5967,6 +6010,9 @@ impl<'a> TypeChecker<'a> {
         let old_handle_body_depth = self.handle_body_depth;
         let old_respond_type = self.current_respond_type;
         let old_specialize_reflection_branches = self.specialize_reflection_branches;
+        // Nested generic checks reuse source DefIds for parameters and locals.
+        // Preserve the outer concrete types while checking the inner body.
+        let old_type_env = self.type_env.clone();
 
         self.in_verify_block = false;
         self.in_property_block = false;
@@ -6046,6 +6092,7 @@ impl<'a> TypeChecker<'a> {
         self.handle_body_depth = old_handle_body_depth;
         self.current_respond_type = old_respond_type;
         self.specialize_reflection_branches = old_specialize_reflection_branches;
+        self.type_env = old_type_env;
     }
 
     fn record_expression_type(&mut self, span: Span, ty: TypeId) {
@@ -10799,7 +10846,7 @@ impl<'a> TypeChecker<'a> {
 
         match self.math_numeric_policy_base(current_ty) {
             Some((base, tainted)) => {
-                self.check_math_source_facade_instantiation(name, base, span);
+                self.check_source_facade_instantiation(name, base, span);
                 self.maybe_wrap_secret(base, tainted)
             }
             None => {
@@ -10878,7 +10925,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        self.check_math_source_facade_instantiation(name, base, span);
+        self.check_source_facade_instantiation(name, base, span);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
@@ -10893,12 +10940,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_math_source_facade_instantiation(
-        &mut self,
-        name: &str,
-        concrete: TypeId,
-        call_span: Span,
-    ) {
+    fn check_source_facade_instantiation(&mut self, name: &str, concrete: TypeId, call_span: Span) {
         let Some(template) = self.generic_function_templates.get(name).cloned() else {
             return;
         };
@@ -10952,7 +10994,7 @@ impl<'a> TypeChecker<'a> {
 
         match self.math_numeric_policy_base(arg_ty) {
             Some((base, tainted)) => {
-                self.check_math_source_facade_instantiation(name, base, span);
+                self.check_source_facade_instantiation(name, base, span);
                 self.maybe_wrap_secret(base, tainted)
             }
             None => {
@@ -11026,7 +11068,7 @@ impl<'a> TypeChecker<'a> {
             return TypeInterner::ERROR;
         }
 
-        self.check_math_source_facade_instantiation(name, base, span);
+        self.check_source_facade_instantiation(name, base, span);
         self.maybe_wrap_secret(base, left_tainted || right_tainted)
     }
 
@@ -11616,6 +11658,21 @@ impl<'a> TypeChecker<'a> {
             args,
             return_type,
         );
+
+        if let Some(name @ ("json.serialize" | "json.serialize_public")) = callee_name.as_deref()
+            && let Some(&value_ty) = checked_arg_types.first()
+            && matches!(
+                self.interner.resolve(value_ty),
+                Type::Struct(_)
+                    | Type::List(_)
+                    | Type::Map(_, _)
+                    | Type::Optional(_)
+                    | Type::Result(_, _)
+            )
+            && self.native_json_source_supported(value_ty, &mut HashSet::new())
+        {
+            self.check_source_facade_instantiation(name, value_ty, span);
+        }
 
         if let Some(callee_name) = callee_name.as_deref() {
             if tainted_return && Self::is_secret_liftable_call(callee_name, callee_is_pure) {

@@ -919,8 +919,10 @@ stdlib functions. For primitive serialization it constructs a checked
 `JsonTree` variant and uses the same source serializer. Primitive parsing for
 `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing` calls
 private stdlib decoders over that tree. This is an interim lowering path while
-other concrete generic JSON bodies remain unavailable to native
-specialization; the compiler-owned public policy gates still run first.
+other concrete generic JSON bodies are staged for native specialization.
+Structs, lists, string-keyed maps, optionals, and results composed of supported
+primitive values now run the checked reflected stdlib serializer. The
+compiler-owned public policy gates still run first.
 
 ---
 

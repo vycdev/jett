@@ -349,13 +349,19 @@ path is equivalent for this raw representation because its source validator
 accepts every valid `JsonTree` shape. String, bool, and numeric serialization
 construct a checked `JsonTree` variant and call the same source serializer;
 string payloads are cloned before the tree takes ownership. A literal
-`nothing` constructs the null variant. Other concrete generic JSON types
-still require native lowering. Checked `json.parse` and `json.parse_exact`
+`nothing` constructs the null variant. Checked `json.parse` and `json.parse_exact`
 calls for `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing`
 lower to private stdlib source decoders after compiler policy checks. They
 parse through `JsonTree` and its strict scalar accessors, preserving source
-error messages and ownership. Narrow numeric and structured types still
+error messages and ownership. Narrow numeric and structured parsing still
 require native lowering.
+
+Concrete structs, lists, string-keyed maps, optionals, and results composed of
+supported primitive values use specialized checked stdlib serialization. The
+public policy gate still runs before the source body. Borrowed bytes and
+containers are cloned before consuming serialization paths; linked
+native/interpreter fixtures check output and
+owner cleanup. Float32 fields and other aggregate JSON shapes remain pending.
 
 The remaining string intrinsics now have typed native leaves. Replace reuses
 the grapheme split matcher and checks output capacity before assembly; empty

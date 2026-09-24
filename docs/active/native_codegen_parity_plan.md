@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
-| JSON and trusted stdlib hooks | covered | checked `JsonTree` parse/parse-exact and serialize calls use trusted raw stdlib functions; scalar string, bool, and numeric serialization constructs a checked `JsonTree` for the same serializer; checked `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing` parsing calls use private source decoders; narrower numerics and structured parsing remain pending | native/interpreter raw-tree, primitive-serialization, and primitive-parse fixtures cover object/array values, parse errors, UTF-8, escaping, integer widths, bools, finite/nonfinite floats, bytes, and literal `nothing`; other concrete JSON types pending |
+| JSON and trusted stdlib hooks | covered | checked `JsonTree` parse/parse-exact and serialize calls use trusted raw stdlib functions; scalar string, bool, and numeric serialization constructs a checked `JsonTree` for the same serializer; supported structs, lists, string-keyed maps, optionals, and results specialize the checked source serializer; checked `string`, `bool`, `int64`, `uint64`, `float64`, `bytes`, and `nothing` parsing calls use private source decoders; other structured serialization and parsing remain pending | native/interpreter raw-tree, primitive-serialization, primitive-parse, and structured serialization fixtures cover object/array values, parse errors, UTF-8, escaping, integer widths, bools, finite/nonfinite floats, bytes, literal `nothing`, renamed fields, direct/nested collections, and owned cleanup; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 The current fixture gates are therefore:
@@ -490,6 +490,18 @@ returning a string now receives a planned owning temporary. Together these add
 insert/remove positions and string-returning `list.map`. Invalid-index failures
 currently report a static native message without the index, so exact diagnostic
 parity remains pending.
+
+Checked public JSON calls for supported structs, lists, string-keyed maps,
+optionals, and results now instantiate the reflected `.jett` serializer after
+the compiler-owned policy gate. The serializer selects type-kind and primitive
+branches while checking each concrete instantiation. Borrowed containers are
+cloned before consuming iteration.
+Nested generic checks preserve the outer parameter types; HIR derives result
+handler error bindings from the checked result type. A linked differential
+fixture covers both public spellings, renamed and escaped fields, all supported
+scalar categories, nested collections, optional/result branches, and cleanup.
+Float32 fields, enums, bitfields, secrets, raw-tree fields, and other JSON
+shapes still need this source path or another checked native lowering.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

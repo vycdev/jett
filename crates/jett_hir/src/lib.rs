@@ -2558,7 +2558,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     .error(name.span, "handle error binding has no resolved definition");
                 return None;
             };
-            let Some(ty) = self.parent.check.definition_types.get(&definition).copied() else {
+            let ty = match self.parent.check.interner.resolve(target.ty) {
+                Type::Result(_, error) => Some(*error),
+                _ => self.parent.check.definition_types.get(&definition).copied(),
+            };
+            let Some(ty) = ty else {
                 self.parent
                     .error(name.span, "handle error binding has no checked type");
                 return None;
