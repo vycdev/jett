@@ -300,13 +300,13 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 150 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 152 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 150/182 (82.4%), a useful progress measure rather than a
+gate is currently 152/182 (83.5%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
@@ -628,6 +628,15 @@ A linked native/interpreter fixture covers both forms, and `pipeline_into.jett`
 joins the object gate. The current exhaustive Windows checkpoint is 150/182
 objects, 23/30 main outcomes, 25/25 runtime contracts, and 182/182 typed
 lowerings.
+Supported records with refinement fields now use the checked source JSON
+decoder. It validates each field as its exact refinement type before insertion
+into the reflected native builder. Native verification rejects builder inputs
+that could pass an unvalidated base value into a direct refinement field;
+accepting those values requires predicate execution at builder finish. A linked
+fixture covers valid and rejected JSON, exact unknown-field errors, and reflected
+reconstruction. `json_parse.jett` and `json_parse_refinement_valid.jett` join
+the object gate. The current exhaustive Windows checkpoint is 152/182 objects,
+23/30 main outcomes, 25/25 runtime contracts, and 182/182 typed lowerings.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

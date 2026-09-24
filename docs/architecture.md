@@ -2698,7 +2698,7 @@ against a known unit variant checks only the variant tag, including when other
 variants carry aggregate payloads; comparison between two unknown aggregate
 payload values remains outside that path.
 
-The full native parity gate is still incomplete: 150/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 152/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -2714,7 +2714,10 @@ specializations, and HIR lowers its checked empty field loop as an empty scope.
 Raw `secret[json.JsonTree]` uses a dedicated trusted parser; nested refinements and
 other unsupported field shapes remain on the generic intrinsic path. Top-level
 refinements with a supported base use checked source parsing and serialization;
-refinement-validating struct fields still require native builder support. Top-level
+record fields with supported refinements now decode through a checked source
+conversion before entering the native reflected builder. The builder accepts
+the exact refined type; base values for refined fields and direct struct
+constructors requiring refinement validation remain native gaps. Top-level
 enums with supported payload fields, including nested raw `json.JsonTree`, use
 dedicated checked native parse and serialize hooks. Raw trees retain their JSON
 wire behavior and are cloned when a decoder returns a borrowed tree. Pipeline

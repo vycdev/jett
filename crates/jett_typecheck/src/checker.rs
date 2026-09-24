@@ -3043,9 +3043,7 @@ impl<'a> TypeChecker<'a> {
                         .fields
                         .iter()
                         .all(|(_, field_ty)| {
-                            !matches!(self.interner.resolve(*field_ty), Type::Refinement { .. })
-                                && self
-                                    .native_json_parse_source_supported_inner(*field_ty, visiting)
+                            self.native_json_parse_source_supported_inner(*field_ty, visiting)
                         });
                 visiting.remove(&ty);
                 supported

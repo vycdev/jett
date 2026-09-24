@@ -56,14 +56,7 @@ impl ScalarKind {
 }
 
 fn native_constructible_struct(types: &TypeInterner, ty: TypeId) -> bool {
-    let Type::Struct(id) = types.resolve(ty) else {
-        return false;
-    };
-    types
-        .resolve_struct(*id)
-        .fields
-        .iter()
-        .all(|(_, field_ty)| !matches!(types.resolve(*field_ty), Type::Refinement { .. }))
+    matches!(types.resolve(ty), Type::Struct(_))
 }
 
 fn native_constructible_bitfield(types: &TypeInterner, ty: TypeId) -> bool {
@@ -93,6 +86,32 @@ fn native_constructible_bitfield(types: &TypeInterner, ty: TypeId) -> bool {
 
 fn native_constructible_record(types: &TypeInterner, ty: TypeId) -> bool {
     native_constructible_struct(types, ty) || native_constructible_bitfield(types, ty)
+}
+
+fn native_builder_value_type_supported(types: &TypeInterner, owner: TypeId, value: TypeId) -> bool {
+    let Type::Struct(id) = types.resolve(owner) else {
+        return true;
+    };
+    let fields = &types.resolve_struct(*id).fields;
+    if fields
+        .iter()
+        .any(|(_, field_ty)| matches!(types.resolve(*field_ty), Type::Refinement { .. }))
+        && !fields.iter().any(|(_, field_ty)| *field_ty == value)
+    {
+        return false;
+    }
+    // The native builder receives already validated refinement values. A base
+    // value can only be accepted once finish can invoke the refinement predicate.
+    fields.iter().all(|(_, field_ty)| {
+        let mut current = *field_ty;
+        while let Type::Refinement { base, .. } = types.resolve(current) {
+            if *base == value {
+                return false;
+            }
+            current = *base;
+        }
+        true
+    })
 }
 
 fn native_constructible_enum(types: &TypeInterner, ty: TypeId) -> bool {
@@ -1235,6 +1254,11 @@ impl Verifier<'_> {
                         && reflection_arguments.len() == 2
                         && native_constructible_builder_kind(self.types, type_arguments[0])
                             == Some(reflection_arguments[0].kind.as_str())
+                        && native_builder_value_type_supported(
+                            self.types,
+                            type_arguments[0],
+                            type_arguments[1],
+                        )
                         && args[0].ty == TypeInterner::TYPE_CONSTRUCTION
                         && matches!(self.types.resolve(args[1].ty), Type::Struct(id)
                             if self.types.resolve_struct(*id).name == "TypeField")

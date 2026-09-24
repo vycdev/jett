@@ -338,6 +338,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/json_refinement_source.jett",
         ),
         (
+            "json_refined_record_source",
+            "../../tests/native/json_refined_record_source.jett",
+        ),
+        (
             "json_bytes_raw_source",
             "../../tests/native/json_bytes_raw_source.jett",
         ),
