@@ -420,10 +420,12 @@ fn native_math_aggregates_preserve_interpreter_extremes() {
 }
 
 #[test]
-fn native_int64_trace_matches_interpreter_debug_output() {
+fn native_int64_debug_statements_match_interpreter_output() {
     for relative_path in [
         "../../tests/run_pass/trace_basic.jett",
         "../../tests/native/trace_int64.jett",
+        "../../tests/run_pass/breakpoint_basic.jett",
+        "../../tests/native/breakpoint_int64.jett",
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");

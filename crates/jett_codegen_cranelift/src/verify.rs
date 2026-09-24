@@ -554,8 +554,44 @@ impl Verifier<'_> {
                     Err(self.unsupported(function, statement.span, "non-int64 trace"))
                 }
             }
-            StatementKind::Breakpoint(_) => {
-                Err(self.unsupported(function, statement.span, "breakpoint"))
+            StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
+                if let Some(condition) = condition {
+                    self.expression(function, condition)?;
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        TypeInterner::BOOL,
+                        condition.ty,
+                        "breakpoint condition must be bool",
+                    )?;
+                }
+                if bindings.len() > 1 {
+                    return Err(self.unsupported(
+                        function,
+                        statement.span,
+                        "multi-binding breakpoint",
+                    ));
+                }
+                for binding in bindings {
+                    let local = function.local(*binding).ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            statement.span,
+                            "breakpoint binding is absent from local table",
+                        )
+                    })?;
+                    if local.ty != TypeInterner::INT64 {
+                        return Err(self.unsupported(
+                            function,
+                            statement.span,
+                            "non-int64 breakpoint binding",
+                        ));
+                    }
+                }
+                Ok(())
             }
         }
     }

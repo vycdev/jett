@@ -8,6 +8,10 @@ Literal creation, concatenation and formatting create one reference; retain
 creates another; release removes it immediately and destroys the last reference.
 Borrowed inputs are valid only for a call. Handles cannot cross contexts and are
 never reused. No interpreter Value, source, AST or HIR enters the runtime.
+Native breakpoint leaves write the interpreter-compatible debug line to stderr
+only when the checked boolean condition is true. HIR supplies the scoped source
+binding snapshot; the current native ABI accepts zero bindings or one `int64`
+binding. The leaf does not expose a debugger pause or evaluate arbitrary values.
 Stdout authority is a separate context-bound token, supplied only for checked
 Stdout entry parameters and passed explicitly to printing leaf operations.
 Clock authority is likewise a distinct context-bound token. The native entry

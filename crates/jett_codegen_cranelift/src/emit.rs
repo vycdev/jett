@@ -924,7 +924,52 @@ impl Translator<'_, '_> {
                 self.leaf(NativeLeaf::TraceInt64, &[pointer, length, value], true)?;
                 Ok(())
             }
-            StatementKind::Breakpoint(_) => Err(self.unsupported(statement.span, "breakpoint")),
+            StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
+                let enabled = match condition {
+                    Some(condition) => {
+                        let value = self.expression(condition)?;
+                        self.scalar(value, statement.span)?
+                    }
+                    None => self.builder.ins().iconst(ir::types::I8, 1),
+                };
+                let enabled = self.builder.ins().uextend(ir::types::I32, enabled);
+                match bindings.as_slice() {
+                    [] => {
+                        self.leaf(NativeLeaf::BreakpointEmpty, &[enabled], true)?;
+                    }
+                    [binding] => {
+                        let local = &self.local_types[binding.index() as usize];
+                        let prefix = format!("breakpoint hit: {}: int64 = ", local.name);
+                        let variable = variable_for(
+                            self.variables,
+                            binding.index(),
+                            statement.span,
+                            self.symbol,
+                        )?
+                        .ok_or_else(|| {
+                            self.unsupported(statement.span, "non-scalar breakpoint binding")
+                        })?;
+                        let value = self.builder.try_use_var(variable).map_err(|error| {
+                            contract_error(
+                                self.symbol,
+                                statement.span,
+                                format!("cannot read native breakpoint binding: {error}"),
+                            )
+                        })?;
+                        let (pointer, length) = self.static_bytes(&prefix)?;
+                        self.leaf(
+                            NativeLeaf::BreakpointInt64,
+                            &[enabled, pointer, length, value],
+                            true,
+                        )?;
+                    }
+                    _ => return Err(self.unsupported(statement.span, "multi-binding breakpoint")),
+                }
+                Ok(())
+            }
         }
     }
 

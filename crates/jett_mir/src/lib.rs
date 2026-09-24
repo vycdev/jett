@@ -151,7 +151,10 @@ pub enum StatementKind {
         message: Option<Expression>,
     },
     Trace(LocalId),
-    Breakpoint(Option<Expression>),
+    Breakpoint {
+        condition: Option<Expression>,
+        bindings: Vec<LocalId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -450,9 +453,15 @@ impl FunctionValidator<'_, '_> {
             StatementKind::Trace(local) => {
                 self.check_local(*local, statement.span, "trace statement");
             }
-            StatementKind::Breakpoint(condition) => {
+            StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
                 if let Some(condition) = condition {
                     self.expression(condition);
+                }
+                for binding in bindings {
+                    self.check_local(*binding, statement.span, "breakpoint binding");
                 }
             }
         }
@@ -626,9 +635,15 @@ impl FunctionValidator<'_, '_> {
             hir::StatementKind::Trace(local) => {
                 self.check_local(*local, statement.span, "nested trace statement");
             }
-            hir::StatementKind::Breakpoint(condition) => {
+            hir::StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
                 if let Some(condition) = condition {
                     self.expression(condition);
+                }
+                for binding in bindings {
+                    self.check_local(*binding, statement.span, "nested breakpoint binding");
                 }
             }
             hir::StatementKind::Scope(block) => self.hir_block(block),
@@ -996,9 +1011,16 @@ impl Builder {
             hir::StatementKind::Trace(local) => {
                 self.push(StatementKind::Trace(*local), statement.span)
             }
-            hir::StatementKind::Breakpoint(condition) => {
-                self.push(StatementKind::Breakpoint(condition.clone()), statement.span)
-            }
+            hir::StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => self.push(
+                StatementKind::Breakpoint {
+                    condition: condition.clone(),
+                    bindings: bindings.clone(),
+                },
+                statement.span,
+            ),
             hir::StatementKind::Respond(value) => {
                 self.terminate(TerminatorKind::Respond(value.clone()), statement.span)
             }

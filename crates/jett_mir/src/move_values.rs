@@ -322,6 +322,21 @@ impl Flow<'_> {
                         return Err("trace target is moved or uninitialized".into());
                     }
                 }
+                StatementKind::Breakpoint {
+                    condition,
+                    bindings,
+                } => {
+                    if let Some(condition) = condition {
+                        self.expr(condition, false)?;
+                    }
+                    if self.validate
+                        && bindings
+                            .iter()
+                            .any(|local| !self.state.contains(&(local.index() as usize)))
+                    {
+                        return Err("breakpoint binding is moved or uninitialized".into());
+                    }
+                }
                 _ => return Err("statement needs explicit native ownership lowering".into()),
             }
             self.loans.clear();

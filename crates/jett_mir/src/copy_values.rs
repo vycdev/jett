@@ -94,6 +94,23 @@ impl CopyValuePlan {
                         reads.insert(local.index() as usize);
                         None
                     }
+                    StatementKind::Breakpoint {
+                        condition,
+                        bindings,
+                    } => {
+                        if let Some(condition) = condition {
+                            visit(
+                                condition,
+                                &mut reads,
+                                &mut temporaries,
+                                types,
+                                program,
+                                false,
+                            )?;
+                        }
+                        reads.extend(bindings.iter().map(|local| local.index() as usize));
+                        None
+                    }
                     _ => return Err("statement needs explicit ownership lowering".into()),
                 };
                 max_temporaries = max_temporaries.max(temporaries);

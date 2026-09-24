@@ -119,7 +119,7 @@ fn collect_function_references(function: &Function, references: &mut Vec<(Functi
                         collect_expression_references(message, references);
                     }
                 }
-                StatementKind::Breakpoint(condition) => {
+                StatementKind::Breakpoint { condition, .. } => {
                     if let Some(condition) = condition {
                         collect_expression_references(condition, references);
                     }
@@ -205,7 +205,7 @@ fn collect_hir_block_references(block: &hir::Block, references: &mut Vec<(Functi
                     collect_expression_references(message, references);
                 }
             }
-            hir::StatementKind::Breakpoint(condition) => {
+            hir::StatementKind::Breakpoint { condition, .. } => {
                 if let Some(condition) = condition {
                     collect_expression_references(condition, references);
                 }

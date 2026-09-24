@@ -145,7 +145,7 @@ impl BackendTypeValidator<'_> {
                     self.expression(message, function_name);
                 }
             }
-            StatementKind::Breakpoint(condition) => {
+            StatementKind::Breakpoint { condition, .. } => {
                 if let Some(condition) = condition {
                     self.expression(condition, function_name);
                 }

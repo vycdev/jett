@@ -200,7 +200,10 @@ pub enum StatementKind {
         message: Option<Expression>,
     },
     Trace(LocalId),
-    Breakpoint(Option<Expression>),
+    Breakpoint {
+        condition: Option<Expression>,
+        bindings: Vec<LocalId>,
+    },
     Respond(Expression),
     Scope(Block),
     /// Execute the checker-specialized body whose concrete bound type matches
@@ -576,9 +579,15 @@ impl Validator<'_> {
                 }
             }
             StatementKind::Trace(local) => self.check_local(*local, statement.span),
-            StatementKind::Breakpoint(condition) => {
+            StatementKind::Breakpoint {
+                condition,
+                bindings,
+            } => {
                 if let Some(condition) = condition {
                     self.expression(condition);
+                }
+                for binding in bindings {
+                    self.check_local(*binding, statement.span);
                 }
             }
             StatementKind::Respond(value) => self.expression(value),
@@ -1458,6 +1467,7 @@ struct BodyLowerer<'lowerer, 'program> {
     consumed_comptime_type_bindings: HashSet<Span>,
     local_ids: HashMap<DefId, LocalId>,
     locals: Vec<Local>,
+    visible_bindings: Vec<HashMap<String, LocalId>>,
 }
 
 impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
@@ -1494,6 +1504,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             consumed_comptime_type_bindings: HashSet::new(),
             local_ids: HashMap::new(),
             locals: Vec::new(),
+            visible_bindings: vec![HashMap::new()],
         }
     }
 
@@ -1545,6 +1556,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     ) -> LocalId {
         let id = LocalId(self.locals.len() as u32);
         self.local_ids.insert(definition, id);
+        if let Some(scope) = self.visible_bindings.last_mut() {
+            scope.insert(name.to_string(), id);
+        }
         self.locals.push(Local {
             id,
             name: name.to_string(),
@@ -1556,12 +1570,14 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     }
 
     fn lower_block(&mut self, block: &ast::Block) -> Block {
+        self.visible_bindings.push(HashMap::new());
         let mut statements = Vec::new();
         for statement in &block.stmts {
             if let Some(statement) = self.lower_statement(statement) {
                 statements.push(statement);
             }
         }
+        self.visible_bindings.pop();
         Block {
             statements,
             span: block.span,
@@ -1688,18 +1704,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 loop_stmt.span,
             ),
             Stmt::For(loop_stmt) => {
+                let iterable = self.lower_expression(&loop_stmt.iterable)?;
+                self.visible_bindings.push(HashMap::new());
                 let key = self.allocate_declared_local(&loop_stmt.variable, false)?;
                 let value = match &loop_stmt.value_variable {
                     Some(binding) => Some(self.allocate_declared_local(binding, false)?),
                     None => None,
                 };
+                let body = self.lower_block(&loop_stmt.body);
+                self.visible_bindings.pop();
                 (
                     StatementKind::For {
                         key,
                         value,
                         by_view: loop_stmt.view,
-                        iterable: self.lower_expression(&loop_stmt.iterable)?,
-                        body: self.lower_block(&loop_stmt.body),
+                        iterable,
+                        body,
                     },
                     loop_stmt.span,
                 )
@@ -1759,13 +1779,23 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 };
                 (StatementKind::Trace(local), trace.span)
             }
-            Stmt::Breakpoint(point) => (
-                StatementKind::Breakpoint(match &point.condition {
+            Stmt::Breakpoint(point) => {
+                let condition = match &point.condition {
                     Some(value) => Some(self.lower_expression(value)?),
                     None => None,
-                }),
-                point.span,
-            ),
+                };
+                let mut visible = std::collections::BTreeMap::new();
+                for scope in &self.visible_bindings {
+                    visible.extend(scope.iter().map(|(name, local)| (name, *local)));
+                }
+                (
+                    StatementKind::Breakpoint {
+                        condition,
+                        bindings: visible.into_values().collect(),
+                    },
+                    point.span,
+                )
+            }
             Stmt::Respond(response) => (
                 StatementKind::Respond(self.lower_expression(&response.value)?),
                 response.span,
@@ -2171,6 +2201,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ExpressionKind::Cancel(Box::new(self.lower_expression(value)?))
             }
             Expr::InlineFn(params, _, body, _) => {
+                self.visible_bindings.push(HashMap::new());
                 let mut lowered_params = Vec::with_capacity(params.len());
                 for param in params {
                     let Some(definition) =
@@ -2195,9 +2226,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         param.span,
                     ));
                 }
+                let body = self.lower_block(body);
+                self.visible_bindings.pop();
                 ExpressionKind::InlineFunction {
                     params: lowered_params,
-                    body: self.lower_block(body),
+                    body,
                 }
             }
             Expr::Spawn(inner, _) => self.lower_actor_spawn(inner)?,
@@ -3946,6 +3979,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let enum_definition = self.parent.check.interner.resolve_enum(enum_id).clone();
         let mut arms = Vec::with_capacity(match_stmt.arms.len());
         for arm in &match_stmt.arms {
+            self.visible_bindings.push(HashMap::new());
             let (variant, source_bindings, field_types) = match &arm.pattern {
                 ast::Pattern::Ident(name) => {
                     let Some(index) = enum_definition
@@ -3995,6 +4029,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ));
             }
             let body = self.lower_block(&arm.body);
+            self.visible_bindings.pop();
             arms.push(MatchArm {
                 variant,
                 bindings,
@@ -4696,7 +4731,10 @@ function render(view values: list[int64]) returns string:
         };
         assert!(matches!(
             body.statements[0].kind,
-            StatementKind::Breakpoint(Some(_))
+            StatementKind::Breakpoint {
+                condition: Some(_),
+                ..
+            }
         ));
         assert!(matches!(body.statements[1].kind, StatementKind::Trace(_)));
         let StatementKind::Assign { value, .. } = &body.statements[2].kind else {

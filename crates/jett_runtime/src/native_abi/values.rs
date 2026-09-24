@@ -2552,6 +2552,25 @@ leaves! {
                 .and_then(|_| stderr.flush())
                 .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
             Ok(0) };
+    BreakpointEmpty, jett_rt_v1_breakpoint_empty, false, (condition: u32 => I32), u32 => I32,
+        |_s| { if condition != 0 {
+            let mut stderr = io::stderr().lock();
+            write_all_bytes(&mut stderr, b"breakpoint hit\n")
+                .and_then(|_| stderr.flush())
+                .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+        } Ok(0) };
+    BreakpointInt64, jett_rt_v1_breakpoint_int64, false, (condition: u32 => I32, prefix_pointer: u64 => I64, prefix_length: u64 => I64, value: i64 => I64), u32 => I32,
+        |_s| { if condition != 0 {
+            if prefix_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(prefix_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let prefix = unsafe { std::slice::from_raw_parts(prefix_pointer as *const u8, length) };
+            let mut stderr = io::stderr().lock();
+            write_all_bytes(&mut stderr, prefix)
+                .and_then(|_| write_all_bytes(&mut stderr, value.to_string().as_bytes()))
+                .and_then(|_| write_all_bytes(&mut stderr, b"\n"))
+                .and_then(|_| stderr.flush())
+                .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+        } Ok(0) };
 }
 
 /// Read the first terminal failure without clearing it. Static message storage

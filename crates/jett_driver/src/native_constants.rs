@@ -28,7 +28,10 @@ fn block(body: &mut Block, values: &HashMap<Span, Value>) {
                 expression(target, values);
                 expression(value, values);
             }
-            S::Return(value) | S::Breakpoint(value) => {
+            S::Return(value)
+            | S::Breakpoint {
+                condition: value, ..
+            } => {
                 if let Some(value) = value {
                     expression(value, values);
                 }
