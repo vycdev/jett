@@ -497,7 +497,10 @@ use this path. Enum start validates the borrowed `TypeVariant` and its payload
 field metadata, then creates an owned tagged record. Put validates each
 selected variant field, and finish reports a handled missing-payload error.
 Bitfield finish checks widths and reports handled errors for out-of-range
-values; machine builders remain open.
+values. Machine start validates the borrowed `TypeMachineState` and selected
+state fields. A state-qualified target accepts the checked state builder, then
+finish reports a handled error if the selected state differs from its target.
+Machine put and finish preserve the same owned-builder cleanup contract.
 The checked `.jett` JSON decoder now reaches that builder for supported
 concrete structs. It selects the struct or alias branch before unrelated
 generic decoder bodies, so direct aliases decode through their base struct

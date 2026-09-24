@@ -97,11 +97,28 @@ fn native_constructible_enum(types: &TypeInterner, ty: TypeId) -> bool {
     })
 }
 
+fn native_constructible_machine(types: &TypeInterner, ty: TypeId) -> bool {
+    let id = match types.resolve(ty) {
+        Type::Machine(id) | Type::MachineState { machine: id, .. } => *id,
+        _ => return false,
+    };
+    types.resolve_machine(id).states.iter().all(|state| {
+        state
+            .fields
+            .iter()
+            .all(|(_, field_ty)| !matches!(types.resolve(*field_ty), Type::Refinement { .. }))
+    })
+}
+
 fn native_constructible_builder_kind(types: &TypeInterner, ty: TypeId) -> Option<&'static str> {
     match types.resolve(ty) {
         Type::Struct(_) if native_constructible_struct(types, ty) => Some("struct"),
         Type::Bitfield(_) if native_constructible_bitfield(types, ty) => Some("bitfield"),
         Type::Enum(_) if native_constructible_enum(types, ty) => Some("enum"),
+        Type::Machine(_) if native_constructible_machine(types, ty) => Some("machine"),
+        Type::MachineState { .. } if native_constructible_machine(types, ty) => {
+            Some("machine_state")
+        }
         _ => None,
     }
 }
@@ -1165,6 +1182,37 @@ impl Verifier<'_> {
                     } else {
                         Err(self.unsupported(function, expression.span,
                             "type.construct_variant_start target requiring unsupported construction validation"))
+                    };
+                }
+                if *intrinsic == jett_hir::IntrinsicId::TypeConstructMachineStart {
+                    let fields = type_arguments.first().and_then(|ty| {
+                        let id = match self.types.resolve(*ty) {
+                            Type::Machine(id) | Type::MachineState { machine: id, .. } => *id,
+                            _ => return None,
+                        };
+                        Some(
+                            self.types
+                                .resolve_machine(id)
+                                .states
+                                .iter()
+                                .map(|state| state.fields.len())
+                                .sum::<usize>(),
+                        )
+                    });
+                    let valid = args.len() == 1
+                        && type_arguments.len() == 1
+                        && fields.is_some_and(|count| reflection_arguments.len() == count + 1)
+                        && native_constructible_builder_kind(self.types, type_arguments[0])
+                            == Some(reflection_arguments[0].kind.as_str())
+                        && matches!(self.types.resolve(args[0].ty), Type::Struct(id)
+                            if self.types.resolve_struct(*id).name == "TypeMachineState")
+                        && matches!(self.types.resolve(expression.ty), Type::Result(ok, err)
+                            if *ok == TypeInterner::TYPE_CONSTRUCTION && *err == TypeInterner::STRING);
+                    return if valid {
+                        Ok(())
+                    } else {
+                        Err(self.unsupported(function, expression.span,
+                            "type.construct_machine_start target requiring unsupported construction validation"))
                     };
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructPut {

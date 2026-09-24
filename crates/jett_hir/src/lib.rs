@@ -2886,6 +2886,20 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     variant.fields.iter().map(|field| field.type_info.clone())
                 }));
             }
+            if intrinsic == IntrinsicId::TypeConstructMachineStart
+                && type_arguments.len() == 1
+                && reflection_arguments
+                    .first()
+                    .is_some_and(|info| matches!(info.kind.as_str(), "machine" | "machine_state"))
+            {
+                let machine = self.checked_reflection_machine(type_arguments[0], call_span)?;
+                reflection_arguments.extend(
+                    machine
+                        .states
+                        .iter()
+                        .flat_map(|state| state.fields.iter().map(|field| field.type_info.clone())),
+                );
+            }
             if intrinsic == IntrinsicId::TypeMachineStateValue
                 && type_arguments.len() == 1
                 && lowered_args.len() == 1

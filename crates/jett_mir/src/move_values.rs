@@ -64,7 +64,11 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
 }
 
 pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
-    if id == IntrinsicId::TypeConstructVariantStart && index == 0 {
+    if matches!(
+        id,
+        IntrinsicId::TypeConstructVariantStart | IntrinsicId::TypeConstructMachineStart
+    ) && index == 0
+    {
         return true;
     }
     if matches!(id, IntrinsicId::SecretCompare | IntrinsicId::SecretRedact) {

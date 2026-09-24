@@ -982,6 +982,72 @@ impl Translator<'_, '_> {
         )?;
         self.own_linear(result)
     }
+    fn construct_machine_builder(
+        &mut self,
+        owner: TypeId,
+        reflection_arguments: &[ReflectionTypeInfo],
+        metadata: LoweredValue,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let (machine_id, state_id) = match self.types.resolve(owner) {
+            Type::Machine(id) => (*id, None),
+            Type::MachineState { machine, state } => (*machine, Some(*state)),
+            _ => return Err(self.unsupported(span, "reflected machine construction owner")),
+        };
+        let machine = self.types.resolve_machine(machine_id);
+        let fields = machine
+            .states
+            .iter()
+            .map(|state| state.fields.len())
+            .sum::<usize>();
+        if reflection_arguments.len() != fields + 1 {
+            return Err(self.unsupported(span, "checked machine construction metadata"));
+        }
+        fn name(layout: &mut Vec<u8>, value: &str) -> Result<(), CodegenError> {
+            let length = u32::try_from(value.len())
+                .map_err(|_| CodegenError::Backend("reflected machine name is too long".into()))?;
+            layout.extend_from_slice(&length.to_le_bytes());
+            layout.extend_from_slice(value.as_bytes());
+            Ok(())
+        }
+        let mut layout = b"JC\x05".to_vec();
+        name(&mut layout, &reflection_arguments[0].type_name)?;
+        name(&mut layout, &machine.name)?;
+        let target_state = state_id
+            .and_then(|id| machine.state(id))
+            .map(|state| state.name.as_str())
+            .unwrap_or("");
+        name(&mut layout, target_state)?;
+        let count = u32::try_from(machine.states.len())
+            .map_err(|_| self.unsupported(span, "reflected machine state count"))?;
+        layout.extend_from_slice(&count.to_le_bytes());
+        let mut field_info = reflection_arguments[1..].iter();
+        for state in &machine.states {
+            name(&mut layout, &state.name)?;
+            let count = u32::try_from(state.fields.len())
+                .map_err(|_| self.unsupported(span, "reflected state payload count"))?;
+            layout.extend_from_slice(&count.to_le_bytes());
+            for (field_name, field_ty) in &state.fields {
+                name(&mut layout, field_name)?;
+                name(
+                    &mut layout,
+                    &field_info
+                        .next()
+                        .ok_or_else(|| self.unsupported(span, "checked machine payload type"))?
+                        .type_name,
+                )?;
+                name(&mut layout, &self.types.type_name(*field_ty))?;
+            }
+        }
+        let (pointer, length) = self.static_data(&layout)?;
+        let metadata = self.scalar(metadata, span)?;
+        let result = self.leaf(
+            NativeLeaf::BuilderMachineNew,
+            &[pointer, length, metadata],
+            true,
+        )?;
+        self.own_linear(result)
+    }
     pub(super) fn literal(&mut self, text: &str) -> Result<LoweredValue, CodegenError> {
         let (pointer, length) = self.static_bytes(text)?;
         let value = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
@@ -1110,6 +1176,12 @@ impl Translator<'_, '_> {
                 .first()
                 .ok_or_else(|| self.unsupported(span, "checked variant construction type"))?;
             return self.construct_variant_builder(owner, reflection_arguments, evaluated[0], span);
+        }
+        if id == IntrinsicId::TypeConstructMachineStart {
+            let owner = *type_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked machine construction type"))?;
+            return self.construct_machine_builder(owner, reflection_arguments, evaluated[0], span);
         }
         if id == IntrinsicId::TypeConstructPut {
             let builder = self.scalar(evaluated[0], span)?;

@@ -184,7 +184,10 @@ struct NativeStruct {
 #[derive(Clone)]
 struct NativeBuilderInfo {
     owner: String,
+    metadata_owner: String,
     variant: Option<String>,
+    state: Option<String>,
+    target_state: Option<String>,
     field_offset: usize,
     field_names: Vec<String>,
     field_type_names: Vec<String>,
@@ -1549,8 +1552,11 @@ impl NativeValues {
         self.builders.insert(
             id,
             NativeBuilderInfo {
+                metadata_owner: owner.clone(),
                 owner,
                 variant: None,
+                state: None,
+                target_state: None,
                 field_offset: 0,
                 field_names,
                 field_type_names,
@@ -1570,15 +1576,32 @@ impl NativeValues {
             }
         }
     }
-    fn new_variant_builder(&mut self, layout: &[u8], metadata: u64) -> LeafResult<u64> {
+    fn new_member_builder(
+        &mut self,
+        layout: &[u8],
+        metadata: u64,
+        machine: bool,
+    ) -> LeafResult<u64> {
         let mut cursor = BitfieldLayoutCursor {
             bytes: layout,
             position: 0,
         };
-        if cursor.take(3).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)? != b"JC\x04" {
+        let version = cursor.take(3).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        if version != if machine { b"JC\x05" } else { b"JC\x04" } {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
         let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+        let expected_metadata_owner = if machine {
+            cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+        } else {
+            owner.clone()
+        };
+        let target_state = if machine {
+            let target = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            (!target.is_empty()).then_some(target)
+        } else {
+            None
+        };
         let count = usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
             .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
         if count > layout.len() {
@@ -1588,17 +1611,29 @@ impl NativeValues {
             .map_err(|_| INVALID_CONSTRUCTION)?;
         let metadata_owner = self.text(self.struct_field(metadata, 1)?.bits)?.to_owned();
         let metadata_name = self.text(self.struct_field(metadata, 2)?.bits)?.to_owned();
-        let metadata_discriminant = self.struct_field(metadata, 3)?.bits as i64;
-        let field_list = self.struct_field(metadata, 5)?.bits;
-        if metadata_owner != owner {
-            return self.builder_start_failure(format!(
-                "type.construct_variant_start: variant metadata belongs to '{metadata_owner}', expected '{owner}'"
-            ));
+        let metadata_discriminant = if machine {
+            0
+        } else {
+            self.struct_field(metadata, 3)?.bits as i64
+        };
+        let field_list = self
+            .struct_field(metadata, if machine { 4 } else { 5 })?
+            .bits;
+        if metadata_owner != expected_metadata_owner {
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: state metadata belongs to machine '{metadata_owner}', expected '{expected_metadata_owner}'")
+            } else {
+                format!("type.construct_variant_start: variant metadata belongs to '{metadata_owner}', expected '{expected_metadata_owner}'")
+            });
         }
         let mut selected = None;
         for variant_index in 0..count {
             let name = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
-            let discriminant = cursor.i64().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let discriminant = if machine {
+                0
+            } else {
+                cursor.i64().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?
+            };
             let field_count =
                 usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
                     .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
@@ -1627,16 +1662,20 @@ impl NativeValues {
         }
         let Some((name, discriminant, field_names, field_type_names, field_types)) = selected
         else {
-            return self.builder_start_failure(format!(
-                "type.construct_variant_start: enum '{owner}' has no variant at index {index}"
-            ));
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: machine '{expected_metadata_owner}' has no state at index {index}")
+            } else {
+                format!("type.construct_variant_start: enum '{owner}' has no variant at index {index}")
+            });
         };
         if name != metadata_name {
-            return self.builder_start_failure(format!(
-                "type.construct_variant_start: variant metadata '{metadata_name}' does not match variant '{name}' on '{owner}'"
-            ));
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: state metadata '{metadata_name}' does not match state '{name}' on '{expected_metadata_owner}'")
+            } else {
+                format!("type.construct_variant_start: variant metadata '{metadata_name}' does not match variant '{name}' on '{owner}'")
+            });
         }
-        if discriminant != metadata_discriminant {
+        if !machine && discriminant != metadata_discriminant {
             return self.builder_start_failure(format!(
                 "type.construct_variant_start: variant '{owner}.{name}' has discriminant {discriminant}, metadata reports {metadata_discriminant}"
             ));
@@ -1647,29 +1686,34 @@ impl NativeValues {
             .ok_or(INVALID_CONSTRUCTION)?
             .elements;
         if metadata_fields.len() != field_names.len() {
-            return self.builder_start_failure(format!(
-                "type.construct_variant_start: variant '{owner}.{name}' expects {} payload field(s), metadata reports {}",
-                field_names.len(), metadata_fields.len()
-            ));
+            return self.builder_start_failure(if machine {
+                format!("type.construct_machine_start: state '{expected_metadata_owner}.{name}' expects {} payload field(s), metadata reports {}", field_names.len(), metadata_fields.len())
+            } else {
+                format!("type.construct_variant_start: variant '{owner}.{name}' expects {} payload field(s), metadata reports {}", field_names.len(), metadata_fields.len())
+            });
         }
         for (position, field) in metadata_fields.iter().enumerate() {
             let (field_index, field_owner, member, field_name, type_name) =
                 self.builder_field_metadata(field.ok_or(INVALID_CONSTRUCTION)?)?;
-            if field_owner != owner || member.as_deref() != Some(name.as_str()) {
+            if field_owner != expected_metadata_owner || member.as_deref() != Some(name.as_str()) {
                 let actual = member.map_or(field_owner.clone(), |member| {
                     format!("{field_owner}.{member}")
                 });
-                return self.builder_start_failure(format!(
-                    "type.construct_variant_start: field metadata belongs to '{actual}', expected '{owner}.{name}'"
-                ));
+                return self.builder_start_failure(if machine {
+                    format!("type.construct_machine_start: field metadata belongs to '{actual}', expected '{expected_metadata_owner}.{name}'")
+                } else {
+                    format!("type.construct_variant_start: field metadata belongs to '{actual}', expected '{expected_metadata_owner}.{name}'")
+                });
             }
             if field_index != position
                 || field_name != field_names[position]
                 || type_name != field_type_names[position]
             {
-                return self.builder_start_failure(format!(
-                    "type.construct_variant_start: payload field metadata at index {position} does not match variant '{owner}.{name}'"
-                ));
+                return self.builder_start_failure(if machine {
+                    format!("type.construct_machine_start: payload field metadata at index {position} does not match state '{expected_metadata_owner}.{name}'")
+                } else {
+                    format!("type.construct_variant_start: payload field metadata at index {position} does not match variant '{owner}.{name}'")
+                });
             }
         }
         let builder = self.new_struct((field_names.len() + 1) as u64)?;
@@ -1684,7 +1728,10 @@ impl NativeValues {
             builder,
             NativeBuilderInfo {
                 owner,
-                variant: Some(name),
+                metadata_owner: expected_metadata_owner,
+                variant: (!machine).then(|| name.clone()),
+                state: machine.then_some(name),
+                target_state,
                 field_offset: 1,
                 validation: vec![BuilderFieldValidation::None; field_names.len()],
                 field_names,
@@ -1760,9 +1807,10 @@ impl NativeValues {
             .ok_or(INVALID_CONSTRUCTION)?;
         let (index, actual_owner, member, name, metadata_type) =
             self.builder_field_metadata(field)?;
-        let expected_label = info.variant.as_ref().map_or_else(
-            || expected_owner.to_owned(),
-            |variant| format!("{expected_owner}.{variant}"),
+        let expected_member = info.variant.as_ref().or(info.state.as_ref());
+        let expected_label = expected_member.map_or_else(
+            || info.metadata_owner.clone(),
+            |member| format!("{}.{member}", info.metadata_owner),
         );
         let slot = index.saturating_add(info.field_offset);
         let error = if info.owner != expected_owner {
@@ -1770,7 +1818,9 @@ impl NativeValues {
                 "type.construct_put: builder for '{}' cannot construct '{}'",
                 info.owner, expected_owner
             ))
-        } else if actual_owner != expected_owner || member != info.variant {
+        } else if actual_owner != info.metadata_owner
+            || member.as_deref() != expected_member.map(String::as_str)
+        {
             let actual_label = member.as_ref().map_or(actual_owner.clone(), |member| {
                 format!("{actual_owner}.{member}")
             });
@@ -1782,6 +1832,10 @@ impl NativeValues {
                 format!(
                     "type.construct_put: variant '{expected_label}' has no payload field at index {index}"
                 )
+            } else if info.state.is_some() {
+                format!(
+                    "type.construct_put: state '{expected_label}' has no payload field at index {index}"
+                )
             } else {
                 format!("type.construct_put: type '{expected_owner}' has no field at index {index}")
             })
@@ -1789,6 +1843,11 @@ impl NativeValues {
             Some(if info.variant.is_some() {
                 format!(
                     "type.construct_put: field metadata '{name}' does not match payload field '{}' on variant '{expected_label}'",
+                    info.field_names[index]
+                )
+            } else if info.state.is_some() {
+                format!(
+                    "type.construct_put: field metadata '{name}' does not match payload field '{}' on state '{expected_label}'",
                     info.field_names[index]
                 )
             } else {
@@ -1849,6 +1908,19 @@ impl NativeValues {
                 false,
             );
         }
+        if let (Some(state), Some(target)) = (&info.state, &info.target_state)
+            && state != target
+        {
+            return self.builder_failure(
+                format!(
+                    "type.construct_finish: machine target '{} at {target}' cannot finish state '{state}'",
+                    info.metadata_owner
+                ),
+                builder,
+                0,
+                false,
+            );
+        }
         let record = self.structs.get(&builder).ok_or(INVALID_CONSTRUCTION)?;
         if let Some((slot, _)) = record
             .fields
@@ -1861,6 +1933,8 @@ impl NativeValues {
             return self.builder_failure(
                 if let Some(variant) = &info.variant {
                     format!("type.construct_finish: variant '{expected_owner}.{variant}' is missing required payload field '{}'", info.field_names[index])
+                } else if let Some(state) = &info.state {
+                    format!("type.construct_finish: state '{}.{state}' is missing required payload field '{}'", info.metadata_owner, info.field_names[index])
                 } else {
                     format!("type.construct_finish: '{expected_owner}' is missing required field '{}'", info.field_names[index])
                 },
@@ -2584,7 +2658,13 @@ leaves! {
             let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
             if length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
-            s.new_variant_builder(layout, metadata) };
+            s.new_member_builder(layout, metadata, false) };
+    BuilderMachineNew, jett_rt_v1_builder_machine_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64, metadata: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.new_member_builder(layout, metadata, true) };
     BuilderPut, jett_rt_v1_builder_put, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64), u64 => I64,
         |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
             let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;

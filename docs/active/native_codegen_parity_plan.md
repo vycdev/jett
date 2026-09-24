@@ -300,14 +300,18 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 132 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 133 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 132/182 (72.5%), a useful progress measure rather than a
-claim that 72.5% of the language has native support.
+gate is currently 133/182 (73.1%), a useful progress measure rather than a
+claim that 73.1% of the language has native support.
+Machine `TypeConstruction` now validates checked state and payload metadata,
+builds the selected tagged record, and checks state-qualified targets at
+finish. This adds `type_construction_machine.jett` to the object gate; a linked
+fixture checks construction and handled owner, member, and missing-field errors.
 Enum `TypeConstruction` now validates the checked `TypeVariant` and payload
 field metadata, builds the selected tag and fields, and returns handled
 owner, member, and missing-field errors. This adds native objects for
@@ -410,9 +414,9 @@ returns a constructed struct or a handled missing-field or owner error. A linked
 native/interpreter fixture covers ordinary and generic structs, alias-typed
 fields, successful construction, error messages, builder cloning, and cleanup.
 The object gate adds `json_reflection_flat_decoder.jett` and
-`reflection_type_id_duplicate_construction.jett`, reaching 120/182. Alias,
-refinement-validating and machine construction remain later
-native slices; the verifier retains their explicit unsupported boundaries.
+`reflection_type_id_duplicate_construction.jett`, reaching 120/182.
+Refinement-validating construction remains a later native slice; the verifier
+retains that explicit unsupported boundary.
 The checked source JSON decoder now specializes concrete structs and aliases
 before its general reflection fallback. The recursive native parse gate accepts
 structs whose fields are already supported, including nested structs and
