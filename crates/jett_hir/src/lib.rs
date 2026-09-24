@@ -2621,6 +2621,42 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .get(&call_span)
                 .cloned()
                 .unwrap_or_default();
+            let raw_json_source = match intrinsic {
+                IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic => {
+                    Some("serialize_raw")
+                }
+                IntrinsicId::JsonParse | IntrinsicId::JsonParseExact => Some("parse_raw"),
+                _ => None,
+            };
+            if let Some(name) = raw_json_source
+                && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && self.is_raw_json_tree(type_arguments[0])
+            {
+                let Some(function) = self.trusted_stdlib_function("json", name) else {
+                    self.parent
+                        .error(call_span, "trusted raw JSON source is missing");
+                    return None;
+                };
+                return Some(ExpressionKind::Call {
+                    function,
+                    args: lowered_args,
+                    evaluation_order,
+                });
+            }
+            if matches!(
+                intrinsic,
+                IntrinsicId::JsonSerialize | IntrinsicId::JsonSerializePublic
+            ) && type_arguments.len() == 1
+                && lowered_args.len() == 1
+                && let Some(kind) = self.lower_primitive_json_serialization(
+                    type_arguments[0],
+                    &lowered_args[0],
+                    call_span,
+                )
+            {
+                return Some(kind);
+            }
             if matches!(
                 intrinsic,
                 IntrinsicId::TypeInfo
@@ -4058,6 +4094,113 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let info = self.parent.resolve.scope_table.def(definition);
         self.parent.origins.get(&info.span.file) == Some(&SourceOrigin::Stdlib)
             && self.intrinsic_ids.contains_key(&span)
+    }
+
+    fn is_raw_json_tree(&self, ty: TypeId) -> bool {
+        matches!(self.parent.check.interner.resolve(ty), Type::Enum(id) if self.parent.check.interner.resolve_enum(*id).name == "json.JsonTree")
+    }
+
+    fn lower_primitive_json_serialization(
+        &mut self,
+        ty: TypeId,
+        value: &Expression,
+        span: Span,
+    ) -> Option<ExpressionKind> {
+        let (variant_name, payload) = match self.parent.check.interner.resolve(ty) {
+            Type::String => (
+                "string_value",
+                Some(Expression {
+                    kind: ExpressionKind::Clone(Box::new(value.clone())),
+                    ty,
+                    span,
+                }),
+            ),
+            Type::Bool => ("bool_value", Some(value.clone())),
+            Type::Nothing if matches!(value.kind, ExpressionKind::Nothing) => ("null", None),
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64 => (
+                "number_value",
+                Some(Expression {
+                    kind: ExpressionKind::StringInterpolation(vec![StringSegment::Value(
+                        value.clone(),
+                    )]),
+                    ty: TypeInterner::STRING,
+                    span,
+                }),
+            ),
+            _ => return None,
+        };
+        let tree_type = self
+            .parent
+            .check
+            .interner
+            .type_ids()
+            .find(|candidate| self.is_raw_json_tree(*candidate))?;
+        let Type::Enum(enum_id) = self.parent.check.interner.resolve(tree_type) else {
+            return None;
+        };
+        let variant = self
+            .parent
+            .check
+            .interner
+            .resolve_enum(*enum_id)
+            .variants
+            .iter()
+            .position(|candidate| candidate.name == variant_name)?;
+        let function = self.trusted_stdlib_function("json", "serialize_raw")?;
+        let tree = Expression {
+            kind: ExpressionKind::EnumConstruct {
+                enum_type: tree_type,
+                variant: VariantId(variant as u32),
+                payloads: payload.into_iter().collect(),
+            },
+            ty: tree_type,
+            span,
+        };
+        Some(ExpressionKind::Call {
+            function,
+            args: vec![Expression {
+                kind: ExpressionKind::View(Box::new(tree)),
+                ty: tree_type,
+                span,
+            }],
+            evaluation_order: vec![0],
+        })
+    }
+
+    fn trusted_stdlib_function(&self, namespace: &str, name: &str) -> Option<FunctionId> {
+        self.parent.module.items.iter().find_map(|item| {
+            let Item::Function(function) = item else {
+                return None;
+            };
+            if function.name.name != name || !function.type_params.is_empty() {
+                return None;
+            }
+            let definition = self
+                .parent
+                .definition_at(function.name.span, DefKind::Function)?;
+            let declared = self.parent.resolve.scope_table.def(definition);
+            if declared.namespace.as_deref() != Some(namespace)
+                || self.parent.origins.get(&function.name.span.file) != Some(&SourceOrigin::Stdlib)
+            {
+                return None;
+            }
+            self.function_ids
+                .get(&FunctionKey::Definition {
+                    definition,
+                    concrete_args: Vec::new(),
+                    specialization: CheckedGenericSpecialization::default(),
+                })
+                .copied()
+        })
     }
 
     fn lower_bitfield_construct(

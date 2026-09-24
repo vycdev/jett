@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
-| JSON and trusted stdlib hooks | covered | pending | pending |
+| JSON and trusted stdlib hooks | covered | checked `JsonTree` parse/parse-exact and serialize calls use trusted raw stdlib functions; scalar string, bool, and numeric serialization constructs a checked `JsonTree` for the same serializer; structured and scalar parsing remain pending | native/interpreter raw-tree and primitive-serialization fixtures cover object/array values, parse errors, UTF-8, escaping, integer widths, bools, finite/nonfinite floats, and literal `nothing`; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 The current fixture gates are therefore:
@@ -300,14 +300,14 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 110 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 113 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 110/182 (60.4%), a useful progress measure rather than a
-claim that 60.4% of the language has native support.
+gate is currently 113/182 (62.1%), a useful progress measure rather than a
+claim that 62.1% of the language has native support.
 Active `type.variant_value` selection matches native/interpreter output for
 payload and empty variants. Reflected `type.field_value` and
 `type.variant_field_value` now read checked struct, bitfield, and enum payload
@@ -340,7 +340,7 @@ The counts come from the exhaustive 207-row `native_parity` probe, which
 attempts every fixture regardless of staged `object_emit` labels and returns
 failure until all denominators pass. The original manifest pins 29 nonempty,
 code-bearing object gates; the exhaustive Windows MSVC probe also attempts every
-unmarked row and now proves 110. Four string/comptime fixtures began emitting
+unmarked row and now proves 113. Four string/comptime fixtures began emitting
 objects after the remaining string intrinsics were implemented; the payload
 enum and unit-equality slice adds `enum_advanced.jett`, and bitfield value
 support adds `namespace_exports_syntax.jett`; byte decoding adds three bitfield
@@ -363,6 +363,11 @@ Primitive-backed refinement collection keys and elements, plus normalized
 boolean lookup keys, add `primitive_collection_hash_types.jett` to native
 object emission. A native/interpreter fixture covers string-refinement sets
 and maps, integer-refinement sets, and boolean set/map lookup and removal.
+Checked raw-tree JSON bridging adds `json_parse_error_parity.jett`,
+`json_parse_success_parity.jett`, and `json_tree_value.jett` to object
+emission. Primitive serialization uses the same trusted raw serializer in
+native/interpreter execution fixtures. Structured JSON and scalar parsing
+remain the dominant JSON object blockers.
 Checked integer/float conversion adds `conversions.jett`.
 Native empty `list[never]` length/emptiness support adds `list_operations.jett`.
 Borrowed enum matching, explicit view-to-owner cloning at direct calls, and

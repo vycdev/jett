@@ -337,6 +337,15 @@ bits and string ownership as their underlying type. Native/interpreter execution
 fixtures and runtime cleanup tests cover these paths. Projected move-only
 views and callback-bearing map helpers remain guarded.
 
+Checked generic JSON calls for `json.JsonTree` lower to trusted
+`json.parse_raw` or `json.serialize_raw` source functions. The exact-parse
+path is equivalent for this raw representation because its source validator
+accepts every valid `JsonTree` shape. String, bool, and numeric serialization
+construct a checked `JsonTree` variant and call the same source serializer;
+string payloads are cloned before the tree takes ownership. A literal
+`nothing` constructs the null variant. Other concrete generic JSON types
+still require native lowering.
+
 The remaining string intrinsics now have typed native leaves. Replace reuses
 the grapheme split matcher and checks output capacity before assembly; empty
 needles preserve the interpreter's leading, between-grapheme and trailing

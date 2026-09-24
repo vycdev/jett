@@ -914,6 +914,12 @@ concrete owner and canonical interface in their identity.
    move-only and follows the same view/consume rules as other owned storage.
 7. **Comptime reflection lowering:** Preserve enough type metadata for comptime code to inspect `type.name[T]()`, `type.kind[T]()`, `type.has_secret[T]()`, `type.fields[T]()`, bitfield layout metadata, state-machine state/transition metadata, active machine states, and reflected active-state payload fields. JSON serialization is expressible in terms of these reflection primitives rather than as format-specific HIR magic. Struct, bitfield, enum, and state-machine deserialization use the explicit `TypeConstruction` builder family to build `T` from parsed field values; that builder is the sole canonical source form, with no parallel construction-block syntax.
 
+Native JSON lowering currently bridges checked `JsonTree` calls to trusted raw
+stdlib functions. For primitive serialization it constructs a checked
+`JsonTree` variant and uses the same source serializer. This is an interim
+lowering path while concrete generic JSON bodies remain unavailable to native
+specialization; the compiler-owned public policy gates still run first.
+
 ---
 
 ## Phase 8: Mid-Level IR (`jett_mir`)

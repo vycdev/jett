@@ -272,6 +272,14 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("list_sort", "../../tests/native/list_sort.jett"),
         ("set_values", "../../tests/native/set_values.jett"),
         ("map_values", "../../tests/native/map_values.jett"),
+        (
+            "json_generic_raw_bridge",
+            "../../tests/native/json_generic_raw_bridge.jett",
+        ),
+        (
+            "json_generic_primitives",
+            "../../tests/native/json_generic_primitives.jett",
+        ),
         ("encoding", "../../tests/native/encoding.jett"),
         ("csv", "../../tests/native/csv.jett"),
         ("secret_values", "../../tests/native/secret_values.jett"),
