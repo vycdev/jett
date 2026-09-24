@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
-| JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, and collections specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders; concrete structs, bare and state-qualified machines, supported secret wrappers, lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
+| JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 The current fixture gates are therefore:
@@ -306,7 +306,7 @@ The current fixture gates are therefore:
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 141/182 (77.5%), a useful progress measure rather than a
+gate is currently 142/182 (78.0%), a useful progress measure rather than a
 claim that 77.5% of the language has native support.
 Machine `TypeConstruction` now validates checked state and payload metadata,
 builds the selected tagged record, and checks state-qualified targets at
@@ -586,9 +586,16 @@ covers unit and payload variants, nested exact validation, unknown variants,
 and public serialization. This adds `json_enum_shapes.jett`,
 `json_result_shape_diagnostics.jett`, and
 `reflection_type_id_duplicate_enum_payloads.jett` to the object gate. The
-current exhaustive Windows gate is 141/182 emitted objects, 23/30 main
-outcomes, 25/25 runtime contracts, and 182/182 typed lowerings. Nested enum
-source dispatch, refinements, and other JSON shapes remain.
+Windows gate reached 141/182 emitted objects. Checked source parsing and
+serialization now accept refinements over supported bases. The reflected
+decoder selects the refinement branch before its generic fallback, and native
+HIR supplies the checked string type for refinement error bindings. A linked
+interpreter/native fixture covers valid and rejected scalar values, exact
+record parsing, and serialization. `json_refinement_exact_serialize_edges.jett`
+adds one object; the current exhaustive Windows gate is 142/182 emitted
+objects, 23/30 main outcomes, 25/25 runtime contracts, and 182/182 typed
+lowerings. Nested enum source dispatch, refinement-validating struct fields,
+and other JSON shapes remain.
 
 Verification-only empty objects do not count. Native
 execution tests additionally assert computed output, not only process success.

@@ -92,7 +92,7 @@ function json_serialize_public_other_reflected[T](view value: T, view info: Type
             return json_serialize_public_reflected[Base](view item)
     if kind == TypeKind.refinement_type:
         comptime type Base = type.arg[T](0):
-            Base item = coarsen value
+            Base item = coarsen(clone value)
             return json_serialize_public_reflected[Base](view item)
     if kind == TypeKind.enum_type:
         return json_serialize_public_enum_reflected[T](view value)

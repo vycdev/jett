@@ -2568,6 +2568,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             };
             let ty = match self.parent.check.interner.resolve(target.ty) {
                 Type::Result(_, error) => Some(*error),
+                _ if matches!(kind, HandleKind::Refinement { .. }) => Some(TypeInterner::STRING),
                 _ => self.parent.check.definition_types.get(&definition).copied(),
             };
             let Some(ty) = ty else {

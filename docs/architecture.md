@@ -2696,7 +2696,7 @@ Payload enum equality compares the selected variant's integer, boolean,
 floating-point, and string fields through the native value ABI; aggregate
 payload fields remain outside that comparison path.
 
-The full native parity gate is still incomplete: 141/182 genuine objects, 23/30
+The full native parity gate is still incomplete: 142/182 genuine objects, 23/30
 main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -2709,8 +2709,10 @@ optionals, results, supported `secret[T]` wrappers, and bare or
 state-qualified machines recursively composed of supported leaves.
 Machine parsing uses the reflected state builder; an empty state has no field
 specializations, and HIR lowers its checked empty field loop as an empty scope.
-Raw `secret[json.JsonTree]` uses a dedicated trusted parser; refinements and
+Raw `secret[json.JsonTree]` uses a dedicated trusted parser; nested refinements and
 other unsupported field shapes remain on the generic intrinsic path. Top-level
+refinements with a supported base use checked source parsing and serialization;
+refinement-validating struct fields still require native builder support. Top-level
 enums with supported payload fields use dedicated checked native parse and
 serialize hooks; `json.JsonTree` retains its raw wire behavior. Nested enum
 source dispatch remains pending. Native source serialization supports bare and

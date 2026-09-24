@@ -326,6 +326,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "../../tests/native/json_enum_source.jett",
         ),
         (
+            "json_refinement_source",
+            "../../tests/native/json_refinement_source.jett",
+        ),
+        (
             "json_generic_parse_primitives",
             "../../tests/native/json_generic_parse_primitives.jett",
         ),

@@ -2882,6 +2882,7 @@ impl<'a> TypeChecker<'a> {
                     && self.native_json_source_supported(*err, visiting)
             }
             Type::Secret(_) => false,
+            Type::Refinement { base, .. } => self.native_json_source_supported(*base, visiting),
             Type::Struct(id) => {
                 if !visiting.insert(ty) {
                     return false;
@@ -2984,6 +2985,9 @@ impl<'a> TypeChecker<'a> {
                     && self.native_json_parse_source_supported_inner(*err, visiting)
             }
             Type::Secret(inner) => self.native_json_parse_source_supported_inner(*inner, visiting),
+            Type::Refinement { base, .. } => {
+                self.native_json_parse_source_supported_inner(*base, visiting)
+            }
             Type::Struct(id) => {
                 if !visiting.insert(ty) {
                     return false;
@@ -11814,6 +11818,7 @@ impl<'a> TypeChecker<'a> {
             && matches!(
                 self.interner.resolve(value_ty),
                 Type::Struct(_)
+                    | Type::Refinement { .. }
                     | Type::Machine(_)
                     | Type::MachineState { .. }
                     | Type::List(_)
@@ -11831,6 +11836,7 @@ impl<'a> TypeChecker<'a> {
             && matches!(
                 self.interner.resolve(*value_ty),
                 Type::Struct(_)
+                    | Type::Refinement { .. }
                     | Type::Machine(_)
                     | Type::MachineState { .. }
                     | Type::Secret(_)
