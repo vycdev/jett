@@ -2881,16 +2881,20 @@ impl<'a> TypeChecker<'a> {
                 self.native_json_source_supported(*ok, visiting)
                     && self.native_json_source_supported(*err, visiting)
             }
+            Type::Secret(_) => false,
             Type::Struct(id) => {
                 if !visiting.insert(ty) {
                     return false;
                 }
-                let supported = self
-                    .interner
-                    .resolve_struct(*id)
-                    .fields
-                    .iter()
-                    .all(|(_, field_ty)| self.native_json_source_supported(*field_ty, visiting));
+                let supported =
+                    self.interner
+                        .resolve_struct(*id)
+                        .fields
+                        .iter()
+                        .all(|(_, field_ty)| {
+                            matches!(self.interner.resolve(*field_ty), Type::Secret(_))
+                                || self.native_json_source_supported(*field_ty, visiting)
+                        });
                 visiting.remove(&ty);
                 supported
             }
@@ -2949,6 +2953,7 @@ impl<'a> TypeChecker<'a> {
                 self.native_json_parse_source_supported_inner(*ok, visiting)
                     && self.native_json_parse_source_supported_inner(*err, visiting)
             }
+            Type::Secret(inner) => self.native_json_parse_source_supported_inner(*inner, visiting),
             Type::Struct(id) => {
                 if !visiting.insert(ty) {
                     return false;
@@ -11773,6 +11778,7 @@ impl<'a> TypeChecker<'a> {
                 Type::Struct(_)
                     | Type::Machine(_)
                     | Type::MachineState { .. }
+                    | Type::Secret(_)
                     | Type::List(_)
                     | Type::Set(_)
                     | Type::Map(_, _)

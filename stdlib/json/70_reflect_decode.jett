@@ -73,6 +73,8 @@ function json_decode_tree_terminal_reflected[T](view raw: JsonTree, view info: T
     TypeKind kind = type.kind_tag[T]()
     if kind == TypeKind.alias_type:
         return json_decode_tree_alias_reflected[T](view raw)
+    else if kind == TypeKind.secret_type:
+        return json_decode_tree_secret_reflected[T](view raw)
     else if kind == TypeKind.primitive_type:
         return json_decode_tree_checked_primitive[T](view raw)
     else:

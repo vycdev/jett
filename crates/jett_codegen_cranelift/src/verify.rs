@@ -944,6 +944,10 @@ impl Verifier<'_> {
                 {
                     return Ok(());
                 }
+                if matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == local.ty)
+                {
+                    return Ok(());
+                }
                 self.require_same_type(
                     function,
                     expression.span,
