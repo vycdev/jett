@@ -838,3 +838,14 @@ regular deterministic gate, raising current object coverage to 178/182
 coverage. The four remaining object gaps are verification/property fixtures
 without reachable native symbols. The full object audit is available as the
 ignored `native_parity_audit_all_run_pass_objects` test.
+
+The remaining four rows cannot gain object credit from an empty object or an
+unrelated helper symbol. Today HIR collects ordinary functions but leaves
+`verify` and `property` bodies in the interpreter test path; native validation
+also rejects `assert`. A native test-body handoff must retain each checked
+block's source identity and lower its actual statements. Property `given`
+bindings become explicit typed inputs to the emitted predicate; deterministic
+generation and shrinking remain the test runner's responsibility. Native
+`assert` must preserve terminal failure and ownership cleanup. Until that
+handoff exists, these four rows remain object failures even though frontend
+verification succeeds.
