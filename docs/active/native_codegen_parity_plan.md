@@ -324,6 +324,15 @@ runtime semantics: fixtures differ in size, overlap, and coverage. The object
 gate is currently 182/182 (100%), a useful progress measure rather than a
 claim that the same fraction of the language has native support. Native
 property-body execution is measured separately from the object and verify gates.
+
+As of 2026-09-25, the working estimate for overall native language coverage is
+**about 80%**. This is a deliberately coarse progress marker, reviewed in
+five-percentage-point steps against the coverage matrix above, not a computed
+ratio or a release gate. The fixture counts remain the reproducible measures.
+The estimate stays below full parity while known semantic gaps remain in
+ownership and nested handlers, capability/resource providers, asynchronous
+task behavior, JSON shapes, reflection, and special-value diagnostics.
+
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a
 literal gives raw `json.JsonTree` its distinct checked branch, while reflected
