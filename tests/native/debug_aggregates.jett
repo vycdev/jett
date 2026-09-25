@@ -14,7 +14,41 @@ machine Session:
         active(user: string)
     transitions:
         guest to active
+enum Protocol:
+    tcp = 6
+    udp = 17
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    protocol: 8 bits as Protocol
+    payload: list[uint8]
+bitfield Wide:
+    sequence: 64 bits
+struct PacketBox:
+    packet: Packet
+function make_packet() returns Packet:
+    mutable list[uint8] body = list.new[uint8]()
+    body = list.append[uint8](body, 7)
+    body = list.append[uint8](body, 255)
+    return Packet(version: 4, flags: 0, protocol: Protocol.tcp, payload: body)
+function roundtrip_packet(view packet: Packet) returns Packet:
+    bytes encoded = Packet.to_bytes(clone packet)
+    Packet decoded = Packet.from_bytes(encoded) handle error:
+        return clone packet
+    return decoded
+function trace_bitfields() returns nothing:
+    Packet packet = make_packet()
+    Packet decoded = roundtrip_packet(view packet)
+    Wide wide = Wide(sequence: 18446744073709551615)
+    PacketBox wrapped = PacketBox(packet: clone packet)
+    trace packet
+    trace decoded
+    trace wide
+    trace wrapped
+    breakpoint true
+    return nothing
 function main() returns nothing:
+    trace_bitfields()
     list[optional[int64]] choices = list(some(3), none, some(-2))
     mutable set[string] tags = set.new[string]()
     tags = set.add[string](tags, "alpha")

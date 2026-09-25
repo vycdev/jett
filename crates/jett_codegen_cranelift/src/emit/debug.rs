@@ -54,8 +54,14 @@ impl DebugGraph<'_> {
                     }
                     DebugNode::Record(definition.name, fields)
                 }
-                // Bitfields are encoded as bytes, not native record handles.
-                Type::Bitfield(_) => return None,
+                Type::Bitfield(id) => {
+                    let definition = self.types.resolve_bitfield(id).clone();
+                    let mut fields = Vec::with_capacity(definition.fields.len());
+                    for field in definition.fields {
+                        fields.push((field.name, self.node(field.ty)?));
+                    }
+                    DebugNode::Record(definition.name, fields)
+                }
                 Type::Enum(id) => {
                     let definition = self.types.resolve_enum(id).clone();
                     let mut variants = Vec::with_capacity(definition.variants.len());

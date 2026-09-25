@@ -1624,9 +1624,10 @@ defining a second debugger wire schema. See the
 [breakpoint protocol record](completed/breakpoint_pause_inspection_protocol.md)
 for the lifecycle, authorization, envelopes, examples, and verification slices.
 HIR now records the visible source bindings at each breakpoint and carries the
-snapshot through MIR. The native backend currently emits the compatibility
-debug line for an empty snapshot or one `int64` binding after evaluating the
-optional condition. Other value shapes and interactive pausing remain pending.
+snapshot through MIR. The native backend emits the compatibility debug line
+for empty and multi-binding snapshots, including supported aggregate values,
+after evaluating the optional condition. Cross-function binding scope and
+interactive pausing remain pending.
 
 ### How the Compiler Uses the Runtime
 
