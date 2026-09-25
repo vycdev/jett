@@ -837,6 +837,9 @@ function-valued local, matching interpreter behavior when an argument handler
 rebinds that local. MIR lowering receives the checked type interner so a view
 used before a later handler can be snapshotted only when its recursive value
 type is cloneable; resource-bearing values are never cloned by this extraction.
+For a non-short-circuit binary expression with a nested handler, the left value
+is captured before lowering the right; owned cloneable operands are cloned so
+the handler cannot change the value compared by a later enum equality.
 Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
 carry typed operands and message identity. Actor receive
 handlers are deterministic HIR functions whose locals preserve checked

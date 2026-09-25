@@ -45,23 +45,6 @@ fn has_extractable_handle(expression: &Expression) -> bool {
     }
 }
 
-fn is_plain_copy_scalar(ty: TypeId) -> bool {
-    matches!(
-        ty,
-        TypeInterner::INT8
-            | TypeInterner::INT16
-            | TypeInterner::INT32
-            | TypeInterner::INT64
-            | TypeInterner::UINT8
-            | TypeInterner::UINT16
-            | TypeInterner::UINT32
-            | TypeInterner::UINT64
-            | TypeInterner::FLOAT32
-            | TypeInterner::FLOAT64
-            | TypeInterner::BOOL
-    )
-}
-
 fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
     fn supported(
         types: &TypeInterner,
@@ -325,12 +308,28 @@ impl Builder<'_> {
         }
         if let ExpressionKind::Binary { left, op, right } = &expression.kind
             && !matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
-            && is_plain_copy_scalar(left.ty)
+            && can_snapshot_view(self.types, left.ty)
             && (has_extractable_handle(left) || has_extractable_handle(right))
         {
             // Save the left value before extracting a handler from the right.
             // Its failure block may mutate locals that the left side reads.
-            let left_value = self.lower_value(left);
+            let mut left_value = self.lower_value(left);
+            if crate::move_values::is_linear(self.types, left.ty) {
+                let borrowed = if matches!(left_value.kind, ExpressionKind::View(_)) {
+                    left_value
+                } else {
+                    Expression {
+                        kind: ExpressionKind::View(Box::new(left_value)),
+                        ty: left.ty,
+                        span: left.span,
+                    }
+                };
+                left_value = Expression {
+                    kind: ExpressionKind::Clone(Box::new(borrowed)),
+                    ty: left.ty,
+                    span: left.span,
+                };
+            }
             let left_local = self.temporary(left.ty, left.span);
             self.push(
                 StatementKind::Let {

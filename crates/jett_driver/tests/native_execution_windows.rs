@@ -1325,6 +1325,21 @@ fn native_binary_nested_handle_matches_interpreter() {
 }
 
 #[test]
+fn native_enum_binary_nested_handle_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_handle_enum_binary.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated enum binary directory");
+    let binary = directory.path().join("nested_handle_enum_binary.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile enum equality with a nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_constructor_nested_handles_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_constructors.jett");

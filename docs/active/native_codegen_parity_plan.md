@@ -291,7 +291,7 @@ lowering alone never changes an execution row to complete.
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
-| Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call, indirect-call, supported intrinsic-argument, unary, plain-scalar binary, short-circuit boolean, collection, and value-constructor handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, ordered call arguments and constructor fields, scalar evaluation order, and short-circuit fallback skipping covered; other nested-expression and refinement handlers pending |
+| Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call, indirect-call, supported intrinsic-argument, unary, cloneable binary, short-circuit boolean, collection, and value-constructor handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, ordered call arguments and constructor fields, scalar, string, and enum evaluation order, and short-circuit fallback skipping covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context; view-parameter function values pending | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls; linked fixtures cover nested closures, loop captures, higher-order callbacks, string and numeric captures |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
@@ -591,10 +591,13 @@ lexical order; `tests/native/nested_handle_indirect_view.jett` and
 interpreter. `tests/native/nested_handle_indirect_aggregate_view.jett` checks
 that a list view captures the old value before a fallback replaces its source.
 `tests/native/nested_handle_borrowed_stdlib_call.jett` checks the same rule for
-a source stdlib call with a borrowed list parameter and handled index. Borrowed
-aggregate compiler intrinsics, authority-bearing direct views, owned
-and refined binary operands, other nested forms, and source syntax for a
-handler inside interpolation remain open.
+a source stdlib call with a borrowed list parameter and handled index.
+`tests/native/nested_handle_enum_binary.jett` checks that enum equality clones
+its left operand before a right-side handler mutates the source, including a
+constructed enum and copyable string equality. Borrowed aggregate compiler
+intrinsics, authority-bearing direct views, refined binary operand combinations,
+other nested forms, and source syntax for a handler inside interpolation remain
+open.
 Enforcing immutable-local rebinding in the frontend and correcting affected
 fixtures adds native objects for `string_iteration.jett`, `set_operations.jett`,
 and `uint64_checked_expression_runtime_types.jett`. The last also passes a
