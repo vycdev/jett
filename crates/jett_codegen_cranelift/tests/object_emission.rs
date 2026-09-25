@@ -653,12 +653,12 @@ fn symbols_use_structural_types_instead_of_session_local_type_ids() {
 }
 
 #[test]
-fn rejects_unsupported_assert_message_explicitly() {
+fn emits_custom_assert_message() {
     let (mut program, types) = lower_source(
         r#"namespace app
 function checked(value: bool) returns bool:
     bool copy = value
-    return copy
+    return value
 "#,
     );
     let statement = &mut program.functions[0].blocks[0].statements[0];
@@ -675,13 +675,8 @@ function checked(value: bool) returns bool:
         condition,
     };
 
-    let error =
-        emit_host_object(&program, &types).expect_err("custom assert message is unsupported");
-
-    assert!(matches!(
-        error,
-        CodegenError::UnsupportedMir { construct, .. } if construct == "assert message"
-    ));
+    let object = emit_host_object(&program, &types).expect("custom assert message emits");
+    assert!(!object.bytes.is_empty());
 }
 
 #[test]

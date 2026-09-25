@@ -608,8 +608,13 @@ callable test symbols. Property `given` bindings are typed parameters, not
 values synthesized by the object emitter. Test-body functions preserve the
 source policy that ordinary owned values can be read repeatedly: an owned
 native read deep-clones the value while a view borrows it. The default `assert`
-failure records the static terminal message `assertion failed` and follows the
-normal owned-value cleanup epilogue. Production program objects still select
+failure records the static terminal message `assertion failed`. A custom
+interpolated assertion message is evaluated only on the failed branch and
+copied into context-owned terminal storage. The existing v1 result still
+returns static message bytes; `jett_rt_v1_value_failure_copy` queries and copies
+the exact failure text into caller-owned storage before context destruction.
+The launcher uses that copy for its error line, and the normal owned-value
+cleanup epilogue still runs. Production program objects still select
 only the checked source `main`. A separate native verify build synthesizes one
 entry that calls the primary file's top-level verify functions in declaration
 order, stopping on terminal failure. A separate property suite embeds the

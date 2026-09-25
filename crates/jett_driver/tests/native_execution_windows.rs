@@ -1273,3 +1273,24 @@ fn native_debug_statements_match_interpreter_output() {
         );
     }
 }
+
+#[test]
+fn native_assertion_compiles_interpolated_failure_message() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/assert_messages.jett");
+    let directory = tempfile::tempdir().expect("isolated verify directory");
+    let binary = directory.path().join("assert_messages.exe");
+    let artifact = build_host_verify_suite_executable(&fixture, launcher(), &binary)
+        .expect("compile native verify assertion");
+    let actual = run_bounded(&artifact.path, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+    let property_binary = directory.path().join("assert_property_messages.exe");
+    let property = build_host_property_suite_executable(&fixture, launcher(), &property_binary)
+        .expect("compile native property assertion");
+    let property_output = run_bounded(&property.path, directory.path());
+    assert!(property_output.status.success(), "{property_output:?}");
+    assert!(property_output.stdout.is_empty(), "{property_output:?}");
+    assert!(property_output.stderr.is_empty(), "{property_output:?}");
+}

@@ -1051,24 +1051,24 @@ impl Translator<'_, '_> {
             StatementKind::HandleDefault(_) => {
                 Err(self.unsupported(statement.span, "handle default"))
             }
-            StatementKind::Assert {
-                condition,
-                message: None,
-            } => {
+            StatementKind::Assert { condition, message } => {
                 let value = self.expression(condition)?;
                 let flag = self.scalar(value, condition.span)?;
                 let passed = self.builder.create_block();
                 let failed = self.builder.create_block();
                 self.builder.ins().brif(flag, passed, &[], failed, &[]);
                 self.builder.switch_to_block(failed);
-                self.leaf(NativeLeaf::AssertFail, &[], true)?;
+                if let Some(message) = message {
+                    let value = self.expression(message)?;
+                    let handle = self.scalar(value, message.span)?;
+                    self.leaf(NativeLeaf::AssertFailMessage, &[handle], true)?;
+                } else {
+                    self.leaf(NativeLeaf::AssertFail, &[], true)?;
+                }
                 self.builder.ins().jump(passed, &[]);
                 self.builder.switch_to_block(passed);
                 Ok(())
             }
-            StatementKind::Assert {
-                message: Some(_), ..
-            } => Err(self.unsupported(statement.span, "assert message")),
             StatementKind::Trace(local) => self.debug_line("trace ", &[*local], statement.span),
             StatementKind::Breakpoint {
                 condition,
@@ -2625,6 +2625,45 @@ mod tests {
         .expect("HIR lowering");
         let mir = jett_mir::lower(&hir).expect("MIR lowering");
         (mir, checked.interner)
+    }
+
+    #[test]
+    fn custom_assertion_message_in_verify_body_emits_native_entry() {
+        let file = FileId::new(0);
+        let parsed = jett_parser::parse(
+            "namespace test\nverify failure:\n    assert false \"custom failure\"\n",
+            file,
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            checked.diagnostics
+        );
+        let hir = jett_hir::lower_with_test_bodies(
+            &parsed.module,
+            &resolved,
+            &checked,
+            &HashMap::from([(file, SourceOrigin::Project)]),
+        )
+        .expect("test-body HIR lowering");
+        let program = jett_mir::lower(&hir).expect("test-body MIR lowering");
+        let entry = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.identity.declaration.kind == jett_hir::DeclarationKind::Verify
+            })
+            .expect("verify body")
+            .id;
+        let object = emit_host_program_object(&program, &checked.interner, entry)
+            .expect("custom assertion message must emit native code");
+        assert!(!object.bytes.is_empty());
     }
 
     fn test_object_module() -> ObjectModule {

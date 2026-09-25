@@ -91,6 +91,10 @@ const INVALID_TRACE_LABEL: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native trace label",
 );
+const INVALID_FAILURE_COPY: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native failure message copy buffer",
+);
 const INVALID_SUM: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native sum handle or tag",
@@ -800,6 +804,7 @@ pub(super) struct NativeValues {
     bytes_created: u64,
     bytes_destroyed: u64,
     failure: Option<Failure>,
+    dynamic_failure_message: Option<Vec<u8>>,
     pub(super) cleanup_failed: bool,
     stdout: Option<u64>,
     clock: Option<u64>,
@@ -3773,6 +3778,13 @@ leaves! {
         |s| Ok(s.failure.map_or(0, |e| e.0.code()));
     AssertFail, jett_rt_v1_assert_fail, false, (), u32 => I32,
         |_s| Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed"));
+    AssertFailMessage, jett_rt_v1_assert_fail_message, false, (message: u64 => I64), u32 => I32,
+        |s| { let text = s.text(message)?.as_bytes();
+            let mut owned = Vec::new();
+            owned.try_reserve_exact(text.len()).map_err(|_| EXHAUSTED)?;
+            owned.extend_from_slice(text);
+            s.dynamic_failure_message = Some(owned);
+            Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed")) };
     Retain, jett_rt_v1_string_retain, false, (value: u64 => I64), u64 => I64,
         |s| s.retain(value);
     Release, jett_rt_v1_string_release, true, (value: u64 => I64), u32 => I32,
@@ -4051,6 +4063,87 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure(
             Some((status, message)) => JettRuntimeResultV1::failure(status, message),
             None => JettRuntimeResultV1::ok(),
         }
+    })
+}
+
+/// Copy the current terminal failure message into caller-owned storage.
+/// A null buffer with zero capacity queries the required byte length. Unlike
+/// `jett_rt_v1_value_failure`, this also returns dynamically produced messages.
+///
+/// # Safety
+/// `context` must be a live context. `out_result` and `out_length` must be
+/// distinct, aligned, writable records. A non-null `buffer` must be writable
+/// for `capacity` bytes and not overlap either output record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_value_failure_copy(
+    context: *const JettRuntimeContextV1,
+    buffer: *mut u8,
+    capacity: u64,
+    out_length: *mut u64,
+    out_result: *mut JettRuntimeResultV1,
+) -> JettRuntimeStatusV1 {
+    complete_call(out_result, || {
+        if out_length.is_null() || (buffer.is_null() && capacity != 0) {
+            return JettRuntimeResultV1::failure(INVALID_FAILURE_COPY.0, INVALID_FAILURE_COPY.1);
+        }
+        let capacity = match usize::try_from(capacity) {
+            Ok(value) if value <= isize::MAX as usize => value,
+            _ => {
+                return JettRuntimeResultV1::failure(
+                    INVALID_FAILURE_COPY.0,
+                    INVALID_FAILURE_COPY.1,
+                );
+            }
+        };
+        let key = match context_key(context) {
+            Ok(key) => key,
+            Err(status) => return JettRuntimeResultV1::failure(status, CONTEXT_INVALID_MESSAGE),
+        };
+        let lease = match acquire_context(key) {
+            Ok(lease) => lease,
+            Err(_) => {
+                return JettRuntimeResultV1::failure(
+                    JettRuntimeStatusV1::INVALID_CONTEXT,
+                    CONTEXT_INVALID_MESSAGE,
+                );
+            }
+        };
+        let state = lock_unpoisoned(&lease.entry.state);
+        let Some(state) = state.as_ref() else {
+            return JettRuntimeResultV1::failure(
+                JettRuntimeStatusV1::INVALID_CONTEXT,
+                CONTEXT_INVALID_MESSAGE,
+            );
+        };
+        let message = state
+            .values
+            .dynamic_failure_message
+            .as_deref()
+            .or_else(|| state.values.failure.map(|(_, message)| message))
+            .unwrap_or_default();
+        let length = match u64::try_from(message.len()) {
+            Ok(length) => length,
+            Err(_) => {
+                return JettRuntimeResultV1::failure(
+                    JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
+                    EXHAUSTED.1,
+                );
+            }
+        };
+        // SAFETY: `out_length` is a caller-provided writable u64 by contract.
+        unsafe { ptr::write(out_length, length) };
+        if buffer.is_null() && capacity == 0 {
+            return JettRuntimeResultV1::ok();
+        }
+        if capacity < message.len() {
+            return JettRuntimeResultV1::failure(INVALID_FAILURE_COPY.0, INVALID_FAILURE_COPY.1);
+        }
+        if !message.is_empty() {
+            // SAFETY: the caller provides a nonoverlapping writable buffer of
+            // at least `capacity` bytes, checked against the message length.
+            unsafe { ptr::copy_nonoverlapping(message.as_ptr(), buffer, message.len()) };
+        }
+        JettRuntimeResultV1::ok()
     })
 }
 
@@ -4364,6 +4457,89 @@ mod tests {
                 slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
                 b"assertion failed"
             );
+            let mut length = 0_u64;
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    ptr::null_mut(),
+                    0,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(length, b"assertion failed".len() as u64);
+            let mut copied = vec![0; length as usize];
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    copied.as_mut_ptr(),
+                    length,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(copied, b"assertion failed");
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn native_assert_failure_copies_dynamic_message_without_changing_v1_static_result() {
+        let context = Context::new();
+        let message = "expected 42, got 🧪";
+        let handle = context.text(message);
+        unsafe {
+            assert_ne!(jett_rt_v1_assert_fail_message(context.pointer(), handle), 0);
+            let mut failure = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure(context.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"assertion failed"
+            );
+
+            let mut length = 0_u64;
+            let mut result = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    ptr::null_mut(),
+                    0,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(length, message.len() as u64);
+            let mut too_small = [0_u8; 2];
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    too_small.as_mut_ptr(),
+                    too_small.len() as u64,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let mut copied = vec![0; message.len()];
+            assert_eq!(
+                jett_rt_v1_value_failure_copy(
+                    context.pointer(),
+                    copied.as_mut_ptr(),
+                    copied.len() as u64,
+                    &mut length,
+                    result.as_mut_ptr(),
+                ),
+                JettRuntimeStatusV1::OK
+            );
+            assert_eq!(copied, message.as_bytes());
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), handle), 0);
         }
         context.destroy(JettRuntimeStatusV1::OK);
     }

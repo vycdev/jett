@@ -57,6 +57,9 @@ trait RuntimeLifecycle {
     fn failure(&mut self, _context: *mut JettRuntimeContextV1) -> Option<RuntimeCall> {
         None
     }
+    fn failure_message(&mut self, _context: *mut JettRuntimeContextV1) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -97,6 +100,43 @@ impl RuntimeLifecycle for NativeRuntime {
                 result: unsafe { result.assume_init() },
             })
         }
+    }
+
+    fn failure_message(&mut self, context: *mut JettRuntimeContextV1) -> Option<Vec<u8>> {
+        let mut length = 0_u64;
+        let mut result = MaybeUninit::uninit();
+        // SAFETY: the live context and distinct outputs remain valid through
+        // this call. A null, zero-capacity buffer queries the required length.
+        let status = unsafe {
+            jett_runtime::native_abi::values::jett_rt_v1_value_failure_copy(
+                context,
+                std::ptr::null_mut(),
+                0,
+                &mut length,
+                result.as_mut_ptr(),
+            )
+        };
+        if status != JettRuntimeStatusV1::OK {
+            return None;
+        }
+        let required = length;
+        let length = usize::try_from(required).ok()?;
+        let mut message = Vec::new();
+        message.try_reserve_exact(length).ok()?;
+        message.resize(length, 0);
+        let mut copied = 0_u64;
+        // SAFETY: `message` owns `length` writable bytes, and all output
+        // records are distinct. The runtime copies while the context is live.
+        let status = unsafe {
+            jett_runtime::native_abi::values::jett_rt_v1_value_failure_copy(
+                context,
+                message.as_mut_ptr(),
+                required,
+                &mut copied,
+                result.as_mut_ptr(),
+            )
+        };
+        (status == JettRuntimeStatusV1::OK && copied == required).then_some(message)
     }
 
     fn destroy(&mut self, context: *mut JettRuntimeContextV1) -> RuntimeCall {
@@ -164,6 +204,9 @@ where
     };
 
     let entry_failure = runtime.failure(context.as_mut_ptr());
+    let entry_message = entry_failure
+        .as_ref()
+        .and_then(|_| runtime.failure_message(context.as_mut_ptr()));
 
     // Cleanup is attempted exactly once after every successful creation,
     // including entry failures and recoverable entry panics.
@@ -178,7 +221,10 @@ where
             if let Some(failure) = entry_failure {
                 let _ = stderr.write_all(b"runtime error: ");
                 let _ = stderr.write_all(
-                    runtime_message(failure.result.message).unwrap_or(INVALID_RUNTIME_MESSAGE),
+                    entry_message
+                        .as_deref()
+                        .or_else(|| runtime_message(failure.result.message))
+                        .unwrap_or(INVALID_RUNTIME_MESSAGE),
                 );
                 let _ = stderr.write_all(b"\n");
             } else {
@@ -435,6 +481,41 @@ mod tests {
         assert_eq!(runtime.create_calls, 1);
         assert_eq!(runtime.destroy_calls, 1);
         assert_eq!(stderr, b"jett launcher: program entry failed (status 19)\n");
+    }
+
+    #[test]
+    fn dynamic_assertion_message_is_copied_before_context_destruction() {
+        let mut runtime = NativeRuntime;
+        let mut stderr = Vec::new();
+        let exit = launch_with(
+            &mut runtime,
+            |context| {
+                let context = context.cast::<JettRuntimeContextV1>();
+                let message = "expected 42, got 🧪";
+                // SAFETY: launch_with supplies a live context and the source
+                // string remains readable for the literal call.
+                unsafe {
+                    let handle = jett_runtime::native_abi::values::jett_rt_v1_string_literal(
+                        context,
+                        message.as_ptr(),
+                        message.len() as u64,
+                    );
+                    let status = jett_runtime::native_abi::values::jett_rt_v1_assert_fail_message(
+                        context, handle,
+                    );
+                    assert_eq!(
+                        jett_runtime::native_abi::values::jett_rt_v1_string_release(
+                            context, handle,
+                        ),
+                        0
+                    );
+                    status
+                }
+            },
+            &mut stderr,
+        );
+        assert_eq!(exit, JETT_LAUNCHER_EXIT_ENTRY_FAILURE);
+        assert_eq!(stderr, "runtime error: expected 42, got 🧪\n".as_bytes());
     }
 
     #[test]

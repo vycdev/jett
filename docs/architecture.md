@@ -1628,6 +1628,9 @@ snapshot through MIR. The native backend emits the compatibility debug line
 for empty and multi-binding snapshots, including supported aggregate values,
 after evaluating the optional condition. Cross-function binding scope and
 interactive pausing remain pending.
+Failed native assertions keep their interpolated message in context-owned
+storage; the launcher copies it before destroying the context. The v1 result
+record continues to expose only process-lifetime static message bytes.
 
 ### How the Compiler Uses the Runtime
 

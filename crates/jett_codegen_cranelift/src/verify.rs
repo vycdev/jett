@@ -683,8 +683,15 @@ impl Verifier<'_> {
                         "assert condition is not bool",
                     ));
                 }
-                if message.is_some() {
-                    return Err(self.unsupported(function, statement.span, "assert message"));
+                if let Some(message) = message {
+                    self.expression(function, message)?;
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        TypeInterner::STRING,
+                        message.ty,
+                        "assert message must be string",
+                    )?;
                 }
                 Ok(())
             }
