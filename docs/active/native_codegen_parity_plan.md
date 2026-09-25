@@ -820,15 +820,20 @@ The eight remaining object failures are four Graphics fixtures and four
 verify-only fixtures with no reachable code symbols; the three remaining
 linked-main failures are scripted Graphics fixtures.
 
-The Graphics parity rows now carry the same deterministic key and close events
-used by interpreter graphics tests. The native launcher can configure those
+The Graphics parity rows carry the same deterministic key and close events
+used by interpreter graphics tests. The native launcher configures those
 events before program entry, and the audit obtains its interpreter oracle from
-the scripted provider. This makes the remaining linked-main gate headless and
-reproducible once native session and callback lowering are implemented; it does
-not change the current 174/182 object or 27/30 main counts.
+the scripted provider. The runtime exposes typed Graphics session leaves with
+scripted open/present/key/close lifecycle, domain failures, and context cleanup.
+The compiler emits the private `graphics.__run` callback loop and tracks source
+state ownership across updates. The three named-callback Graphics mains now
+link and match interpreter output or terminal callback failure.
 
-The runtime now exposes typed Graphics session leaves and tests their scripted
-open/present/key/close lifecycle, domain failures, and context cleanup. The
-session owns no Jett value; source state and callback ownership remain the
-compiler's responsibility. The exhaustive fixture counts are unchanged until
-the private `graphics.__run` intrinsic emits the checked callback loop.
+The September 2026 exhaustive Windows object audit reports 177/182 emitted
+objects (97.3%), 30/30 linked `main` outcomes, 25/25 runtime contracts, and
+182/182 typed lowerings. This percentage measures the current fixture set,
+not overall language coverage. The five remaining object gaps are
+`graphics_scene.jett` (inline callback values) and four verification/property
+fixtures without reachable native symbols. The full object audit is available
+as the ignored `native_parity_audit_all_run_pass_objects` test; the three new
+Graphics objects are part of the regular deterministic object gate.

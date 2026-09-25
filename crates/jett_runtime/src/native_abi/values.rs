@@ -1605,6 +1605,11 @@ impl NativeValues {
         self.parsed_sum(graphics::render_scene(width, height, &scene).map(|_| 0))
     }
 
+    fn graphics_validate_config(&mut self, value: u64) -> LeafResult<u64> {
+        let config = self.graphics_config(value)?;
+        self.parsed_sum(graphics::validate_config(&config).map(|_| 0))
+    }
+
     fn graphics_open(&mut self, authority: u64, value: u64) -> LeafResult<u64> {
         if self.graphics != Some(authority) {
             return Err(INVALID_GRAPHICS);
@@ -3550,6 +3555,8 @@ leaves! {
     GrantGraphics, jett_rt_v1_grant_graphics, false, (), u64 => I64,
         |s| { if let Some(token) = s.graphics { return Ok(token); }
             let token = next_identity()?; s.graphics = Some(token); Ok(token) };
+    GraphicsValidateConfig, jett_rt_v1_graphics_validate_config, false, (config: u64 => I64), u64 => I64,
+        |s| s.graphics_validate_config(config);
     GraphicsValidateScene, jett_rt_v1_graphics_validate_scene, false, (width: i64 => I64, height: i64 => I64, scene: u64 => I64), u64 => I64,
         |s| s.graphics_validate_scene(width, height, scene);
     GraphicsOpen, jett_rt_v1_graphics_open, false, (authority: u64 => I64, config: u64 => I64), u64 => I64,

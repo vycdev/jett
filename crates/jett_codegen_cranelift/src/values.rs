@@ -55,6 +55,40 @@ pub(crate) fn verify_intrinsic(
     types: &TypeInterner,
 ) -> Result<(), String> {
     use TypeInterner as T;
+    if id == IntrinsicId::GraphicsRun {
+        let valid = if let [display, config, state, update, render] = args {
+            let state_type = state.ty;
+            let config_is_checked = matches!(types.resolve(config.ty), Type::Struct(id)
+                if types.resolve_struct(*id).name == "graphics.Config");
+            let key = types.type_ids().find(|ty| {
+                matches!(types.resolve(*ty), Type::Enum(id)
+                if types.resolve_enum(*id).name == "graphics.Key")
+            });
+            let scene = types.type_ids().find(|ty| {
+                matches!(types.resolve(*ty), Type::Struct(id)
+                if types.resolve_struct(*id).name == "graphics.Scene")
+            });
+            display.ty == T::GRAPHICS
+                && config_is_checked
+                && key.is_some_and(|key| {
+                    matches!(types.resolve(update.ty), Type::Function { params, return_type }
+                    if params.as_slice() == [state_type, key] && *return_type == state_type)
+                })
+                && scene.is_some_and(|scene| {
+                    matches!(types.resolve(render.ty), Type::Function { params, return_type }
+                    if params.as_slice() == [state_type] && *return_type == scene)
+                })
+                && matches!(types.resolve(result), Type::Result(ok, error)
+                    if *ok == T::NOTHING && *error == T::STRING)
+        } else {
+            false
+        };
+        return if valid {
+            Ok(())
+        } else {
+            Err("invalid checked Graphics runtime intrinsic".into())
+        };
+    }
     if id == IntrinsicId::EnvironmentGet {
         return if args.len() == 2
             && args[0].ty == T::ENVIRONMENT

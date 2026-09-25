@@ -1186,6 +1186,9 @@ impl Translator<'_, '_> {
                 jett_mir::move_values::intrinsic_borrows(id, index),
             )?;
         }
+        if id == IntrinsicId::GraphicsRun {
+            return self.graphics_run(type_arguments, args, &evaluated, span);
+        }
         if matches!(
             id,
             IntrinsicId::TypeName | IntrinsicId::TypeKind | IntrinsicId::TypeHasSecret

@@ -2,7 +2,7 @@
 #![cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
 
 use jett_driver::native::{NativeLauncherBundle, build_host_executable, host_target};
-use jett_runtime::{clock, environment, random};
+use jett_runtime::{clock, environment, graphics, random};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -509,6 +509,110 @@ fn native_graphics_authority_reaches_main() {
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_scripted_graphics_matches_interpreter() {
+    for (name, events) in [
+        (
+            "graphics_scripted.jett",
+            vec![
+                graphics::TestEvent::Key(graphics::Key::Right),
+                graphics::TestEvent::Key(graphics::Key::Right),
+                graphics::TestEvent::Key(graphics::Key::Left),
+                graphics::TestEvent::Close,
+            ],
+        ),
+        (
+            "graphics_pipeline_scripted.jett",
+            vec![
+                graphics::TestEvent::Key(graphics::Key::Right),
+                graphics::TestEvent::Close,
+                graphics::TestEvent::Key(graphics::Key::Left),
+                graphics::TestEvent::Close,
+                graphics::TestEvent::Key(graphics::Key::Right),
+                graphics::TestEvent::Close,
+            ],
+        ),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/run_pass")
+            .join(name);
+        let expected = jett_driver::run_file_capture_output_with_graphics_test_events(
+            &fixture,
+            events.clone(),
+        )
+        .expect("scripted Graphics interpreter oracle");
+        let script = graphics::encode_test_script(&events);
+        assert_scripted_fixture(
+            &fixture,
+            graphics::TEST_SCRIPT_ENV,
+            &script,
+            &expected.stdout,
+        );
+    }
+}
+
+#[test]
+fn native_graphics_callback_runtime_error_is_terminal() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/run_pass/graphics_callback_runtime_error.jett");
+    let events = vec![graphics::TestEvent::Key(graphics::Key::Right)];
+    let expected =
+        jett_driver::run_file_capture_outcome_with_graphics_test_events(&fixture, events.clone())
+            .expect_err("interpreter callback must fail");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile Graphics callback fixture");
+    let script = graphics::encode_test_script(&events);
+    let actual = run_bounded_with_env(
+        &binary,
+        directory.path(),
+        Some((graphics::TEST_SCRIPT_ENV, &script)),
+    );
+    assert!(!actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        b"runtime error: string.repeat: requested output is too large\n"
+    );
+}
+
+#[test]
+fn native_graphics_handled_failures_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/graphics_scripted.jett");
+    let source = std::fs::read_to_string(&fixture).expect("read Graphics fixture");
+    let cases = [
+        (
+            "config",
+            source.replacen("width: 32", "width: 0", 1),
+            vec![],
+        ),
+        (
+            "scene",
+            source.replacen("red: state.moves", "red: 999", 1),
+            vec![],
+        ),
+        (
+            "host",
+            source.clone(),
+            vec![graphics::TestEvent::HostError(
+                "injected graphics failure".into(),
+            )],
+        ),
+    ];
+    for (name, source, events) in cases {
+        let directory = tempfile::tempdir().expect("isolated Graphics fixture");
+        let path = directory.path().join(format!("{name}.jett"));
+        std::fs::write(&path, source).expect("write Graphics fixture");
+        let expected =
+            jett_driver::run_file_capture_output_with_graphics_test_events(&path, events.clone())
+                .expect("Graphics interpreter oracle");
+        let script = graphics::encode_test_script(&events);
+        assert_scripted_fixture(&path, graphics::TEST_SCRIPT_ENV, &script, &expected.stdout);
+    }
 }
 
 #[test]

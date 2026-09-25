@@ -376,7 +376,11 @@ fn visit(
             args,
             ..
         } => {
-            if matches!(id, IntrinsicId::Print | IntrinsicId::Println) {
+            if *id == IntrinsicId::GraphicsRun {
+                // The generated session loop stages callback results, scene and
+                // domain-result sums across its branches and backedge.
+                *temporaries += 16;
+            } else if matches!(id, IntrinsicId::Print | IntrinsicId::Println) {
                 // Empty output, argument concatenations, inter-argument spaces
                 // (literal + concat), and the optional newline (literal + concat).
                 *temporaries += 1 + args.len() + 2 * args.len().saturating_sub(1);

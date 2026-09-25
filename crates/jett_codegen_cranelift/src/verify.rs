@@ -955,6 +955,15 @@ impl Verifier<'_> {
     }
 
     fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
+        self.expression_with_view_callback(function, expression, false)
+    }
+
+    fn expression_with_view_callback(
+        &self,
+        function: &Function,
+        expression: &Expression,
+        allow_view_callback: bool,
+    ) -> Result<(), CodegenError> {
         let kind = scalar_kind(
             self.types,
             expression.ty,
@@ -1060,10 +1069,11 @@ impl Verifier<'_> {
                         "function value signature does not match target",
                     ));
                 }
-                if callee
-                    .params
-                    .iter()
-                    .any(|param| param.mode == jett_mir::ParamMode::View)
+                if !allow_view_callback
+                    && callee
+                        .params
+                        .iter()
+                        .any(|param| param.mode == jett_mir::ParamMode::View)
                 {
                     return Err(self.unsupported(
                         function,
@@ -1151,11 +1161,12 @@ impl Verifier<'_> {
                         ));
                     }
                 }
-                if callee
-                    .params
-                    .iter()
-                    .skip(callee.capture_count)
-                    .any(|param| param.mode == jett_mir::ParamMode::View)
+                if !allow_view_callback
+                    && callee
+                        .params
+                        .iter()
+                        .skip(callee.capture_count)
+                        .any(|param| param.mode == jett_mir::ParamMode::View)
                 {
                     return Err(self.unsupported(
                         function,
@@ -1215,8 +1226,24 @@ impl Verifier<'_> {
                         "direct call argument count does not match its signature",
                     ));
                 }
-                for (argument, parameter) in args.iter().zip(&callee.params) {
-                    self.expression(function, argument)?;
+                let forwards_graphics_run = callee.blocks.iter().any(|block| {
+                    matches!(
+                        &block.terminator.kind,
+                        TerminatorKind::Return(Some(Expression {
+                            kind: ExpressionKind::Intrinsic {
+                                intrinsic: jett_hir::IntrinsicId::GraphicsRun,
+                                ..
+                            },
+                            ..
+                        }))
+                    )
+                });
+                for (index, (argument, parameter)) in args.iter().zip(&callee.params).enumerate() {
+                    self.expression_with_view_callback(
+                        function,
+                        argument,
+                        forwards_graphics_run && index == 4,
+                    )?;
                     self.require_same_type(
                         function,
                         argument.span,
@@ -1261,8 +1288,12 @@ impl Verifier<'_> {
                 reflection_arguments,
                 ..
             } => {
-                for arg in args {
-                    self.expression(function, arg)?;
+                for (index, arg) in args.iter().enumerate() {
+                    self.expression_with_view_callback(
+                        function,
+                        arg,
+                        *intrinsic == jett_hir::IntrinsicId::GraphicsRun && index == 4,
+                    )?;
                 }
                 if matches!(
                     intrinsic,
@@ -1768,11 +1799,22 @@ impl Verifier<'_> {
                         "map intrinsic type arguments differ from key and value",
                     ));
                 }
+                let graphics_generic = *intrinsic == jett_hir::IntrinsicId::GraphicsRun;
+                if graphics_generic
+                    && (args.len() != 5 || type_arguments.as_slice() != [args[2].ty])
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "graphics state type argument differs from its initial value",
+                    ));
+                }
                 if !numeric_generic
                     && !list_generic
                     && !math_aggregate_generic
                     && !set_generic
                     && !map_generic
+                    && !graphics_generic
                     && !type_arguments.is_empty()
                 {
                     return Err(self.unsupported(

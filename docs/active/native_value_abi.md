@@ -92,8 +92,14 @@ The native ABI now validates checked `graphics.Config` and `graphics.Scene`
 records and exposes open, present, next-key, and close leaves. The session stays
 on its creating thread; context destruction closes an unfinished session before
 checking value ownership. Domain errors return owned Jett result values, while
-terminal callback errors remain separate runtime failures. The compiler's
-callback loop still needs native lowering before a graphics program can run.
+terminal callback errors remain separate runtime failures. Native
+`graphics.__run` validates the config and initial scene, opens a session,
+presents each rendered scene, and dispatches checked update and render
+callbacks until close. It tracks the state owner across updates and closes
+the session on handled domain failures; context destruction closes it after
+a terminal callback failure. Named callbacks, including render's `view`
+parameter, now match the interpreter in scripted fixtures. Native inline
+callback values remain unsupported.
 For deterministic parity runs, the launcher configures a context-local Graphics
 event queue from `JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1` before entry. The runtime
 and interpreter share the JSON event grammar (key, close, host error); no

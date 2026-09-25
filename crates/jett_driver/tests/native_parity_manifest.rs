@@ -414,6 +414,9 @@ fn native_parity_manifest_matches_fixture_inventory() {
         "tests/run_pass/escape_sequences.jett".to_owned(),
         "tests/run_pass/explicit_comptime_expression.jett".to_owned(),
         "tests/run_pass/fibonacci.jett".to_owned(),
+        "tests/run_pass/graphics_callback_runtime_error.jett".to_owned(),
+        "tests/run_pass/graphics_pipeline_scripted.jett".to_owned(),
+        "tests/run_pass/graphics_scripted.jett".to_owned(),
         "tests/run_pass/handle_result_optional.jett".to_owned(),
         "tests/run_pass/hello_print.jett".to_owned(),
         "tests/run_pass/integer_wrapping_and_float_ieee.jett".to_owned(),
@@ -444,7 +447,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
     );
     assert_eq!(
         manifested_object_emit.len(),
-        29,
+        32,
         "native object-emission coverage changed"
     );
 
@@ -560,6 +563,26 @@ fn native_parity_object_emit_obligations_emit_deterministic_host_objects() {
                 "{path} must emit the stable symbol derived from `app.add`"
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "manual full-fixture native object audit"]
+fn native_parity_audit_all_run_pass_objects() {
+    let root = workspace_root();
+    let paths = discovered_fixture_paths("run_pass");
+    let mut emitted = 0;
+    let mut failures = Vec::new();
+    for path in &paths {
+        match jett_driver::native::emit_host_object_for_file(&root.join(path)) {
+            Ok(object) if !object.symbols().is_empty() => emitted += 1,
+            Ok(_) => failures.push(format!("{path}: no reachable native symbols")),
+            Err(error) => failures.push(format!("{path}: {error}")),
+        }
+    }
+    println!("native objects: {emitted}/{}", paths.len());
+    for failure in failures {
+        println!("{failure}");
     }
 }
 

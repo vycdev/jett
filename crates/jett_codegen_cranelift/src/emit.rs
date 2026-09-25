@@ -1,3 +1,4 @@
+mod graphics;
 mod values;
 use jett_mir::move_values::{
     MoveValuePlan, is_copy_owned, is_function, is_linear, is_string, representation_type,
