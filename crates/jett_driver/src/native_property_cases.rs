@@ -1,0 +1,380 @@
+//! Translate deterministic property inputs into typed, compiler-owned HIR.
+//! The interpreter chooses cases; only compiled Jett code executes their bodies.
+
+use jett_common::{FileId, Span};
+use jett_comptime::value::Value;
+use jett_comptime::verify::{PROPERTY_DEFAULT_ITERATIONS, PropertyCase};
+use jett_hir::{
+    Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,
+    FunctionIdentity, HandleKind, IntrinsicId, MapEntry, Statement, StatementKind, VariantId,
+};
+use jett_parser::ast::{Item, Module};
+use jett_types::{Type, TypeId, TypeInterner};
+
+pub(super) fn append_property_suite(
+    hir: &mut jett_hir::Program,
+    module: &Module,
+    entry_file: FileId,
+    cases: &[PropertyCase],
+    types: &TypeInterner,
+) -> Result<Option<FunctionId>, Vec<jett_hir::LowerError>> {
+    let mut statements = Vec::new();
+    let mut first_identity = None;
+    let mut first_span = None;
+    for item in &module.items {
+        let Item::Property(property) = item else {
+            continue;
+        };
+        if property.span.file != entry_file {
+            continue;
+        }
+        let mut matches = hir.functions.iter().filter(|function| {
+            function.span == property.span
+                && function.identity.declaration.kind == DeclarationKind::Property
+        });
+        let Some(function) = matches.next() else {
+            return Err(error(
+                property.span,
+                "checked property has no exact HIR function",
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(error(
+                property.span,
+                "checked property has multiple HIR functions",
+            ));
+        }
+        if first_identity.is_none() {
+            first_identity = Some(function.identity.declaration.clone());
+            first_span = Some(property.span);
+        }
+        let mut count = 0;
+        for case in cases
+            .iter()
+            .filter(|case| case.property_span == property.span)
+        {
+            if case.iteration != count || case.arguments.len() != function.params.len() {
+                return Err(error(
+                    property.span,
+                    "generated property cases disagree with checked parameters or iteration order",
+                ));
+            }
+            let args = case
+                .arguments
+                .iter()
+                .zip(&function.params)
+                .map(|(value, param)| value_expression(value, param.ty, property.span, types))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|message| error(property.span, message))?;
+            statements.push(Statement {
+                kind: StatementKind::Expression(Expression {
+                    kind: ExpressionKind::Call {
+                        function: function.id,
+                        evaluation_order: (0..args.len()).collect(),
+                        args,
+                    },
+                    ty: TypeInterner::NOTHING,
+                    span: property.span,
+                }),
+                span: property.span,
+            });
+            count += 1;
+        }
+        if count != PROPERTY_DEFAULT_ITERATIONS {
+            return Err(error(
+                property.span,
+                format!(
+                    "checked property has {count} generated cases; expected {PROPERTY_DEFAULT_ITERATIONS}"
+                ),
+            ));
+        }
+    }
+    let Some(span) = first_span else {
+        return Ok(None);
+    };
+    let declaration = first_identity.expect("a suite span has a checked declaration");
+    let id = FunctionId::new(hir.functions.len() as u32);
+    hir.functions.push(Function {
+        id,
+        identity: FunctionIdentity {
+            declaration: DeclarationId {
+                origin: declaration.origin,
+                namespace: declaration.namespace,
+                name: format!("__native_property_suite:{}", span.start),
+                kind: DeclarationKind::Property,
+            },
+            type_arguments: Vec::new(),
+            specialization: jett_typecheck::CheckedGenericSpecialization::default(),
+        },
+        source_definition: None,
+        params: Vec::new(),
+        capture_count: 0,
+        return_type: TypeInterner::NOTHING,
+        locals: Vec::new(),
+        body: Block { statements, span },
+        span,
+    });
+    Ok(Some(id))
+}
+
+fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {
+    vec![jett_hir::LowerError {
+        span,
+        message: message.into(),
+    }]
+}
+
+fn value_expression(
+    value: &Value,
+    ty: TypeId,
+    span: Span,
+    types: &TypeInterner,
+) -> Result<Expression, String> {
+    let kind = match (types.resolve(ty), value) {
+        (
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64,
+            Value::Int64(number),
+        ) => ExpressionKind::Int(i128::from(*number)),
+        (Type::Uint64, Value::Uint64(number)) => ExpressionKind::Int(i128::from(*number)),
+        (Type::Float32 | Type::Float64, Value::Float64(number)) => ExpressionKind::Float(*number),
+        (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
+        (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
+        (Type::Nothing, Value::Nothing) => ExpressionKind::Nothing,
+        (Type::Bytes, Value::Bytes(bytes)) => return bytes_expression(bytes, span, types),
+        (Type::List(element), Value::List(values)) => ExpressionKind::ListConstruct {
+            elements: values
+                .iter()
+                .map(|value| value_expression(value, *element, span, types))
+                .collect::<Result<_, _>>()?,
+        },
+        (Type::Map(key, mapped), Value::Map(entries)) => ExpressionKind::MapConstruct {
+            entries: entries
+                .iter()
+                .map(|(key_value, mapped_value)| {
+                    Ok(MapEntry {
+                        key: value_expression(key_value, *key, span, types)?,
+                        value: value_expression(mapped_value, *mapped, span, types)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+        },
+        (Type::Set(element), Value::Set(values)) => {
+            return set_expression(values, *element, ty, span, types);
+        }
+        (Type::Optional(_), Value::OptionalNone) => ExpressionKind::OptionalNone,
+        (Type::Optional(inner), Value::OptionalSome(value)) => {
+            ExpressionKind::OptionalSome(Box::new(value_expression(value, *inner, span, types)?))
+        }
+        (Type::Result(ok, _), Value::ResultOk(value)) => {
+            ExpressionKind::ResultOk(Box::new(value_expression(value, *ok, span, types)?))
+        }
+        (Type::Result(_, failure), Value::ResultFail(value)) => {
+            ExpressionKind::ResultFail(Box::new(value_expression(value, *failure, span, types)?))
+        }
+        (Type::Refinement { base, .. }, _) => ExpressionKind::RefinementValidated(Box::new(
+            value_expression(value, *base, span, types)?,
+        )),
+        (Type::Struct(id), Value::Struct { fields, .. }) => {
+            let definition = types.resolve_struct(*id);
+            if fields.len() != definition.fields.len() {
+                return Err(format!(
+                    "generated struct has {} fields; checked type expects {}",
+                    fields.len(),
+                    definition.fields.len()
+                ));
+            }
+            ExpressionKind::StructConstruct {
+                struct_type: ty,
+                fields: definition
+                    .fields
+                    .iter()
+                    .map(|(name, field_type)| {
+                        let (_, value) = fields
+                            .iter()
+                            .find(|(candidate, _)| candidate == name)
+                            .ok_or_else(|| format!("generated struct field `{name}` is absent"))?;
+                        value_expression(value, *field_type, span, types)
+                    })
+                    .collect::<Result<_, _>>()?,
+                evaluation_order: (0..definition.fields.len()).collect(),
+                validates_refinements: false,
+                refinement_predicates: Vec::new(),
+            }
+        }
+        (Type::Bitfield(id), Value::Struct { fields, .. }) => {
+            let definition = types.resolve_bitfield(*id);
+            if fields.len() != definition.fields.len() {
+                return Err(format!(
+                    "generated bitfield has {} fields; checked type expects {}",
+                    fields.len(),
+                    definition.fields.len()
+                ));
+            }
+            ExpressionKind::BitfieldConstruct {
+                bitfield_type: ty,
+                fields: definition
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let (_, value) = fields
+                            .iter()
+                            .find(|(name, _)| name == &field.name)
+                            .ok_or_else(|| {
+                                format!("generated bitfield field `{}` is absent", field.name)
+                            })?;
+                        value_expression(value, field.ty, span, types)
+                    })
+                    .collect::<Result<_, _>>()?,
+                evaluation_order: (0..definition.fields.len()).collect(),
+                // The property generator already bounds every bitfield field.
+                validates_widths: false,
+            }
+        }
+        (
+            Type::Enum(id),
+            Value::Enum {
+                variant, fields, ..
+            },
+        ) => {
+            let definition = types.resolve_enum(*id);
+            let (index, variant_def) = definition
+                .variants
+                .iter()
+                .enumerate()
+                .find(|(_, candidate)| candidate.name == *variant)
+                .ok_or_else(|| format!("generated enum variant `{variant}` is absent"))?;
+            if fields.len() != variant_def.fields.len() {
+                return Err(format!(
+                    "generated enum variant `{variant}` has wrong arity"
+                ));
+            }
+            let index = u32::try_from(index)
+                .map_err(|_| "generated enum variant index exceeds u32".to_owned())?;
+            ExpressionKind::EnumConstruct {
+                enum_type: ty,
+                variant: VariantId::new(index),
+                payloads: fields
+                    .iter()
+                    .zip(&variant_def.fields)
+                    .map(|(value, (_, field_type))| {
+                        value_expression(value, *field_type, span, types)
+                    })
+                    .collect::<Result<_, _>>()?,
+            }
+        }
+        (expected, actual) => {
+            return Err(format!(
+                "cannot materialize generated `{actual:?}` as checked `{expected:?}`"
+            ));
+        }
+    };
+    Ok(Expression { kind, ty, span })
+}
+
+fn set_expression(
+    values: &[Value],
+    element: TypeId,
+    ty: TypeId,
+    span: Span,
+    types: &TypeInterner,
+) -> Result<Expression, String> {
+    let mut current = Expression {
+        kind: ExpressionKind::Intrinsic {
+            intrinsic: IntrinsicId::SetNew,
+            type_arguments: vec![element],
+            reflection_arguments: Vec::new(),
+            args: Vec::new(),
+            evaluation_order: Vec::new(),
+        },
+        ty,
+        span,
+    };
+    for value in values {
+        current = Expression {
+            kind: ExpressionKind::Intrinsic {
+                intrinsic: IntrinsicId::SetAdd,
+                type_arguments: vec![element],
+                reflection_arguments: Vec::new(),
+                args: vec![current, value_expression(value, element, span, types)?],
+                evaluation_order: vec![0, 1],
+            },
+            ty,
+            span,
+        };
+    }
+    Ok(current)
+}
+
+fn bytes_expression(bytes: &[u8], span: Span, types: &TypeInterner) -> Result<Expression, String> {
+    let empty = Expression {
+        kind: ExpressionKind::Intrinsic {
+            intrinsic: IntrinsicId::BytesNew,
+            type_arguments: Vec::new(),
+            reflection_arguments: Vec::new(),
+            args: Vec::new(),
+            evaluation_order: Vec::new(),
+        },
+        ty: TypeInterner::BYTES,
+        span,
+    };
+    if bytes.is_empty() {
+        return Ok(empty);
+    }
+    let result_type = types
+        .type_ids()
+        .find(|id| {
+            matches!(types.resolve(*id), Type::Result(ok, failure) if *ok == TypeInterner::BYTES && *failure == TypeInterner::STRING)
+        })
+        .ok_or("checked `result[bytes, string]` type is absent")?;
+    let hex = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(Expression {
+        kind: ExpressionKind::Handle {
+            target: Box::new(Expression {
+                kind: ExpressionKind::Intrinsic {
+                    intrinsic: IntrinsicId::BytesFromHex,
+                    type_arguments: Vec::new(),
+                    reflection_arguments: Vec::new(),
+                    args: vec![Expression {
+                        kind: ExpressionKind::String(hex),
+                        ty: TypeInterner::STRING,
+                        span,
+                    }],
+                    evaluation_order: vec![0],
+                },
+                ty: result_type,
+                span,
+            }),
+            kind: HandleKind::Result,
+            error_local: None,
+            failure: Block {
+                statements: vec![
+                    Statement {
+                        kind: StatementKind::Assert {
+                            condition: Expression {
+                                kind: ExpressionKind::Bool(false),
+                                ty: TypeInterner::BOOL,
+                                span,
+                            },
+                            message: None,
+                        },
+                        span,
+                    },
+                    Statement {
+                        kind: StatementKind::HandleDefault(empty),
+                        span,
+                    },
+                ],
+                span,
+            },
+        },
+        ty: TypeInterner::BYTES,
+        span,
+    })
+}

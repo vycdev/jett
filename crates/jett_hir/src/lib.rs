@@ -68,6 +68,11 @@ impl FieldId {
 pub struct VariantId(u32);
 
 impl VariantId {
+    /// Select a checked enum variant when building compiler-owned HIR.
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }

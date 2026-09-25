@@ -20,7 +20,8 @@ use jett_hir::FunctionId;
 
 use crate::{
     BackendLoweringError, BackendLoweringResult, lower_file_for_backend,
-    lower_file_for_native_tests, lower_file_for_native_verify_suite,
+    lower_file_for_native_property_suite, lower_file_for_native_tests,
+    lower_file_for_native_verify_suite,
 };
 
 /// The sole target accepted by the version 1 native Windows linker.
@@ -240,6 +241,9 @@ pub enum NativeBuildError {
     MissingVerifyBodies {
         source_path: PathBuf,
     },
+    MissingPropertyBodies {
+        source_path: PathBuf,
+    },
     Codegen {
         source_path: PathBuf,
         source: CodegenError,
@@ -375,6 +379,11 @@ impl fmt::Display for NativeBuildError {
             Self::MissingVerifyBodies { source_path } => write!(
                 formatter,
                 "native source `{}` has no checked `verify` bodies in the primary file",
+                source_path.display()
+            ),
+            Self::MissingPropertyBodies { source_path } => write!(
+                formatter,
+                "native source `{}` has no checked `property` bodies in the primary file",
                 source_path.display()
             ),
             Self::Codegen {
@@ -585,6 +594,27 @@ pub fn emit_host_verify_suite_object_for_file(
     emit_program_object_from_lowering(source_path, lowered, entry)
 }
 
+/// Emit one launcher-compatible object that calls each checked property body
+/// with the deterministic inputs used by the interpreter's property runner.
+pub fn emit_host_property_suite_object_for_file(
+    source_path: &Path,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered = lower_file_for_native_property_suite(source_path).map_err(|source| {
+        NativeBuildError::Lowering {
+            source_path: source_path.to_path_buf(),
+            source: Box::new(source),
+        }
+    })?;
+    let entry =
+        lowered
+            .native_property_entry
+            .ok_or_else(|| NativeBuildError::MissingPropertyBodies {
+                source_path: source_path.to_path_buf(),
+            })?;
+    emit_program_object_from_lowering(source_path, lowered, entry)
+}
+
 fn emit_program_object_from_lowering(
     source_path: &Path,
     lowered: BackendLoweringResult,
@@ -646,6 +676,16 @@ pub fn build_host_verify_suite_executable(
     output_path: &Path,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
     let object = emit_host_verify_suite_object_for_file(source_path)?;
+    link_host_object(&object, launcher, output_path)
+}
+
+/// Compile and link the checked property trials for one primary source file.
+pub fn build_host_property_suite_executable(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_property_suite_object_for_file(source_path)?;
     link_host_object(&object, launcher, output_path)
 }
 

@@ -11,13 +11,14 @@ layer or silently delegate runtime behavior to the interpreter.
 
 ## Scope and Baseline
 
-The current fixture inventory establishes four separate denominators:
+The current fixture inventory establishes five separate denominators:
 
 | Obligation | Denominator | Acceptance condition |
 | --- | ---: | --- |
 | Native lowering | 182 | Every `tests/run_pass/*.jett` fixture reaches validated HIR and MIR and is accepted by native object generation. |
 | `main` execution | 30 | Every run-pass fixture that declares `main` links and runs on the supported host with its interpreter-equivalent expected outcome and observable behavior. One scripted graphics fixture intentionally returns a runtime error. |
 | `verify` execution | 154 | Every run-pass fixture with top-level `verify` blocks links a native suite that executes each body in declaration order and exits successfully. |
+| `property` execution | 3 | Every run-pass fixture with top-level `property` blocks links a native suite that executes each body for 100 deterministic trials chosen by the existing generator. |
 | Runtime contracts | 25 | Every `tests/runtime_fail/*.jett` fixture links and matches its interpreter contract: 17 wrapping-success cases and 8 runtime-failure cases, including failure class, message contract, and cleanup behavior where applicable. |
 
 These numbers are denominators, not a sample or a percentage target. Fixtures
@@ -29,8 +30,10 @@ Run-pass files without `main`, including verification and property fixtures,
 count toward the 182-fixture lowering obligation. They do not enter the
 30-fixture `main` execution denominator. The native verification suite now
 links and executes every checked top-level `verify` body in each of 154
-fixtures as a separate execution gate. Property `given` generation and native
-property-body execution remain separate work.
+fixtures as a separate execution gate. A native property suite uses the
+interpreter's established deterministic `given` pools as test inputs, then
+executes the checked property bodies as native code. Native failure-case
+shrinking and diagnostics remain follow-up work.
 
 Compile-fail fixtures remain frontend contracts. Native work must not change
 their diagnostics, but rejected programs do not enter a backend denominator.
@@ -312,13 +315,14 @@ The current fixture gates are:
 | Native object generation | 182 | 182 | `native_parity_object_emit_obligations_emit_host_objects`; every run-pass fixture emits reachable native code |
 | Successful/expected `main` execution | 30 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, Environment, and Graphics inputs |
 | Native `verify` execution | 154 | 154 | `native_verify_suites_execute_for_all_run_pass_fixtures`; 506 top-level bodies execute across the 154 fixtures |
+| Native `property` execution | 3 | 3 | `native_property_suites_execute_for_all_run_pass_fixtures`; 18 top-level bodies each execute 100 generated trials |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
 gate is currently 182/182 (100%), a useful progress measure rather than a
 claim that the same fraction of the language has native support. Native
-property-body execution remains separate from the object and verify gates.
+property-body execution is measured separately from the object and verify gates.
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a
 literal gives raw `json.JsonTree` its distinct checked branch, while reflected
@@ -850,5 +854,7 @@ The native verify runner now synthesizes a source-file suite entry that calls
 only exact top-level `verify` bodies in declaration order. It runs the 154
 verify-bearing fixtures through the production launcher and linker. Extracted
 inline callbacks remain reachable through their parent bodies, rather than
-becoming independent zero-argument tests. Property generation and native
-property-body execution still need a runner.
+becoming independent zero-argument tests. The native property runner embeds
+the existing generator's typed cases into a separate suite entry. All 18
+property bodies across three run-pass fixtures execute 100 native trials each;
+failure-case shrinking and case-specific diagnostics are still pending.

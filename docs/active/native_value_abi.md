@@ -608,8 +608,11 @@ failure records the static terminal message `assertion failed` and follows the
 normal owned-value cleanup epilogue. Production program objects still select
 only the checked source `main`. A separate native verify build synthesizes one
 entry that calls the primary file's top-level verify functions in declaration
-order, stopping on terminal failure. Generating property inputs and executing
-property bodies remain follow-up work.
+order, stopping on terminal failure. A separate property suite embeds the
+existing deterministic `given` samples as typed HIR constructions and calls
+each checked property body 100 times. The interpreter chooses inputs, while
+the emitted code executes the property body. Native counterexample shrinking
+and case-specific failure diagnostics remain follow-up work.
 
 Evidence includes existing generic_struct and explicit_struct_equality fixture
 bodies executed with supplemental mains, nested owners and early returns,

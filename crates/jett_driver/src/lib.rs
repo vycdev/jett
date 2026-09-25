@@ -1,8 +1,10 @@
 mod native_constants;
+mod native_property_cases;
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
 use jett_comptime::evaluate_explicit_comptime_expressions;
 use jett_comptime::value::Value;
 use jett_comptime::verify::{
+    collect_property_cases_with_metadata_and_expression_types,
     run_verify_blocks_detailed_with_metadata_and_expression_types,
     run_verify_blocks_with_metadata_and_expression_types,
 };
@@ -80,6 +82,8 @@ pub struct BackendLoweringResult {
     /// Compiler-owned entry that calls the primary source file's checked
     /// `verify` bodies in declaration order, when native suite mode is used.
     pub native_verify_entry: Option<jett_hir::FunctionId>,
+    /// Compiler-owned entry for generated native `property` trials.
+    pub native_property_entry: Option<jett_hir::FunctionId>,
     pub interner: jett_types::TypeInterner,
     pub source_origins: HashMap<FileId, SourceOrigin>,
     pub reflection_metadata: Arc<ReflectionMetadata>,
@@ -2679,11 +2683,24 @@ pub fn lower_file_for_native_verify_suite(
     )
 }
 
+/// Lower checked property bodies with the interpreter's deterministic `given`
+/// cases and append one native entry that executes those cases.
+pub fn lower_file_for_native_property_suite(
+    path: &Path,
+) -> Result<BackendLoweringResult, BackendLoweringError> {
+    lower_file_for_backend_inner(
+        path,
+        BuildOptions::default(),
+        BackendLoweringMode::PropertySuite,
+    )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BackendLoweringMode {
     Program,
     TestBodies,
     VerifySuite,
+    PropertySuite,
 }
 
 fn lower_file_for_backend_inner(
@@ -2809,6 +2826,23 @@ fn lower_file_for_backend_inner(
     } else {
         None
     };
+    let native_property_entry = if mode == BackendLoweringMode::PropertySuite {
+        let cases = collect_property_cases_with_metadata_and_expression_types(
+            &parse_result.module,
+            reflection_metadata.clone(),
+            checked_expression_types.clone(),
+        );
+        native_property_cases::append_property_suite(
+            &mut hir,
+            &parse_result.module,
+            entry_file,
+            &cases,
+            &check_result.interner,
+        )
+        .map_err(BackendLoweringError::Hir)?
+    } else {
+        None
+    };
     let program_entry = lowered_program_entry(&hir, source_program_entry)?;
     let mir = jett_mir::lower(&hir).map_err(BackendLoweringError::Mir)?;
     jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;
@@ -2818,6 +2852,7 @@ fn lower_file_for_backend_inner(
         mir,
         program_entry,
         native_verify_entry,
+        native_property_entry,
         interner: check_result.interner,
         source_origins,
         reflection_metadata,

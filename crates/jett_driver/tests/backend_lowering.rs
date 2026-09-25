@@ -3,7 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jett_common::SourceOrigin;
-use jett_driver::{lower_file_for_backend, lower_file_for_native_verify_suite};
+use jett_driver::{
+    lower_file_for_backend, lower_file_for_native_property_suite,
+    lower_file_for_native_verify_suite,
+};
 use jett_hir::{DeclarationKind, ExpressionKind, StatementKind};
 
 fn fixture_dir() -> PathBuf {
@@ -122,6 +125,33 @@ fn native_verify_suite_calls_primary_file_bodies_in_declaration_order() {
     }));
     assert!(bodies[0].identity.declaration.name.starts_with("add:"));
     assert!(bodies[1].identity.declaration.name.starts_with("multiply:"));
+}
+
+#[test]
+fn native_property_suite_embeds_checked_generated_trials() {
+    let fixture = fixture_dir().join("namespace_runtime_verify_context.jett");
+    let lowered = lower_file_for_native_property_suite(&fixture)
+        .expect("checked scalar property trials should lower");
+    let entry = lowered
+        .native_property_entry
+        .expect("property fixture must have a native suite entry");
+    let suite = &lowered.hir.functions[entry.index() as usize];
+    assert_eq!(suite.body.statements.len(), 200);
+    assert_eq!(suite.identity.declaration.namespace, "alpha");
+    let StatementKind::Expression(first) = &suite.body.statements[0].kind else {
+        panic!("expected a generated property call");
+    };
+    let ExpressionKind::Call { function, args, .. } = &first.kind else {
+        panic!("expected a direct property call");
+    };
+    assert_eq!(
+        lowered.hir.functions[function.index() as usize]
+            .identity
+            .declaration
+            .kind,
+        DeclarationKind::Property
+    );
+    assert!(matches!(args[0].kind, ExpressionKind::Int(0)));
 }
 
 #[test]

@@ -52,7 +52,7 @@ fn update_current_namespace(
 // Default iteration count for property-based testing
 // ---------------------------------------------------------------------------
 
-const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
+pub const PROPERTY_DEFAULT_ITERATIONS: usize = 100;
 // Backstop recursion whose generic arguments change on every expansion.
 const PROPERTY_GENERATION_MAX_DEPTH: usize = 32;
 const PROPERTY_GENERATION_MAX_TYPE_NODES: usize = 1024;
@@ -190,6 +190,20 @@ pub struct VerifyResult {
     pub is_property: bool,
 }
 
+/// Inputs chosen by the existing property generator for one test iteration.
+/// The compiler can embed these checked cases into a native property runner.
+#[derive(Debug, Clone)]
+pub struct PropertyCase {
+    pub property_span: Span,
+    pub iteration: usize,
+    pub arguments: Vec<Value>,
+}
+
+struct VerificationRun {
+    results: Vec<VerifyResult>,
+    property_cases: Vec<PropertyCase>,
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -269,6 +283,27 @@ pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
     metadata: Option<Arc<ReflectionMetadata>>,
     expression_types: Option<Arc<HashMap<Span, String>>>,
 ) -> Vec<VerifyResult> {
+    run_verification(module, metadata, expression_types, false).results
+}
+
+/// Reuse the interpreter's deterministic property pools for native test input
+/// generation. The source has already passed frontend verification before the
+/// driver calls this, so generated cases are valid values of their `given`
+/// types; the native runner still executes the property bodies itself.
+pub fn collect_property_cases_with_metadata_and_expression_types(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<HashMap<Span, String>>,
+) -> Vec<PropertyCase> {
+    run_verification(module, Some(metadata), Some(expression_types), true).property_cases
+}
+
+fn run_verification(
+    module: &Module,
+    metadata: Option<Arc<ReflectionMetadata>>,
+    expression_types: Option<Arc<HashMap<Span, String>>>,
+    collect_cases: bool,
+) -> VerificationRun {
     let module_for_thread = module.clone();
     let thread_metadata = metadata.clone();
     let thread_expression_types = expression_types.clone();
@@ -280,13 +315,16 @@ pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
                 &module_for_thread,
                 thread_metadata,
                 thread_expression_types,
+                collect_cases,
             )
         }) {
         Ok(handle) => match handle.join() {
             Ok(results) => results,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => run_verify_blocks_detailed_inner(module, metadata, expression_types),
+        Err(_) => {
+            run_verify_blocks_detailed_inner(module, metadata, expression_types, collect_cases)
+        }
     }
 }
 
@@ -294,7 +332,8 @@ fn run_verify_blocks_detailed_inner(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
     expression_types: Option<Arc<HashMap<Span, String>>>,
-) -> Vec<VerifyResult> {
+    collect_cases: bool,
+) -> VerificationRun {
     let mut interp = Interpreter::new();
     if let Some(metadata) = metadata {
         interp.set_reflection_metadata(metadata);
@@ -303,6 +342,7 @@ fn run_verify_blocks_detailed_inner(
         interp.set_checked_expression_types(expression_types);
     }
     let mut results = Vec::new();
+    let mut property_cases = Vec::new();
 
     // First pass: register all functions and type aliases so verify blocks
     // can call them and use refinement types.
@@ -436,15 +476,21 @@ fn run_verify_blocks_detailed_inner(
             &mut interp,
             namespace.as_deref(),
             pb,
-            &property_enums,
-            &property_structs,
-            &property_bitfields,
-            &property_type_aliases,
+            PropertyDefinitions {
+                enums: &property_enums,
+                structs: &property_structs,
+                bitfields: &property_bitfields,
+                aliases: &property_type_aliases,
+            },
+            collect_cases.then_some(&mut property_cases),
         );
         results.push(result);
     }
 
-    results
+    VerificationRun {
+        results,
+        property_cases,
+    }
 }
 
 /// Evaluate a single pure function at compile time with the given arguments.
@@ -727,14 +773,19 @@ fn shrink_inputs(
     current
 }
 
+struct PropertyDefinitions<'a> {
+    enums: &'a [PropertyEnumDef],
+    structs: &'a [PropertyStructDef],
+    bitfields: &'a [PropertyBitfieldDef],
+    aliases: &'a [PropertyTypeAliasDef],
+}
+
 fn run_property_block(
     interp: &mut Interpreter,
     namespace: Option<&str>,
     pb: &PropertyBlock,
-    enum_defs: &[PropertyEnumDef],
-    struct_defs: &[PropertyStructDef],
-    bitfield_defs: &[PropertyBitfieldDef],
-    type_alias_defs: &[PropertyTypeAliasDef],
+    definitions: PropertyDefinitions<'_>,
+    mut collected_cases: Option<&mut Vec<PropertyCase>>,
 ) -> VerifyResult {
     let iterations = PROPERTY_DEFAULT_ITERATIONS;
 
@@ -747,10 +798,10 @@ fn run_property_block(
                 interp,
                 &g.ty,
                 namespace,
-                enum_defs,
-                struct_defs,
-                bitfield_defs,
-                type_alias_defs,
+                definitions.enums,
+                definitions.structs,
+                definitions.bitfields,
+                definitions.aliases,
             )
         })
         .collect();
@@ -783,6 +834,14 @@ fn run_property_block(
                 (given, pool[idx].clone())
             })
             .collect();
+
+        if let Some(cases) = collected_cases.as_deref_mut() {
+            cases.push(PropertyCase {
+                property_span: pb.span,
+                iteration,
+                arguments: chosen.iter().map(|(_, value)| value.clone()).collect(),
+            });
+        }
 
         // Push a scope, bind the given values, execute the body.
         interp.push_scope_public();
@@ -2208,6 +2267,23 @@ mod tests {
     use jett_parser::ast::*;
 
     use super::*;
+
+    #[test]
+    fn native_property_cases_reuse_the_interpreter_pool_and_iteration_order() {
+        let parsed = jett_parser::parse(
+            "namespace app\nproperty identity:\n    given n: int64\n    assert n == n\n",
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let run = run_verification(&parsed.module, None, None, true);
+        assert_eq!(run.results.len(), 1);
+        assert!(run.results[0].passed);
+        assert_eq!(run.property_cases.len(), PROPERTY_DEFAULT_ITERATIONS);
+        assert_eq!(run.property_cases[0].iteration, 0);
+        assert_eq!(run.property_cases[0].arguments, vec![Value::Int64(0)]);
+        assert_eq!(run.property_cases[1].arguments, vec![Value::Int64(1)]);
+        assert_eq!(run.property_cases[8].arguments, vec![Value::Int64(0)]);
+    }
 
     fn sp() -> Span {
         Span::new(FileId::new(0), 0, 0)

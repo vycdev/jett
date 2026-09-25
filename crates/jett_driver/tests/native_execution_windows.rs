@@ -3,7 +3,8 @@
 
 use jett_common::FileId;
 use jett_driver::native::{
-    NativeLauncherBundle, build_host_executable, build_host_verify_suite_executable, host_target,
+    NativeLauncherBundle, build_host_executable, build_host_property_suite_executable,
+    build_host_verify_suite_executable, host_target,
 };
 use jett_parser::ast::Item;
 use jett_runtime::{clock, environment, graphics, random};
@@ -142,6 +143,81 @@ fn native_verify_suite_executes_all_checked_bodies() {
         output.stderr.is_empty(),
         "verify emitted stderr: {output:?}"
     );
+}
+
+#[test]
+fn native_property_suite_executes_deterministic_scalar_trials() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/run_pass/namespace_runtime_verify_context.jett");
+    let directory = tempfile::tempdir().expect("property executable directory");
+    let executable = directory.path().join("scalar_property_suite.exe");
+    let artifact = build_host_property_suite_executable(&fixture, launcher(), &executable)
+        .expect("link native scalar property suite");
+    let output = run_bounded(&artifact.path, directory.path());
+    assert!(
+        output.status.success(),
+        "native properties failed: {output:?}"
+    );
+}
+
+#[test]
+fn native_property_suites_execute_for_all_run_pass_fixtures() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass");
+    let mut sources = fs::read_dir(&fixtures)
+        .expect("run-pass fixture directory")
+        .map(|entry| entry.expect("fixture entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jett")
+        })
+        .collect::<Vec<_>>();
+    sources.sort();
+    let directory = tempfile::tempdir().expect("property audit directory");
+    let mut attempted = 0;
+    let mut property_blocks = 0;
+    let mut passed = 0;
+    let mut failures = Vec::new();
+    for source in sources {
+        let text = fs::read_to_string(&source).expect("fixture source");
+        let parsed = jett_parser::parse(&text, FileId::new(0));
+        let count = parsed
+            .module
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Property(_)))
+            .count();
+        if count == 0 {
+            continue;
+        }
+        attempted += 1;
+        property_blocks += count;
+        let executable = directory.path().join(format!(
+            "{}.exe",
+            source.file_stem().expect("fixture stem").to_string_lossy()
+        ));
+        match build_host_property_suite_executable(&source, launcher(), &executable) {
+            Ok(artifact) => {
+                let output = run_bounded(&artifact.path, directory.path());
+                if output.status.success() {
+                    passed += 1;
+                } else {
+                    failures.push(format!("{}: {output:?}", source.display()));
+                }
+                fs::remove_file(&artifact.path).expect("remove finished property executable");
+            }
+            Err(error) => failures.push(format!("{}: {error}", source.display())),
+        }
+    }
+    println!("native property suites: {passed}/{attempted}; {property_blocks} blocks");
+    for failure in &failures {
+        println!("{failure}");
+    }
+    assert_eq!(attempted, 3, "native property fixture denominator changed");
+    assert_eq!(
+        property_blocks, 18,
+        "native property block denominator changed"
+    );
+    assert_eq!(passed, attempted, "native property suite failures");
 }
 
 #[test]
