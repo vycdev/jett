@@ -84,6 +84,26 @@ pub const TEST_SCRIPT_ENV: &str = "JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1";
 pub const INVALID_TEST_SCRIPT: &str = "Graphics: invalid test script";
 
 impl Key {
+    pub fn variant_index(self) -> u64 {
+        match self {
+            Self::Up => 0,
+            Self::Down => 1,
+            Self::Left => 2,
+            Self::Right => 3,
+            Self::W => 4,
+            Self::A => 5,
+            Self::S => 6,
+            Self::D => 7,
+            Self::U => 8,
+            Self::Z => 9,
+            Self::R => 10,
+            Self::N => 11,
+            Self::P => 12,
+            Self::Enter => 13,
+            Self::Space => 14,
+        }
+    }
+
     fn script_name(self) -> &'static str {
         match self {
             Self::Up => "up",

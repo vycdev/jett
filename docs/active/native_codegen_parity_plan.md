@@ -826,3 +826,9 @@ events before program entry, and the audit obtains its interpreter oracle from
 the scripted provider. This makes the remaining linked-main gate headless and
 reproducible once native session and callback lowering are implemented; it does
 not change the current 174/182 object or 27/30 main counts.
+
+The runtime now exposes typed Graphics session leaves and tests their scripted
+open/present/key/close lifecycle, domain failures, and context cleanup. The
+session owns no Jett value; source state and callback ownership remain the
+compiler's responsibility. The exhaustive fixture counts are unchanged until
+the private `graphics.__run` intrinsic emits the checked callback loop.

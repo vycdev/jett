@@ -10,6 +10,7 @@ use crate::environment::{self, LaunchEnvironmentSnapshot};
 use crate::graphics;
 use crate::math;
 use crate::random::{self, RandomProvider};
+use std::cell::RefCell;
 use std::cmp::Ordering as CompareOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
 use subtle::ConstantTimeEq;
@@ -33,6 +34,10 @@ const INVALID_STRUCT: Failure = (
 const INVALID_ACTOR: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native actor handle or field",
+);
+const INVALID_GRAPHICS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native Graphics authority or session",
 );
 const INVALID_CONSTRUCTION: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
@@ -102,6 +107,20 @@ struct NativeString {
 /// Stable discriminants for optional and result storage (not terminal status).
 pub const SUM_FAILURE: u32 = 0;
 pub const SUM_SUCCESS: u32 = 1;
+
+enum NativeGraphicsSession {
+    Window(graphics::Session),
+    Scripted { width: i64, height: i64 },
+}
+
+struct ActiveGraphicsSession {
+    identity: u64,
+    session: NativeGraphicsSession,
+}
+
+thread_local! {
+    static GRAPHICS_SESSION: RefCell<Option<ActiveGraphicsSession>> = const { RefCell::new(None) };
+}
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeSortKind {
@@ -476,6 +495,7 @@ pub(super) struct NativeValues {
     environment_snapshot: Option<LaunchEnvironmentSnapshot>,
     graphics: Option<u64>,
     graphics_script: Option<std::collections::VecDeque<graphics::TestEvent>>,
+    graphics_session: Option<u64>,
 }
 impl NativeValues {
     #[cfg(test)]
@@ -501,6 +521,7 @@ impl NativeValues {
             && self.sets_created == self.sets_destroyed
             && self.maps.is_empty()
             && self.maps_created == self.maps_destroyed
+            && self.graphics_session.is_none()
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
         #[cfg(test)]
@@ -1514,6 +1535,199 @@ impl NativeValues {
     pub(super) fn release_actors(&mut self) -> LeafResult<()> {
         for id in std::mem::take(&mut self.actors) {
             self.drop_value(id)?;
+        }
+        Ok(())
+    }
+
+    fn graphics_config(&self, value: u64) -> LeafResult<graphics::Config> {
+        let title = self.struct_field(value, 0)?.bits;
+        Ok(graphics::Config {
+            title: self.text(title)?.to_owned(),
+            width: self.struct_field(value, 1)?.bits as i64,
+            height: self.struct_field(value, 2)?.bits as i64,
+        })
+    }
+
+    fn graphics_color(&self, value: u64) -> LeafResult<graphics::Color> {
+        Ok(graphics::Color {
+            red: self.struct_field(value, 0)?.bits as i64,
+            green: self.struct_field(value, 1)?.bits as i64,
+            blue: self.struct_field(value, 2)?.bits as i64,
+        })
+    }
+
+    fn graphics_rect(&self, value: u64) -> LeafResult<graphics::Rect> {
+        Ok(graphics::Rect {
+            x: self.struct_field(value, 0)?.bits as i64,
+            y: self.struct_field(value, 1)?.bits as i64,
+            width: self.struct_field(value, 2)?.bits as i64,
+            height: self.struct_field(value, 3)?.bits as i64,
+            color: self.graphics_color(self.struct_field(value, 4)?.bits)?,
+        })
+    }
+
+    fn graphics_text(&self, value: u64) -> LeafResult<graphics::Text> {
+        let text = self.struct_field(value, 2)?.bits;
+        Ok(graphics::Text {
+            x: self.struct_field(value, 0)?.bits as i64,
+            y: self.struct_field(value, 1)?.bits as i64,
+            text: self.text(text)?.to_owned(),
+            scale: self.struct_field(value, 3)?.bits as i64,
+            color: self.graphics_color(self.struct_field(value, 4)?.bits)?,
+        })
+    }
+
+    fn graphics_scene(&self, value: u64) -> LeafResult<graphics::Scene> {
+        let rectangles = self.struct_field(value, 1)?.bits;
+        let texts = self.struct_field(value, 2)?.bits;
+        let rectangles = self.lists.get(&rectangles).ok_or(INVALID_LIST)?;
+        let texts = self.lists.get(&texts).ok_or(INVALID_LIST)?;
+        if !rectangles.owned || !texts.owned {
+            return Err(INVALID_LIST);
+        }
+        Ok(graphics::Scene {
+            background: self.graphics_color(self.struct_field(value, 0)?.bits)?,
+            rectangles: rectangles
+                .elements
+                .iter()
+                .map(|value| self.graphics_rect(value.ok_or(INVALID_LIST)?))
+                .collect::<LeafResult<Vec<_>>>()?,
+            texts: texts
+                .elements
+                .iter()
+                .map(|value| self.graphics_text(value.ok_or(INVALID_LIST)?))
+                .collect::<LeafResult<Vec<_>>>()?,
+        })
+    }
+
+    fn graphics_validate_scene(&mut self, width: i64, height: i64, value: u64) -> LeafResult<u64> {
+        let scene = self.graphics_scene(value)?;
+        self.parsed_sum(graphics::render_scene(width, height, &scene).map(|_| 0))
+    }
+
+    fn graphics_open(&mut self, authority: u64, value: u64) -> LeafResult<u64> {
+        if self.graphics != Some(authority) {
+            return Err(INVALID_GRAPHICS);
+        }
+        if self.graphics_session.is_some() || GRAPHICS_SESSION.with(|slot| slot.borrow().is_some())
+        {
+            return self.parsed_sum(Err(
+                "graphics.run: nested sessions are unsupported".to_owned()
+            ));
+        }
+        let config = self.graphics_config(value)?;
+        if let Err(message) = graphics::validate_config(&config) {
+            return self.parsed_sum(Err(message));
+        }
+        let session = if self.graphics_script.is_some() {
+            NativeGraphicsSession::Scripted {
+                width: config.width,
+                height: config.height,
+            }
+        } else {
+            match graphics::Session::new(config) {
+                Ok(session) => NativeGraphicsSession::Window(session),
+                Err(message) => return self.parsed_sum(Err(message)),
+            }
+        };
+        let identity = next_identity()?;
+        GRAPHICS_SESSION.with(|slot| {
+            *slot.borrow_mut() = Some(ActiveGraphicsSession { identity, session });
+        });
+        self.graphics_session = Some(identity);
+        match self.sum(SUM_SUCCESS, identity, false) {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                GRAPHICS_SESSION.with(|slot| {
+                    slot.borrow_mut().take();
+                });
+                self.graphics_session = None;
+                Err(error)
+            }
+        }
+    }
+
+    fn graphics_present(&mut self, identity: u64, value: u64) -> LeafResult<u64> {
+        if self.graphics_session != Some(identity) {
+            return Err(INVALID_GRAPHICS);
+        }
+        let scene = self.graphics_scene(value)?;
+        let outcome = GRAPHICS_SESSION.with(|slot| {
+            let mut active = slot.borrow_mut();
+            let active = active.as_mut().ok_or(INVALID_GRAPHICS)?;
+            if active.identity != identity {
+                return Err(INVALID_GRAPHICS);
+            }
+            Ok(match &mut active.session {
+                NativeGraphicsSession::Window(session) => session.present(&scene),
+                NativeGraphicsSession::Scripted { width, height } => {
+                    graphics::render_scene(*width, *height, &scene).map(|_| ())
+                }
+            })
+        })?;
+        self.parsed_sum(outcome.map(|_| 0))
+    }
+
+    fn graphics_next_key(&mut self, identity: u64) -> LeafResult<u64> {
+        if self.graphics_session != Some(identity) {
+            return Err(INVALID_GRAPHICS);
+        }
+        let outcome = GRAPHICS_SESSION.with(|slot| {
+            let mut active = slot.borrow_mut();
+            let active = active.as_mut().ok_or(INVALID_GRAPHICS)?;
+            if active.identity != identity {
+                return Err(INVALID_GRAPHICS);
+            }
+            Ok(match &mut active.session {
+                NativeGraphicsSession::Window(session) => session.next_key(),
+                NativeGraphicsSession::Scripted { .. } => match self
+                    .graphics_script
+                    .as_mut()
+                    .ok_or(INVALID_GRAPHICS)?
+                    .pop_front()
+                {
+                    Some(graphics::TestEvent::Key(key)) => Ok(Some(key)),
+                    Some(graphics::TestEvent::Close) => Ok(None),
+                    Some(graphics::TestEvent::HostError(message)) => Err(message),
+                    None => Err("Graphics: test provider exhausted".to_owned()),
+                },
+            })
+        })?;
+        match outcome {
+            Ok(Some(key)) => {
+                let optional = self.sum(SUM_SUCCESS, key.variant_index(), false)?;
+                self.owned_sum(SUM_SUCCESS, optional)
+            }
+            Ok(None) => {
+                let optional = self.sum(SUM_FAILURE, 0, false)?;
+                self.owned_sum(SUM_SUCCESS, optional)
+            }
+            Err(message) => self.parsed_sum(Err(message)),
+        }
+    }
+
+    fn graphics_close(&mut self, identity: u64) -> LeafResult<u32> {
+        if self.graphics_session != Some(identity) {
+            return Err(INVALID_GRAPHICS);
+        }
+        GRAPHICS_SESSION.with(|slot| {
+            let mut active = slot.borrow_mut();
+            if active
+                .as_ref()
+                .is_none_or(|active| active.identity != identity)
+            {
+                return Err(INVALID_GRAPHICS);
+            }
+            active.take();
+            Ok(())
+        })?;
+        self.graphics_session = None;
+        Ok(0)
+    }
+
+    pub(super) fn release_graphics_session(&mut self) -> LeafResult<()> {
+        if let Some(identity) = self.graphics_session {
+            self.graphics_close(identity)?;
         }
         Ok(())
     }
@@ -3336,6 +3550,16 @@ leaves! {
     GrantGraphics, jett_rt_v1_grant_graphics, false, (), u64 => I64,
         |s| { if let Some(token) = s.graphics { return Ok(token); }
             let token = next_identity()?; s.graphics = Some(token); Ok(token) };
+    GraphicsValidateScene, jett_rt_v1_graphics_validate_scene, false, (width: i64 => I64, height: i64 => I64, scene: u64 => I64), u64 => I64,
+        |s| s.graphics_validate_scene(width, height, scene);
+    GraphicsOpen, jett_rt_v1_graphics_open, false, (authority: u64 => I64, config: u64 => I64), u64 => I64,
+        |s| s.graphics_open(authority, config);
+    GraphicsPresent, jett_rt_v1_graphics_present, false, (session: u64 => I64, scene: u64 => I64), u64 => I64,
+        |s| s.graphics_present(session, scene);
+    GraphicsNextKey, jett_rt_v1_graphics_next_key, false, (session: u64 => I64), u64 => I64,
+        |s| s.graphics_next_key(session);
+    GraphicsClose, jett_rt_v1_graphics_close, true, (session: u64 => I64), u32 => I32,
+        |s| s.graphics_close(session);
     EnvironmentArgs, jett_rt_v1_environment_args, false, (authority: u64 => I64), u64 => I64,
         |s| { if s.environment != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Environment authority")); }
             let arguments = s.environment_snapshot.as_ref().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Environment: launch data unavailable".as_slice()))?
@@ -3528,6 +3752,131 @@ mod tests {
         drop(lease);
         scripted.destroy(JettRuntimeStatusV1::OK);
         production.destroy(JettRuntimeStatusV1::OK);
+    }
+
+    #[test]
+    fn scripted_graphics_session_validates_presents_keys_and_closes() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let script = graphics::encode_test_script(&[
+            graphics::TestEvent::Key(graphics::Key::Right),
+            graphics::TestEvent::Close,
+        ]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    pointer,
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let authority = jett_rt_v1_grant_graphics(pointer);
+            let title = context.text("headless");
+            let config = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 0, title, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 1, 16, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 2, 16, 0), 0);
+
+            let color = jett_rt_v1_struct_new(pointer, 3);
+            for field in 0..3 {
+                assert_eq!(jett_rt_v1_struct_init(pointer, color, field, 0, 0), 0);
+            }
+            let rectangles = jett_rt_v1_list_new(pointer, 1);
+            let texts = jett_rt_v1_list_new(pointer, 1);
+            let scene = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, scene, 0, color, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, scene, 1, rectangles, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, scene, 2, texts, 1), 0);
+
+            let validated = jett_rt_v1_graphics_validate_scene(pointer, 16, 16, scene);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, validated), SUM_SUCCESS);
+            assert_eq!(jett_rt_v1_value_drop(pointer, validated), 0);
+            let opened = jett_rt_v1_graphics_open(pointer, authority, config);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, opened), SUM_SUCCESS);
+            let session = jett_rt_v1_sum_take(pointer, opened, SUM_SUCCESS);
+            let presented = jett_rt_v1_graphics_present(pointer, session, scene);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, presented), SUM_SUCCESS);
+            assert_eq!(jett_rt_v1_value_drop(pointer, presented), 0);
+
+            let first = jett_rt_v1_graphics_next_key(pointer, session);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, first), SUM_SUCCESS);
+            let key = jett_rt_v1_sum_take(pointer, first, SUM_SUCCESS);
+            assert_eq!(
+                jett_rt_v1_sum_take(pointer, key, SUM_SUCCESS),
+                graphics::Key::Right.variant_index()
+            );
+            let second = jett_rt_v1_graphics_next_key(pointer, session);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, second), SUM_SUCCESS);
+            let close = jett_rt_v1_sum_take(pointer, second, SUM_SUCCESS);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, close), SUM_FAILURE);
+            assert_eq!(jett_rt_v1_value_drop(pointer, close), 0);
+            assert_eq!(jett_rt_v1_graphics_close(pointer, session), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, scene), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, config), 0);
+            assert_eq!(jett_rt_v1_value_status(pointer), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+
+    #[test]
+    fn context_destruction_closes_an_unfinished_scripted_graphics_session() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let script = graphics::encode_test_script(&[graphics::TestEvent::Close]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    pointer,
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let authority = jett_rt_v1_grant_graphics(pointer);
+            let title = context.text("cleanup");
+            let config = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 0, title, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 1, 8, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 2, 8, 0), 0);
+            let opened = jett_rt_v1_graphics_open(pointer, authority, config);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, opened), SUM_SUCCESS);
+            assert_ne!(jett_rt_v1_sum_take(pointer, opened, SUM_SUCCESS), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, config), 0);
+        }
+        assert!(GRAPHICS_SESSION.with(|slot| slot.borrow().is_some()));
+        context.destroy(JettRuntimeStatusV1::OK);
+        assert!(GRAPHICS_SESSION.with(|slot| slot.borrow().is_none()));
+    }
+
+    #[test]
+    fn invalid_graphics_config_is_a_domain_result_without_opening_a_session() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let script = graphics::encode_test_script(&[graphics::TestEvent::Close]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    pointer,
+                    script.as_ptr(),
+                    script.len() as u64
+                ),
+                0
+            );
+            let authority = jett_rt_v1_grant_graphics(pointer);
+            let title = context.text("invalid");
+            let config = jett_rt_v1_struct_new(pointer, 3);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 0, title, 1), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 1, 0, 0), 0);
+            assert_eq!(jett_rt_v1_struct_init(pointer, config, 2, 8, 0), 0);
+            let outcome = jett_rt_v1_graphics_open(pointer, authority, config);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, outcome), SUM_FAILURE);
+            assert_eq!(jett_rt_v1_value_status(pointer), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, outcome), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, config), 0);
+        }
+        assert!(GRAPHICS_SESSION.with(|slot| slot.borrow().is_none()));
+        context.destroy(JettRuntimeStatusV1::OK);
     }
     #[test]
     fn strings_release_immediately_and_retain_preserves_aliases() {

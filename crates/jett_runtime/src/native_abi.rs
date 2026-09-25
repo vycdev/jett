@@ -517,7 +517,9 @@ pub unsafe extern "C" fn jett_rt_v1_context_destroy(
         let Some(mut state) = entry.wait_for_leases_and_take_state() else {
             return JettRuntimeResultV1::failure(JettRuntimeStatusV1::PANIC, PANIC_MESSAGE);
         };
-        if state.values.release_actors().is_err() {
+        let graphics_cleanup_failed = state.values.release_graphics_session().is_err();
+        let actor_cleanup_failed = state.values.release_actors().is_err();
+        if graphics_cleanup_failed || actor_cleanup_failed {
             state.values.cleanup_failed = true;
         }
         let leaked = !state.values.is_empty();
