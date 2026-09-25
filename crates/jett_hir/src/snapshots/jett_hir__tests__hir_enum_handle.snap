@@ -1,5 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
+assertion_line: 5375
 expression: program
 ---
 Program {
@@ -50,6 +51,7 @@ Program {
                     },
                 },
             ],
+            capture_count: 0,
             return_type: TypeId(
                 48,
             ),
@@ -182,6 +184,7 @@ Program {
                 ),
             ),
             params: [],
+            capture_count: 0,
             return_type: TypeId(
                 3,
             ),

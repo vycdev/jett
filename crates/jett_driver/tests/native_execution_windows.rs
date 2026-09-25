@@ -270,6 +270,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("uuid_values", "../../tests/native/uuid_values.jett"),
         ("function_values", "../../tests/native/function_values.jett"),
         (
+            "captured_closure_values",
+            "../../tests/native/captured_closure_values.jett",
+        ),
+        (
             "function_descriptor_ownership",
             "../../tests/native/function_descriptor_ownership.jett",
         ),
@@ -460,6 +464,45 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             "{name}: {actual:?}"
         );
         assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+    }
+}
+
+#[test]
+fn native_captured_closures_match_interpreter() {
+    for (fixture, main) in [
+        (
+            "closures.jett",
+            "function main() returns nothing:\n    println(test_make_adder(), test_linear(), test_count_above(), test_nested_closures())\n",
+        ),
+        (
+            "closures_advanced.jett",
+            "function main() returns nothing:\n    println(test_explicit_struct_parameter(), test_closure_as_argument(), test_conditional_closure_add(), test_conditional_closure_mul(), sum_with_closure(), accumulate_squares(), make_inc_and_dec(5), double_all_sum())\n",
+        ),
+        ("captured_local_function_name.jett", ""),
+    ] {
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/run_pass")
+                .join(fixture),
+        )
+        .expect("read closure fixture");
+        let directory = tempfile::tempdir().expect("isolated closure execution directory");
+        let source_path = directory.path().join(fixture);
+        std::fs::write(&source_path, format!("{source}\n{main}"))
+            .expect("write closure fixture with an executable entry");
+        let expected =
+            jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+        let binary = directory.path().join("program.exe");
+        build_host_executable(&source_path, launcher(), &binary)
+            .unwrap_or_else(|error| panic!("{fixture}: {error:?}"));
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{fixture}: {actual:?}");
+        assert_eq!(
+            actual.stdout,
+            expected.stdout.as_bytes(),
+            "{fixture}: {actual:?}"
+        );
+        assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
     }
 }
 

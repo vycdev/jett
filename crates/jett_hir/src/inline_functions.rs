@@ -1,14 +1,13 @@
-//! Extract capture-free inline functions into ordinary checked HIR functions.
-//! Captured closures keep their explicit HIR form until extraction and native
-//! environment lowering are implemented.
+//! Extract inline functions into ordinary checked HIR functions. Captured
+//! locals become leading synthetic parameters supplied by a native environment.
 
 use crate::{
     Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,
-    FunctionIdentity, Local, Param, ParamMode, StatementKind, StringSegment,
+    FunctionIdentity, Local, LocalId, Param, ParamMode, StatementKind, StringSegment,
 };
 use jett_types::{Type, TypeInterner};
 
-pub(super) fn extract_capture_free(functions: &mut Vec<Function>, types: &TypeInterner) {
+pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &TypeInterner) {
     let mut extractor = Extractor {
         types,
         next_id: functions.len() as u32,
@@ -111,9 +110,13 @@ impl Extractor<'_> {
             body,
         } = &expression.kind
         {
-            if !view_params.is_empty() || block_uses_capture(body, *local_floor) {
+            if !view_params.is_empty() {
                 return;
             }
+            let captures = (0..*local_floor)
+                .filter(|id| block_uses_local(body, *id))
+                .map(LocalId::new)
+                .collect::<Vec<_>>();
             let Type::Function {
                 params: expected,
                 return_type,
@@ -142,6 +145,25 @@ impl Extractor<'_> {
             let Some(parameters) = parameters else {
                 return;
             };
+            let capture_parameters = captures
+                .iter()
+                .map(|id| {
+                    let local = parent.locals.get(id.index() as usize)?;
+                    (local.id == *id).then(|| Param {
+                        local: *id,
+                        name: local.name.clone(),
+                        ty: local.ty,
+                        mode: ParamMode::Owned,
+                        mutable: local.mutable,
+                        span: local.span,
+                    })
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(mut capture_parameters) = capture_parameters else {
+                return;
+            };
+            let capture_count = capture_parameters.len();
+            capture_parameters.extend(parameters);
             let id = FunctionId(self.next_id);
             self.next_id += 1;
             let name = format!(
@@ -161,13 +183,21 @@ impl Extractor<'_> {
                     specialization: parent.identity.specialization.clone(),
                 },
                 source_definition: None,
-                params: parameters,
+                params: capture_parameters,
+                capture_count,
                 return_type: *return_type,
                 locals: parent.locals.to_vec(),
                 body: body.clone(),
                 span: expression.span,
             });
-            expression.kind = ExpressionKind::FunctionRef(id);
+            expression.kind = if captures.is_empty() {
+                ExpressionKind::FunctionRef(id)
+            } else {
+                ExpressionKind::ClosureRef {
+                    function: id,
+                    captures,
+                }
+            };
             return;
         }
         match &mut expression.kind {
@@ -260,13 +290,14 @@ impl Extractor<'_> {
             | ExpressionKind::Nothing
             | ExpressionKind::Local(_)
             | ExpressionKind::FunctionRef(_)
+            | ExpressionKind::ClosureRef { .. }
             | ExpressionKind::OptionalNone
             | ExpressionKind::InlineFunction { .. } => {}
         }
     }
 }
 
-fn block_uses_capture(block: &Block, floor: u32) -> bool {
+fn block_uses_local(block: &Block, target: u32) -> bool {
     block
         .statements
         .iter()
@@ -274,64 +305,65 @@ fn block_uses_capture(block: &Block, floor: u32) -> bool {
             StatementKind::Let { value, .. }
             | StatementKind::HandleDefault(value)
             | StatementKind::Expression(value)
-            | StatementKind::Respond(value) => expression_uses_capture(value, floor),
-            StatementKind::Assign { target, value } => {
-                expression_uses_capture(target, floor) || expression_uses_capture(value, floor)
-            }
+            | StatementKind::Respond(value) => expression_uses_local(value, target),
+            StatementKind::Assign {
+                target: place,
+                value,
+            } => expression_uses_local(place, target) || expression_uses_local(value, target),
             StatementKind::Return(value) => value
                 .as_ref()
-                .is_some_and(|value| expression_uses_capture(value, floor)),
+                .is_some_and(|value| expression_uses_local(value, target)),
             StatementKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                expression_uses_capture(condition, floor)
-                    || block_uses_capture(then_block, floor)
+                expression_uses_local(condition, target)
+                    || block_uses_local(then_block, target)
                     || else_block
                         .as_ref()
-                        .is_some_and(|block| block_uses_capture(block, floor))
+                        .is_some_and(|block| block_uses_local(block, target))
             }
             StatementKind::While { condition, body } => {
-                expression_uses_capture(condition, floor) || block_uses_capture(body, floor)
+                expression_uses_local(condition, target) || block_uses_local(body, target)
             }
             StatementKind::For { iterable, body, .. } => {
-                expression_uses_capture(iterable, floor) || block_uses_capture(body, floor)
+                expression_uses_local(iterable, target) || block_uses_local(body, target)
             }
             StatementKind::Match { scrutinee, arms } => {
-                expression_uses_capture(scrutinee, floor)
-                    || arms.iter().any(|arm| block_uses_capture(&arm.body, floor))
+                expression_uses_local(scrutinee, target)
+                    || arms.iter().any(|arm| block_uses_local(&arm.body, target))
             }
             StatementKind::Assert { condition, message } => {
-                expression_uses_capture(condition, floor)
+                expression_uses_local(condition, target)
                     || message
                         .as_ref()
-                        .is_some_and(|message| expression_uses_capture(message, floor))
+                        .is_some_and(|message| expression_uses_local(message, target))
             }
-            StatementKind::Trace(local) => local.index() < floor,
+            StatementKind::Trace(local) => local.index() == target,
             StatementKind::Breakpoint {
                 condition,
                 bindings,
             } => {
                 condition
                     .as_ref()
-                    .is_some_and(|condition| expression_uses_capture(condition, floor))
-                    || bindings.iter().any(|binding| binding.index() < floor)
+                    .is_some_and(|condition| expression_uses_local(condition, target))
+                    || bindings.iter().any(|binding| binding.index() == target)
             }
-            StatementKind::Scope(body) => block_uses_capture(body, floor),
+            StatementKind::Scope(body) => block_uses_local(body, target),
             StatementKind::ReflectedTypeDispatch { type_info, arms } => {
-                expression_uses_capture(type_info, floor)
-                    || arms.iter().any(|arm| block_uses_capture(&arm.body, floor))
+                expression_uses_local(type_info, target)
+                    || arms.iter().any(|arm| block_uses_local(&arm.body, target))
             }
             StatementKind::Break | StatementKind::Continue => false,
         })
 }
 
-fn expression_uses_capture(expression: &Expression, floor: u32) -> bool {
+fn expression_uses_local(expression: &Expression, target: u32) -> bool {
     match &expression.kind {
-        ExpressionKind::Local(local) => local.index() < floor,
+        ExpressionKind::Local(local) => local.index() == target,
         ExpressionKind::Binary { left, right, .. } => {
-            expression_uses_capture(left, floor) || expression_uses_capture(right, floor)
+            expression_uses_local(left, target) || expression_uses_local(right, target)
         }
         ExpressionKind::Unary { value, .. }
         | ExpressionKind::ResultOk(value)
@@ -347,50 +379,54 @@ fn expression_uses_capture(expression: &Expression, floor: u32) -> bool {
         | ExpressionKind::Cancel(value)
         | ExpressionKind::Field { base: value, .. }
         | ExpressionKind::View(value)
-        | ExpressionKind::Clone(value) => expression_uses_capture(value, floor),
+        | ExpressionKind::Clone(value) => expression_uses_local(value, target),
         ExpressionKind::Call { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
         | ExpressionKind::ActorSpawn { args, .. } => {
-            args.iter().any(|arg| expression_uses_capture(arg, floor))
+            args.iter().any(|arg| expression_uses_local(arg, target))
         }
         ExpressionKind::IndirectCall { callee, args, .. } => {
-            expression_uses_capture(callee, floor)
-                || args.iter().any(|arg| expression_uses_capture(arg, floor))
+            expression_uses_local(callee, target)
+                || args.iter().any(|arg| expression_uses_local(arg, target))
         }
         ExpressionKind::StructConstruct { fields, .. }
         | ExpressionKind::BitfieldConstruct { fields, .. } => fields
             .iter()
-            .any(|field| expression_uses_capture(field, floor)),
+            .any(|field| expression_uses_local(field, target)),
         ExpressionKind::MachineConstruct { payloads, .. }
         | ExpressionKind::EnumConstruct { payloads, .. } => payloads
             .iter()
-            .any(|payload| expression_uses_capture(payload, floor)),
+            .any(|payload| expression_uses_local(payload, target)),
         ExpressionKind::MachineTransition {
             source, payloads, ..
         } => {
-            expression_uses_capture(source, floor)
+            expression_uses_local(source, target)
                 || payloads
                     .iter()
-                    .any(|payload| expression_uses_capture(payload, floor))
+                    .any(|payload| expression_uses_local(payload, target))
         }
         ExpressionKind::ListConstruct { elements } => elements
             .iter()
-            .any(|element| expression_uses_capture(element, floor)),
+            .any(|element| expression_uses_local(element, target)),
         ExpressionKind::MapConstruct { entries } => entries.iter().any(|entry| {
-            expression_uses_capture(&entry.key, floor)
-                || expression_uses_capture(&entry.value, floor)
+            expression_uses_local(&entry.key, target) || expression_uses_local(&entry.value, target)
         }),
         ExpressionKind::Handle {
-            target, failure, ..
-        } => expression_uses_capture(target, floor) || block_uses_capture(failure, floor),
+            target: handled,
+            failure,
+            ..
+        } => expression_uses_local(handled, target) || block_uses_local(failure, target),
         ExpressionKind::StringInterpolation(parts) => parts.iter().any(|part| match part {
             StringSegment::Text(_) => false,
-            StringSegment::Value(value) => expression_uses_capture(value, floor),
+            StringSegment::Value(value) => expression_uses_local(value, target),
         }),
-        ExpressionKind::InlineFunction { body, .. } => block_uses_capture(body, floor),
+        ExpressionKind::InlineFunction { body, .. } => block_uses_local(body, target),
+        ExpressionKind::ClosureRef { captures, .. } => {
+            captures.iter().any(|local| local.index() == target)
+        }
         ExpressionKind::ActorMessage { actor, args, .. } => {
-            expression_uses_capture(actor, floor)
-                || args.iter().any(|arg| expression_uses_capture(arg, floor))
+            expression_uses_local(actor, target)
+                || args.iter().any(|arg| expression_uses_local(arg, target))
         }
         ExpressionKind::Int(_)
         | ExpressionKind::Float(_)

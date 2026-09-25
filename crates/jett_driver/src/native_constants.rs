@@ -166,6 +166,7 @@ fn expression(expr: &mut Expression, values: &HashMap<Span, Value>) {
         | E::OptionalNone
         | E::Local(_)
         | E::FunctionRef(_)
+        | E::ClosureRef { .. }
         | E::Comptime(_) => {}
     }
 }

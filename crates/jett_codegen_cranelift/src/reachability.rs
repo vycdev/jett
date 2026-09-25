@@ -237,6 +237,9 @@ fn collect_expression_references(
 ) {
     match &expression.kind {
         ExpressionKind::FunctionRef(function) => references.push((*function, expression.span)),
+        ExpressionKind::ClosureRef { function, .. } => {
+            references.push((*function, expression.span));
+        }
         ExpressionKind::Call { function, args, .. } => {
             references.push((*function, expression.span));
             for argument in args {
@@ -451,7 +454,9 @@ function root(seed: int64) returns function(bool) returns int64:
         // MIR statement/terminator and MIR-carried HIR statement/expression.
         // This exercises the extra nested HIR body that a shallow MIR walk
         // would miss; adding an enum variant also fails those matches to build.
-        assert_eq!(reachable_names(&program), ["stdlib_leaf", "root"]);
+        let names = reachable_names(&program);
+        assert_eq!(names[0..2], ["stdlib_leaf", "root"]);
+        assert!(names[2].starts_with("root$inline"));
     }
 
     #[test]

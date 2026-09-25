@@ -542,6 +542,16 @@ impl Flow<'_> {
                     }
                 }
             }
+            ExpressionKind::ClosureRef { captures, .. } => {
+                if self.validate {
+                    for capture in captures {
+                        let id = capture.index() as usize;
+                        if !self.state.contains(&id) {
+                            return Err(format!("native capture {id} is moved or uninitialized"));
+                        }
+                    }
+                }
+            }
             ExpressionKind::Int(_)
             | ExpressionKind::Float(_)
             | ExpressionKind::Bool(_)

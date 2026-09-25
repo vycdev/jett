@@ -369,6 +369,7 @@ impl BackendTypeValidator<'_> {
             | ExpressionKind::Nothing
             | ExpressionKind::Local(_)
             | ExpressionKind::FunctionRef(_)
+            | ExpressionKind::ClosureRef { .. }
             | ExpressionKind::OptionalNone => {}
         }
     }
@@ -642,6 +643,7 @@ mod tests {
                 },
                 source_definition: None,
                 params: Vec::new(),
+                capture_count: 0,
                 return_type,
                 locals: Vec::new(),
                 body: Block { statements, span },

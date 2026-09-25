@@ -1,6 +1,6 @@
 //! Ownership planning for the copyable scalar/string MIR subset.
-//! This deliberately rejects unextracted handlers/closures rather than walking
-//! hidden control flow. Resources and other move-only values need a distinct
+//! This deliberately rejects unextracted handlers rather than walking hidden
+//! control flow. Resources and other move-only values need a distinct
 //! move/borrow/drop analysis before their backend support can be enabled.
 use crate::{ControlFlowGraph, Function, StatementKind, TerminatorKind};
 use jett_hir::{Expression, ExpressionKind, IntrinsicId, StringSegment};
@@ -391,11 +391,30 @@ fn visit(
             // Initial empty literal plus one concatenation per segment.
             *temporaries += 1 + segments.len();
         }
+        ExpressionKind::ClosureRef { function, captures } => {
+            // The descriptor and its environment are both owned temporaries.
+            *temporaries += 2;
+            let closure = program
+                .and_then(|program| program.functions.get(function.index() as usize))
+                .ok_or("closure capture needs its checked function")?;
+            if closure.capture_count != captures.len() {
+                return Err("closure capture count disagrees with its function".into());
+            }
+            for (capture, param) in captures.iter().zip(&closure.params) {
+                if param.local != *capture {
+                    return Err("closure capture order disagrees with its function".into());
+                }
+                *temporaries += usize::from(crate::move_values::is_copy_owned(types, param.ty));
+            }
+        }
         _ => {}
     }
     match &value.kind {
         ExpressionKind::Local(l) => {
             reads.insert(l.index() as usize);
+        }
+        ExpressionKind::ClosureRef { captures, .. } => {
+            reads.extend(captures.iter().map(|local| local.index() as usize));
         }
         ExpressionKind::Int(_)
         | ExpressionKind::Float(_)

@@ -33,6 +33,7 @@ pub struct Function {
     pub id: FunctionId,
     pub identity: FunctionIdentity,
     pub params: Vec<Param>,
+    pub capture_count: usize,
     pub return_type: TypeId,
     pub locals: Vec<Local>,
     pub entry: BlockId,
@@ -263,6 +264,12 @@ struct FunctionValidator<'function, 'errors> {
 impl FunctionValidator<'_, '_> {
     fn validate(&mut self) {
         let function = self.function;
+        if function.capture_count > function.params.len() {
+            self.error(
+                function.span,
+                "closure capture count exceeds function parameter count",
+            );
+        }
         if function.entry.index() as usize >= function.blocks.len() {
             self.error(
                 function.span,
@@ -681,6 +688,12 @@ impl FunctionValidator<'_, '_> {
             hir::ExpressionKind::FunctionRef(function) => {
                 self.check_function(*function, expression.span);
             }
+            hir::ExpressionKind::ClosureRef { function, captures } => {
+                self.check_function(*function, expression.span);
+                for capture in captures {
+                    self.check_local(*capture, expression.span, "closure capture");
+                }
+            }
             hir::ExpressionKind::Binary { left, right, .. } => {
                 self.expression(left);
                 self.expression(right);
@@ -856,6 +869,7 @@ fn lower_function(function: &hir::Function) -> Function {
         id: function.id,
         identity: function.identity.clone(),
         params: function.params.clone(),
+        capture_count: function.capture_count,
         return_type: function.return_type,
         locals: builder.locals,
         entry: BlockId(0),

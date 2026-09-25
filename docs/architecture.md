@@ -1398,7 +1398,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `trace` | Conditional instrumentation code (compiled out in release) |
 | `breakpoint` | Conditional pause + IPC server (compiled out in release). Supports optional condition expression (`breakpoint expr`) — only pauses when condition is true |
 | Bitfields | Packed integer types with shift/mask accessors |
-| `function(T) returns U` | Owned function descriptor. Native capture-free values currently store a code pointer in the first field; captured closures require an environment field and lowering that is still pending. |
+| `function(T) returns U` | Owned function descriptor containing a code pointer and an environment handle. Captured inline functions copy enclosing values into the environment; native calls pass it as a hidden argument after the runtime context. |
 | Capabilities | Regular struct parameters — no special runtime representation |
 
 #### Platform-Specific Capability Lowering

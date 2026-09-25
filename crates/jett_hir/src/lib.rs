@@ -118,6 +118,8 @@ pub struct Function {
     pub identity: FunctionIdentity,
     pub source_definition: Option<DefId>,
     pub params: Vec<Param>,
+    /// Leading parameters copied from an enclosing closure environment.
+    pub capture_count: usize,
     pub return_type: TypeId,
     pub locals: Vec<Local>,
     pub body: Block,
@@ -249,6 +251,11 @@ pub enum ExpressionKind {
     Local(LocalId),
     /// A checked, concrete source function used as a first-class value.
     FunctionRef(FunctionId),
+    /// A checked inline function with an environment of copied enclosing locals.
+    ClosureRef {
+        function: FunctionId,
+        captures: Vec<LocalId>,
+    },
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
@@ -644,6 +651,31 @@ impl Validator<'_> {
                     );
                 }
             }
+            ExpressionKind::ClosureRef { function, captures } => {
+                let Some(target) = self.program.functions.get(function.index() as usize) else {
+                    self.error(
+                        expression.span,
+                        "closure references an unknown HIR function",
+                    );
+                    return;
+                };
+                if target.capture_count != captures.len()
+                    || !target
+                        .params
+                        .iter()
+                        .take(target.capture_count)
+                        .zip(captures)
+                        .all(|(parameter, capture)| parameter.local == *capture)
+                {
+                    self.error(
+                        expression.span,
+                        "closure capture list disagrees with its function",
+                    );
+                }
+                for capture in captures {
+                    self.check_local(*capture, expression.span);
+                }
+            }
             ExpressionKind::Binary { left, right, .. } => {
                 self.expression(left);
                 self.expression(right);
@@ -971,7 +1003,7 @@ impl<'a> Lowerer<'a> {
             }
         }
         if self.errors.is_empty() {
-            inline_functions::extract_capture_free(&mut functions, &self.check.interner);
+            inline_functions::extract_inline_functions(&mut functions, &self.check.interner);
             let program = Program { functions };
             validate(&program).map_err(|errors| {
                 errors
@@ -1374,6 +1406,7 @@ impl<'a> Lowerer<'a> {
             },
             source_definition: source.definition,
             params,
+            capture_count: 0,
             return_type,
             locals,
             body,
@@ -1556,6 +1589,7 @@ impl<'a> Lowerer<'a> {
             },
             source_definition: None,
             params,
+            capture_count: 0,
             return_type: message.responds,
             locals,
             body,
@@ -1635,6 +1669,7 @@ impl<'a> Lowerer<'a> {
                 mutable: false,
                 span: constraint.span(),
             }],
+            capture_count: 0,
             return_type: TypeInterner::BOOL,
             locals,
             body: Block {
@@ -6640,20 +6675,25 @@ function main() returns int64:
     }
 
     #[test]
-    fn keeps_captured_inline_functions_explicit() {
+    fn extracts_captured_inline_functions_with_environment_parameters() {
         let source = r#"namespace app
 function make(seed: int64) returns function(int64) returns int64:
     return function(value: int64) returns int64: return value + seed
 "#;
         let program = lower_source(source);
-        assert_eq!(program.functions.len(), 1);
+        assert_eq!(program.functions.len(), 2);
         assert!(matches!(
             program.functions[0].body.statements[0].kind,
             StatementKind::Return(Some(Expression {
-                kind: ExpressionKind::InlineFunction { .. },
+                kind: ExpressionKind::ClosureRef {
+                    function: FunctionId(1),
+                    ref captures,
+                },
                 ..
-            }))
+            })) if captures == &[LocalId::new(0)]
         ));
+        assert_eq!(program.functions[1].capture_count, 1);
+        assert_eq!(program.functions[1].params.len(), 2);
     }
 
     #[test]

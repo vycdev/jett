@@ -288,7 +288,7 @@ lowering alone never changes an execution row to complete.
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
-| Function values, closures, and indirect calls | covered; capture-free inline bodies extract to ordinary checked functions while captured closures retain an explicit unsupported form | named and capture-free inline functions use owned descriptors with code addresses; indirect calls read the address for supported signatures; captured closures and view-parameter function values pending | named and capture-free inline callbacks passed, returned, copied through struct fields, lists, and maps, and invoked through indirect calls; a linked fixture covers zero-argument and nested capture-free functions; captured closures pending |
+| Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context; view-parameter function values pending | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls; linked fixtures cover nested closures, loop captures, higher-order callbacks, string and numeric captures |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
@@ -300,20 +300,24 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 159 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
-| Successful/expected `main` execution | 23 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
+| Native object generation | 162 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Successful/expected `main` execution | 24 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 159/182 (87.4%), a useful progress measure rather than a
+gate is currently 162/182 (89.0%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
-Function values now use owned native descriptors instead of raw code addresses.
-The descriptor carries a code pointer today and gives captured closures a
-place for their environment when extraction is implemented. A linked
-native/interpreter fixture covers function values copied through struct
-fields, lists, and maps. The 207-row object audit remains 159/182 with no lost
-passes; captured closures still account for some of the remaining failures.
+Captured inline functions now extract to checked functions with explicit
+capture parameters. An owned descriptor carries both the code address and a
+copied environment; indirect calls pass the environment through a hidden
+argument. Linked native/interpreter fixtures cover nested closures, loop
+captures, higher-order callbacks, and captured strings and narrow/floating
+numbers. The 207-row audit gained `captured_local_function_name.jett`,
+`closures.jett`, and `closures_advanced.jett`, and `main` execution gained the
+first of those, without losing an earlier pass. Before this step, function
+values had moved to owned descriptors, with a linked fixture covering copies
+through struct fields, lists, and maps; that audit held at 159/182.
 Checked source JSON parsing now accepts sets of narrow integers and
 primitive-backed refinements as well as the earlier `string`, `bool`, `int64`,
 and `uint64` cases. A linked native/interpreter fixture covers duplicate
@@ -596,8 +600,8 @@ use the same native function-address path. This adds object gates for
 `generic_function_value_wrappers.jett`, `inline_functions.jett`,
 `list_map_extra.jett`, and `map_advanced.jett`. A linked differential fixture
 covers inline list callbacks, returned callbacks, zero-argument functions,
-and nested capture-free functions. Closures that read enclosing locals remain
-guarded until the native function value can carry an environment.
+and nested capture-free functions. At that checkpoint, closures reading
+enclosing locals still awaited native environments.
 Checked `list.insert_at` and `list.remove_at` leaves transfer list and element
 ownership on success, including owned bytes elements. An indirect callback
 returning a string now receives a planned owning temporary. Together these add

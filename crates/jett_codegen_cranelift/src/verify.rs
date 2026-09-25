@@ -1031,6 +1031,98 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
+            ExpressionKind::ClosureRef {
+                function: target,
+                captures,
+            } => {
+                let Some(callee) = self
+                    .program
+                    .functions
+                    .get(target.index() as usize)
+                    .filter(|callee| callee.id == *target)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "closure target is absent",
+                    ));
+                };
+                let Type::Function {
+                    params,
+                    return_type,
+                } = self.types.resolve(expression.ty)
+                else {
+                    return Err(self.expression_kind_error(function, expression, "closure value"));
+                };
+                if callee.capture_count == 0
+                    || callee.capture_count != captures.len()
+                    || callee.params.len() != captures.len() + params.len()
+                    || *return_type != callee.return_type
+                    || callee
+                        .params
+                        .iter()
+                        .skip(callee.capture_count)
+                        .zip(params)
+                        .any(|(actual, expected)| actual.ty != *expected)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "closure signature does not match target",
+                    ));
+                }
+                for (capture, parameter) in captures.iter().zip(&callee.params) {
+                    let Some(local) = function.local(*capture) else {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture local is absent",
+                        ));
+                    };
+                    if local.ty != parameter.ty || parameter.local != *capture {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture type does not match target",
+                        ));
+                    }
+                    if !matches!(
+                        self.types.resolve(local.ty),
+                        Type::Int8
+                            | Type::Int16
+                            | Type::Int32
+                            | Type::Int64
+                            | Type::Uint8
+                            | Type::Uint16
+                            | Type::Uint32
+                            | Type::Uint64
+                            | Type::Float32
+                            | Type::Float64
+                            | Type::String
+                            | Type::Bool
+                            | Type::Nothing
+                    ) {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture is not an implicitly copyable source value",
+                        ));
+                    }
+                }
+                if callee
+                    .params
+                    .iter()
+                    .skip(callee.capture_count)
+                    .any(|param| param.mode == jett_mir::ParamMode::View)
+                {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "closure value with view parameter",
+                    ));
+                }
+                Ok(())
+            }
             ExpressionKind::Unary { op, value } => {
                 self.expression(function, value)?;
                 self.require_same_type(

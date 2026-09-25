@@ -442,7 +442,7 @@ fn translate_program_entry_wrapper(
             message: "exported entry wrapper is missing its runtime-context pointer".to_string(),
         })?;
     let entry_reference = module.declare_func_in_func(entry_function.native_id, builder.func);
-    let mut args = vec![runtime_context];
+    let mut args = vec![runtime_context, builder.ins().iconst(ir::types::I64, 0)];
     for parameter in &entry_function.parameter_types {
         let grant = match *parameter {
             TypeInterner::STDOUT => NativeLeaf::GrantStdout,
@@ -480,7 +480,8 @@ fn signature(
 ) -> Result<ir::Signature, CodegenError> {
     let mut signature = module.make_signature();
     signature.params.push(runtime_context_abi_param(module));
-    for parameter in &function.params {
+    signature.params.push(AbiParam::new(ir::types::I64));
+    for parameter in function.params.iter().skip(function.capture_count) {
         if let Some(ty) = clif_type(types, parameter.ty, "function parameter")? {
             signature.params.push(AbiParam::new(ty));
         }
@@ -631,24 +632,6 @@ fn translate_function(
             for slot in local_slots.iter().flatten().chain(&temporary_slots) {
                 builder.ins().stack_store(zero, *slot, 0);
             }
-            let mut incoming_index = 1_usize;
-            for parameter in &function.params {
-                let variable =
-                    variable_for(&variables, parameter.local.index(), parameter.span, symbol)?;
-                if let Some(variable) = variable {
-                    let value = incoming.get(incoming_index).copied().ok_or_else(|| {
-                        contract_error(symbol, parameter.span, "missing native function parameter")
-                    })?;
-                    builder.try_def_var(variable, value).map_err(|error| {
-                        contract_error(
-                            symbol,
-                            parameter.span,
-                            format!("cannot bind native function parameter: {error}"),
-                        )
-                    })?;
-                    incoming_index += 1;
-                }
-            }
         }
 
         let mut translator = Translator {
@@ -667,6 +650,70 @@ fn translate_function(
             failure_block,
         };
         if block.id == function.entry {
+            let incoming = translator.builder.block_params(native_block).to_vec();
+            let environment = incoming.get(1).copied().ok_or_else(|| {
+                contract_error(
+                    symbol,
+                    function.span,
+                    "missing hidden native environment parameter",
+                )
+            })?;
+            let mut incoming_index = 2_usize;
+            for (index, parameter) in function.params.iter().enumerate() {
+                let variable =
+                    variable_for(&variables, parameter.local.index(), parameter.span, symbol)?;
+                let Some(variable) = variable else {
+                    continue;
+                };
+                let value = if index < function.capture_count {
+                    let field = translator
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I64, index as i64);
+                    let bits =
+                        translator.leaf(NativeLeaf::StructField, &[environment, field], true)?;
+                    let native =
+                        clif_type(types, parameter.ty, "closure capture")?.ok_or_else(|| {
+                            contract_error(
+                                symbol,
+                                parameter.span,
+                                "nothing capture has no native value",
+                            )
+                        })?;
+                    if native == ir::types::F64 {
+                        translator
+                            .builder
+                            .ins()
+                            .bitcast(native, ir::MemFlags::new(), bits)
+                    } else if native == ir::types::F32 {
+                        let bits = translator.builder.ins().ireduce(ir::types::I32, bits);
+                        translator
+                            .builder
+                            .ins()
+                            .bitcast(native, ir::MemFlags::new(), bits)
+                    } else if native != ir::types::I64 {
+                        translator.builder.ins().ireduce(native, bits)
+                    } else {
+                        bits
+                    }
+                } else {
+                    let value = incoming.get(incoming_index).copied().ok_or_else(|| {
+                        contract_error(symbol, parameter.span, "missing native function parameter")
+                    })?;
+                    incoming_index += 1;
+                    value
+                };
+                translator
+                    .builder
+                    .try_def_var(variable, value)
+                    .map_err(|error| {
+                        contract_error(
+                            symbol,
+                            parameter.span,
+                            format!("cannot bind native function parameter: {error}"),
+                        )
+                    })?;
+            }
             for parameter in &function.params {
                 if let Some(slot) = local_slots[parameter.local.index() as usize] {
                     let v = translator
@@ -1229,8 +1276,8 @@ impl Translator<'_, '_> {
                 } else {
                     self.builder.ins().uextend(ir::types::I64, address)
                 };
-                let one = self.builder.ins().iconst(ir::types::I64, 1);
-                let descriptor = self.leaf(NativeLeaf::StructNew, &[one], true)?;
+                let two = self.builder.ins().iconst(ir::types::I64, 2);
+                let descriptor = self.leaf(NativeLeaf::StructNew, &[two], true)?;
                 let owned = self.own(descriptor)?;
                 let zero = self.builder.ins().iconst(ir::types::I64, 0);
                 let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
@@ -1239,7 +1286,92 @@ impl Translator<'_, '_> {
                     &[descriptor, zero, address, borrowed],
                     true,
                 )?;
+                let one = self.builder.ins().iconst(ir::types::I64, 1);
+                self.leaf(
+                    NativeLeaf::StructInit,
+                    &[descriptor, one, zero, borrowed],
+                    true,
+                )?;
                 Ok(owned)
+            }
+            ExpressionKind::ClosureRef { function, captures } => {
+                let native_id = self
+                    .declarations
+                    .get(*function)
+                    .ok_or_else(|| {
+                        contract_error(
+                            self.symbol,
+                            expression.span,
+                            "closure target is not reachable",
+                        )
+                    })?
+                    .native_id;
+                let reference = self
+                    .module
+                    .declare_func_in_func(native_id, self.builder.func);
+                let pointer_type = self.module.target_config().pointer_type();
+                let address = self.builder.ins().func_addr(pointer_type, reference);
+                let address = if pointer_type == ir::types::I64 {
+                    address
+                } else {
+                    self.builder.ins().uextend(ir::types::I64, address)
+                };
+                let count = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I64, captures.len() as i64);
+                let environment = self.leaf(NativeLeaf::StructNew, &[count], true)?;
+                let environment_owned = self.own(environment)?;
+                for (index, capture) in captures.iter().enumerate() {
+                    let ty = self
+                        .local_types
+                        .get(capture.index() as usize)
+                        .ok_or_else(|| {
+                            contract_error(
+                                self.symbol,
+                                expression.span,
+                                "closure capture is absent",
+                            )
+                        })?
+                        .ty;
+                    let captured = self.expression(&Expression {
+                        kind: ExpressionKind::Local(*capture),
+                        ty,
+                        span: expression.span,
+                    })?;
+                    let (bits, owned) = self.payload_bits(captured);
+                    let index = self.builder.ins().iconst(ir::types::I64, index as i64);
+                    let owned_flag = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+                    self.leaf(
+                        NativeLeaf::StructInit,
+                        &[environment, index, bits, owned_flag],
+                        true,
+                    )?;
+                    if let LoweredValue::Owned(_, slot) = captured {
+                        self.clear_slot(slot);
+                    }
+                }
+                let two = self.builder.ins().iconst(ir::types::I64, 2);
+                let descriptor = self.leaf(NativeLeaf::StructNew, &[two], true)?;
+                let descriptor_owned = self.own(descriptor)?;
+                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
+                self.leaf(
+                    NativeLeaf::StructInit,
+                    &[descriptor, zero, address, borrowed],
+                    true,
+                )?;
+                let one = self.builder.ins().iconst(ir::types::I64, 1);
+                let owned_flag = self.builder.ins().iconst(ir::types::I32, 1);
+                self.leaf(
+                    NativeLeaf::StructInit,
+                    &[descriptor, one, environment, owned_flag],
+                    true,
+                )?;
+                if let LoweredValue::Owned(_, slot) = environment_owned {
+                    self.clear_slot(slot);
+                }
+                Ok(descriptor_owned)
             }
             ExpressionKind::Unary { op, value } => {
                 let lowered_value = self.expression(value)?;
@@ -1521,8 +1653,9 @@ impl Translator<'_, '_> {
                     format!("cannot read native runtime context: {error}"),
                 )
             })?;
-        let mut native_args = Vec::with_capacity(evaluated.len() + 1);
+        let mut native_args = Vec::with_capacity(evaluated.len() + 2);
         native_args.push(runtime_context);
+        native_args.push(self.builder.ins().iconst(ir::types::I64, 0));
         for (index, (argument, value)) in args.iter().zip(evaluated).enumerate() {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
@@ -1616,6 +1749,8 @@ impl Translator<'_, '_> {
         let descriptor = self.scalar(lowered_callee, callee.span)?;
         let zero = self.builder.ins().iconst(ir::types::I64, 0);
         let address = self.leaf(NativeLeaf::StructField, &[descriptor, zero], true)?;
+        let one = self.builder.ins().iconst(ir::types::I64, 1);
+        let environment = self.leaf(NativeLeaf::StructField, &[descriptor, one], true)?;
         let pointer_type = self.module.target_config().pointer_type();
         let address = if pointer_type == ir::types::I64 {
             address
@@ -1659,7 +1794,7 @@ impl Translator<'_, '_> {
                     format!("cannot read native runtime context: {error}"),
                 )
             })?;
-        let mut native_args = vec![context];
+        let mut native_args = vec![context, environment];
         for (argument, value) in args.iter().zip(evaluated) {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
@@ -1686,6 +1821,7 @@ impl Translator<'_, '_> {
         signature
             .params
             .push(runtime_context_abi_param(self.module));
+        signature.params.push(AbiParam::new(ir::types::I64));
         for param in params {
             if let Some(ty) = clif_type(self.types, param, "indirect call parameter")? {
                 signature.params.push(AbiParam::new(ty));
@@ -2304,7 +2440,7 @@ mod tests {
     }
 
     #[test]
-    fn emitted_jett_signatures_prepend_one_hidden_runtime_context_pointer() {
+    fn emitted_jett_signatures_prepend_runtime_context_and_environment() {
         let (program, _types, module, declarations) = declared_program(
             r#"namespace app
 function leaf(value: int64, enabled: bool) returns int64:
@@ -2321,8 +2457,8 @@ function root() returns int64:
             let function = program_function(&program, declaration.mir_id).expect("MIR function");
             assert_eq!(
                 declaration.signature.params.len(),
-                function.params.len() + 1,
-                "{} must gain exactly one native-only parameter",
+                function.params.len() - function.capture_count + 2,
+                "{} must gain context and environment parameters",
                 function.identity.declaration.name
             );
             assert_eq!(
@@ -2330,6 +2466,10 @@ function root() returns int64:
                 AbiParam::new(pointer_type),
                 "{} must receive an ordinary runtime-context pointer first",
                 function.identity.declaration.name
+            );
+            assert_eq!(
+                declaration.signature.params[1],
+                AbiParam::new(ir::types::I64)
             );
         }
 
@@ -2365,11 +2505,11 @@ function caller(value: int64, choose_original: bool) returns int64:
         let calls = direct_call_arguments(&function);
 
         assert_eq!(calls.len(), 4, "two Jett calls and two failure checks");
-        assert_eq!(calls.iter().filter(|args| args.len() == 2).count(), 2);
+        assert_eq!(calls.iter().filter(|args| args.len() == 3).count(), 2);
         for arguments in calls {
             assert!(
-                matches!(arguments.len(), 1 | 2),
-                "status receives context; Jett call also receives source argument"
+                matches!(arguments.len(), 1 | 3),
+                "status receives context; Jett call also receives environment and source argument"
             );
             assert_eq!(
                 function.dfg.resolve_aliases(arguments[0]),
@@ -2477,7 +2617,10 @@ function selected_entry() returns nothing:
             .expect("wrapper entry block");
         let incoming_context = context.func.dfg.block_params(block)[0];
         let calls = direct_call_arguments(&context.func);
-        assert_eq!(calls, [vec![incoming_context], vec![incoming_context]]); // entry and failure status
+        assert_eq!(calls.len(), 2); // entry and failure status
+        assert_eq!(calls[0].len(), 2);
+        assert_eq!(calls[1], vec![incoming_context]);
+        assert_eq!(calls[0][0], incoming_context);
         assert_eq!(
             context.func.signature.params,
             [AbiParam::new(module.target_config().pointer_type())]

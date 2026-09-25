@@ -338,7 +338,7 @@ impl Translator<'_, '_> {
         let _ = span;
         self.own_linear(sum)
     }
-    fn payload_bits(&mut self, value: LoweredValue) -> (Value, bool) {
+    pub(super) fn payload_bits(&mut self, value: LoweredValue) -> (Value, bool) {
         match value {
             LoweredValue::Nothing => (self.builder.ins().iconst(ir::types::I64, 0), false),
             LoweredValue::Owned(v, _) => (v, true),
