@@ -287,6 +287,8 @@ pub enum ExpressionKind {
         /// Field indexes in lexical source evaluation order.
         evaluation_order: Vec<usize>,
         validates_refinements: bool,
+        /// Predicate chains by canonical field index for base-value inputs.
+        refinement_predicates: Vec<Vec<RefinementPredicate>>,
     },
     BitfieldConstruct {
         bitfield_type: TypeId,
@@ -695,9 +697,34 @@ impl Validator<'_> {
             ExpressionKind::StructConstruct {
                 fields,
                 evaluation_order,
+                validates_refinements,
+                refinement_predicates,
                 ..
+            } => {
+                self.check_evaluation_order(evaluation_order, fields.len(), expression.span);
+                if (*validates_refinements && refinement_predicates.len() != fields.len())
+                    || (!*validates_refinements && !refinement_predicates.is_empty())
+                {
+                    self.error(
+                        expression.span,
+                        "struct refinement predicate layout is invalid",
+                    );
+                }
+                for chain in refinement_predicates {
+                    for predicate in chain {
+                        if predicate.function.index() as usize >= self.program.functions.len() {
+                            self.error(
+                                expression.span,
+                                "struct refinement predicate is outside HIR function table",
+                            );
+                        }
+                    }
+                }
+                for field in fields {
+                    self.expression(field);
+                }
             }
-            | ExpressionKind::BitfieldConstruct {
+            ExpressionKind::BitfieldConstruct {
                 fields,
                 evaluation_order,
                 ..
@@ -2498,6 +2525,43 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         })
     }
 
+    fn checked_refinement_predicates(
+        &mut self,
+        refined_type: TypeId,
+        span: Span,
+    ) -> Option<Vec<RefinementPredicate>> {
+        let mut predicates = Vec::new();
+        let mut current = refined_type;
+        while let Type::Refinement { name, base } = self.parent.check.interner.resolve(current) {
+            let Some(function) = self.parent.refinement_function_ids.get(&current).copied() else {
+                self.parent
+                    .error(span, "refinement has no checked predicate function");
+                return None;
+            };
+            predicates.push(RefinementPredicate {
+                refined_type: current,
+                type_name: name.clone(),
+                function,
+                input_type: {
+                    let mut input = current;
+                    while let Type::Refinement { base, .. } =
+                        self.parent.check.interner.resolve(input)
+                    {
+                        input = *base;
+                    }
+                    if let Type::Secret(inner) = self.parent.check.interner.resolve(input) {
+                        *inner
+                    } else {
+                        input
+                    }
+                },
+            });
+            current = *base;
+        }
+        predicates.reverse();
+        Some(predicates)
+    }
+
     fn lower_handle(
         &mut self,
         target: Expression,
@@ -2514,38 +2578,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 Type::Refinement { .. }
             ) =>
             {
-                let mut predicates = Vec::new();
-                let mut current = output_type;
-                while let Type::Refinement { name, base } =
-                    self.parent.check.interner.resolve(current)
-                {
-                    let Some(function) = self.parent.refinement_function_ids.get(&current).copied()
-                    else {
-                        self.parent
-                            .error(span, "refinement has no checked predicate function");
-                        return None;
-                    };
-                    predicates.push(RefinementPredicate {
-                        refined_type: current,
-                        type_name: name.clone(),
-                        function,
-                        input_type: {
-                            let mut input = current;
-                            while let Type::Refinement { base, .. } =
-                                self.parent.check.interner.resolve(input)
-                            {
-                                input = *base;
-                            }
-                            if let Type::Secret(inner) = self.parent.check.interner.resolve(input) {
-                                *inner
-                            } else {
-                                input
-                            }
-                        },
-                    });
-                    current = *base;
-                }
-                predicates.reverse();
+                let predicates = self.checked_refinement_predicates(output_type, span)?;
                 HandleKind::Refinement {
                     refined_type: output_type,
                     predicates,
@@ -2637,11 +2670,50 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         if let Some(construction) = self.struct_constructions.get(&call_span).cloned() {
             let (fields, evaluation_order) =
                 self.lower_arguments_in_parameter_order(args, call_span)?;
+            let refinement_predicates = if construction.validates_refinements {
+                let Type::Struct(id) = self.parent.check.interner.resolve(construction.struct_type)
+                else {
+                    self.parent.error(
+                        call_span,
+                        "checked struct constructor target is not a struct",
+                    );
+                    return None;
+                };
+                let field_types = self
+                    .parent
+                    .check
+                    .interner
+                    .resolve_struct(*id)
+                    .fields
+                    .clone();
+                if field_types.len() != fields.len() {
+                    self.parent
+                        .error(call_span, "checked struct constructor field count changed");
+                    return None;
+                }
+                let mut chains = Vec::with_capacity(fields.len());
+                for (field, (_, expected)) in fields.iter().zip(field_types) {
+                    if field.ty != expected
+                        && matches!(
+                            self.parent.check.interner.resolve(expected),
+                            Type::Refinement { .. }
+                        )
+                    {
+                        chains.push(self.checked_refinement_predicates(expected, call_span)?);
+                    } else {
+                        chains.push(Vec::new());
+                    }
+                }
+                chains
+            } else {
+                Vec::new()
+            };
             return Some(ExpressionKind::StructConstruct {
                 struct_type: construction.struct_type,
                 fields,
                 evaluation_order,
                 validates_refinements: construction.validates_refinements,
+                refinement_predicates,
             });
         }
 
@@ -3308,6 +3380,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields,
             evaluation_order: (0..expected.len()).collect(),
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 
@@ -3465,6 +3538,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields,
             evaluation_order: (0..expected.len()).collect(),
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 
@@ -3615,6 +3689,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields,
             evaluation_order: (0..expected.len()).collect(),
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 
@@ -3711,6 +3786,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields,
             evaluation_order: vec![0, 1],
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 
@@ -3838,6 +3914,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields: fields.into_iter().map(|(_, field)| field).collect(),
             evaluation_order: (0..expected.len()).collect(),
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 
@@ -3937,6 +4014,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields,
             evaluation_order: (0..expected.len()).collect(),
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 
@@ -4044,6 +4122,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields,
             evaluation_order: (0..expected.len()).collect(),
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 
@@ -4154,6 +4233,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             fields,
             evaluation_order: (0..expected.len()).collect(),
             validates_refinements: false,
+            refinement_predicates: Vec::new(),
         })
     }
 

@@ -11,6 +11,10 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         } => true,
         ExpressionKind::View(value) => has_extractable_handle(value),
         ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
+        ExpressionKind::StructConstruct {
+            refinement_predicates,
+            ..
+        } => refinement_predicates.iter().any(|chain| !chain.is_empty()),
         _ => false,
     }
 }
@@ -46,6 +50,24 @@ impl Builder {
                 predicates,
                 *error_local,
                 failure,
+            );
+        }
+        if let ExpressionKind::StructConstruct {
+            struct_type,
+            fields,
+            evaluation_order,
+            validates_refinements: true,
+            refinement_predicates,
+        } = &expression.kind
+            && refinement_predicates.len() == fields.len()
+            && refinement_predicates.iter().any(|chain| !chain.is_empty())
+        {
+            return self.lower_refinement_struct_construct(
+                expression,
+                *struct_type,
+                fields,
+                evaluation_order,
+                refinement_predicates,
             );
         }
         if let ExpressionKind::Call {
@@ -296,6 +318,158 @@ impl Builder {
         if self.open() {
             self.terminate(TerminatorKind::Unreachable, span);
         }
+        self.current = continuation;
+        Expression {
+            kind: ExpressionKind::Local(output),
+            ty: expression.ty,
+            span,
+        }
+    }
+
+    fn lower_refinement_struct_construct(
+        &mut self,
+        expression: &Expression,
+        struct_type: TypeId,
+        fields: &[Expression],
+        evaluation_order: &[usize],
+        refinement_predicates: &[Vec<hir::RefinementPredicate>],
+    ) -> Expression {
+        if evaluation_order.len() != fields.len()
+            || evaluation_order.iter().any(|&index| index >= fields.len())
+            || fields
+                .iter()
+                .zip(refinement_predicates)
+                .any(|(field, chain)| {
+                    chain
+                        .iter()
+                        .any(|predicate| predicate.input_type != field.ty)
+                })
+        {
+            return expression.clone();
+        }
+        let span = expression.span;
+        let continuation = self.new_block(span);
+        let output = self.temporary(expression.ty, span);
+        let mut evaluated = vec![None; fields.len()];
+        for &index in evaluation_order {
+            let value = self.lower_value(&fields[index]);
+            let local = self.temporary(value.ty, value.span);
+            self.push(StatementKind::Let { local, value }, span);
+            evaluated[index] = Some(local);
+        }
+        let mut prepared = vec![None; fields.len()];
+        for &index in evaluation_order {
+            let source = evaluated[index].expect("validated field evaluation order");
+            let field = &fields[index];
+            let mut field_type = field.ty;
+            for predicate in &refinement_predicates[index] {
+                let input = Expression {
+                    kind: ExpressionKind::Clone(Box::new(Expression {
+                        kind: ExpressionKind::Local(source),
+                        ty: field.ty,
+                        span,
+                    })),
+                    ty: field.ty,
+                    span,
+                };
+                let passed = self.temporary(TypeInterner::BOOL, span);
+                self.push(
+                    StatementKind::Let {
+                        local: passed,
+                        value: Expression {
+                            kind: ExpressionKind::Call {
+                                function: predicate.function,
+                                args: vec![input],
+                                evaluation_order: vec![0],
+                            },
+                            ty: TypeInterner::BOOL,
+                            span,
+                        },
+                    },
+                    span,
+                );
+                let next = self.new_block(span);
+                let rejected = self.new_block(span);
+                self.terminate(
+                    TerminatorKind::Branch {
+                        condition: Expression {
+                            kind: ExpressionKind::Local(passed),
+                            ty: TypeInterner::BOOL,
+                            span,
+                        },
+                        then_block: next,
+                        else_block: rejected,
+                    },
+                    span,
+                );
+                self.current = rejected;
+                self.push(
+                    StatementKind::Let {
+                        local: output,
+                        value: Expression {
+                            kind: ExpressionKind::ResultFail(Box::new(Expression {
+                                kind: ExpressionKind::String(format!(
+                                    "refinement type constraint failed for '{}'",
+                                    predicate.type_name
+                                )),
+                                ty: TypeInterner::STRING,
+                                span,
+                            })),
+                            ty: expression.ty,
+                            span,
+                        },
+                    },
+                    span,
+                );
+                self.close_to(continuation, span);
+                self.current = next;
+                field_type = predicate.refined_type;
+            }
+            let field_value = if field_type != field.ty {
+                Expression {
+                    kind: ExpressionKind::RefinementValidated(Box::new(Expression {
+                        kind: ExpressionKind::Local(source),
+                        ty: field.ty,
+                        span,
+                    })),
+                    ty: field_type,
+                    span,
+                }
+            } else {
+                Expression {
+                    kind: ExpressionKind::Local(source),
+                    ty: field.ty,
+                    span,
+                }
+            };
+            prepared[index] = Some(field_value);
+        }
+        let fields = prepared
+            .into_iter()
+            .map(|value| value.expect("validated field evaluation order"))
+            .collect();
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::ResultOk(Box::new(Expression {
+                        kind: ExpressionKind::StructConstruct {
+                            struct_type,
+                            fields,
+                            evaluation_order: (0..evaluation_order.len()).collect(),
+                            validates_refinements: false,
+                            refinement_predicates: Vec::new(),
+                        },
+                        ty: struct_type,
+                        span,
+                    })),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
         self.current = continuation;
         Expression {
             kind: ExpressionKind::Local(output),

@@ -516,21 +516,22 @@ fn native_refined_struct_builder_matches_interpreter() {
 }
 
 #[test]
-fn native_refined_struct_base_value_requires_predicate_lowering() {
-    let directory = tempfile::tempdir().expect("isolated execution directory");
-    let source_path = directory.path().join("refined_struct_base.jett");
-    std::fs::write(
-        &source_path,
-        "namespace test\ntype NonEmpty = string where string.char_count(value) > 0\nstruct User:\n    name: NonEmpty\nfunction main() returns nothing:\n    string raw = \"Ada\"\n    User user = User(name: raw) handle error:\n        return nothing\n    println(coarsen user.name)\n",
-    )
-    .expect("write base-value constructor fixture");
-    let binary = directory.path().join("program.exe");
-    let error = build_host_executable(&source_path, launcher(), &binary)
-        .expect_err("base-value field still requires predicate lowering");
-    assert!(
-        format!("{error:?}").contains("struct refinement validation from a base value"),
-        "unexpected native error: {error:?}"
+fn native_refined_struct_base_values_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/refined_struct_base_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "Ada:Agent\nrefinement type constraint failed for 'test.NonEmpty'\nrefinement type constraint failed for 'test.Long'\nAda\nrefinement type constraint failed for 'test.NonEmpty'\n7\nrefinement type constraint failed for 'test.Positive'\n"
     );
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile base-value refinement constructor");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
 }
 
 #[test]

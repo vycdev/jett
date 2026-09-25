@@ -1,0 +1,33 @@
+namespace test
+type NonEmpty = string where string.char_count(value) > 0
+type Long = NonEmpty where string.char_count(value) >= 3
+type Positive = int64 where value > 0
+struct User:
+    name: NonEmpty
+    alias: Long
+struct Counter:
+    value: Positive
+function make(name: string, alias: string) returns string:
+    User user = User(name: name, alias: alias) handle error:
+        return error
+    string first = coarsen user.name
+    string second = coarsen user.alias
+    return "{first}:{second}"
+function inspect(value: result[User, string]) returns string:
+    User user = value handle error:
+        return error
+    return coarsen user.name
+function nested(name: string, alias: string) returns string:
+    return inspect(User(name: name, alias: alias))
+function count(value: int64) returns string:
+    Counter counter = Counter(value: value) handle error:
+        return error
+    return "{coarsen counter.value}"
+function main() returns nothing:
+    println(make("Ada", "Agent"))
+    println(make("", "Agent"))
+    println(make("Ada", "Al"))
+    println(nested("Ada", "Agent"))
+    println(nested("", "Agent"))
+    println(count(7))
+    println(count(0))

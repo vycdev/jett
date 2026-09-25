@@ -2722,9 +2722,10 @@ other unsupported field shapes remain on the generic intrinsic path. Top-level
 refinements with a supported base use checked source parsing and serialization;
 record fields with supported refinements now decode through a checked source
 conversion before entering the native reflected builder. The builder accepts
-the exact refined type; direct struct constructors with exact refined fields
-emit a success result. Base values for refined struct fields remain a native
-gap until the constructor can invoke the predicate. Top-level
+the exact refined type; direct struct constructors now lower checked base-value
+field predicates into MIR branches and emit a success or failure result. Exact
+refined fields retain their validated invariant. Secret-backed and
+intermediate-refinement field inputs remain native gaps. Top-level
 enums with supported payload fields, including nested raw `json.JsonTree`, use
 dedicated checked native parse and serialize hooks. Raw trees retain their JSON
 wire behavior and are cloned when a decoder returns a borrowed tree. Pipeline

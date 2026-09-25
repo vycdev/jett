@@ -809,6 +809,7 @@ function read(view pair: Pair) returns string:
                 struct_type,
                 evaluation_order,
                 validates_refinements,
+                ..
             } = &mut value.kind
             else {
                 panic!("constructor");
