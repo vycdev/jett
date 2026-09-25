@@ -15,10 +15,28 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             has_extractable_handle(left) || has_extractable_handle(right)
         }
         ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
+        ExpressionKind::ListConstruct { elements } => elements.iter().any(has_extractable_handle),
+        ExpressionKind::MapConstruct { entries } => entries.iter().any(|entry| {
+            has_extractable_handle(&entry.key) || has_extractable_handle(&entry.value)
+        }),
         ExpressionKind::StructConstruct {
+            fields,
             refinement_predicates,
             ..
-        } => refinement_predicates.iter().any(|chain| !chain.is_empty()),
+        } => {
+            fields.iter().any(has_extractable_handle)
+                || refinement_predicates.iter().any(|chain| !chain.is_empty())
+        }
+        ExpressionKind::BitfieldConstruct { fields, .. } => {
+            fields.iter().any(has_extractable_handle)
+        }
+        ExpressionKind::EnumConstruct { payloads, .. }
+        | ExpressionKind::MachineConstruct { payloads, .. } => {
+            payloads.iter().any(has_extractable_handle)
+        }
+        ExpressionKind::ResultOk(value)
+        | ExpressionKind::ResultFail(value)
+        | ExpressionKind::OptionalSome(value) => has_extractable_handle(value),
         _ => false,
     }
 }
@@ -86,6 +104,40 @@ impl Builder {
         });
         id
     }
+
+    fn lower_ordered_owned_values(
+        &mut self,
+        values: &[Expression],
+        order: &[usize],
+    ) -> Option<Vec<Expression>> {
+        if order.len() != values.len()
+            || order.iter().any(|&index| index >= values.len())
+            || order
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != values.len()
+            || values
+                .iter()
+                .any(|value| matches!(value.kind, ExpressionKind::View(_)))
+        {
+            return None;
+        }
+        let mut lowered = values.to_vec();
+        for &index in order {
+            let value = self.lower_value(&values[index]);
+            let local = self.temporary(value.ty, value.span);
+            self.push(StatementKind::Let { local, value }, values[index].span);
+            lowered[index] = Expression {
+                kind: ExpressionKind::Local(local),
+                ty: values[index].ty,
+                span: values[index].span,
+            };
+        }
+        Some(lowered)
+    }
+
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
         if let ExpressionKind::View(value) = &expression.kind {
             let mut lowered = expression.clone();
@@ -237,6 +289,132 @@ impl Builder {
                 evaluation_order,
                 refinement_predicates,
             );
+        }
+        if let ExpressionKind::ListConstruct { elements } = &expression.kind
+            && elements.iter().any(has_extractable_handle)
+            && let Some(elements) =
+                self.lower_ordered_owned_values(elements, &(0..elements.len()).collect::<Vec<_>>())
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::ListConstruct { elements };
+            return lowered;
+        }
+        if let ExpressionKind::MapConstruct { entries } = &expression.kind
+            && entries.iter().any(|entry| {
+                has_extractable_handle(&entry.key) || has_extractable_handle(&entry.value)
+            })
+        {
+            let values: Vec<_> = entries
+                .iter()
+                .flat_map(|entry| [entry.key.clone(), entry.value.clone()])
+                .collect();
+            if let Some(values) =
+                self.lower_ordered_owned_values(&values, &(0..values.len()).collect::<Vec<_>>())
+            {
+                let entries = values
+                    .chunks_exact(2)
+                    .map(|pair| hir::MapEntry {
+                        key: pair[0].clone(),
+                        value: pair[1].clone(),
+                    })
+                    .collect();
+                let mut lowered = expression.clone();
+                lowered.kind = ExpressionKind::MapConstruct { entries };
+                return lowered;
+            }
+        }
+        if let ExpressionKind::StructConstruct {
+            struct_type,
+            fields,
+            evaluation_order,
+            validates_refinements,
+            refinement_predicates,
+        } = &expression.kind
+            && fields.iter().any(has_extractable_handle)
+            && let Some(fields) = self.lower_ordered_owned_values(fields, evaluation_order)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::StructConstruct {
+                struct_type: *struct_type,
+                fields,
+                evaluation_order: evaluation_order.clone(),
+                validates_refinements: *validates_refinements,
+                refinement_predicates: refinement_predicates.clone(),
+            };
+            return lowered;
+        }
+        if let ExpressionKind::BitfieldConstruct {
+            bitfield_type,
+            fields,
+            evaluation_order,
+            validates_widths,
+        } = &expression.kind
+            && fields.iter().any(has_extractable_handle)
+            && let Some(fields) = self.lower_ordered_owned_values(fields, evaluation_order)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::BitfieldConstruct {
+                bitfield_type: *bitfield_type,
+                fields,
+                evaluation_order: evaluation_order.clone(),
+                validates_widths: *validates_widths,
+            };
+            return lowered;
+        }
+        if let ExpressionKind::EnumConstruct {
+            enum_type,
+            variant,
+            payloads,
+        } = &expression.kind
+            && payloads.iter().any(has_extractable_handle)
+            && let Some(payloads) =
+                self.lower_ordered_owned_values(payloads, &(0..payloads.len()).collect::<Vec<_>>())
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::EnumConstruct {
+                enum_type: *enum_type,
+                variant: *variant,
+                payloads,
+            };
+            return lowered;
+        }
+        if let ExpressionKind::MachineConstruct {
+            state_type,
+            state,
+            payloads,
+        } = &expression.kind
+            && payloads.iter().any(has_extractable_handle)
+            && let Some(payloads) =
+                self.lower_ordered_owned_values(payloads, &(0..payloads.len()).collect::<Vec<_>>())
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::MachineConstruct {
+                state_type: *state_type,
+                state: *state,
+                payloads,
+            };
+            return lowered;
+        }
+        if let ExpressionKind::ResultOk(value) = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::ResultOk(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::ResultFail(value) = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::ResultFail(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::OptionalSome(value) = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::OptionalSome(Box::new(self.lower_value(value)));
+            return lowered;
         }
         if let ExpressionKind::Call {
             function,

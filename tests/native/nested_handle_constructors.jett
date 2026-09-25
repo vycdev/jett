@@ -1,0 +1,73 @@
+namespace test
+struct Pair:
+    label: string
+    count: int64
+enum Bundle:
+    packet(label: string, count: int64)
+machine Session:
+    states:
+        guest
+        active(label: string, count: int64)
+    transitions:
+        guest to active
+bitfield Header:
+    version: 4 bits
+    length: 8 bits
+function text(label: string) returns string:
+    println(label)
+    return label
+function number(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function make_map(maybe: optional[int64]) returns map[string, int64]:
+    optional[string] maybe_key = none
+    return map("first": number("map first", 3),(maybe_key handle:
+        println("map key fallback")
+        default "second"
+    ): clone maybe handle:
+        println("map fallback")
+        default number("map second", 4)
+    )
+function show(maybe: optional[int64]) returns nothing:
+    list[int64] numbers = list(number("list first", 1), clone maybe handle:
+        println("list fallback")
+        default number("list second", 2)
+    )
+    map[string, int64] entries = make_map(clone maybe)
+    Pair pair = Pair(count: clone maybe handle:
+        println("pair fallback")
+        default number("pair count", 5)
+    , label: text("pair label"))
+    Bundle bundle = Bundle.packet(text("enum label"), clone maybe handle:
+        println("enum fallback")
+        default number("enum count", 6)
+    )
+    Session session = Session(active, text("machine label"), clone maybe handle:
+        println("machine fallback")
+        default number("machine count", 7)
+    )
+    result[Header, string] checked_header = Header(version: clone maybe handle:
+        println("header fallback")
+        default 4
+    , length: number("header length", 12))
+    Header header = checked_header handle error:
+        return nothing
+    optional[int64] wrapped = some(clone maybe handle:
+        default 8
+    )
+    result[int64, string] outcome = ok(clone maybe handle:
+        default 10
+    )
+    trace numbers
+    trace entries
+    trace pair
+    trace bundle
+    trace session
+    trace header
+    trace wrapped
+    trace outcome
+    return nothing
+function main() returns nothing:
+    show(some(9))
+    show(none)
+    return nothing
