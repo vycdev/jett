@@ -354,6 +354,12 @@ impl Flow<'_> {
                     self.state.insert(local.index() as usize);
                 }
                 StatementKind::Evaluate(value) => self.expr(value, false)?,
+                StatementKind::Assert { condition, message } => {
+                    self.expr(condition, false)?;
+                    if let Some(message) = message {
+                        self.expr(message, false)?;
+                    }
+                }
                 StatementKind::Trace(local) => {
                     if self.validate && !self.state.contains(&(local.index() as usize)) {
                         return Err("trace target is moved or uninitialized".into());
@@ -403,6 +409,12 @@ impl Flow<'_> {
                 if is_linear(self.types, value.ty) {
                     if borrowed {
                         self.loans.insert(id);
+                    } else if matches!(
+                        self.function.identity.declaration.kind,
+                        jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
+                    ) {
+                        // Test blocks implicitly view ordinary data. A native
+                        // read creates an independent owner for the expression.
                     } else {
                         if self
                             .function

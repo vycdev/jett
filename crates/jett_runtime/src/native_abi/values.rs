@@ -3392,6 +3392,8 @@ leaves! {
         };
     Status, jett_rt_v1_value_status, true, (), u32 => I32,
         |s| Ok(s.failure.map_or(0, |e| e.0.code()));
+    AssertFail, jett_rt_v1_assert_fail, false, (), u32 => I32,
+        |_s| Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed"));
     Retain, jett_rt_v1_string_retain, false, (value: u64 => I64), u64 => I64,
         |s| s.retain(value);
     Release, jett_rt_v1_string_release, true, (value: u64 => I64), u32 => I32,
@@ -3949,6 +3951,24 @@ mod tests {
             assert_eq!(jett_rt_v1_string_release(second.pointer(), empty), 0);
         }
         second.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
+    }
+    #[test]
+    fn native_assert_failure_preserves_default_message() {
+        let context = Context::new();
+        unsafe {
+            assert_ne!(jett_rt_v1_assert_fail(context.pointer()), 0);
+            let mut failure = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure(context.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"assertion failed"
+            );
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
     }
     #[test]
     fn clock_authority_is_context_bound_and_samples_wall_time() {

@@ -653,7 +653,7 @@ fn symbols_use_structural_types_instead_of_session_local_type_ids() {
 }
 
 #[test]
-fn rejects_unsupported_mir_explicitly() {
+fn rejects_unsupported_assert_message_explicitly() {
     let (mut program, types) = lower_source(
         r#"namespace app
 function checked(value: bool) returns bool:
@@ -667,15 +667,20 @@ function checked(value: bool) returns bool:
         other => panic!("expected lowered let, got {other:?}"),
     };
     statement.kind = jett_mir::StatementKind::Assert {
+        message: Some(jett_hir::Expression {
+            kind: jett_hir::ExpressionKind::String("detail".to_owned()),
+            ty: TypeInterner::STRING,
+            span: condition.span,
+        }),
         condition,
-        message: None,
     };
 
-    let error = emit_host_object(&program, &types).expect_err("assert is not in the scalar slice");
+    let error =
+        emit_host_object(&program, &types).expect_err("custom assert message is unsupported");
 
     assert!(matches!(
         error,
-        CodegenError::UnsupportedMir { construct, .. } if construct == "assert"
+        CodegenError::UnsupportedMir { construct, .. } if construct == "assert message"
     ));
 }
 

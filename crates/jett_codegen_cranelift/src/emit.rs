@@ -719,6 +719,10 @@ fn translate_function(
             types,
             symbol,
             local_types: &function.locals,
+            test_ownership: matches!(
+                function.identity.declaration.kind,
+                jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
+            ),
             local_slots: &local_slots,
             temporary_slots: &temporary_slots,
             next_temporary: 0,
@@ -847,6 +851,10 @@ fn translate_function(
         types,
         symbol,
         local_types: &function.locals,
+        test_ownership: matches!(
+            function.identity.declaration.kind,
+            jett_hir::DeclarationKind::Verify | jett_hir::DeclarationKind::Property
+        ),
         local_slots: &local_slots,
         temporary_slots: &temporary_slots,
         next_temporary: temporary_slots.len(),
@@ -884,6 +892,7 @@ struct Translator<'a, 'builder> {
     types: &'a TypeInterner,
     symbol: &'a str,
     local_types: &'a [jett_mir::Local],
+    test_ownership: bool,
     local_slots: &'a [Option<ir::StackSlot>],
     temporary_slots: &'a [ir::StackSlot],
     next_temporary: usize,
@@ -1041,7 +1050,24 @@ impl Translator<'_, '_> {
             StatementKind::HandleDefault(_) => {
                 Err(self.unsupported(statement.span, "handle default"))
             }
-            StatementKind::Assert { .. } => Err(self.unsupported(statement.span, "assert")),
+            StatementKind::Assert {
+                condition,
+                message: None,
+            } => {
+                let value = self.expression(condition)?;
+                let flag = self.scalar(value, condition.span)?;
+                let passed = self.builder.create_block();
+                let failed = self.builder.create_block();
+                self.builder.ins().brif(flag, passed, &[], failed, &[]);
+                self.builder.switch_to_block(failed);
+                self.leaf(NativeLeaf::AssertFail, &[], true)?;
+                self.builder.ins().jump(passed, &[]);
+                self.builder.switch_to_block(passed);
+                Ok(())
+            }
+            StatementKind::Assert {
+                message: Some(_), ..
+            } => Err(self.unsupported(statement.span, "assert message")),
             StatementKind::Trace(local) => {
                 let id = local.index() as usize;
                 let local = &self.local_types[id];
@@ -1366,6 +1392,13 @@ impl Translator<'_, '_> {
                     let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
                     self.expect_machine_state(local.index() as usize, expression.ty, v)?;
                     if is_linear(self.types, expression.ty) {
+                        if self.test_ownership {
+                            return self.clone_linear(
+                                LoweredValue::Scalar(v),
+                                expression.ty,
+                                expression.span,
+                            );
+                        }
                         self.clear_slot(slot);
                         return self.own_linear(v);
                     }

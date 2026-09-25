@@ -18,7 +18,10 @@ use std::time::{Duration, Instant};
 use jett_codegen_cranelift::{CodegenError, emit_host_object, emit_host_program_object};
 use jett_hir::FunctionId;
 
-use crate::{BackendLoweringError, BackendLoweringResult, lower_file_for_backend};
+use crate::{
+    BackendLoweringError, BackendLoweringResult, lower_file_for_backend,
+    lower_file_for_native_tests,
+};
 
 /// The sole target accepted by the version 1 native Windows linker.
 pub const WINDOWS_MSVC_NATIVE_TARGET: &str = "x86_64-pc-windows-msvc";
@@ -515,7 +518,8 @@ pub fn host_target() -> String {
     jett_codegen_cranelift::host_target().to_string()
 }
 
-/// Lower a source file and emit an ordinary reachable host object.
+/// Lower a source file and emit an ordinary reachable host object, including
+/// checked `verify` and `property` bodies as callable native test symbols.
 ///
 /// This stage does not require a source `main` and does not add the launcher
 /// entry wrapper. Executable publication always uses the distinct program
@@ -523,7 +527,12 @@ pub fn host_target() -> String {
 pub fn emit_host_object_for_file(
     source_path: &Path,
 ) -> Result<NativeObjectArtifact, NativeBuildError> {
-    let lowered = lower_checked_file(source_path)?;
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered =
+        lower_file_for_native_tests(source_path).map_err(|source| NativeBuildError::Lowering {
+            source_path: source_path.to_path_buf(),
+            source: Box::new(source),
+        })?;
     let object = emit_host_object(&lowered.mir, &lowered.interner).map_err(|source| {
         NativeBuildError::Codegen {
             source_path: source_path.to_path_buf(),

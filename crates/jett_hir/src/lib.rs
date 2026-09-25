@@ -90,6 +90,8 @@ pub struct DeclarationId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeclarationKind {
     Function,
+    Verify,
+    Property,
     Method,
     ActorConstructor,
     ActorHandler,
@@ -934,7 +936,19 @@ pub fn lower(
     check: &CheckResult,
     origins: &HashMap<FileId, SourceOrigin>,
 ) -> Result<Program, Vec<LowerError>> {
-    Lowerer::new(module, resolve, check, origins).lower()
+    Lowerer::new(module, resolve, check, origins, false).lower()
+}
+
+/// Lower checked verification and property bodies as callable test predicates.
+/// Property `given` bindings become typed function parameters; generation stays
+/// with the test runner. Production program lowering continues to use `lower`.
+pub fn lower_with_test_bodies(
+    module: &Module,
+    resolve: &ResolveResult,
+    check: &CheckResult,
+    origins: &HashMap<FileId, SourceOrigin>,
+) -> Result<Program, Vec<LowerError>> {
+    Lowerer::new(module, resolve, check, origins, true).lower()
 }
 
 struct FunctionSource<'a> {
@@ -993,6 +1007,7 @@ struct Lowerer<'a> {
     refinement_function_ids: HashMap<TypeId, FunctionId>,
     function_ids: HashMap<FunctionKey, FunctionId>,
     errors: Vec<LowerError>,
+    include_test_bodies: bool,
 }
 
 impl<'a> Lowerer<'a> {
@@ -1001,6 +1016,7 @@ impl<'a> Lowerer<'a> {
         resolve: &'a ResolveResult,
         check: &'a CheckResult,
         origins: &'a HashMap<FileId, SourceOrigin>,
+        include_test_bodies: bool,
     ) -> Self {
         Self {
             module,
@@ -1016,6 +1032,7 @@ impl<'a> Lowerer<'a> {
             refinement_function_ids: HashMap::new(),
             function_ids: HashMap::new(),
             errors: Vec::new(),
+            include_test_bodies,
         }
     }
 
@@ -1044,6 +1061,46 @@ impl<'a> Lowerer<'a> {
         for source in refinement_sources {
             if let Some(function) = self.lower_refinement_predicate(source) {
                 functions.push(function);
+            }
+        }
+        if self.include_test_bodies {
+            let mut namespaces = HashMap::new();
+            for item in &self.module.items {
+                if let Item::Namespace(namespace) = item {
+                    namespaces.insert(namespace.span.file, namespace.name.name.clone());
+                    continue;
+                }
+                let test = match item {
+                    Item::Verify(test) => Some((
+                        DeclarationKind::Verify,
+                        &test.name,
+                        &[][..],
+                        &test.body,
+                        test.span,
+                    )),
+                    Item::Property(test) => Some((
+                        DeclarationKind::Property,
+                        &test.name,
+                        test.givens.as_slice(),
+                        &test.body,
+                        test.span,
+                    )),
+                    _ => None,
+                };
+                if let Some((kind, name, givens, body, span)) = test {
+                    let namespace = namespaces.get(&span.file).map_or("", String::as_str);
+                    if let Some(function) = self.lower_test_body(
+                        FunctionId(functions.len() as u32),
+                        kind,
+                        namespace,
+                        name,
+                        givens,
+                        body,
+                        span,
+                    ) {
+                        functions.push(function);
+                    }
+                }
             }
         }
         if self.errors.is_empty() {
@@ -1263,6 +1320,90 @@ impl<'a> Lowerer<'a> {
             }
             Item::Implement(block) => block.methods.iter().find(|method| method.span == span),
             _ => None,
+        })
+    }
+
+    fn lower_test_body(
+        &mut self,
+        id: FunctionId,
+        kind: DeclarationKind,
+        namespace: &str,
+        name: &ast::Ident,
+        givens: &[ast::GivenDecl],
+        source_body: &ast::Block,
+        span: Span,
+    ) -> Option<Function> {
+        let Some(origin) = self.origins.get(&span.file).cloned() else {
+            self.error(span, "test body has no source origin");
+            return None;
+        };
+        let function_ids = self.function_ids.clone();
+        let mut body_lowerer = BodyLowerer::new(
+            self,
+            &function_ids,
+            self.check.type_map.clone(),
+            self.check.generic_calls.clone(),
+            self.check.intrinsic_ids.clone(),
+            self.check.intrinsic_type_arguments.clone(),
+            self.check.intrinsic_reflection_arguments.clone(),
+            self.check.call_argument_orders.clone(),
+            self.check.method_calls.clone(),
+            self.check.struct_constructions.clone(),
+            self.check.pipeline_step_call_types.clone(),
+            HashMap::new(),
+            facts_in_span(&self.check.comptime_type_bindings, span),
+        );
+        let mut params = Vec::with_capacity(givens.len());
+        for given in givens {
+            let Some(definition) = body_lowerer
+                .parent
+                .definition_at(given.name.span, DefKind::Variable)
+            else {
+                body_lowerer
+                    .parent
+                    .error(given.span, "property input has no checked definition");
+                return None;
+            };
+            let Some(&ty) = body_lowerer.parent.check.definition_types.get(&definition) else {
+                body_lowerer
+                    .parent
+                    .error(given.span, "property input has no checked type");
+                return None;
+            };
+            let local =
+                body_lowerer.allocate_local(definition, &given.name.name, ty, false, given.span);
+            params.push(Param {
+                local,
+                name: given.name.name.clone(),
+                ty,
+                mode: ParamMode::Owned,
+                mutable: false,
+                span: given.span,
+            });
+        }
+        let body = body_lowerer.lower_block(source_body);
+        body_lowerer.reject_unconsumed_static_selections();
+        body_lowerer.reject_unconsumed_comptime_type_bindings();
+        let locals = body_lowerer.locals;
+        Some(Function {
+            id,
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin,
+                    namespace: namespace.to_owned(),
+                    name: format!("{}:{}", name.name, span.start),
+                    kind,
+                },
+                type_arguments: Vec::new(),
+                specialization: CheckedGenericSpecialization::default(),
+            },
+            source_definition: None,
+            params,
+            capture_count: 0,
+            return_type: TypeInterner::NOTHING,
+            locals,
+            body,
+            span,
         })
     }
 
@@ -5496,6 +5637,10 @@ mod tests {
     use jett_types::{CapabilityKind, TypeInterner};
 
     fn lower_source(source: &str) -> Program {
+        lower_source_mode(source, false)
+    }
+
+    fn lower_source_mode(source: &str, include_test_bodies: bool) -> Program {
         let file = FileId::new(0);
         let parsed = jett_parser::parse(source, file);
         assert!(
@@ -5522,7 +5667,40 @@ mod tests {
             checked.diagnostics
         );
         let origins = HashMap::from([(file, SourceOrigin::Project)]);
-        lower(&parsed.module, &resolved, &checked, &origins).expect("HIR lowering failed")
+        if include_test_bodies {
+            lower_with_test_bodies(&parsed.module, &resolved, &checked, &origins)
+                .expect("test HIR lowering failed")
+        } else {
+            lower(&parsed.module, &resolved, &checked, &origins).expect("HIR lowering failed")
+        }
+    }
+
+    #[test]
+    fn lowers_checked_verify_and_property_bodies_as_native_test_functions() {
+        let program = lower_source_mode(
+            r#"namespace app
+verify equal_literals:
+    assert 1 == 1
+property identity:
+    given value: int64
+    assert value == value
+"#,
+            true,
+        );
+        assert_eq!(program.functions.len(), 2);
+        assert_eq!(program.functions[0].identity.declaration.namespace, "app");
+        assert_eq!(program.functions[1].identity.declaration.namespace, "app");
+        assert_eq!(program.functions[0].params.len(), 0);
+        assert_eq!(program.functions[1].params.len(), 1);
+        assert_eq!(program.functions[1].params[0].ty, TypeInterner::INT64);
+        assert!(matches!(
+            program.functions[0].body.statements[0].kind,
+            StatementKind::Assert { .. }
+        ));
+        assert!(matches!(
+            program.functions[1].body.statements[0].kind,
+            StatementKind::Assert { .. }
+        ));
     }
 
     #[test]

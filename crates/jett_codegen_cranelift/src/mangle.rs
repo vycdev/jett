@@ -23,6 +23,8 @@ pub fn symbol_name(
     push_component(&mut canonical, &identity.declaration.name);
     canonical.push(match identity.declaration.kind {
         DeclarationKind::Function => 'f',
+        DeclarationKind::Verify => 'v',
+        DeclarationKind::Property => 'p',
         DeclarationKind::Method => 'm',
         DeclarationKind::ActorConstructor => 'a',
         DeclarationKind::ActorHandler => 'h',

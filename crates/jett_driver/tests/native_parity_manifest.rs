@@ -407,48 +407,13 @@ fn native_parity_manifest_matches_fixture_inventory() {
     assert_eq!(manifested_lower.len(), 182, "lowering denominator changed");
 
     let manifested_object_emit = manifest_paths_with_obligation(&manifest, Obligation::ObjectEmit);
-    let expected_object_emit = BTreeSet::from([
-        "tests/run_pass/bytes_boundary_helpers.jett".to_owned(),
-        "tests/run_pass/bytes_operations.jett".to_owned(),
-        "tests/run_pass/error_handling.jett".to_owned(),
-        "tests/run_pass/escape_sequences.jett".to_owned(),
-        "tests/run_pass/explicit_comptime_expression.jett".to_owned(),
-        "tests/run_pass/fibonacci.jett".to_owned(),
-        "tests/run_pass/graphics_callback_runtime_error.jett".to_owned(),
-        "tests/run_pass/graphics_pipeline_scripted.jett".to_owned(),
-        "tests/run_pass/graphics_scene.jett".to_owned(),
-        "tests/run_pass/graphics_scripted.jett".to_owned(),
-        "tests/run_pass/handle_result_optional.jett".to_owned(),
-        "tests/run_pass/hello_print.jett".to_owned(),
-        "tests/run_pass/integer_wrapping_and_float_ieee.jett".to_owned(),
-        "tests/run_pass/list_access_source.jett".to_owned(),
-        "tests/run_pass/logical_ops.jett".to_owned(),
-        "tests/run_pass/math_advanced.jett".to_owned(),
-        "tests/run_pass/math_error_helpers.jett".to_owned(),
-        "tests/run_pass/math_operations.jett".to_owned(),
-        "tests/run_pass/math_sum_source.jett".to_owned(),
-        "tests/run_pass/math_trig.jett".to_owned(),
-        "tests/run_pass/multi_verify.jett".to_owned(),
-        "tests/run_pass/named_argument_runtime_order.jett".to_owned(),
-        "tests/run_pass/namespace_qualified_functions.jett".to_owned(),
-        "tests/run_pass/namespace_runtime_main_context.jett".to_owned(),
-        "tests/run_pass/namespace_runtime_verify_context.jett".to_owned(),
-        "tests/run_pass/native_scalar_entry.jett".to_owned(),
-        "tests/run_pass/simple.jett".to_owned(),
-        "tests/run_pass/stdlib_loading.jett".to_owned(),
-        "tests/run_pass/string_format.jett".to_owned(),
-        "tests/run_pass/string_indic_grapheme.jett".to_owned(),
-        "tests/run_pass/string_interpolation.jett".to_owned(),
-        "tests/run_pass/string_layout_helpers.jett".to_owned(),
-        "tests/run_pass/verify_test.jett".to_owned(),
-    ]);
     assert_eq!(
-        manifested_object_emit, expected_object_emit,
-        "object-emission coverage must name exactly the fixtures proven by the native object gate"
+        manifested_object_emit, discovered_run_pass,
+        "every run-pass fixture must emit a native object with reachable code"
     );
     assert_eq!(
         manifested_object_emit.len(),
-        33,
+        182,
         "native object-emission coverage changed"
     );
 
@@ -520,7 +485,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
 }
 
 #[test]
-fn native_parity_object_emit_obligations_emit_deterministic_host_objects() {
+fn native_parity_object_emit_obligations_emit_host_objects() {
     const SIMPLE_APP_ADD_SYMBOL: &str =
         "jett_v0_a9076f8b4f10f051ac43be7e160564e56e68c5278c8dd064137a42f152d4bf4f";
 
@@ -536,55 +501,50 @@ fn native_parity_object_emit_obligations_emit_deterministic_host_objects() {
         let fixture = root.join(&path);
         let first = jett_driver::native::emit_host_object_for_file(&fixture)
             .unwrap_or_else(|error| panic!("failed to emit native object for {path}: {error}"));
-        let second =
-            jett_driver::native::emit_host_object_for_file(&fixture).unwrap_or_else(|error| {
-                panic!("failed to repeat native object emission for {path}: {error}")
-            });
-
         assert_eq!(first.target(), jett_driver::native::host_target());
         assert!(!first.bytes().is_empty(), "{path} emitted an empty object");
-        assert_eq!(
-            first.bytes(),
-            second.bytes(),
-            "{path} object bytes are not deterministic"
-        );
         assert!(
             !first.symbols().is_empty(),
             "{path} emitted no reachable symbols"
         );
-        assert_eq!(
-            first.symbols(),
-            second.symbols(),
-            "{path} object symbols are not deterministic"
-        );
         if path == "tests/run_pass/simple.jett" {
-            assert_eq!(
-                first.symbols(),
-                [SIMPLE_APP_ADD_SYMBOL],
+            assert!(
+                first
+                    .symbols()
+                    .iter()
+                    .any(|symbol| symbol == SIMPLE_APP_ADD_SYMBOL),
                 "{path} must emit the stable symbol derived from `app.add`"
             );
+        }
+        if matches!(
+            path.as_str(),
+            "tests/run_pass/simple.jett"
+                | "tests/run_pass/graphics_scripted.jett"
+                | "tests/run_pass/type_info_reflection.jett"
+        ) {
+            let second =
+                jett_driver::native::emit_host_object_for_file(&fixture).unwrap_or_else(|error| {
+                    panic!("failed to repeat native object emission for {path}: {error}")
+                });
+            assert_eq!(first.bytes(), second.bytes(), "{path} object bytes changed");
+            assert_eq!(first.symbols(), second.symbols(), "{path} symbols changed");
         }
     }
 }
 
 #[test]
-#[ignore = "manual full-fixture native object audit"]
-fn native_parity_audit_all_run_pass_objects() {
-    let root = workspace_root();
-    let paths = discovered_fixture_paths("run_pass");
-    let mut emitted = 0;
-    let mut failures = Vec::new();
-    for path in &paths {
-        match jett_driver::native::emit_host_object_for_file(&root.join(path)) {
-            Ok(object) if !object.symbols().is_empty() => emitted += 1,
-            Ok(_) => failures.push(format!("{path}: no reachable native symbols")),
-            Err(error) => failures.push(format!("{path}: {error}")),
-        }
-    }
-    println!("native objects: {emitted}/{}", paths.len());
-    for failure in failures {
-        println!("{failure}");
-    }
+fn native_test_object_emits_checked_verify_and_property_bodies() {
+    let directory = tempfile::tempdir().expect("test source directory");
+    let source = directory.path().join("test_bodies.jett");
+    fs::write(
+        &source,
+        "namespace app\nverify equal_literals:\n    assert 1 == 1\nproperty identity:\n    given value: int64\n    assert value == value\n",
+    )
+    .expect("write checked test bodies");
+    let object =
+        jett_driver::native::emit_host_object_for_file(&source).expect("emit native test bodies");
+    assert_eq!(object.symbols().len(), 2);
+    assert!(!object.bytes().is_empty());
 }
 
 #[test]

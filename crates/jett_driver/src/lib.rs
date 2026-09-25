@@ -2648,6 +2648,22 @@ pub fn lower_file_for_backend_with_options(
     path: &Path,
     options: BuildOptions,
 ) -> Result<BackendLoweringResult, BackendLoweringError> {
+    lower_file_for_backend_inner(path, options, false)
+}
+
+/// Lower checked `verify` and `property` bodies as native test functions.
+/// Property inputs are explicit parameters for a future native test runner.
+pub fn lower_file_for_native_tests(
+    path: &Path,
+) -> Result<BackendLoweringResult, BackendLoweringError> {
+    lower_file_for_backend_inner(path, BuildOptions::default(), true)
+}
+
+fn lower_file_for_backend_inner(
+    path: &Path,
+    options: BuildOptions,
+    include_test_bodies: bool,
+) -> Result<BackendLoweringResult, BackendLoweringError> {
     let file_path = path.display().to_string();
     let source = fs::read_to_string(path).map_err(|error| {
         BackendLoweringError::Build(BuildResult {
@@ -2744,12 +2760,21 @@ pub fn lower_file_for_backend_with_options(
         ));
     }
 
-    let mut hir = jett_hir::lower(
-        &parse_result.module,
-        &resolve_result,
-        &check_result,
-        &source_origins,
-    )
+    let mut hir = if include_test_bodies {
+        jett_hir::lower_with_test_bodies(
+            &parse_result.module,
+            &resolve_result,
+            &check_result,
+            &source_origins,
+        )
+    } else {
+        jett_hir::lower(
+            &parse_result.module,
+            &resolve_result,
+            &check_result,
+            &source_origins,
+        )
+    }
     .map_err(BackendLoweringError::Hir)?;
     native_constants::bake_primitives(&mut hir, &explicit_comptime_values);
     let program_entry = lowered_program_entry(&hir, source_program_entry)?;

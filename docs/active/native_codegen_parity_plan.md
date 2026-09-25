@@ -303,19 +303,20 @@ replace owned fields, and clean them at context destruction. Native actor
 allocation emission, state writeback, and message dispatch still need implementations before actor rows can pass the
 object or execution gates.
 
-The current fixture gates are therefore:
+The current fixture gates are:
 
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 169 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
-| Successful/expected `main` execution | 26 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
+| Native object generation | 182 | 182 | `native_parity_object_emit_obligations_emit_host_objects`; every run-pass fixture emits reachable native code |
+| Successful/expected `main` execution | 30 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, Environment, and Graphics inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 169/182 (92.9%), a useful progress measure rather than a
-claim that the same fraction of the language has native support.
+gate is currently 182/182 (100%), a useful progress measure rather than a
+claim that the same fraction of the language has native support. Native test
+symbol execution remains separate from this object gate.
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a
 literal gives raw `json.JsonTree` its distinct checked branch, while reflected
@@ -813,12 +814,12 @@ actor as their hidden environment, evaluate ordered arguments, write mutable
 state back, and return or discard responses with owned-value cleanup. Native
 execution tests compare actor state mutation, string ownership, named arguments,
 numeric contexts, and duplicate namespace names with the interpreter. The
-exhaustive Windows audit now reports 174/182 emitted objects (95.6%), 27/30
+earlier exhaustive Windows audit reported 174/182 emitted objects (95.6%), 27/30
 linked `main` outcomes, 25/25 runtime contracts, and 182/182 typed lowerings.
-This percentage tracks fixture object coverage, not overall language coverage.
-The eight remaining object failures are four Graphics fixtures and four
-verify-only fixtures with no reachable code symbols; the three remaining
-linked-main failures are scripted Graphics fixtures.
+That percentage tracked fixture object coverage, not overall language coverage.
+At that checkpoint, the eight remaining object failures were four Graphics
+fixtures and four verify-only fixtures with no reachable code symbols; the
+three remaining linked-main failures were scripted Graphics fixtures.
 
 The Graphics parity rows carry the same deterministic key and close events
 used by interpreter graphics tests. The native launcher configures those
@@ -829,23 +830,19 @@ The compiler emits the private `graphics.__run` callback loop and tracks source
 state ownership across updates. The three named-callback Graphics mains now
 link and match interpreter output or terminal callback failure.
 
-The September 2026 exhaustive Windows object audit reports 177/182 emitted
-objects (97.3%), 30/30 linked `main` outcomes, 25/25 runtime contracts, and
-182/182 typed lowerings. Inline Graphics callbacks with `view` parameters now
-extract to checked functions and the `graphics_scene.jett` object joins the
-regular deterministic gate, raising current object coverage to 178/182
-(97.8%). This percentage measures the current fixture set, not overall language
-coverage. The four remaining object gaps are verification/property fixtures
-without reachable native symbols. The full object audit is available as the
-ignored `native_parity_audit_all_run_pass_objects` test.
+The September 2026 exhaustive Windows object audit first reached 177/182
+emitted objects (97.3%), 30/30 linked `main` outcomes, 25/25 runtime
+contracts, and 182/182 typed lowerings. Inline Graphics callbacks with `view`
+parameters then raised object coverage to 178/182 (97.8%). Those percentages
+measure the fixture set, not overall language coverage.
 
-The remaining four rows cannot gain object credit from an empty object or an
-unrelated helper symbol. Today HIR collects ordinary functions but leaves
-`verify` and `property` bodies in the interpreter test path; native validation
-also rejects `assert`. A native test-body handoff must retain each checked
-block's source identity and lower its actual statements. Property `given`
-bindings become explicit typed inputs to the emitted predicate; deterministic
-generation and shrinking remain the test runner's responsibility. Native
-`assert` must preserve terminal failure and ownership cleanup. Until that
-handoff exists, these four rows remain object failures even though frontend
-verification succeeds.
+Ordinary object emission now includes checked `verify` and `property` bodies as
+native functions, so the four test-only fixtures emit actual body symbols
+rather than empty objects. A property `given` is a typed function parameter;
+generation and shrinking stay with the test runner. Native `assert` has a
+terminal failure path, and test-body reads clone ordinary owned values to
+preserve Jett's relaxed test-block ownership policy. The full 182-fixture
+test-body audit now emits 182/182 objects (100%). The regular object gate
+checks all 182 rows, with deterministic byte checks on representative objects.
+This object count does not assert that `verify` or `property` bodies execute
+natively: the native test runner remains a separate execution gate.

@@ -213,10 +213,10 @@ function header_version_by_reflection() returns int64:
     return found
 function bitfield_field_count[T]() returns int64:
     list[TypeBitfieldField] fields = type.bitfield_fields[T]()
-    return list.length[TypeField](fields)
+    return list.length[TypeBitfieldField](fields)
 function bitfield_metadata_field_count[T]() returns int64:
     TypeBitfield info = type.bitfield_layout[T]()
-    return list.length[TypeField](info.fields)
+    return list.length[TypeBitfieldField](info.fields)
 function bitfield_metadata_network_order[T]() returns bool:
     TypeBitfield info = type.bitfield_layout[T]()
     return info.network_order

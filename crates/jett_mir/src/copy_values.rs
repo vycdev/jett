@@ -90,6 +90,20 @@ impl CopyValuePlan {
                         visit(value, &mut reads, &mut temporaries, types, program, false)?;
                         None
                     }
+                    StatementKind::Assert { condition, message } => {
+                        visit(
+                            condition,
+                            &mut reads,
+                            &mut temporaries,
+                            types,
+                            program,
+                            false,
+                        )?;
+                        if let Some(message) = message {
+                            visit(message, &mut reads, &mut temporaries, types, program, false)?;
+                        }
+                        None
+                    }
                     StatementKind::Trace(local) => {
                         reads.insert(local.index() as usize);
                         None
@@ -419,6 +433,11 @@ fn visit(
     match &value.kind {
         ExpressionKind::Local(l) => {
             reads.insert(l.index() as usize);
+            if program.is_some() && !borrowed && crate::move_values::is_linear(types, value.ty) {
+                // Test predicates clone local owners on each ordinary read;
+                // reserving this slot for all native functions is conservative.
+                *temporaries += 1;
+            }
         }
         ExpressionKind::ClosureRef { captures, .. } => {
             reads.extend(captures.iter().map(|local| local.index() as usize));

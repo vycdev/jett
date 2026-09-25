@@ -6694,10 +6694,21 @@ impl<'a> TypeChecker<'a> {
             Stmt::VarDecl(decl) => self.direct_runtime_reflection_call_is_one_of(
                 &decl.value,
                 type_params,
-                &["type.fields", "type.field_value"],
+                &[
+                    "type.fields",
+                    "type.field_value",
+                    "type.bitfield_fields",
+                    "type.bitfield_layout",
+                    "type.machine_layout",
+                    "type.machine_states",
+                    "type.machine_transitions",
+                    "type.variants",
+                    "type.primitive_tag",
+                ],
             ),
             Stmt::Return(ret) => ret.value.as_ref().is_some_and(|value| {
                 self.direct_runtime_reflection_call_is_one_of(value, type_params, &["type.name"])
+                    || self.direct_runtime_reflection_comparison(value, type_params)
             }),
             Stmt::If(if_stmt) => {
                 !self.expr_uses_type_param_reflection(&if_stmt.condition, type_params)
@@ -6743,6 +6754,9 @@ impl<'a> TypeChecker<'a> {
         type_params: &HashSet<String>,
         allowed: &[&str],
     ) -> bool {
+        if let Expr::Paren(inner, _) | Expr::Handle(inner, _, _, _) = expr {
+            return self.direct_runtime_reflection_call_is_one_of(inner, type_params, allowed);
+        }
         let Expr::GenericCall(callee, type_args, args, _) = expr else {
             return false;
         };
@@ -6754,6 +6768,21 @@ impl<'a> TypeChecker<'a> {
             && args
                 .iter()
                 .all(|arg| !self.expr_uses_type_param_reflection(&arg.value, type_params))
+    }
+
+    fn direct_runtime_reflection_comparison(
+        &self,
+        expr: &Expr,
+        type_params: &HashSet<String>,
+    ) -> bool {
+        let Expr::Binary(left, BinOp::Eq | BinOp::NotEq, right, _) = expr else {
+            return false;
+        };
+        let allowed = ["type.kind_tag", "type.primitive_tag", "type.has_secret"];
+        (self.direct_runtime_reflection_call_is_one_of(left, type_params, &allowed)
+            && !self.expr_uses_type_param_reflection(right, type_params))
+            || (self.direct_runtime_reflection_call_is_one_of(right, type_params, &allowed)
+                && !self.expr_uses_type_param_reflection(left, type_params))
     }
 
     fn block_reflection_is_branch_specializable(
@@ -6862,7 +6891,8 @@ impl<'a> TypeChecker<'a> {
             Stmt::Return(ret) => ret.value.as_ref().map_or(true, |expr| {
                 !self.expr_uses_type_param_reflection(expr, type_params)
                     || (context.permits_shape_reflection()
-                        && self.expr_is_direct_reflection_statement_source(expr, type_params))
+                        && (self.expr_is_direct_reflection_statement_source(expr, type_params)
+                            || self.expr_forwards_direct_type_info(expr, type_params)))
             }),
             Stmt::ComptimeTypeBind(bind) => {
                 self.comptime_type_bind_reflection_is_specializable(bind, type_params, context)
@@ -6995,6 +7025,25 @@ impl<'a> TypeChecker<'a> {
             }
             _ => false,
         }
+    }
+
+    fn expr_forwards_direct_type_info(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
+        let args = match expr {
+            Expr::Paren(inner, _) => {
+                return self.expr_forwards_direct_type_info(inner, type_params);
+            }
+            Expr::Call(_, args, _) | Expr::GenericCall(_, _, args, _) => args,
+            _ => return false,
+        };
+        let direct_info = |value: &Expr| match value {
+            Expr::View(inner, _) => self.expr_is_type_info_reflection(inner, type_params),
+            other => self.expr_is_type_info_reflection(other, type_params),
+        };
+        args.iter().any(|arg| direct_info(&arg.value))
+            && args.iter().all(|arg| {
+                !self.expr_uses_type_param_reflection(&arg.value, type_params)
+                    || direct_info(&arg.value)
+            })
     }
 
     fn expr_is_potential_static_reflection_condition(&self, expr: &Expr) -> bool {

@@ -178,7 +178,12 @@ impl Extractor<'_> {
                         origin: parent.identity.declaration.origin.clone(),
                         namespace: parent.identity.declaration.namespace.clone(),
                         name,
-                        kind: DeclarationKind::Function,
+                        kind: match parent.identity.declaration.kind {
+                            DeclarationKind::Verify | DeclarationKind::Property => {
+                                parent.identity.declaration.kind
+                            }
+                            _ => DeclarationKind::Function,
+                        },
                     },
                     type_arguments: parent.identity.type_arguments.clone(),
                     specialization: parent.identity.specialization.clone(),

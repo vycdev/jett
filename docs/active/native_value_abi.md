@@ -599,6 +599,16 @@ including handler default edges that bypass the ordinary loop exit. Split edges
 end only that loop token, preserving outer loans. Nested iterable element IDs
 are checked before sequence preprocessing resolves them.
 
+Native object emission also lowers checked `verify` and `property` blocks to
+callable test symbols. Property `given` bindings are typed parameters, not
+values synthesized by the object emitter. Test-body functions preserve the
+source policy that ordinary owned values can be read repeatedly: an owned
+native read deep-clones the value while a view borrows it. The default `assert`
+failure records the static terminal message `assertion failed` and follows the
+normal owned-value cleanup epilogue. Production program objects still select
+only the checked source `main`; executing native test symbols and generating
+property inputs remain follow-up work.
+
 Evidence includes existing generic_struct and explicit_struct_equality fixture
 bodies executed with supplemental mains, nested owners and early returns,
 partial construction terminal cleanup (exit 71), runtime clone fault boundaries,

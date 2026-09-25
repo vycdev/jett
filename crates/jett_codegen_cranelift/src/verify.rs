@@ -674,8 +674,19 @@ impl Verifier<'_> {
             StatementKind::HandleDefault(_) => {
                 Err(self.unsupported(function, statement.span, "handle default"))
             }
-            StatementKind::Assert { .. } => {
-                Err(self.unsupported(function, statement.span, "assert"))
+            StatementKind::Assert { condition, message } => {
+                self.expression(function, condition)?;
+                if condition.ty != TypeInterner::BOOL {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "assert condition is not bool",
+                    ));
+                }
+                if message.is_some() {
+                    return Err(self.unsupported(function, statement.span, "assert message"));
+                }
+                Ok(())
             }
             StatementKind::Trace(local) => {
                 let Some(local) = function.local(*local) else {
