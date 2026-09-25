@@ -7047,6 +7047,9 @@ each expression result, including literals and intermediate arithmetic, in both
 runtime and explicit comptime evaluation. Its current string conversion formats
 that value exactly widened to the shared float64 display carrier; it does not
 restore discarded precision or promise shortest-float32 decimal output.
+`float32.from_float64(value)` explicitly rounds a `float64` to binary32 using
+the same boundary rule. It is pure, has no handled failure, and preserves IEEE
+NaN and infinity behavior; the result is eligible for `comptime` evaluation.
 Arithmetic therefore does not create runtime
 exceptions or handled errors. Refinement types remain the way to constrain an
 application to a mathematically non-overflowing domain.
@@ -7542,4 +7545,7 @@ Supported bitfields parse and serialize through checked source hooks that handle
 unit-enum fields and ordinary payload fields. Native JSON decoding of `uint8`,
 `int8`/`int16`/`int32`, and `uint16`/`uint32` checks the range before a bounded
 source conversion, including when these values occur in supported aggregates.
-`float32` decoding remains a gap.
+`float32` JSON decoding uses the same checked source path: it reads a `float64`
+JSON number and explicitly rounds with `float32.from_float64`.
+Checked source JSON serialization formats that rounded value using the
+language's existing `float32` string display behavior.

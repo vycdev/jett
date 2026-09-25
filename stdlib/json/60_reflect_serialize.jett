@@ -3,6 +3,8 @@ mutual:
     function json_serialize_public_reflected[T](view value: T) returns string
     function json_serialize_public_checked_primitive[T](view value: T) returns string
     function json_serialize_public_checked_numeric[T](view value: T) returns string
+    function json_serialize_public_checked_signed_numeric[T](view value: T) returns string
+    function json_serialize_public_checked_unsigned_numeric[T](view value: T) returns string
     function json_serialize_public_checked_wide_numeric[T](view value: T) returns string
     function json_serialize_public_other_reflected[T](view value: T, view info: TypeInfo) returns string
     function json_serialize_public_raw_reflected[T](view value: T) returns string
@@ -61,18 +63,52 @@ function json_serialize_public_checked_numeric[T](view value: T) returns string:
     TypePrimitive primitive = type.primitive_tag[T]() handle:
         default TypePrimitive.unknown_type
     if primitive == TypePrimitive.int8_type or primitive == TypePrimitive.int16_type or primitive == TypePrimitive.int32_type or primitive == TypePrimitive.int64_type:
-        return "{value}"
+        return json_serialize_public_checked_signed_numeric[T](view value)
     else if primitive == TypePrimitive.uint8_type or primitive == TypePrimitive.uint16_type or primitive == TypePrimitive.uint32_type:
-        return "{value}"
+        return json_serialize_public_checked_unsigned_numeric[T](view value)
     else:
         return json_serialize_public_checked_wide_numeric[T](view value)
+function json_serialize_public_checked_signed_numeric[T](view value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    if primitive == TypePrimitive.int8_type:
+        int8 item = value
+        return "{item}"
+    else if primitive == TypePrimitive.int16_type:
+        int16 item = value
+        return "{item}"
+    else if primitive == TypePrimitive.int32_type:
+        int32 item = value
+        return "{item}"
+    else if primitive == TypePrimitive.int64_type:
+        int64 item = value
+        return "{item}"
+    else:
+        return "null"
+function json_serialize_public_checked_unsigned_numeric[T](view value: T) returns string:
+    TypePrimitive primitive = type.primitive_tag[T]() handle:
+        default TypePrimitive.unknown_type
+    if primitive == TypePrimitive.uint8_type:
+        uint8 item = value
+        return "{item}"
+    else if primitive == TypePrimitive.uint16_type:
+        uint16 item = value
+        return "{item}"
+    else if primitive == TypePrimitive.uint32_type:
+        uint32 item = value
+        return "{item}"
+    else:
+        return "null"
 function json_serialize_public_checked_wide_numeric[T](view value: T) returns string:
     TypePrimitive primitive = type.primitive_tag[T]() handle:
         default TypePrimitive.unknown_type
     if primitive == TypePrimitive.uint64_type:
         uint64 item = value
         return string.from_uint64(item)
-    else if primitive == TypePrimitive.float32_type or primitive == TypePrimitive.float64_type:
+    else if primitive == TypePrimitive.float32_type:
+        float32 item = value
+        return "{item}"
+    else if primitive == TypePrimitive.float64_type:
         float64 item = value
         return "{item}"
     else:

@@ -15,6 +15,7 @@ mutual:
     function json_decode_tree_int32_reflected(view raw: JsonTree) returns result[int32, string]
     function json_decode_tree_uint16_reflected(view raw: JsonTree) returns result[uint16, string]
     function json_decode_tree_uint32_reflected(view raw: JsonTree) returns result[uint32, string]
+    function json_decode_tree_float32_reflected(view raw: JsonTree) returns result[float32, string]
     function json_int8_from_bounded_int64(value: int64) returns int8
     function json_int16_from_bounded_int64(value: int64) returns int16
     function json_int32_from_bounded_int64(value: int64) returns int32
@@ -166,6 +167,11 @@ function json_decode_tree_checked_narrow_numeric[T](view raw: JsonTree, primitiv
             return fail(error)
         T typed = item
         return ok(typed)
+    else if primitive == TypePrimitive.float32_type:
+        float32 item = json_decode_tree_float32_reflected(view raw) handle error:
+            return fail(error)
+        T typed = item
+        return ok(typed)
     else:
         return json_decode_tree_checked_unsigned_numeric[T](view raw, primitive)
 function json_decode_tree_checked_unsigned_numeric[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
@@ -225,6 +231,10 @@ function json_decode_tree_uint32_reflected(view raw: JsonTree) returns result[ui
     int64 item = json_decode_tree_bounded_int64(view raw, 0, 4294967295, "uint32") handle error:
         return fail(error)
     return ok(json_uint32_from_bounded_int64(item))
+function json_decode_tree_float32_reflected(view raw: JsonTree) returns result[float32, string]:
+    float64 item = json_tree_as_float64(view raw) handle error:
+        return fail(error)
+    return ok(float32.from_float64(item))
 function json_int8_from_bounded_int64(value: int64) returns int8:
     mutable int64 remaining = value + 128
     mutable int8 converted = -128

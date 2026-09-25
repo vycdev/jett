@@ -1054,6 +1054,8 @@ literals and arithmetic results to f32 before widening into the internal
 `Value::Float64` carrier. Both runtime and explicit comptime evaluation use
 this boundary, so intermediate arithmetic cannot silently retain f64 precision.
 Native formatting and interpreter display both format that exactly widened value.
+The explicit pure `float32.from_float64` intrinsic applies this same rounding
+at runtime and in comptime; native codegen emits a scalar f64-to-f32 demotion.
 The driver additionally evaluates every explicit `comptime expression` after
 type checking and stores the resulting value by source span. Runtime
 interpretation consumes that stored value instead of evaluating the expression
@@ -2726,7 +2728,10 @@ refinements with a supported base use checked source parsing and serialization;
 signed `int8`/`int16`/`int32` and unsigned `uint16`/`uint32` JSON values now
 use checked source decoding, both directly and inside supported aggregates.
 The decoder checks the `int64` range before constructing the narrow value
-through bounded arithmetic; `float32` JSON decoding remains outside this path.
+through bounded arithmetic. `float32` JSON decoding uses a checked source
+call to `float32.from_float64` after reading a JSON number as `float64`.
+Checked source serialization formats the rounded `float32` value through its
+existing string display path, including when it is a record field.
 Record fields with supported refinements now decode through a checked source
 conversion before entering the native reflected builder. The builder accepts
 the exact refined type; direct struct constructors now lower checked field

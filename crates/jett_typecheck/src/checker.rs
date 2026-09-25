@@ -2871,6 +2871,7 @@ impl<'a> TypeChecker<'a> {
             | Type::Uint16
             | Type::Uint32
             | Type::Uint64
+            | Type::Float32
             | Type::Float64 => true,
             Type::List(element) => self.native_json_source_supported(*element, visiting),
             Type::Map(key, value) if *key == TypeInterner::STRING => {
@@ -3017,6 +3018,7 @@ impl<'a> TypeChecker<'a> {
             | Type::Uint16
             | Type::Uint32
             | Type::Uint64
+            | Type::Float32
             | Type::Float64 => true,
             Type::List(element) => {
                 self.native_json_parse_source_supported_inner(*element, visiting)
@@ -3455,6 +3457,13 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(TypeInterner::FLOAT64, TypeInterner::STRING)),
                 ))
             }
+            IntrinsicId::Float32FromFloat64 => self.no_type_args_signature(
+                &name,
+                type_args,
+                span,
+                vec![TypeInterner::FLOAT64],
+                TypeInterner::FLOAT32,
+            ),
             IntrinsicId::StringFromInt64 => self.no_type_args_signature(
                 &name,
                 type_args,
@@ -11962,6 +11971,7 @@ impl<'a> TypeChecker<'a> {
                     | Type::Int32
                     | Type::Uint16
                     | Type::Uint32
+                    | Type::Float32
             )
             && self.native_json_parse_source_supported(*value_ty)
         {

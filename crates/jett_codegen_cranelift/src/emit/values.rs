@@ -1573,6 +1573,12 @@ impl Translator<'_, '_> {
             IntrinsicId::SecretRedact => self.literal("***"),
             IntrinsicId::BitfieldToBytes => self.encode_bitfield(evaluated[0], args[0].ty, span),
             IntrinsicId::BitfieldFromBytes => self.decode_bitfield(evaluated[0], result_type, span),
+            IntrinsicId::Float32FromFloat64 => {
+                let input = self.scalar(evaluated[0], span)?;
+                Ok(LoweredValue::Scalar(
+                    self.builder.ins().fdemote(ir::types::F32, input),
+                ))
+            }
             IntrinsicId::Float64FromInt64 | IntrinsicId::Int64FromFloat64 => {
                 let input = self.scalar(evaluated[0], span)?;
                 let leaf = if id == IntrinsicId::Float64FromInt64 {

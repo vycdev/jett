@@ -66,6 +66,7 @@ define_intrinsics! {
     EnvironmentGet => "Environment.__get",
     FilesystemReadFile => "Filesystem.read_file",
     FilesystemWriteFile => "Filesystem.write_file",
+    Float32FromFloat64 => "float32.from_float64",
     Float64FromInt64 => "float64.from_int64",
     Float64FromString => "float64.from_string",
     GraphicsRun => "graphics.__run",

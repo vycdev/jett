@@ -170,6 +170,7 @@ macro_rules! non_type_arg_intrinsics {
             | IntrinsicId::EnvironmentGet
             | IntrinsicId::FilesystemReadFile
             | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::Float32FromFloat64
             | IntrinsicId::Float64FromInt64
             | IntrinsicId::Float64FromString
             | IntrinsicId::GraphicsRun
@@ -301,6 +302,7 @@ macro_rules! non_higher_order_intrinsics {
             | IntrinsicId::EnvironmentGet
             | IntrinsicId::FilesystemReadFile
             | IntrinsicId::FilesystemWriteFile
+            | IntrinsicId::Float32FromFloat64
             | IntrinsicId::Float64FromInt64
             | IntrinsicId::Float64FromString
             | IntrinsicId::Int64FromFloat64
@@ -1579,11 +1581,25 @@ impl Interpreter {
     }
 
     fn normalize_value_for_checked_expr(&self, expr: &Expr, value: Value) -> Result<Value, String> {
-        let Some(type_name) = self
-            .checked_expression_types
-            .as_ref()
-            .and_then(|types| types.get(&expr.span()))
-        else {
+        // A generic body can be checked for several concrete instantiations,
+        // but the span map stores only one type per source expression. A live
+        // binding carries the type of this invocation and wins for identifiers.
+        let mut binding_expr = expr;
+        while let Expr::View(inner, _) | Expr::Paren(inner, _) = binding_expr {
+            binding_expr = inner;
+        }
+        let binding_type = if let Expr::Ident(ident) = binding_expr {
+            self.get_variable_type(&ident.name)
+                .map(|ty| type_expr_name(&self.substitute_type_expr(ty)))
+        } else {
+            None
+        };
+        let Some(type_name) = binding_type.as_deref().or_else(|| {
+            self.checked_expression_types
+                .as_ref()
+                .and_then(|types| types.get(&expr.span()))
+                .map(String::as_str)
+        }) else {
             return Ok(value);
         };
         if matches!(
@@ -8697,6 +8713,13 @@ impl Interpreter {
             }
 
             // -- float64 conversions ------------------------------------------
+            IntrinsicId::Float32FromFloat64 => {
+                require_args!(name, 1, args);
+                match &args[0] {
+                    Value::Float64(value) => Some(Ok(Value::Float64((*value as f32) as f64))),
+                    _ => Some(Err(format!("{name} expects a float64 argument"))),
+                }
+            }
             IntrinsicId::Float64FromInt64 => {
                 require_args!(name, 1, args);
                 match &args[0] {

@@ -395,6 +395,7 @@ pub(crate) fn verify_intrinsic(
         return Err(format!("invalid native sum leaf signature for {id}"));
     }
     let (parameters, expected): (&[TypeId], TypeId) = match id {
+        IntrinsicId::Float32FromFloat64 => (&[T::FLOAT64], T::FLOAT32),
         IntrinsicId::BytesNew => (&[], T::BYTES),
         IntrinsicId::BytesLength => (&[T::BYTES], T::INT64),
         IntrinsicId::BytesFromString => (&[T::STRING], T::BYTES),
