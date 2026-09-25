@@ -1,0 +1,39 @@
+namespace test
+type Positive = int64 where value > 0
+type NonEmpty = string where value != ""
+function capture_left(maybe: optional[Positive]) returns bool:
+    mutable Positive left = 7 handle error:
+        return false
+    Positive replacement = 9 handle error:
+        return false
+    Positive fallback = 7 handle error:
+        return false
+    bool equal = left ==(maybe handle:
+        left = replacement
+        default fallback
+    )
+    println(coarsen left)
+    return equal
+function capture_text(maybe: optional[NonEmpty]) returns bool:
+    mutable NonEmpty left = "old" handle error:
+        return false
+    NonEmpty replacement = "new" handle error:
+        return false
+    NonEmpty fallback = "old" handle error:
+        return false
+    bool equal = left ==(maybe handle:
+        left = replacement
+        default fallback
+    )
+    println(coarsen left)
+    return equal
+function main() returns nothing:
+    Positive present = 7 handle error:
+        return
+    NonEmpty present_text = "old" handle error:
+        return
+    println(capture_left(none))
+    println(capture_left(some(present)))
+    println(capture_text(none))
+    println(capture_text(some(present_text)))
+    return nothing

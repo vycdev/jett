@@ -595,9 +595,11 @@ a source stdlib call with a borrowed list parameter and handled index.
 `tests/native/nested_handle_enum_binary.jett` checks that enum equality clones
 its left operand before a right-side handler mutates the source, including a
 constructed enum and copyable string equality. Borrowed aggregate compiler
-intrinsics, authority-bearing direct views, refined binary operand combinations,
-other nested forms, and source syntax for a handler inside interpolation remain
-open.
+`tests/native/nested_handle_refined_binary.jett` compares primitive-backed
+integer and string refinements through the same path. Borrowed aggregate compiler
+intrinsics, authority-bearing direct views, other refined binary operand
+combinations, other nested forms, and source syntax for a handler inside
+interpolation remain open.
 Enforcing immutable-local rebinding in the frontend and correcting affected
 fixtures adds native objects for `string_iteration.jett`, `set_operations.jett`,
 and `uint64_checked_expression_runtime_types.jett`. The last also passes a
