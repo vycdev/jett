@@ -77,6 +77,9 @@ pub struct BackendLoweringResult {
     /// function. Backend consumers must use this identity rather than
     /// rediscovering an entry point from source or symbol names.
     pub program_entry: Option<jett_hir::FunctionId>,
+    /// Compiler-owned entry that calls the primary source file's checked
+    /// `verify` bodies in declaration order, when native suite mode is used.
+    pub native_verify_entry: Option<jett_hir::FunctionId>,
     pub interner: jett_types::TypeInterner,
     pub source_origins: HashMap<FileId, SourceOrigin>,
     pub reflection_metadata: Arc<ReflectionMetadata>,
@@ -2648,7 +2651,7 @@ pub fn lower_file_for_backend_with_options(
     path: &Path,
     options: BuildOptions,
 ) -> Result<BackendLoweringResult, BackendLoweringError> {
-    lower_file_for_backend_inner(path, options, false)
+    lower_file_for_backend_inner(path, options, BackendLoweringMode::Program)
 }
 
 /// Lower checked `verify` and `property` bodies as native test functions.
@@ -2656,13 +2659,37 @@ pub fn lower_file_for_backend_with_options(
 pub fn lower_file_for_native_tests(
     path: &Path,
 ) -> Result<BackendLoweringResult, BackendLoweringError> {
-    lower_file_for_backend_inner(path, BuildOptions::default(), true)
+    lower_file_for_backend_inner(
+        path,
+        BuildOptions::default(),
+        BackendLoweringMode::TestBodies,
+    )
+}
+
+/// Lower the primary file's checked `verify` bodies and append a native entry
+/// that calls them in declaration order. `native_verify_entry` is absent when
+/// the primary file has no `verify` blocks.
+pub fn lower_file_for_native_verify_suite(
+    path: &Path,
+) -> Result<BackendLoweringResult, BackendLoweringError> {
+    lower_file_for_backend_inner(
+        path,
+        BuildOptions::default(),
+        BackendLoweringMode::VerifySuite,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackendLoweringMode {
+    Program,
+    TestBodies,
+    VerifySuite,
 }
 
 fn lower_file_for_backend_inner(
     path: &Path,
     options: BuildOptions,
-    include_test_bodies: bool,
+    mode: BackendLoweringMode,
 ) -> Result<BackendLoweringResult, BackendLoweringError> {
     let file_path = path.display().to_string();
     let source = fs::read_to_string(path).map_err(|error| {
@@ -2760,7 +2787,7 @@ fn lower_file_for_backend_inner(
         ));
     }
 
-    let mut hir = if include_test_bodies {
+    let mut hir = if mode != BackendLoweringMode::Program {
         jett_hir::lower_with_test_bodies(
             &parse_result.module,
             &resolve_result,
@@ -2777,6 +2804,11 @@ fn lower_file_for_backend_inner(
     }
     .map_err(BackendLoweringError::Hir)?;
     native_constants::bake_primitives(&mut hir, &explicit_comptime_values);
+    let native_verify_entry = if mode == BackendLoweringMode::VerifySuite {
+        append_native_verify_suite(&mut hir, &parse_result.module, entry_file)?
+    } else {
+        None
+    };
     let program_entry = lowered_program_entry(&hir, source_program_entry)?;
     let mir = jett_mir::lower(&hir).map_err(BackendLoweringError::Mir)?;
     jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;
@@ -2785,6 +2817,7 @@ fn lower_file_for_backend_inner(
         hir,
         mir,
         program_entry,
+        native_verify_entry,
         interner: check_result.interner,
         source_origins,
         reflection_metadata,
@@ -3140,6 +3173,83 @@ fn lowered_program_entry(
         }]));
     }
     Ok(Some(entry.id))
+}
+
+fn append_native_verify_suite(
+    hir: &mut jett_hir::Program,
+    module: &Module,
+    entry_file: FileId,
+) -> Result<Option<jett_hir::FunctionId>, BackendLoweringError> {
+    let mut verifies = Vec::new();
+    let mut suite_namespace = None;
+    for item in &module.items {
+        let Item::Verify(verify) = item else {
+            continue;
+        };
+        if verify.span.file != entry_file {
+            continue;
+        }
+        let mut matches = hir.functions.iter().filter(|function| {
+            function.span == verify.span
+                && function.identity.declaration.kind == jett_hir::DeclarationKind::Verify
+        });
+        let Some(function) = matches.next() else {
+            return Err(BackendLoweringError::Hir(vec![jett_hir::LowerError {
+                span: verify.span,
+                message: "checked verify body has no exact HIR function".to_owned(),
+            }]));
+        };
+        if matches.next().is_some() {
+            return Err(BackendLoweringError::Hir(vec![jett_hir::LowerError {
+                span: verify.span,
+                message: "checked verify body has multiple HIR functions".to_owned(),
+            }]));
+        }
+        if suite_namespace.is_none() {
+            suite_namespace = Some(function.identity.declaration.namespace.clone());
+        }
+        verifies.push((function.id, function.span));
+    }
+    let Some(span) = verifies.first().map(|(_, span)| *span) else {
+        return Ok(None);
+    };
+    let id = jett_hir::FunctionId::new(hir.functions.len() as u32);
+    let statements = verifies
+        .into_iter()
+        .map(|(function, span)| jett_hir::Statement {
+            kind: jett_hir::StatementKind::Expression(jett_hir::Expression {
+                kind: jett_hir::ExpressionKind::Call {
+                    function,
+                    args: Vec::new(),
+                    evaluation_order: Vec::new(),
+                },
+                ty: jett_types::TypeInterner::NOTHING,
+                span,
+            }),
+            span,
+        })
+        .collect();
+    hir.functions.push(jett_hir::Function {
+        id,
+        identity: jett_hir::FunctionIdentity {
+            declaration: jett_hir::DeclarationId {
+                origin: SourceOrigin::Project,
+                namespace: suite_namespace.unwrap_or_default(),
+                name: format!("__native_verify_suite:{}", span.start),
+                kind: jett_hir::DeclarationKind::Verify,
+            },
+            type_arguments: Vec::new(),
+            specialization: jett_typecheck::CheckedGenericSpecialization::default(),
+        },
+        source_definition: None,
+        params: Vec::new(),
+        capture_count: 0,
+        return_type: jett_types::TypeInterner::NOTHING,
+        locals: Vec::new(),
+        body: jett_hir::Block { statements, span },
+        span,
+    });
+    Ok(Some(id))
 }
 
 fn prepend_support_modules(module: &mut Module, support_modules: Vec<Module>) {

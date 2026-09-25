@@ -1,8 +1,13 @@
 //! Link and execute real native programs on the Windows MSVC host.
 #![cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
 
-use jett_driver::native::{NativeLauncherBundle, build_host_executable, host_target};
+use jett_common::FileId;
+use jett_driver::native::{
+    NativeLauncherBundle, build_host_executable, build_host_verify_suite_executable, host_target,
+};
+use jett_parser::ast::Item;
 use jett_runtime::{clock, environment, graphics, random};
+use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -116,6 +121,92 @@ fn run_bounded_with_env(
         stdout: snapshot(stdout.as_file_mut()),
         stderr: snapshot(stderr.as_file_mut()),
     }
+}
+
+#[test]
+fn native_verify_suite_executes_all_checked_bodies() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/verify_test.jett");
+    let directory = tempfile::tempdir().expect("verify executable directory");
+    let executable = directory.path().join("verify_test.exe");
+    let artifact = build_host_verify_suite_executable(&fixture, launcher(), &executable)
+        .expect("link native verify suite");
+    assert_eq!(artifact.path, executable);
+    let output = run_bounded(&artifact.path, directory.path());
+    assert!(output.status.success(), "native verify failed: {output:?}");
+    assert!(
+        output.stdout.is_empty(),
+        "verify emitted stdout: {output:?}"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "verify emitted stderr: {output:?}"
+    );
+}
+
+#[test]
+fn native_verify_suite_keeps_inline_callbacks_inside_their_parent_body() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/run_pass/json_public_secret_policy.jett");
+    let directory = tempfile::tempdir().expect("verify executable directory");
+    let executable = directory.path().join("json_public_secret_policy.exe");
+    let artifact = build_host_verify_suite_executable(&fixture, launcher(), &executable)
+        .expect("link native verify suite with inline callbacks");
+    let output = run_bounded(&artifact.path, directory.path());
+    assert!(output.status.success(), "native verify failed: {output:?}");
+}
+
+#[test]
+fn native_verify_suites_execute_for_all_run_pass_fixtures() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass");
+    let mut sources = fs::read_dir(&fixtures)
+        .expect("run-pass fixture directory")
+        .map(|entry| entry.expect("fixture entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jett")
+        })
+        .collect::<Vec<_>>();
+    sources.sort();
+    let directory = tempfile::tempdir().expect("native verify audit directory");
+    let mut attempted = 0;
+    let mut passed = 0;
+    let mut failures = Vec::new();
+    for source in sources {
+        let text = fs::read_to_string(&source).expect("fixture source");
+        let parsed = jett_parser::parse(&text, FileId::new(0));
+        if !parsed
+            .module
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::Verify(_)))
+        {
+            continue;
+        }
+        attempted += 1;
+        let executable = directory.path().join(format!(
+            "{}.exe",
+            source.file_stem().expect("fixture stem").to_string_lossy()
+        ));
+        match build_host_verify_suite_executable(&source, launcher(), &executable) {
+            Ok(artifact) => {
+                let output = run_bounded(&artifact.path, directory.path());
+                if output.status.success() {
+                    passed += 1;
+                } else {
+                    failures.push(format!("{}: {output:?}", source.display()));
+                }
+                fs::remove_file(&artifact.path).expect("remove finished verify executable");
+            }
+            Err(error) => failures.push(format!("{}: {error}", source.display())),
+        }
+    }
+    println!("native verify suites: {passed}/{attempted}");
+    for failure in &failures {
+        println!("{failure}");
+    }
+    assert_eq!(attempted, 154, "native verify fixture denominator changed");
+    assert_eq!(passed, attempted, "native verify suite failures");
 }
 
 #[test]

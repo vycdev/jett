@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jett_common::SourceOrigin;
-use jett_driver::lower_file_for_backend;
+use jett_driver::{lower_file_for_backend, lower_file_for_native_verify_suite};
+use jett_hir::{DeclarationKind, ExpressionKind, StatementKind};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass")
@@ -78,6 +79,49 @@ fn backend_lowering_publishes_the_exact_primary_program_entry() {
     assert_eq!(hir_entry.identity.declaration.origin, SourceOrigin::Project);
     assert_eq!(hir_entry.identity, mir_entry.identity);
     assert_eq!(hir_entry.span, mir_entry.span);
+}
+
+#[test]
+fn native_verify_suite_calls_primary_file_bodies_in_declaration_order() {
+    let fixture = fixture_dir().join("verify_test.jett");
+    let lowered =
+        lower_file_for_native_verify_suite(&fixture).expect("verify fixture should lower");
+    assert_eq!(lowered.program_entry, None);
+    let entry = lowered
+        .native_verify_entry
+        .expect("verify fixture must have a suite entry");
+    let suite = &lowered.hir.functions[entry.index() as usize];
+    assert_eq!(suite.identity.declaration.namespace, "app");
+    assert!(
+        suite
+            .identity
+            .declaration
+            .name
+            .starts_with("__native_verify_suite:")
+    );
+    let called = suite
+        .body
+        .statements
+        .iter()
+        .map(|statement| match &statement.kind {
+            StatementKind::Expression(expression) => match &expression.kind {
+                ExpressionKind::Call { function, args, .. } if args.is_empty() => *function,
+                other => panic!("suite statement does not call a verify body: {other:?}"),
+            },
+            other => panic!("suite has an unexpected statement: {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(called.len(), 2);
+    let bodies = called
+        .iter()
+        .map(|id| &lowered.hir.functions[id.index() as usize])
+        .collect::<Vec<_>>();
+    assert!(bodies.iter().all(|body| {
+        body.identity.declaration.kind == DeclarationKind::Verify
+            && body.span.file == suite.span.file
+    }));
+    assert!(bodies[0].identity.declaration.name.starts_with("add:"));
+    assert!(bodies[1].identity.declaration.name.starts_with("multiply:"));
 }
 
 #[test]

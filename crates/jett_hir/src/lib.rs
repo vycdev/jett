@@ -31,6 +31,11 @@ pub use type_validation::validate_backend_types;
 pub struct FunctionId(u32);
 
 impl FunctionId {
+    /// Allocate a compiler-managed function after checked HIR lowering.
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }

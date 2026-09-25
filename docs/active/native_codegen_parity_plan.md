@@ -11,12 +11,13 @@ layer or silently delegate runtime behavior to the interpreter.
 
 ## Scope and Baseline
 
-The current fixture inventory establishes three separate denominators:
+The current fixture inventory establishes four separate denominators:
 
 | Obligation | Denominator | Acceptance condition |
 | --- | ---: | --- |
 | Native lowering | 182 | Every `tests/run_pass/*.jett` fixture reaches validated HIR and MIR and is accepted by native object generation. |
 | `main` execution | 30 | Every run-pass fixture that declares `main` links and runs on the supported host with its interpreter-equivalent expected outcome and observable behavior. One scripted graphics fixture intentionally returns a runtime error. |
+| `verify` execution | 154 | Every run-pass fixture with top-level `verify` blocks links a native suite that executes each body in declaration order and exits successfully. |
 | Runtime contracts | 25 | Every `tests/runtime_fail/*.jett` fixture links and matches its interpreter contract: 17 wrapping-success cases and 8 runtime-failure cases, including failure class, message contract, and cleanup behavior where applicable. |
 
 These numbers are denominators, not a sample or a percentage target. Fixtures
@@ -25,11 +26,11 @@ may leave it only when the corresponding language or runtime feature is
 explicitly marked unimplemented, with the reason recorded in the same change.
 
 Run-pass files without `main`, including verification and property fixtures,
-count toward the 182-fixture lowering obligation. The initial executable
-harness does not execute their `verify` blocks natively, so they do not count
-toward the 30-fixture execution obligation. Passing them through frontend
-verification is not evidence that their bodies executed as native code. A
-future native verification harness may add a separate execution denominator.
+count toward the 182-fixture lowering obligation. They do not enter the
+30-fixture `main` execution denominator. The native verification suite now
+links and executes every checked top-level `verify` body in each of 154
+fixtures as a separate execution gate. Property `given` generation and native
+property-body execution remain separate work.
 
 Compile-fail fixtures remain frontend contracts. Native work must not change
 their diagnostics, but rejected programs do not enter a backend denominator.
@@ -265,8 +266,8 @@ the runtime interpreter.
    stable design, architecture, and progress documents are updated to describe
    the proven implementation.
 
-The parity report must publish counts as `passed / denominator` for each of the
-three obligations. A single percentage would hide the difference between code
+The parity report must publish counts as `passed / denominator` for each
+obligation. A single percentage would hide the difference between code
 that merely lowers, code that executes successfully, and code that preserves
 failure semantics.
 
@@ -293,7 +294,7 @@ lowering alone never changes an execution row to complete.
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | sequential `run`/`join`/`cancel` values and result propagation covered; actors and a distinct pending-task representation pending | native/interpreter differential probe covers successful and failed string tasks, cancellation cleanup, and the existing structured-concurrency `main`; actors, asynchronous scheduling, cancellation checkpoints, and nothing-typed pending tasks remain pending |
 | JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections including sets of primitive-backed elements, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32`, `uint16`/`uint32`, and `float32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of primitive-backed hashable types, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
-| Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
+| Trace, breakpoint, assert, and failure reporting | covered | `int64` trace, zero- or one-binding `int64` breakpoints, and default-message `assert` in test bodies covered; other trace/breakpoint shapes and custom assertion messages pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; checked `verify` bodies run through native suite entries; other instrumentation pending |
 
 Actor handler capability and state snapshots are now explicit leading HIR/MIR
 parameters, and `respond` participates in native ownership analysis. Checked
@@ -310,13 +311,14 @@ The current fixture gates are:
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
 | Native object generation | 182 | 182 | `native_parity_object_emit_obligations_emit_host_objects`; every run-pass fixture emits reachable native code |
 | Successful/expected `main` execution | 30 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, Environment, and Graphics inputs |
+| Native `verify` execution | 154 | 154 | `native_verify_suites_execute_for_all_run_pass_fixtures`; 506 top-level bodies execute across the 154 fixtures |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
 gate is currently 182/182 (100%), a useful progress measure rather than a
-claim that the same fraction of the language has native support. Native test
-symbol execution remains separate from this object gate.
+claim that the same fraction of the language has native support. Native
+property-body execution remains separate from the object and verify gates.
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a
 literal gives raw `json.JsonTree` its distinct checked branch, while reflected
@@ -844,5 +846,9 @@ terminal failure path, and test-body reads clone ordinary owned values to
 preserve Jett's relaxed test-block ownership policy. The full 182-fixture
 test-body audit now emits 182/182 objects (100%). The regular object gate
 checks all 182 rows, with deterministic byte checks on representative objects.
-This object count does not assert that `verify` or `property` bodies execute
-natively: the native test runner remains a separate execution gate.
+The native verify runner now synthesizes a source-file suite entry that calls
+only exact top-level `verify` bodies in declaration order. It runs the 154
+verify-bearing fixtures through the production launcher and linker. Extracted
+inline callbacks remain reachable through their parent bodies, rather than
+becoming independent zero-argument tests. Property generation and native
+property-body execution still need a runner.

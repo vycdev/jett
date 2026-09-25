@@ -606,8 +606,10 @@ source policy that ordinary owned values can be read repeatedly: an owned
 native read deep-clones the value while a view borrows it. The default `assert`
 failure records the static terminal message `assertion failed` and follows the
 normal owned-value cleanup epilogue. Production program objects still select
-only the checked source `main`; executing native test symbols and generating
-property inputs remain follow-up work.
+only the checked source `main`. A separate native verify build synthesizes one
+entry that calls the primary file's top-level verify functions in declaration
+order, stopping on terminal failure. Generating property inputs and executing
+property bodies remain follow-up work.
 
 Evidence includes existing generic_struct and explicit_struct_equality fixture
 bodies executed with supplemental mains, nested owners and early returns,

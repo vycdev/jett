@@ -20,7 +20,7 @@ use jett_hir::FunctionId;
 
 use crate::{
     BackendLoweringError, BackendLoweringResult, lower_file_for_backend,
-    lower_file_for_native_tests,
+    lower_file_for_native_tests, lower_file_for_native_verify_suite,
 };
 
 /// The sole target accepted by the version 1 native Windows linker.
@@ -237,6 +237,9 @@ pub enum NativeBuildError {
     MissingProgramEntry {
         source_path: PathBuf,
     },
+    MissingVerifyBodies {
+        source_path: PathBuf,
+    },
     Codegen {
         source_path: PathBuf,
         source: CodegenError,
@@ -367,6 +370,11 @@ impl fmt::Display for NativeBuildError {
             Self::MissingProgramEntry { source_path } => write!(
                 formatter,
                 "native source `{}` has no checked primary `main` program entry",
+                source_path.display()
+            ),
+            Self::MissingVerifyBodies { source_path } => write!(
+                formatter,
+                "native source `{}` has no checked `verify` bodies in the primary file",
                 source_path.display()
             ),
             Self::Codegen {
@@ -553,6 +561,35 @@ pub fn emit_host_program_object_for_file(
             .ok_or_else(|| NativeBuildError::MissingProgramEntry {
                 source_path: source_path.to_path_buf(),
             })?;
+    emit_program_object_from_lowering(source_path, lowered, program_entry)
+}
+
+/// Emit one launcher-compatible object that calls every checked `verify` body
+/// in the primary source file, in declaration order.
+pub fn emit_host_verify_suite_object_for_file(
+    source_path: &Path,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered = lower_file_for_native_verify_suite(source_path).map_err(|source| {
+        NativeBuildError::Lowering {
+            source_path: source_path.to_path_buf(),
+            source: Box::new(source),
+        }
+    })?;
+    let entry =
+        lowered
+            .native_verify_entry
+            .ok_or_else(|| NativeBuildError::MissingVerifyBodies {
+                source_path: source_path.to_path_buf(),
+            })?;
+    emit_program_object_from_lowering(source_path, lowered, entry)
+}
+
+fn emit_program_object_from_lowering(
+    source_path: &Path,
+    lowered: BackendLoweringResult,
+    program_entry: FunctionId,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
     let object = emit_host_program_object(&lowered.mir, &lowered.interner, program_entry).map_err(
         |source| NativeBuildError::Codegen {
             source_path: source_path.to_path_buf(),
@@ -598,6 +635,17 @@ pub fn build_host_executable(
     output_path: &Path,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
     let object = emit_host_program_object_for_file(source_path)?;
+    link_host_object(&object, launcher, output_path)
+}
+
+/// Compile and link the primary file's checked `verify` bodies as one native
+/// executable. The launcher reports the first terminal assertion failure.
+pub fn build_host_verify_suite_executable(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_verify_suite_object_for_file(source_path)?;
     link_host_object(&object, launcher, output_path)
 }
 
