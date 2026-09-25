@@ -110,6 +110,45 @@ pub const SUM_SUCCESS: u32 = 1;
 pub const DEBUG_NOTHING_KIND: u32 = 12;
 pub const DEBUG_BYTES_KIND: u32 = 13;
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeDebugTag {
+    Primitive,
+    Nothing,
+    Bytes,
+    List,
+    Set,
+    Map,
+    Optional,
+    Result,
+    Record,
+    Enum,
+    Machine,
+    Capability,
+    Alias,
+}
+
+impl NativeDebugTag {
+    fn from_raw(value: u8) -> LeafResult<Self> {
+        Ok(match value {
+            0 => Self::Primitive,
+            1 => Self::Nothing,
+            2 => Self::Bytes,
+            3 => Self::List,
+            4 => Self::Set,
+            5 => Self::Map,
+            6 => Self::Optional,
+            7 => Self::Result,
+            8 => Self::Record,
+            9 => Self::Enum,
+            10 => Self::Machine,
+            11 => Self::Capability,
+            12 => Self::Alias,
+            _ => return Err(INVALID_TRACE_LABEL),
+        })
+    }
+}
+
 enum NativeGraphicsSession {
     Window(graphics::Session),
     Scripted { width: i64, height: i64 },
@@ -271,6 +310,280 @@ enum DecodedBitfieldField {
     Plain(u64),
     Enum(u32),
     Payload(Vec<u8>),
+}
+struct NativeDebugLayout {
+    root: usize,
+    nodes: Vec<NativeDebugNode>,
+}
+enum NativeDebugNode {
+    Primitive(u32),
+    Nothing,
+    Bytes,
+    List(usize),
+    Set(usize),
+    Map(usize, usize),
+    Optional(usize),
+    Result(usize, usize),
+    Record(String, Vec<(String, usize)>),
+    Enum(String, Vec<(String, Vec<usize>)>),
+    Machine(String, Vec<(String, Vec<usize>)>),
+    Capability(String),
+    Alias(usize),
+}
+impl NativeDebugLayout {
+    fn parse(bytes: &[u8]) -> LeafResult<Self> {
+        let mut cursor = BitfieldLayoutCursor { bytes, position: 0 };
+        if cursor.take(3).map_err(|_| INVALID_TRACE_LABEL)? != b"JD\x01" {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        let count = usize::try_from(cursor.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+            .map_err(|_| INVALID_TRACE_LABEL)?;
+        let root = usize::try_from(cursor.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+            .map_err(|_| INVALID_TRACE_LABEL)?;
+        if count > bytes.len() || root >= count {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        let mut nodes = Vec::new();
+        nodes.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+        for _ in 0..count {
+            let length = usize::try_from(cursor.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+                .map_err(|_| INVALID_TRACE_LABEL)?;
+            let node_bytes = cursor.take(length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let mut node = BitfieldLayoutCursor {
+                bytes: node_bytes,
+                position: 0,
+            };
+            let tag = NativeDebugTag::from_raw(node.byte().map_err(|_| INVALID_TRACE_LABEL)?)?;
+            let index = |node: &mut BitfieldLayoutCursor<'_>| -> LeafResult<usize> {
+                usize::try_from(node.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+                    .map_err(|_| INVALID_TRACE_LABEL)
+            };
+            let name = |node: &mut BitfieldLayoutCursor<'_>| -> LeafResult<String> {
+                node.name().map_err(|_| INVALID_TRACE_LABEL)
+            };
+            let parsed = match tag {
+                NativeDebugTag::Primitive => {
+                    NativeDebugNode::Primitive(node.u32().map_err(|_| INVALID_TRACE_LABEL)?)
+                }
+                NativeDebugTag::Nothing => NativeDebugNode::Nothing,
+                NativeDebugTag::Bytes => NativeDebugNode::Bytes,
+                NativeDebugTag::List => NativeDebugNode::List(index(&mut node)?),
+                NativeDebugTag::Set => NativeDebugNode::Set(index(&mut node)?),
+                NativeDebugTag::Map => NativeDebugNode::Map(index(&mut node)?, index(&mut node)?),
+                NativeDebugTag::Optional => NativeDebugNode::Optional(index(&mut node)?),
+                NativeDebugTag::Result => {
+                    NativeDebugNode::Result(index(&mut node)?, index(&mut node)?)
+                }
+                NativeDebugTag::Record => {
+                    let type_name = name(&mut node)?;
+                    let fields = index(&mut node)?;
+                    if fields > node_bytes.len() {
+                        return Err(INVALID_TRACE_LABEL);
+                    }
+                    let mut definitions = Vec::new();
+                    definitions
+                        .try_reserve_exact(fields)
+                        .map_err(|_| EXHAUSTED)?;
+                    for _ in 0..fields {
+                        definitions.push((name(&mut node)?, index(&mut node)?));
+                    }
+                    NativeDebugNode::Record(type_name, definitions)
+                }
+                NativeDebugTag::Enum | NativeDebugTag::Machine => {
+                    let type_name = name(&mut node)?;
+                    let count = index(&mut node)?;
+                    if count > node_bytes.len() {
+                        return Err(INVALID_TRACE_LABEL);
+                    }
+                    let mut variants = Vec::new();
+                    variants.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
+                    for _ in 0..count {
+                        let variant_name = name(&mut node)?;
+                        let fields = index(&mut node)?;
+                        if fields > node_bytes.len() / 4 {
+                            return Err(INVALID_TRACE_LABEL);
+                        }
+                        let mut types = Vec::new();
+                        types.try_reserve_exact(fields).map_err(|_| EXHAUSTED)?;
+                        for _ in 0..fields {
+                            types.push(index(&mut node)?);
+                        }
+                        variants.push((variant_name, types));
+                    }
+                    if tag == NativeDebugTag::Enum {
+                        NativeDebugNode::Enum(type_name, variants)
+                    } else {
+                        NativeDebugNode::Machine(type_name, variants)
+                    }
+                }
+                NativeDebugTag::Capability => NativeDebugNode::Capability(name(&mut node)?),
+                NativeDebugTag::Alias => NativeDebugNode::Alias(index(&mut node)?),
+            };
+            if node.position != node_bytes.len() {
+                return Err(INVALID_TRACE_LABEL);
+            }
+            nodes.push(parsed);
+        }
+        if cursor.position != bytes.len() {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        Ok(Self { root, nodes })
+    }
+
+    fn format_value(
+        &self,
+        values: &NativeValues,
+        bits: u64,
+        index: usize,
+        depth: u32,
+    ) -> LeafResult<String> {
+        if depth >= 128 {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        let child = depth + 1;
+        Ok(match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
+            NativeDebugNode::Primitive(kind) => values.debug_value(bits, *kind)?,
+            NativeDebugNode::Nothing => "nothing".to_owned(),
+            NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
+            NativeDebugNode::Alias(base) => return self.format_value(values, bits, *base, child),
+            NativeDebugNode::Capability(name) => format!("<{name} capability>"),
+            NativeDebugNode::List(element) => {
+                let list = values.lists.get(&bits).ok_or(INVALID_LIST)?;
+                let mut result = String::from("list(");
+                for (position, item) in list.elements.iter().enumerate() {
+                    if position > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&self.format_value(
+                        values,
+                        item.ok_or(INVALID_LIST)?,
+                        *element,
+                        child,
+                    )?);
+                }
+                result.push(')');
+                result
+            }
+            NativeDebugNode::Set(element) => {
+                let set = values.sets.get(&bits).ok_or(INVALID_SET)?;
+                let mut result = String::from("set(");
+                for (position, item) in set.elements.iter().enumerate() {
+                    if position > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&self.format_value(
+                        values,
+                        item.ok_or(INVALID_SET)?,
+                        *element,
+                        child,
+                    )?);
+                }
+                result.push(')');
+                result
+            }
+            NativeDebugNode::Map(key, value) => {
+                let map = values.maps.get(&bits).ok_or(INVALID_MAP)?;
+                let mut result = String::from("map(");
+                for (position, entry) in map.entries.iter().enumerate() {
+                    let entry = entry.ok_or(INVALID_MAP)?;
+                    if entry.key_taken {
+                        return Err(INVALID_MAP);
+                    }
+                    if position > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(&self.format_value(values, entry.key, *key, child)?);
+                    result.push_str(": ");
+                    result.push_str(&self.format_value(values, entry.value, *value, child)?);
+                }
+                result.push(')');
+                result
+            }
+            NativeDebugNode::Optional(element) => {
+                let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
+                match sum.tag {
+                    SUM_FAILURE => "none".to_owned(),
+                    SUM_SUCCESS => format!(
+                        "some({})",
+                        self.format_value(values, sum.bits, *element, child)?
+                    ),
+                    _ => return Err(INVALID_SUM),
+                }
+            }
+            NativeDebugNode::Result(ok, error) => {
+                let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
+                match sum.tag {
+                    SUM_FAILURE => format!(
+                        "fail({})",
+                        self.format_value(values, sum.bits, *error, child)?
+                    ),
+                    SUM_SUCCESS => {
+                        format!("ok({})", self.format_value(values, sum.bits, *ok, child)?)
+                    }
+                    _ => return Err(INVALID_SUM),
+                }
+            }
+            NativeDebugNode::Record(name, fields) => {
+                let record = values.structs.get(&bits).ok_or(INVALID_STRUCT)?;
+                if record.fields.len() != fields.len() {
+                    return Err(INVALID_STRUCT);
+                }
+                let mut result = format!("{name}(");
+                for (position, (field_name, field_type)) in fields.iter().enumerate() {
+                    if position > 0 {
+                        result.push_str(", ");
+                    }
+                    let field = record.fields[position].ok_or(INVALID_STRUCT)?;
+                    result.push_str(field_name);
+                    result.push_str(": ");
+                    result.push_str(&self.format_value(values, field.bits, *field_type, child)?);
+                }
+                result.push(')');
+                result
+            }
+            NativeDebugNode::Enum(name, variants) | NativeDebugNode::Machine(name, variants) => {
+                let record = values.structs.get(&bits).ok_or(INVALID_STRUCT)?;
+                let tag = usize::try_from(
+                    record
+                        .fields
+                        .first()
+                        .copied()
+                        .flatten()
+                        .ok_or(INVALID_STRUCT)?
+                        .bits,
+                )
+                .map_err(|_| INVALID_STRUCT)?;
+                let (variant_name, fields) = variants.get(tag).ok_or(INVALID_STRUCT)?;
+                if record.fields.len() != fields.len() + 1 {
+                    return Err(INVALID_STRUCT);
+                }
+                let separator = if matches!(self.nodes.get(index), Some(NativeDebugNode::Enum(..)))
+                {
+                    "."
+                } else {
+                    "@"
+                };
+                let mut result = format!("{name}{separator}{variant_name}");
+                if !fields.is_empty() {
+                    result.push('(');
+                    for (position, field_type) in fields.iter().enumerate() {
+                        if position > 0 {
+                            result.push_str(", ");
+                        }
+                        let field = record.fields[position + 1].ok_or(INVALID_STRUCT)?;
+                        result.push_str(&self.format_value(
+                            values,
+                            field.bits,
+                            *field_type,
+                            child,
+                        )?);
+                    }
+                    result.push(')');
+                }
+                result
+            }
+        })
+    }
 }
 struct BitfieldLayoutCursor<'a> {
     bytes: &'a [u8],
@@ -575,6 +888,20 @@ impl NativeValues {
     }
     fn debug_append(&mut self, builder: u64, label: &str, bits: u64, kind: u32) -> LeafResult<u32> {
         let value = self.debug_value(bits, kind)?;
+        let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
+        text.push_str(label);
+        text.push_str(&value);
+        Ok(0)
+    }
+    fn debug_append_aggregate(
+        &mut self,
+        builder: u64,
+        label: &str,
+        bits: u64,
+        layout: &[u8],
+    ) -> LeafResult<u32> {
+        let layout = NativeDebugLayout::parse(layout)?;
+        let value = layout.format_value(self, bits, layout.root, 0)?;
         let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
         text.push_str(label);
         text.push_str(&value);
@@ -3653,6 +3980,15 @@ leaves! {
             let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, length) };
             let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
             s.debug_append(builder, label, bits, kind) };
+    DebugAppendAggregate, jett_rt_v1_debug_append_aggregate, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if label_pointer == 0 || layout_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let label_length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            if label_length > isize::MAX as usize || layout_length > isize::MAX as usize { return Err(INVALID_TRACE_LABEL); }
+            let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, label_length) };
+            let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, layout_length) };
+            s.debug_append_aggregate(builder, label, bits, layout) };
     DebugEmit, jett_rt_v1_debug_emit, false, (builder: u64 => I64), u32 => I32,
         |s| s.debug_emit(builder);
     TraceInt64, jett_rt_v1_trace_int64, false, (prefix_pointer: u64 => I64, prefix_length: u64 => I64, value: i64 => I64), u32 => I32,

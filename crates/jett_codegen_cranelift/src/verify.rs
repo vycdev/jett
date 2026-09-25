@@ -696,9 +696,7 @@ impl Verifier<'_> {
                         "trace target is absent from the local table",
                     ));
                 };
-                if crate::values::list_sort_kind(self.types, local.ty).is_some()
-                    || matches!(self.types.resolve(local.ty), Type::Nothing | Type::Bytes)
-                {
+                if super::emit::debug::debug_layout(self.types, local.ty).is_some() {
                     Ok(())
                 } else {
                     Err(self.unsupported(function, statement.span, "aggregate trace value"))
@@ -726,9 +724,7 @@ impl Verifier<'_> {
                             "breakpoint binding is absent from local table",
                         )
                     })?;
-                    if crate::values::list_sort_kind(self.types, local.ty).is_none()
-                        && !matches!(self.types.resolve(local.ty), Type::Nothing | Type::Bytes)
-                    {
+                    if super::emit::debug::debug_layout(self.types, local.ty).is_none() {
                         return Err(self.unsupported(
                             function,
                             statement.span,

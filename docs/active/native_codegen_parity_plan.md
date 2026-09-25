@@ -297,7 +297,7 @@ lowering alone never changes an execution row to complete.
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | sequential `run`/`join`/`cancel` values and result propagation; actor constructors, registration, handler dispatch, and state writeback covered; a distinct pending-task representation remains pending | native/interpreter differential probes cover successful and failed string tasks, cancellation cleanup, actor allocation and owned-state cleanup, message ordering, state mutation, and responses; asynchronous scheduling, cancellation checkpoints, and nothing-typed pending tasks remain pending |
 | JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections including sets of primitive-backed elements, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32`, `uint16`/`uint32`, and `float32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of primitive-backed hashable types, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
-| Trace, breakpoint, assert, and failure reporting | covered | primitive numeric, boolean, string, bytes, and `nothing` trace; zero- and multi-binding breakpoints over those types; default-message `assert` in test bodies; aggregate formatting and custom assertion messages pending | native debug lines match interpreter stderr for primitive traces and all visible breakpoint bindings, including false conditions, Unicode strings, bytes, `nothing`, and an out-of-scope local; checked `verify` bodies run through native suite entries; aggregate instrumentation pending |
+| Trace, breakpoint, assert, and failure reporting | covered | primitive and recursive list, set, map, optional, result, struct, enum, and machine values trace; zero- and multi-binding breakpoints over those types; default-message `assert` in test bodies; bitfields, other special values, and custom assertion messages pending | native debug lines match interpreter stderr for scalar and aggregate fixtures, including empty and recursive values, false conditions, Unicode strings, bytes, `nothing`, and an out-of-scope local; checked `verify` bodies run through native suite entries; bitfield and special-value instrumentation pending |
 
 Actor handler capability and state snapshots are explicit leading HIR/MIR
 parameters, and `respond` participates in native ownership analysis. Checked
@@ -467,7 +467,8 @@ adds one object and native `main`; primitive list sort adds
 `map_operations.jett`, and `map_set_source_surface.jett`.
 Scoped breakpoint bindings add `breakpoint_basic.jett` to both native object
 and linked `main` gates. Later primitive debug-value formatting adds
-multi-binding breakpoints; aggregate bindings still need a recursive formatter.
+multi-binding breakpoints. A recursive type graph now formats aggregate
+bindings for trace and breakpoint; bitfields and special values remain open.
 Compiler-owned predicate functions and CFG lowering for base-value refinement
 boundaries add `integer_nonzero_proofs.jett` to the native object gate. The
 native/interpreter fixture covers ordered ancestor predicates, false-result
@@ -865,5 +866,7 @@ result and error text. Primitive trace and breakpoint statements now assemble
 one debug line from live native bindings. The differential
 `tests/native/debug_primitives.jett` fixture covers every fixed-width integer
 category, both float widths, booleans, UTF-8 strings, bytes, `nothing`, and
-sorted multi-binding breakpoints. Aggregate debug values and custom assertion
-messages remain open.
+sorted multi-binding breakpoints. `tests/native/debug_aggregates.jett` covers
+nested and empty collections, optional and result branches, structs, recursive
+enums, and machine states against interpreter output. Bitfield and special
+debug values and custom assertion messages remain open.

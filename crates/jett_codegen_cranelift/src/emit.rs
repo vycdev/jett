@@ -1,3 +1,4 @@
+pub(crate) mod debug;
 mod graphics;
 mod values;
 use jett_mir::move_values::{
@@ -1114,20 +1115,24 @@ impl Translator<'_, '_> {
                 .local_types
                 .get(binding.index() as usize)
                 .ok_or_else(|| contract_error(self.symbol, span, "debug binding is absent"))?;
-            let kind = if let Some(kind) = crate::values::list_sort_kind(self.types, local.ty) {
-                kind as u32
-            } else {
-                match self.types.resolve(local.ty) {
-                    Type::Nothing => DEBUG_NOTHING_KIND,
-                    Type::Bytes => DEBUG_BYTES_KIND,
-                    _ => return Err(self.unsupported(span, "aggregate debug value")),
+            let kind = crate::values::list_sort_kind(self.types, local.ty)
+                .map(|kind| kind as u32)
+                .or_else(|| match self.types.resolve(local.ty) {
+                    Type::Nothing => Some(DEBUG_NOTHING_KIND),
+                    Type::Bytes => Some(DEBUG_BYTES_KIND),
+                    _ => None,
+                });
+            let type_name = match self.types.resolve(local.ty) {
+                Type::MachineState { machine, .. } => {
+                    self.types.resolve_machine(*machine).name.clone()
                 }
+                _ => self.types.type_name(local.ty),
             };
             let label = format!(
                 "{}{}: {} = ",
                 if index == 0 { "" } else { ", " },
                 local.name,
-                self.types.type_name(local.ty)
+                type_name
             );
             let value = if local.ty == TypeInterner::NOTHING {
                 self.builder.ins().iconst(ir::types::I64, 0)
@@ -1148,12 +1153,30 @@ impl Translator<'_, '_> {
             };
             let bits = self.payload_bits(LoweredValue::Scalar(value)).0;
             let (label_pointer, label_length) = self.static_bytes(&label)?;
-            let kind = self.builder.ins().iconst(ir::types::I32, i64::from(kind));
-            self.leaf(
-                NativeLeaf::DebugAppend,
-                &[text, label_pointer, label_length, bits, kind],
-                true,
-            )?;
+            if let Some(kind) = kind {
+                let kind = self.builder.ins().iconst(ir::types::I32, i64::from(kind));
+                self.leaf(
+                    NativeLeaf::DebugAppend,
+                    &[text, label_pointer, label_length, bits, kind],
+                    true,
+                )?;
+            } else {
+                let layout = debug::debug_layout(self.types, local.ty)
+                    .ok_or_else(|| self.unsupported(span, "aggregate debug value"))?;
+                let (layout_pointer, layout_length) = self.static_data(&layout)?;
+                self.leaf(
+                    NativeLeaf::DebugAppendAggregate,
+                    &[
+                        text,
+                        label_pointer,
+                        label_length,
+                        bits,
+                        layout_pointer,
+                        layout_length,
+                    ],
+                    true,
+                )?;
+            }
         }
         self.leaf(NativeLeaf::DebugEmit, &[text], true)?;
         if let LoweredValue::Owned(_, slot) = owned {

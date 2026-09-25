@@ -1,0 +1,41 @@
+namespace test
+struct Payload:
+    title: string
+    numbers: list[int16]
+    maybe: optional[string]
+    outcome: result[int64, string]
+enum Message:
+    empty
+    text(value: string)
+    nested(inner: Message)
+machine Session:
+    states:
+        guest
+        active(user: string)
+    transitions:
+        guest to active
+function main() returns nothing:
+    list[optional[int64]] choices = list(some(3), none, some(-2))
+    mutable set[string] tags = set.new[string]()
+    tags = set.add[string](tags, "alpha")
+    tags = set.add[string](tags, "beta")
+    map[string, list[int64]] groups = map("one": list(1, 2), "other": list(0))
+    list[int64] empty = list.new[int64]()
+    Payload payload = Payload(title: "Ada", numbers: list(2, -3), maybe: some("ready"), outcome: fail("retry"))
+    Message message = Message.nested(Message.text("hello"))
+    Message unit = Message.empty
+    Session session = Session(active, "Lin")
+    Session guest = Session(guest)
+    result[int64, string] success = ok(42)
+    trace choices
+    trace tags
+    trace groups
+    trace empty
+    trace payload
+    trace message
+    trace unit
+    trace session
+    trace guest
+    trace success
+    breakpoint true
+    return nothing

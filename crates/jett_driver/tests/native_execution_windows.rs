@@ -1255,6 +1255,7 @@ fn native_debug_statements_match_interpreter_output() {
         "../../tests/run_pass/breakpoint_basic.jett",
         "../../tests/native/breakpoint_int64.jett",
         "../../tests/native/debug_primitives.jett",
+        "../../tests/native/debug_aggregates.jett",
     ] {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
@@ -1265,6 +1266,10 @@ fn native_debug_statements_match_interpreter_output() {
         assert!(actual.status.success(), "{relative_path}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{relative_path}");
         let debug = format!("{}\n", expected.debug_output.join("\n"));
-        assert_eq!(actual.stderr, debug.as_bytes(), "{relative_path}");
+        assert_eq!(
+            String::from_utf8_lossy(&actual.stderr),
+            debug,
+            "{relative_path}"
+        );
     }
 }
