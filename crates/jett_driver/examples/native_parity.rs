@@ -4,6 +4,7 @@
 use jett_driver::native::{self, NativeLauncherBundle};
 use jett_runtime::clock::{ClockTestSample, TEST_SCRIPT_ENV, encode_test_script};
 use jett_runtime::environment::{self, EnvironmentTestSnapshot};
+use jett_runtime::graphics::{self, TestEvent as GraphicsTestEvent};
 use jett_runtime::random::{
     RandomTestSample, TEST_SCRIPT_ENV as RANDOM_TEST_SCRIPT_ENV,
     encode_test_script as encode_random_test_script,
@@ -22,6 +23,7 @@ fn execute(
     clock_samples: Option<&[ClockTestSample]>,
     random_samples: Option<&[RandomTestSample]>,
     environment_snapshot: Option<&EnvironmentTestSnapshot>,
+    graphics_events: Option<&[GraphicsTestEvent]>,
 ) -> Result<Output, String> {
     let mut command = Command::new(binary);
     command
@@ -40,6 +42,12 @@ fn execute(
         command.env(
             environment::TEST_SNAPSHOT_ENV,
             environment::encode_test_snapshot(snapshot),
+        );
+    }
+    if let Some(events) = graphics_events {
+        command.env(
+            graphics::TEST_SCRIPT_ENV,
+            graphics::encode_test_script(events),
         );
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
@@ -92,6 +100,7 @@ fn behavior(
     clock_samples: Option<&[ClockTestSample]>,
     random_samples: Option<&[RandomTestSample]>,
     environment_snapshot: Option<&EnvironmentTestSnapshot>,
+    graphics_events: Option<&[GraphicsTestEvent]>,
 ) -> Result<Value, String> {
     let actual = execute(
         binary,
@@ -99,12 +108,14 @@ fn behavior(
         clock_samples,
         random_samples,
         environment_snapshot,
+        graphics_events,
     )?;
     let stdout = String::from_utf8(actual.stdout).map_err(|e| e.to_string())?;
     let stderr = String::from_utf8(actual.stderr).map_err(|e| e.to_string())?;
     if usize::from(clock_samples.is_some())
         + usize::from(random_samples.is_some())
         + usize::from(environment_snapshot.is_some())
+        + usize::from(graphics_events.is_some())
         > 1
     {
         return Err("multiple scripted capability providers in one fixture".into());
@@ -118,6 +129,8 @@ fn behavior(
             source,
             snapshot.clone(),
         )
+    } else if let Some(events) = graphics_events {
+        jett_driver::run_file_capture_outcome_with_graphics_test_events(source, events.to_vec())
     } else {
         jett_driver::run_file_capture_outcome(source)
     };
@@ -235,6 +248,13 @@ fn environment_snapshot(fixture: &Value) -> Result<Option<EnvironmentTestSnapsho
         .transpose()
 }
 
+fn graphics_events(fixture: &Value) -> Result<Option<Vec<GraphicsTestEvent>>, String> {
+    fixture
+        .get("graphics_test_events")
+        .map(|events| graphics::decode_test_script(&events.to_string()).map(Vec::from))
+        .transpose()
+}
+
 fn main() -> ExitCode {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     assert_eq!(args.len(), 2, "usage: native_parity LAUNCHER REPORT.json");
@@ -317,6 +337,8 @@ fn main() -> ExitCode {
                         random_samples(fixture).expect("valid Random sample manifest");
                     let environment_snapshot =
                         environment_snapshot(fixture).expect("valid Environment snapshot manifest");
+                    let graphics_events =
+                        graphics_events(fixture).expect("valid Graphics event manifest");
                     match behavior(
                         &source,
                         &output,
@@ -325,6 +347,7 @@ fn main() -> ExitCode {
                         samples.as_deref(),
                         random_samples.as_deref(),
                         environment_snapshot.as_ref(),
+                        graphics_events.as_deref(),
                     ) {
                         Err(error) => row["execution_error"] = json!(error),
                         Ok(result) => {

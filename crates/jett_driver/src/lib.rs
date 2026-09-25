@@ -3524,6 +3524,24 @@ pub fn run_file_with_environment_test_snapshot(
 }
 
 /// Run with deterministic graphics input and real scene validation, without a window.
+pub fn run_file_capture_outcome_with_graphics_test_events(
+    path: &Path,
+    events: Vec<GraphicsTestEvent>,
+) -> Result<RunOutput, RunFailure> {
+    run_file_with_captured_options(
+        path,
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: None,
+            graphics_test_events: Some(events),
+        },
+    )
+}
+
+/// Run with deterministic graphics input and scene validation, without a window.
 pub fn run_file_capture_output_with_graphics_test_events(
     path: &Path,
     events: Vec<GraphicsTestEvent>,

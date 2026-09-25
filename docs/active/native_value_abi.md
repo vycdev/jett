@@ -90,6 +90,11 @@ namespaces, and actor responses.
 function signatures can carry that token through checked `view` parameters.
 This establishes capability injection only; the graphics session kernel and
 callback loop still need native lowering before a graphics program can run.
+For deterministic parity runs, the launcher configures a context-local Graphics
+event queue from `JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1` before entry. The runtime
+and interpreter share the JSON event grammar (key, close, host error); no
+window is created by configuration or authority grant. Native session
+consumption and scene validation remain pending.
 
 Runtime exports use fixed-width scalar parameters and typed leaf operations;
 no universal operation/name dispatcher. Panics are contained at each C boundary.

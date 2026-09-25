@@ -72,6 +72,104 @@ pub enum Key {
     Space,
 }
 
+/// Deterministic session input shared by interpreter and native parity runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestEvent {
+    Key(Key),
+    Close,
+    HostError(String),
+}
+
+pub const TEST_SCRIPT_ENV: &str = "JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1";
+pub const INVALID_TEST_SCRIPT: &str = "Graphics: invalid test script";
+
+impl Key {
+    fn script_name(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::W => "w",
+            Self::A => "a",
+            Self::S => "s",
+            Self::D => "d",
+            Self::U => "u",
+            Self::Z => "z",
+            Self::R => "r",
+            Self::N => "n",
+            Self::P => "p",
+            Self::Enter => "enter",
+            Self::Space => "space",
+        }
+    }
+
+    fn from_script_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "up" => Self::Up,
+            "down" => Self::Down,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "w" => Self::W,
+            "a" => Self::A,
+            "s" => Self::S,
+            "d" => Self::D,
+            "u" => Self::U,
+            "z" => Self::Z,
+            "r" => Self::R,
+            "n" => Self::N,
+            "p" => Self::P,
+            "enter" => Self::Enter,
+            "space" => Self::Space,
+            _ => return None,
+        })
+    }
+}
+
+pub fn encode_test_script(events: &[TestEvent]) -> String {
+    let events = events
+        .iter()
+        .map(|event| match event {
+            TestEvent::Key(key) => serde_json::json!({ "key": key.script_name() }),
+            TestEvent::Close => serde_json::Value::String("close".to_owned()),
+            TestEvent::HostError(message) => serde_json::json!({ "host_error": message }),
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&events).expect("graphics test script is JSON serializable")
+}
+
+pub fn decode_test_script(text: &str) -> Result<VecDeque<TestEvent>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| INVALID_TEST_SCRIPT.to_owned())?;
+    let events = value.as_array().ok_or(INVALID_TEST_SCRIPT)?;
+    events
+        .iter()
+        .map(|event| {
+            if event == "close" {
+                return Ok(TestEvent::Close);
+            }
+            let object = event.as_object().ok_or(INVALID_TEST_SCRIPT)?;
+            if object.len() != 1 {
+                return Err(INVALID_TEST_SCRIPT.to_owned());
+            }
+            if let Some(key) = object.get("key") {
+                let key = key
+                    .as_str()
+                    .and_then(Key::from_script_name)
+                    .ok_or(INVALID_TEST_SCRIPT)?;
+                return Ok(TestEvent::Key(key));
+            }
+            if let Some(message) = object.get("host_error") {
+                return message
+                    .as_str()
+                    .map(|message| TestEvent::HostError(message.to_owned()))
+                    .ok_or_else(|| INVALID_TEST_SCRIPT.to_owned());
+            }
+            Err(INVALID_TEST_SCRIPT.to_owned())
+        })
+        .collect()
+}
+
 pub fn validate_config(config: &Config) -> Result<(), String> {
     dimensions(config.width, config.height)?;
     if config.title.len() > MAX_TITLE_BYTES || config.title.contains('\0') {
@@ -429,6 +527,35 @@ fn portable_key(key: minifb::Key) -> Option<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scripted_graphics_events_roundtrip_and_reject_unknown_shapes() {
+        let events = [
+            TestEvent::Key(Key::Right),
+            TestEvent::HostError("window: lost \"focus\"".to_owned()),
+            TestEvent::Close,
+        ];
+        let encoded = encode_test_script(&events);
+        assert_eq!(
+            decode_test_script(&encoded)
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            events
+        );
+        for invalid in [
+            "",
+            "{}",
+            "[\"right\"]",
+            "[{\"key\":\"escape\"}]",
+            "[{\"close\":true}]",
+        ] {
+            assert_eq!(
+                decode_test_script(invalid),
+                Err(INVALID_TEST_SCRIPT.to_owned())
+            );
+        }
+    }
 
     const BLACK: Color = Color {
         red: 0,

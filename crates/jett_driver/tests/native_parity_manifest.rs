@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use jett_common::FileId;
 use jett_parser::ast::Item;
-use jett_runtime::environment;
+use jett_runtime::{environment, graphics};
 use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -136,11 +136,15 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
     if object.contains_key("environment_test_snapshot") {
         fields.push("environment_test_snapshot");
     }
+    if object.contains_key("graphics_test_events") {
+        fields.push("graphics_test_events");
+    }
     require_exact_fields(object, &fields, &context)?;
     let scripted_count = [
         "clock_test_samples",
         "random_test_samples",
         "environment_test_snapshot",
+        "graphics_test_events",
     ]
     .into_iter()
     .filter(|field| object.contains_key(*field))
@@ -153,6 +157,10 @@ fn parse_fixture(value: &Value, index: usize) -> Result<(String, Fixture), Strin
     if let Some(snapshot) = object.get("environment_test_snapshot") {
         environment::decode_test_snapshot(&snapshot.to_string())
             .map_err(|error| format!("{context}.environment_test_snapshot: {error}"))?;
+    }
+    if let Some(events) = object.get("graphics_test_events") {
+        graphics::decode_test_script(&events.to_string())
+            .map_err(|error| format!("{context}.graphics_test_events: {error}"))?;
     }
 
     if let Some(samples) = object.get("clock_test_samples") {

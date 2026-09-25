@@ -7,6 +7,7 @@ use crate::crypto;
 use crate::csv;
 use crate::encoding;
 use crate::environment::{self, LaunchEnvironmentSnapshot};
+use crate::graphics;
 use crate::math;
 use crate::random::{self, RandomProvider};
 use std::cmp::Ordering as CompareOrdering;
@@ -474,6 +475,7 @@ pub(super) struct NativeValues {
     environment: Option<u64>,
     environment_snapshot: Option<LaunchEnvironmentSnapshot>,
     graphics: Option<u64>,
+    graphics_script: Option<std::collections::VecDeque<graphics::TestEvent>>,
 }
 impl NativeValues {
     #[cfg(test)]
@@ -2713,6 +2715,41 @@ pub unsafe extern "C" fn jett_rt_v1_environment_configure_snapshot(
     })
 }
 
+/// Configure deterministic Graphics events before program entry. No window is
+/// opened until the compiled graphics session requests one.
+///
+/// # Safety
+/// `data` must point to `length` readable bytes when `length` is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_graphics_configure_scripted(
+    context: *const JettRuntimeContextV1,
+    data: *const u8,
+    length: u64,
+) -> u32 {
+    leaf(context, false, |s| {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            graphics::INVALID_TEST_SCRIPT.as_bytes(),
+        );
+        if s.graphics.is_some() || s.graphics_script.is_some() {
+            return Err(invalid);
+        }
+        let length = usize::try_from(length).map_err(|_| invalid)?;
+        if length > isize::MAX as usize || (length != 0 && data.is_null()) {
+            return Err(invalid);
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: the caller supplies a readable slice for this call.
+            unsafe { std::slice::from_raw_parts(data, length) }
+        };
+        let script = std::str::from_utf8(bytes).map_err(|_| invalid)?;
+        s.graphics_script = Some(graphics::decode_test_script(script).map_err(|_| invalid)?);
+        Ok(0)
+    })
+}
+
 /// Scalar signature schema consumed by Cranelift, never inferred from names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbiScalar {
@@ -3444,6 +3481,53 @@ mod tests {
                 JettRuntimeStatusV1::OK
             );
         }
+    }
+
+    #[test]
+    fn graphics_script_configuration_is_context_local_and_precedes_grant() {
+        let scripted = Context::new();
+        let production = Context::new();
+        let script = graphics::encode_test_script(&[
+            graphics::TestEvent::Key(graphics::Key::Right),
+            graphics::TestEvent::Close,
+        ]);
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    scripted.pointer(),
+                    script.as_ptr(),
+                    script.len() as u64,
+                ),
+                0
+            );
+            let scripted_token = jett_rt_v1_grant_graphics(scripted.pointer());
+            assert_ne!(scripted_token, 0);
+            assert_eq!(
+                jett_rt_v1_grant_graphics(scripted.pointer()),
+                scripted_token
+            );
+            assert_ne!(
+                jett_rt_v1_grant_graphics(production.pointer()),
+                scripted_token
+            );
+        }
+        let lease = acquire_context(context_key(scripted.pointer()).unwrap()).unwrap();
+        let state = lock_unpoisoned(&lease.entry.state);
+        assert_eq!(
+            state
+                .as_ref()
+                .unwrap()
+                .values
+                .graphics_script
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+        drop(state);
+        drop(lease);
+        scripted.destroy(JettRuntimeStatusV1::OK);
+        production.destroy(JettRuntimeStatusV1::OK);
     }
     #[test]
     fn strings_release_immediately_and_retain_preserves_aliases() {

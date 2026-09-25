@@ -5,12 +5,7 @@ use jett_runtime::graphics::{self, Color, Config, Key, Rect, Scene, Text};
 use super::{Interpreter, Value};
 
 /// Input supplied by a deterministic graphics provider. It never opens a window.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GraphicsTestEvent {
-    Key(Key),
-    Close,
-    HostError(String),
-}
+pub use jett_runtime::graphics::TestEvent as GraphicsTestEvent;
 
 /// Observable graphics operations recorded by a deterministic provider.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -819,3 +819,10 @@ This percentage tracks fixture object coverage, not overall language coverage.
 The eight remaining object failures are four Graphics fixtures and four
 verify-only fixtures with no reachable code symbols; the three remaining
 linked-main failures are scripted Graphics fixtures.
+
+The Graphics parity rows now carry the same deterministic key and close events
+used by interpreter graphics tests. The native launcher can configure those
+events before program entry, and the audit obtains its interpreter oracle from
+the scripted provider. This makes the remaining linked-main gate headless and
+reproducible once native session and callback lowering are implemented; it does
+not change the current 174/182 object or 27/30 main counts.
