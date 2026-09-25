@@ -298,8 +298,9 @@ lowering alone never changes an execution row to complete.
 Actor handler capability and state snapshots are now explicit leading HIR/MIR
 parameters, and `respond` participates in native ownership analysis. Checked
 actor state initializers now lower into constructor functions that source spawns
-reference directly. Native actor allocation, state writeback, message dispatch,
-and runtime cleanup still need implementations before actor rows can pass the
+reference directly. Typed runtime leaves now register actor-owned state records,
+replace owned fields, and clean them at context destruction. Native actor
+allocation emission, state writeback, and message dispatch still need implementations before actor rows can pass the
 object or execution gates.
 
 The current fixture gates are therefore:

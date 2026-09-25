@@ -29,6 +29,10 @@ const INVALID_STRUCT: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native struct handle or field",
 );
+const INVALID_ACTOR: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native actor handle or field",
+);
 const INVALID_CONSTRUCTION: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native TypeConstruction builder",
@@ -446,6 +450,7 @@ pub(super) struct NativeValues {
     sets: HashMap<NativeHandle, NativeSet>,
     maps: HashMap<NativeHandle, NativeMap>,
     structs: HashMap<NativeHandle, NativeStruct>,
+    actors: std::collections::HashSet<NativeHandle>,
     builders: HashMap<NativeHandle, NativeBuilderInfo>,
     structs_created: u64,
     structs_destroyed: u64,
@@ -479,6 +484,7 @@ impl NativeValues {
     }
     pub(super) fn is_empty(&self) -> bool {
         self.structs.is_empty()
+            && self.actors.is_empty()
             && self.builders.is_empty()
             && self.structs_created == self.structs_destroyed
             && self.strings.is_empty()
@@ -1466,6 +1472,48 @@ impl NativeValues {
         self.structs_created += 1;
         Ok(id)
     }
+    fn register_actor(&mut self, id: u64) -> LeafResult<u64> {
+        let Some(record) = self.structs.get(&id) else {
+            return Err(INVALID_ACTOR);
+        };
+        if record.fields.iter().any(Option::is_none) || !self.actors.insert(id) {
+            return Err(INVALID_ACTOR);
+        }
+        Ok(id)
+    }
+    fn replace_actor_field(
+        &mut self,
+        id: u64,
+        index: u64,
+        bits: u64,
+        owned: bool,
+    ) -> LeafResult<u32> {
+        if !self.actors.contains(&id) {
+            return Err(INVALID_ACTOR);
+        }
+        let slot = self
+            .structs
+            .get_mut(&id)
+            .and_then(|record| {
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| record.fields.get_mut(i))
+            })
+            .ok_or(INVALID_ACTOR)?;
+        let old = slot
+            .replace(NativeField { bits, owned })
+            .ok_or(INVALID_ACTOR)?;
+        if old.owned {
+            self.drop_value(old.bits)?;
+        }
+        Ok(0)
+    }
+    pub(super) fn release_actors(&mut self) -> LeafResult<()> {
+        for id in std::mem::take(&mut self.actors) {
+            self.drop_value(id)?;
+        }
+        Ok(())
+    }
     fn new_builder(&mut self, layout: &[u8]) -> LeafResult<u64> {
         let mut cursor = BitfieldLayoutCursor {
             bytes: layout,
@@ -2247,6 +2295,9 @@ impl NativeValues {
         self.retain(id)
     }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if self.actors.contains(&id) {
+            return Err(INVALID_ACTOR);
+        }
         if let Some(value) = self.structs.remove(&id) {
             self.builders.remove(&id);
             self.structs_destroyed += 1;
@@ -2738,6 +2789,11 @@ leaves! {
             *slot = Some(NativeField { bits, owned: owned != 0 }); Ok(0) };
     StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.struct_field(value, index)?.bits);
+    ActorRegister, jett_rt_v1_actor_register, false, (value: u64 => I64), u64 => I64,
+        |s| s.register_actor(value);
+    ActorReplace, jett_rt_v1_actor_replace, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
+        |s| { if owned > 1 { return Err(INVALID_ACTOR); }
+            s.replace_actor_field(value, index, bits, owned != 0) };
     ReflectedFieldIndex, jett_rt_v1_reflected_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_FIELD);
     ReflectedVariantFieldIndex, jett_rt_v1_reflected_variant_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
@@ -3941,6 +3997,23 @@ mod tests {
             assert_eq!((values.bytes_created, values.bytes_destroyed), (2, 2));
             assert!(values.is_empty());
         }
+    }
+    #[test]
+    fn actors_replace_owned_state_and_release_it_with_the_context() {
+        let context = Context::new();
+        unsafe {
+            let p = context.pointer();
+            let initial = context.text("initial");
+            let actor = jett_rt_v1_struct_new(p, 1);
+            assert_eq!(jett_rt_v1_struct_init(p, actor, 0, initial, 1), 0);
+            assert_eq!(jett_rt_v1_actor_register(p, actor), actor);
+            let updated = context.text("updated");
+            assert_eq!(jett_rt_v1_actor_replace(p, actor, 0, updated, 1), 0);
+            assert_eq!(jett_rt_v1_struct_field(p, actor, 0), updated);
+            assert_eq!(context.count(), 1, "old actor state must be released");
+            assert_eq!(jett_rt_v1_value_status(p), 0);
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
     }
     #[test]
     fn reflected_field_validation_checks_owner_member_name_and_type() {

@@ -71,6 +71,14 @@ before context destruction. Cleanup does not overwrite the first failure.
 Context destruction checks that all owning values have been released; it must
 not silently hide compiler leaks by acting as a program-long value arena.
 
+An actor is a runtime-owned state record rather than an ordinary frame owner.
+`ActorRegister` transfers a fully initialized native struct to the context's
+actor registry. `ActorReplace` transfers a new state field and releases the
+previous owned field. Ordinary `DropValue` rejects a registered actor. Context
+destruction releases registered actor records before checking for leaked frame
+owners, including any nested owned state. Native actor construction and message
+dispatch are still pending; these leaves only establish the ownership boundary.
+
 Runtime exports use fixed-width scalar parameters and typed leaf operations;
 no universal operation/name dispatcher. Panics are contained at each C boundary.
 The existing ABI v1 lifecycle remains compatible; added leaf signatures are
