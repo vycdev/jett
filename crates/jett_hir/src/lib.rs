@@ -118,7 +118,7 @@ pub struct Function {
     pub identity: FunctionIdentity,
     pub source_definition: Option<DefId>,
     pub params: Vec<Param>,
-    /// Leading parameters copied from an enclosing closure environment.
+    /// Leading parameters supplied by a closure environment or actor state snapshot.
     pub capture_count: usize,
     pub return_type: TypeId,
     pub locals: Vec<Local>,
@@ -1492,6 +1492,15 @@ impl<'a> Lowerer<'a> {
             comptime_type_bindings,
         );
 
+        // Handler state is an input snapshot, not an uninitialized local.
+        // Captured parameters are supplied through the actor environment;
+        // message parameters follow them in the ordinary call signature.
+        let mut params = Vec::with_capacity(
+            source.actor.capability_params.len()
+                + source.actor.state_fields.len()
+                + source.handler.params.len(),
+        );
+
         for (param, (_, ty)) in source
             .actor
             .capability_params
@@ -1507,13 +1516,25 @@ impl<'a> Lowerer<'a> {
                     .error(param.name.span, "actor capability parameter is unresolved");
                 return None;
             };
-            body_lowerer.allocate_local(
+            let local = body_lowerer.allocate_local(
                 definition,
                 &param.name.name,
                 *ty,
                 param.mutable,
                 param.span,
             );
+            params.push(Param {
+                local,
+                name: param.name.name.clone(),
+                ty: *ty,
+                mode: if param.view {
+                    ParamMode::View
+                } else {
+                    ParamMode::Owned
+                },
+                mutable: param.mutable,
+                span: param.span,
+            });
         }
         for (field, (_, ty)) in source
             .actor
@@ -1530,15 +1551,23 @@ impl<'a> Lowerer<'a> {
                     .error(field.name.span, "actor state field is unresolved");
                 return None;
             };
-            body_lowerer.allocate_local(
+            let local = body_lowerer.allocate_local(
                 definition,
                 &field.name.name,
                 *ty,
                 field.mutable,
                 field.span,
             );
+            params.push(Param {
+                local,
+                name: field.name.name.clone(),
+                ty: *ty,
+                mode: ParamMode::Owned,
+                mutable: field.mutable,
+                span: field.span,
+            });
         }
-        let mut params = Vec::with_capacity(source.handler.params.len());
+        let capture_count = params.len();
         for (param, (_, ty)) in source.handler.params.iter().zip(message.params.iter()) {
             let Some(definition) = body_lowerer
                 .parent
@@ -1589,7 +1618,7 @@ impl<'a> Lowerer<'a> {
             },
             source_definition: None,
             params,
-            capture_count: 0,
+            capture_count,
             return_type: message.responds,
             locals,
             body,
@@ -5518,9 +5547,10 @@ actor Counter:
         let handler = &program.functions[0];
         assert_eq!(handler.identity.declaration.namespace, "app");
         assert_eq!(handler.identity.declaration.name, "Counter.add");
-        assert_eq!(handler.params.len(), 1);
-        assert_eq!(handler.params[0].name, "amount");
-        assert!(handler.locals.iter().any(|local| local.name == "count"));
+        assert_eq!(handler.capture_count, 1);
+        assert_eq!(handler.params.len(), 2);
+        assert_eq!(handler.params[0].name, "count");
+        assert_eq!(handler.params[1].name, "amount");
         assert!(matches!(
             handler.body.statements.as_slice(),
             [

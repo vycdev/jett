@@ -361,9 +361,9 @@ impl Flow<'_> {
             self.loans.clear();
         }
         match &block.terminator.kind {
-            TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
-                self.expr(v, false)?
-            }
+            TerminatorKind::Return(Some(v))
+            | TerminatorKind::Respond(v)
+            | TerminatorKind::Branch { condition: v, .. } => self.expr(v, false)?,
             TerminatorKind::Switch { scrutinee, .. } => self.expr(scrutinee, false)?,
             TerminatorKind::ReflectedTypeDispatch { type_info, .. } => {
                 self.expr(type_info, true)?

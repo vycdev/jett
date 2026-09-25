@@ -2687,6 +2687,27 @@ function selected_entry() returns string:
     }
 
     #[test]
+    fn actor_handler_state_is_initialized_for_native_ownership_analysis() {
+        let (program, types) = lower_source(
+            r#"namespace test
+actor ByteCounter(seed: uint8):
+    mutable uint8 count = seed + 1
+    receive add(delta: uint8):
+        count = count + delta
+    receive current responds uint8:
+        respond count + 1
+"#,
+        );
+        for handler in &program.functions {
+            assert_eq!(handler.capture_count, 2);
+            assert_eq!(handler.params[0].name, "seed");
+            assert_eq!(handler.params[1].name, "count");
+            MoveValuePlan::analyze(&program, handler, &types)
+                .expect("actor input state has a valid native ownership plan");
+        }
+    }
+
+    #[test]
     fn native_ownership_plan_keeps_loop_carried_strings_live() {
         let (program, types) = lower_source(
             r#"

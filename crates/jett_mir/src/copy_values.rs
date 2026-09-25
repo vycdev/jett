@@ -119,7 +119,9 @@ impl CopyValuePlan {
             let mut reads = Set::new();
             let mut temporaries = 0;
             match &block.terminator.kind {
-                TerminatorKind::Return(Some(v)) | TerminatorKind::Branch { condition: v, .. } => {
+                TerminatorKind::Return(Some(v))
+                | TerminatorKind::Respond(v)
+                | TerminatorKind::Branch { condition: v, .. } => {
                     visit(v, &mut reads, &mut temporaries, types, program, false)?
                 }
                 TerminatorKind::ReflectedTypeDispatch { type_info, .. } if program.is_some() => {
