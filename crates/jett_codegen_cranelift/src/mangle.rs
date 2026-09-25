@@ -24,6 +24,7 @@ pub fn symbol_name(
     canonical.push(match identity.declaration.kind {
         DeclarationKind::Function => 'f',
         DeclarationKind::Method => 'm',
+        DeclarationKind::ActorConstructor => 'a',
         DeclarationKind::ActorHandler => 'h',
         DeclarationKind::RefinementPredicate => 'r',
     });

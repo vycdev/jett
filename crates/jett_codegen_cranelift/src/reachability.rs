@@ -269,8 +269,17 @@ fn collect_expression_references(
             reflection_arguments: _,
             args,
             evaluation_order: _,
+        } => {
+            for argument in args {
+                collect_expression_references(argument, references);
+            }
         }
-        | ExpressionKind::ActorSpawn { args, .. } => {
+        ExpressionKind::ActorSpawn {
+            args, constructor, ..
+        } => {
+            if let Some(constructor) = constructor {
+                references.push((*constructor, expression.span));
+            }
             for argument in args {
                 collect_expression_references(argument, references);
             }

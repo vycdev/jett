@@ -296,9 +296,11 @@ lowering alone never changes an execution row to complete.
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 Actor handler capability and state snapshots are now explicit leading HIR/MIR
-parameters, and `respond` participates in native ownership analysis. Actor
-allocation, state writeback, message dispatch, and runtime cleanup still need
-native implementations before actor rows can pass the object or execution gates.
+parameters, and `respond` participates in native ownership analysis. Checked
+actor state initializers now lower into constructor functions that source spawns
+reference directly. Native actor allocation, state writeback, message dispatch,
+and runtime cleanup still need implementations before actor rows can pass the
+object or execution gates.
 
 The current fixture gates are therefore:
 

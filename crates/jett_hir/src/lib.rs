@@ -91,6 +91,7 @@ pub struct DeclarationId {
 pub enum DeclarationKind {
     Function,
     Method,
+    ActorConstructor,
     ActorHandler,
     RefinementPredicate,
 }
@@ -359,6 +360,9 @@ pub enum ExpressionKind {
         actor_type: String,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
+        /// Source spawns invoke the checked constructor. `None` is the
+        /// compiler-generated allocation at the end of that constructor.
+        constructor: Option<FunctionId>,
     },
     ActorMessage {
         actor: Box<Expression>,
@@ -863,9 +867,20 @@ impl Validator<'_> {
             ExpressionKind::ActorSpawn {
                 args,
                 evaluation_order,
+                constructor,
                 ..
             } => {
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                if let Some(constructor) = constructor {
+                    if self
+                        .program
+                        .functions
+                        .get(constructor.index() as usize)
+                        .is_none()
+                    {
+                        self.error(expression.span, "actor constructor target is absent");
+                    }
+                }
                 for argument in args {
                     self.expression(argument);
                 }
@@ -928,6 +943,13 @@ struct ActorHandlerSource<'a> {
     message_index: usize,
 }
 
+struct ActorConstructorSource<'a> {
+    id: FunctionId,
+    actor_definition: DefId,
+    actor: &'a ast::ActorDef,
+    ty: TypeId,
+}
+
 struct RefinementSource<'a> {
     id: FunctionId,
     definition: DefId,
@@ -953,6 +975,8 @@ struct Lowerer<'a> {
     check: &'a CheckResult,
     origins: &'a HashMap<FileId, SourceOrigin>,
     functions: Vec<FunctionSource<'a>>,
+    actor_constructors: Vec<ActorConstructorSource<'a>>,
+    actor_constructor_ids: HashMap<TypeId, FunctionId>,
     actor_handlers: Vec<ActorHandlerSource<'a>>,
     refinement_sources: Vec<RefinementSource<'a>>,
     refinement_function_ids: HashMap<TypeId, FunctionId>,
@@ -973,6 +997,8 @@ impl<'a> Lowerer<'a> {
             check,
             origins,
             functions: Vec::new(),
+            actor_constructors: Vec::new(),
+            actor_constructor_ids: HashMap::new(),
             actor_handlers: Vec::new(),
             refinement_sources: Vec::new(),
             refinement_function_ids: HashMap::new(),
@@ -987,6 +1013,12 @@ impl<'a> Lowerer<'a> {
         let mut functions = Vec::with_capacity(sources.len());
         for source in sources {
             if let Some(function) = self.lower_function(source) {
+                functions.push(function);
+            }
+        }
+        let actor_constructors = std::mem::take(&mut self.actor_constructors);
+        for source in actor_constructors {
+            if let Some(function) = self.lower_actor_constructor(source) {
                 functions.push(function);
             }
         }
@@ -1130,8 +1162,33 @@ impl<'a> Lowerer<'a> {
                 self.error(actor.name.span, "actor has no resolved definition");
                 continue;
             };
+            let Some(&ty) = self.check.definition_types.get(&actor_definition) else {
+                self.error(actor.name.span, "actor has no checked type");
+                continue;
+            };
+            let id = FunctionId((self.functions.len() + self.actor_constructors.len()) as u32);
+            self.actor_constructor_ids.insert(ty, id);
+            self.actor_constructors.push(ActorConstructorSource {
+                id,
+                actor_definition,
+                actor,
+                ty,
+            });
+        }
+        for item in &self.module.items {
+            let Item::Actor(actor) = item else {
+                continue;
+            };
+            let Some(actor_definition) = self.definition_at(actor.name.span, DefKind::Actor) else {
+                self.error(actor.name.span, "actor has no resolved definition");
+                continue;
+            };
             for (message_index, handler) in actor.handlers.iter().enumerate() {
-                let id = FunctionId((self.functions.len() + self.actor_handlers.len()) as u32);
+                let id = FunctionId(
+                    (self.functions.len()
+                        + self.actor_constructors.len()
+                        + self.actor_handlers.len()) as u32,
+                );
                 self.actor_handlers.push(ActorHandlerSource {
                     id,
                     actor_definition,
@@ -1166,8 +1223,10 @@ impl<'a> Lowerer<'a> {
                 continue;
             };
             let id = FunctionId(
-                (self.functions.len() + self.actor_handlers.len() + self.refinement_sources.len())
-                    as u32,
+                (self.functions.len()
+                    + self.actor_constructors.len()
+                    + self.actor_handlers.len()
+                    + self.refinement_sources.len()) as u32,
             );
             self.refinement_function_ids.insert(ty, id);
             self.refinement_sources.push(RefinementSource {
@@ -1411,6 +1470,179 @@ impl<'a> Lowerer<'a> {
             locals,
             body,
             span: source.function.span,
+        })
+    }
+
+    fn lower_actor_constructor(&mut self, source: ActorConstructorSource<'a>) -> Option<Function> {
+        let origin = match self.origins.get(&source.actor.span.file) {
+            Some(origin) => origin.clone(),
+            None => {
+                self.error(
+                    source.actor.span,
+                    "source origin is missing for actor constructor",
+                );
+                return None;
+            }
+        };
+        let Type::Actor(actor_id) = self.check.interner.resolve(source.ty) else {
+            self.error(
+                source.actor.name.span,
+                "checked actor constructor target is not an actor",
+            );
+            return None;
+        };
+        let definition = self.check.interner.resolve_actor(*actor_id).clone();
+        if source.actor.capability_params.len() != definition.capability_params.len()
+            || source.actor.state_fields.len() != definition.state_fields.len()
+        {
+            self.error(source.actor.span, "checked actor constructor shape changed");
+            return None;
+        }
+        let namespace = self
+            .resolve
+            .scope_table
+            .def(source.actor_definition)
+            .namespace
+            .clone()
+            .unwrap_or_default();
+        let constructor_bindings = source
+            .actor
+            .state_fields
+            .iter()
+            .flat_map(|field| facts_in_span(&self.check.comptime_type_bindings, field.value.span()))
+            .collect();
+
+        let function_ids = self.function_ids.clone();
+        let mut body_lowerer = BodyLowerer::new(
+            self,
+            &function_ids,
+            self.check.type_map.clone(),
+            self.check.generic_calls.clone(),
+            self.check.intrinsic_ids.clone(),
+            self.check.intrinsic_type_arguments.clone(),
+            self.check.intrinsic_reflection_arguments.clone(),
+            self.check.call_argument_orders.clone(),
+            self.check.method_calls.clone(),
+            self.check.struct_constructions.clone(),
+            self.check.pipeline_step_call_types.clone(),
+            HashMap::new(),
+            constructor_bindings,
+        );
+        let mut params = Vec::with_capacity(definition.capability_params.len());
+        let mut fields =
+            Vec::with_capacity(definition.capability_params.len() + definition.state_fields.len());
+        for (param, (_, ty)) in source
+            .actor
+            .capability_params
+            .iter()
+            .zip(&definition.capability_params)
+        {
+            let Some(definition_id) = body_lowerer
+                .parent
+                .definition_at(param.name.span, DefKind::Param)
+            else {
+                body_lowerer
+                    .parent
+                    .error(param.name.span, "actor constructor parameter is unresolved");
+                return None;
+            };
+            let local = body_lowerer.allocate_local(
+                definition_id,
+                &param.name.name,
+                *ty,
+                param.mutable,
+                param.span,
+            );
+            params.push(Param {
+                local,
+                name: param.name.name.clone(),
+                ty: *ty,
+                mode: if param.view {
+                    ParamMode::View
+                } else {
+                    ParamMode::Owned
+                },
+                mutable: param.mutable,
+                span: param.span,
+            });
+            fields.push((local, *ty, param.span));
+        }
+        let mut statements = Vec::with_capacity(source.actor.state_fields.len() + 1);
+        for (field, (_, ty)) in source
+            .actor
+            .state_fields
+            .iter()
+            .zip(&definition.state_fields)
+        {
+            let value = body_lowerer.lower_expression(&field.value)?;
+            let Some(definition_id) = body_lowerer
+                .parent
+                .definition_at(field.name.span, DefKind::Variable)
+            else {
+                body_lowerer
+                    .parent
+                    .error(field.name.span, "actor state field is unresolved");
+                return None;
+            };
+            let local = body_lowerer.allocate_local(
+                definition_id,
+                &field.name.name,
+                *ty,
+                field.mutable,
+                field.span,
+            );
+            statements.push(Statement {
+                kind: StatementKind::Let { local, value },
+                span: field.span,
+            });
+            fields.push((local, *ty, field.span));
+        }
+        body_lowerer.reject_unconsumed_static_selections();
+        body_lowerer.reject_unconsumed_comptime_type_bindings();
+        let args = fields
+            .into_iter()
+            .map(|(local, ty, span)| Expression {
+                kind: ExpressionKind::Local(local),
+                ty,
+                span,
+            })
+            .collect::<Vec<_>>();
+        let evaluation_order = (0..args.len()).collect();
+        statements.push(Statement {
+            kind: StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::ActorSpawn {
+                    actor_type: definition.name,
+                    args,
+                    evaluation_order,
+                    constructor: None,
+                },
+                ty: source.ty,
+                span: source.actor.span,
+            })),
+            span: source.actor.span,
+        });
+        Some(Function {
+            id: source.id,
+            identity: FunctionIdentity {
+                declaration: DeclarationId {
+                    origin,
+                    namespace,
+                    name: source.actor.name.name.clone(),
+                    kind: DeclarationKind::ActorConstructor,
+                },
+                type_arguments: Vec::new(),
+                specialization: CheckedGenericSpecialization::default(),
+            },
+            source_definition: None,
+            params,
+            capture_count: 0,
+            return_type: source.ty,
+            locals: body_lowerer.locals,
+            body: Block {
+                statements,
+                span: source.actor.span,
+            },
+            span: source.actor.span,
         })
     }
 
@@ -2541,7 +2773,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     body,
                 }
             }
-            Expr::Spawn(inner, _) => self.lower_actor_spawn(inner)?,
+            Expr::Spawn(inner, _) => self.lower_actor_spawn(inner, ty)?,
             Expr::Send(inner, _) => self.lower_actor_message(inner, ActorMessageKind::Send)?,
             Expr::Ask(inner, _) => self.lower_actor_message(inner, ActorMessageKind::Ask)?,
             Expr::View(value, _) => ExpressionKind::View(Box::new(self.lower_expression(value)?)),
@@ -2557,17 +2789,23 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         Some(Expression { kind, ty, span })
     }
 
-    fn lower_actor_spawn(&mut self, inner: &Expr) -> Option<ExpressionKind> {
+    fn lower_actor_spawn(&mut self, inner: &Expr, ty: TypeId) -> Option<ExpressionKind> {
         let (callee, args, call_span) = match inner {
             Expr::Call(callee, args, span) => (callee.as_ref(), args.as_slice(), *span),
             _ => (inner, &[][..], inner.span()),
         };
         let actor_type = self.dotted_expression_name(callee)?;
         let (args, evaluation_order) = self.lower_arguments_in_parameter_order(args, call_span)?;
+        let Some(&constructor) = self.parent.actor_constructor_ids.get(&ty) else {
+            self.parent
+                .error(call_span, "actor spawn has no checked constructor");
+            return None;
+        };
         Some(ExpressionKind::ActorSpawn {
             actor_type,
             args,
             evaluation_order,
+            constructor: Some(constructor),
         })
     }
 
@@ -5543,8 +5781,32 @@ actor Counter:
 "#,
         );
 
-        assert_eq!(program.functions.len(), 1);
-        let handler = &program.functions[0];
+        assert_eq!(program.functions.len(), 2);
+        let constructor = &program.functions[0];
+        assert_eq!(
+            constructor.identity.declaration.kind,
+            DeclarationKind::ActorConstructor
+        );
+        assert!(matches!(
+            constructor.body.statements.as_slice(),
+            [
+                Statement {
+                    kind: StatementKind::Let { .. },
+                    ..
+                },
+                Statement {
+                    kind: StatementKind::Return(Some(Expression {
+                        kind: ExpressionKind::ActorSpawn {
+                            constructor: None,
+                            ..
+                        },
+                        ..
+                    })),
+                    ..
+                }
+            ]
+        ));
+        let handler = &program.functions[1];
         assert_eq!(handler.identity.declaration.namespace, "app");
         assert_eq!(handler.identity.declaration.name, "Counter.add");
         assert_eq!(handler.capture_count, 1);
@@ -6632,6 +6894,30 @@ function main() returns nothing:
         assert!(matches!(args[0].kind, ExpressionKind::Int(1)));
         assert!(matches!(args[1].kind, ExpressionKind::Int(2)));
         assert_eq!(evaluation_order, &[1, 0]);
+        let constructor = &program.functions[1];
+        assert_eq!(
+            constructor.identity.declaration.kind,
+            DeclarationKind::ActorConstructor
+        );
+        assert_eq!(constructor.params[0].name, "seed");
+        assert_eq!(constructor.params[1].name, "step");
+        assert!(matches!(
+            constructor.body.statements[0].kind,
+            StatementKind::Let {
+                value: Expression {
+                    kind: ExpressionKind::Local(_),
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::ActorSpawn {
+                constructor: Some(id),
+                ..
+            } if id == constructor.id
+        ));
 
         let StatementKind::Expression(Expression {
             kind:

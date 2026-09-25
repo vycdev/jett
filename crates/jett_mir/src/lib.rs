@@ -726,12 +726,21 @@ impl FunctionValidator<'_, '_> {
                 args,
                 evaluation_order,
                 ..
+            } => {
+                self.check_evaluation_order(evaluation_order, args.len(), expression.span);
+                for argument in args {
+                    self.expression(argument);
+                }
             }
-            | hir::ExpressionKind::ActorSpawn {
+            hir::ExpressionKind::ActorSpawn {
                 args,
                 evaluation_order,
+                constructor,
                 ..
             } => {
+                if let Some(constructor) = constructor {
+                    self.check_function(*constructor, expression.span);
+                }
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
@@ -2056,7 +2065,13 @@ actor Counter:
             respond 2
 "#,
         );
-        let handler = &program.functions[0];
+        let handler = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler
+            })
+            .expect("actor handler MIR");
         assert_eq!(handler.blocks.len(), 3, "responding branches need no join");
         let cfg = ControlFlowGraph::analyze(handler).expect("valid handler CFG");
         for target in cfg.successors(handler.entry) {

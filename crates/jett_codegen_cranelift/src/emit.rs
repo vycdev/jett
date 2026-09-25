@@ -2698,7 +2698,9 @@ actor ByteCounter(seed: uint8):
         respond count + 1
 "#,
         );
-        for handler in &program.functions {
+        for handler in program.functions.iter().filter(|function| {
+            function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler
+        }) {
             assert_eq!(handler.capture_count, 2);
             assert_eq!(handler.params[0].name, "seed");
             assert_eq!(handler.params[1].name, "count");
