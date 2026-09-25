@@ -385,6 +385,7 @@ pub struct RefinementPredicate {
     pub refined_type: TypeId,
     pub type_name: String,
     pub function: FunctionId,
+    pub base_type: TypeId,
     pub input_type: TypeId,
 }
 
@@ -2531,6 +2532,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         span: Span,
     ) -> Option<Vec<RefinementPredicate>> {
         let mut predicates = Vec::new();
+        let mut base_type = refined_type;
+        while let Type::Refinement { base, .. } = self.parent.check.interner.resolve(base_type) {
+            base_type = *base;
+        }
+        let input_type = if let Type::Secret(inner) = self.parent.check.interner.resolve(base_type)
+        {
+            *inner
+        } else {
+            base_type
+        };
         let mut current = refined_type;
         while let Type::Refinement { name, base } = self.parent.check.interner.resolve(current) {
             let Some(function) = self.parent.refinement_function_ids.get(&current).copied() else {
@@ -2542,19 +2553,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 refined_type: current,
                 type_name: name.clone(),
                 function,
-                input_type: {
-                    let mut input = current;
-                    while let Type::Refinement { base, .. } =
-                        self.parent.check.interner.resolve(input)
-                    {
-                        input = *base;
-                    }
-                    if let Type::Secret(inner) = self.parent.check.interner.resolve(input) {
-                        *inner
-                    } else {
-                        input
-                    }
-                },
+                base_type,
+                input_type,
             });
             current = *base;
         }
@@ -2578,7 +2578,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 Type::Refinement { .. }
             ) =>
             {
-                let predicates = self.checked_refinement_predicates(output_type, span)?;
+                let mut predicates = self.checked_refinement_predicates(output_type, span)?;
+                if let Some(index) = predicates
+                    .iter()
+                    .position(|predicate| predicate.refined_type == target.ty)
+                {
+                    predicates.drain(..=index);
+                }
                 HandleKind::Refinement {
                     refined_type: output_type,
                     predicates,
@@ -2699,7 +2705,15 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                             Type::Refinement { .. }
                         )
                     {
-                        chains.push(self.checked_refinement_predicates(expected, call_span)?);
+                        let mut predicates =
+                            self.checked_refinement_predicates(expected, call_span)?;
+                        if let Some(index) = predicates
+                            .iter()
+                            .position(|predicate| predicate.refined_type == field.ty)
+                        {
+                            predicates.drain(..=index);
+                        }
+                        chains.push(predicates);
                     } else {
                         chains.push(Vec::new());
                     }

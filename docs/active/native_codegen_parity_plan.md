@@ -281,7 +281,7 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics, direct Unicode-scalar string iteration, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, scalar `for` loops, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, base-value refinement predicates, and result-wrapped struct construction with checked base-value string and integer fields; secret-backed and intermediate-refinement struct fields remain pending | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus scalar payload-enum equality; bitfield field ownership, clone, byte roundtrip, and reflected-builder width validation; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer and owned-string refinements; direct bitfield width validation, aggregate payload-enum equality and broader refinement boundaries pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, checked refinement predicates for base, intermediate-refined, and secret-backed inputs, and result-wrapped struct construction with validated fields | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus scalar payload-enum equality; bitfield field ownership, clone, byte roundtrip, and reflected-builder width validation; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer, owned-string, and secret-backed refinements; direct bitfield width validation, aggregate payload-enum equality and broader refinement boundaries pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive and indexed-row list sorting, sortedness checks and sets, and primitive-backed refinement keys and set elements | compiled list access, insert/remove, reverse/repeat, scalar iteration and sort; stable `list.sort_by` and `list.group_by` with named callbacks; indexed-row sorting for interpreter-supported key types; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; borrowed iteration through nested struct-field collection paths; refinement string and integer keys and set elements; one contextual generic empty-list path covered; other projected views, collection shape conversions, and callback helpers pending |
 | Numeric aggregates | covered | `math.average` and `math.median` for `list[int64]`, `list[uint64]`, and `list[float64]` | native/interpreter differential fixtures cover all three element types and overflow-safe floating-point extremes; empty-list error contract covered |
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
@@ -312,9 +312,12 @@ Direct struct constructors lower checked base-value field predicates into MIR
 branches before creating their required `result[Struct, string]`. Native
 execution matches the interpreter for successful string and integer fields,
 ordered nested predicates, handled failures, and a constructor nested in a
-call. Exact refined fields retain the success path. Secret-backed and
-intermediate-refinement field inputs remain gated. The 207-row audit remains
-157/182 with no regressions; the earlier exact-field change gained
+call. Inputs already validated as an intermediate refinement skip their
+ancestor predicates; secret-backed integer and owned-string inputs pass their
+underlying values to the checked predicate. The same rule applies at explicit
+refinement `handle` boundaries. A linked native/interpreter fixture covers
+their successful and rejected paths. Exact refined fields retain the success
+path. The 207-row audit remains 157/182 with no regressions; the earlier exact-field change gained
 `type_construction_builder.jett`.
 The ownership checker now treats `ok`, `fail`, and `some` payloads as moves.
 The secret-bearing JSON policy fixture explicitly clones a payload used in
@@ -397,9 +400,9 @@ Compiler-owned predicate functions and CFG lowering for base-value refinement
 boundaries add `integer_nonzero_proofs.jett` to the native object gate. The
 native/interpreter fixture covers ordered ancestor predicates, false-result
 messages, owned-string cleanup, and successful transfers. The remaining
-refinement fixtures advanced to JSON intrinsics or primitive-backed sets;
-predicate runtime failures, secret-backed inputs, already-refined inputs, and
-refinement validation inside struct construction remain pending.
+refinement fixtures advanced to JSON intrinsics or primitive-backed sets.
+Predicate runtime failures remain pending; the later slices above add
+secret-backed and already-refined inputs plus direct struct construction.
 Primitive-backed refinement collection keys and elements, plus normalized
 boolean lookup keys, add `primitive_collection_hash_types.jett` to native
 object emission. A native/interpreter fixture covers string-refinement sets

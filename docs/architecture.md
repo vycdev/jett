@@ -818,12 +818,14 @@ markers are also covered. Bitfield and state-machine construction, transitions,
 and fields carry explicit checked types plus dense field/state IDs. Native
 `coarsen` verifies a checked refinement ancestor and transfers its base
 representation, including ownership of aggregate payloads, without a wrapper.
-For base-value refinement boundaries, HIR now lowers each checked predicate to
-a compiler-owned pure function. MIR calls ancestor predicates in base-first
-order and branches to the source `handle error` block on a false result;
-successful construction transfers the original value through an explicit
-validated-refinement expression. Predicate runtime failures, already-refined
-or secret-backed inputs, and validating struct fields remain future slices.
+For refinement boundaries, HIR lowers each checked predicate to a
+compiler-owned pure function. MIR calls unvalidated ancestor predicates in
+base-first order and branches to the source `handle error` block on a false
+result; successful construction transfers the original value through an
+explicit validated-refinement expression. An already-refined input skips its
+validated ancestors. A secret-backed input is unwrapped only for the checked
+predicate call. Direct struct constructors use the same predicate path for
+refined fields. Predicate runtime failures remain a future slice.
 Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
 lexical evaluation order after type checking has authorized them. The shared
 registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,
@@ -2722,10 +2724,11 @@ other unsupported field shapes remain on the generic intrinsic path. Top-level
 refinements with a supported base use checked source parsing and serialization;
 record fields with supported refinements now decode through a checked source
 conversion before entering the native reflected builder. The builder accepts
-the exact refined type; direct struct constructors now lower checked base-value
-field predicates into MIR branches and emit a success or failure result. Exact
-refined fields retain their validated invariant. Secret-backed and
-intermediate-refinement field inputs remain native gaps. Top-level
+the exact refined type; direct struct constructors now lower checked field
+predicates into MIR branches and emit a success or failure result. Inputs with
+an intermediate refinement skip its already-validated predicates, and
+secret-backed inputs are unwrapped for validation. Exact refined fields retain
+their validated invariant. Top-level
 enums with supported payload fields, including nested raw `json.JsonTree`, use
 dedicated checked native parse and serialize hooks. Raw trees retain their JSON
 wire behavior and are cloned when a decoder returns a borrowed tree. Pipeline

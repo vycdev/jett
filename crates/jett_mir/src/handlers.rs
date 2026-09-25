@@ -20,6 +20,40 @@ fn has_extractable_handle(expression: &Expression) -> bool {
 }
 
 impl Builder {
+    fn refinement_predicate_input(
+        &self,
+        source: LocalId,
+        source_type: TypeId,
+        predicate: &hir::RefinementPredicate,
+        span: Span,
+    ) -> Expression {
+        let source_value = Expression {
+            kind: ExpressionKind::Local(source),
+            ty: source_type,
+            span,
+        };
+        let mut input = Expression {
+            kind: ExpressionKind::Clone(Box::new(source_value)),
+            ty: source_type,
+            span,
+        };
+        if input.ty != predicate.base_type && input.ty != predicate.input_type {
+            input = Expression {
+                kind: ExpressionKind::Coarsen(Box::new(input)),
+                ty: predicate.base_type,
+                span,
+            };
+        }
+        if input.ty != predicate.input_type {
+            input = Expression {
+                kind: ExpressionKind::Declassify(Box::new(input)),
+                ty: predicate.input_type,
+                span,
+            };
+        }
+        input
+    }
+
     fn temporary(&mut self, ty: TypeId, span: Span) -> LocalId {
         let id = LocalId::new(self.locals.len() as u32);
         self.locals.push(Local {
@@ -213,11 +247,7 @@ impl Builder {
         error_local: Option<LocalId>,
         failure: &hir::Block,
     ) -> Expression {
-        if predicates.is_empty()
-            || predicates
-                .iter()
-                .any(|predicate| predicate.input_type != target.ty)
-        {
+        if predicates.is_empty() {
             return expression.clone();
         }
         let span = expression.span;
@@ -235,15 +265,7 @@ impl Builder {
         let output = self.temporary(expression.ty, span);
 
         for predicate in predicates {
-            let input = Expression {
-                kind: ExpressionKind::Clone(Box::new(Expression {
-                    kind: ExpressionKind::Local(source),
-                    ty: target.ty,
-                    span,
-                })),
-                ty: target.ty,
-                span,
-            };
+            let input = self.refinement_predicate_input(source, target.ty, predicate, span);
             let passed = self.temporary(TypeInterner::BOOL, span);
             self.push(
                 StatementKind::Let {
@@ -336,14 +358,6 @@ impl Builder {
     ) -> Expression {
         if evaluation_order.len() != fields.len()
             || evaluation_order.iter().any(|&index| index >= fields.len())
-            || fields
-                .iter()
-                .zip(refinement_predicates)
-                .any(|(field, chain)| {
-                    chain
-                        .iter()
-                        .any(|predicate| predicate.input_type != field.ty)
-                })
         {
             return expression.clone();
         }
@@ -363,15 +377,7 @@ impl Builder {
             let field = &fields[index];
             let mut field_type = field.ty;
             for predicate in &refinement_predicates[index] {
-                let input = Expression {
-                    kind: ExpressionKind::Clone(Box::new(Expression {
-                        kind: ExpressionKind::Local(source),
-                        ty: field.ty,
-                        span,
-                    })),
-                    ty: field.ty,
-                    span,
-                };
+                let input = self.refinement_predicate_input(source, field.ty, predicate, span);
                 let passed = self.temporary(TypeInterner::BOOL, span);
                 self.push(
                     StatementKind::Let {
