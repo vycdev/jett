@@ -650,6 +650,28 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
 }
 
 #[test]
+fn native_list_invalid_indices_match_interpreter_errors() {
+    for name in ["list_insert_invalid_index", "list_remove_invalid_index"] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject an invalid list index");
+        let directory = tempfile::tempdir().expect("isolated list failure directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile invalid list index fixture");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_actor_spawn_releases_state_with_context() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/actor_spawn.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");

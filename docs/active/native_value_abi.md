@@ -613,6 +613,8 @@ interpolated assertion message is evaluated only on the failed branch and
 copied into context-owned terminal storage. The existing v1 result still
 returns static message bytes; `jett_rt_v1_value_failure_copy` queries and copies
 the exact failure text into caller-owned storage before context destruction.
+The same path carries signed invalid indices from `list.insert_at` and
+`list.remove_at`, matching the interpreter's terminal error text.
 The launcher uses that copy for its error line, and the normal owned-value
 cleanup epilogue still runs. Production program objects still select
 only the checked source `main`. A separate native verify build synthesizes one

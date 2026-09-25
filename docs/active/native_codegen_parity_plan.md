@@ -695,8 +695,10 @@ ownership on success, including owned bytes elements. An indirect callback
 returning a string now receives a planned owning temporary. Together these add
 `list_extras.jett` to the object gate; linked differential fixtures cover valid
 insert/remove positions and string-returning `list.map`. Invalid-index failures
-currently report a static native message without the index, so exact diagnostic
-parity remains pending.
+now preserve the signed index in the context-owned terminal message. Dedicated
+native/interpreter fixtures compare the exact error text for insertion past the
+end and removal at a negative index; runtime leaf tests cover both index signs
+for both operations while checking that the list remains unchanged.
 
 Checked public JSON calls for supported structs, lists, string-keyed maps,
 optionals, and results now instantiate the reflected `.jett` serializer after

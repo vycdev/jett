@@ -1,0 +1,5 @@
+namespace test
+function main() returns nothing:
+    list[int64] values = list.remove_at[int64](list(1), -1)
+    println(list.length[int64](view values))
+    return nothing
