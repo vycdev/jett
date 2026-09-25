@@ -2717,13 +2717,15 @@ move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
 remaining reflection/JSON shapes, actors/tasks, other capabilities, and clean Windows release
 verification are not established by this slice.
 Native JSON parsing now checks and emits the stdlib decoder for concrete
-structs, lists, sets of supported hashable primitives, string-keyed maps,
+structs, lists, sets of primitive-backed hashable types, string-keyed maps,
 optionals, results, supported `secret[T]` wrappers, and bare or
 state-qualified machines recursively composed of supported leaves.
 Machine parsing uses the reflected state builder; an empty state has no field
 specializations, and HIR lowers its checked empty field loop as an empty scope.
-Raw `secret[json.JsonTree]` uses a dedicated trusted parser; nested refinements and
-other unsupported field shapes remain on the generic intrinsic path. Top-level
+Raw `secret[json.JsonTree]` uses a dedicated trusted parser; other unsupported
+field shapes remain on the generic intrinsic path. Set elements may be narrow
+integers or primitive-backed refinements, with their ordinary range and
+refinement checks applied before insertion. Top-level
 refinements with a supported base use checked source parsing and serialization;
 signed `int8`/`int16`/`int32` and unsigned `uint16`/`uint32` JSON values now
 use checked source decoding, both directly and inside supported aggregates.

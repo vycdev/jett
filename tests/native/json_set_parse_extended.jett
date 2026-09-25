@@ -1,0 +1,39 @@
+namespace test
+type Tag = string where string.char_count(value) > 0
+struct Bag:
+    values: set[int16]
+function parse_int8_set() returns string:
+    set[int8] values = json.parse[set[int8]]("[-128,127,127]") handle error:
+        return error
+    int64 count = set.length[int8](clone values)
+    bool has_minimum = set.contains[int8](view values, -128)
+    return "{count}:{has_minimum}"
+function parse_uint32_set() returns string:
+    set[uint32] values = json.parse_exact[set[uint32]]("[0,4294967295,4294967295]") handle error:
+        return error
+    int64 count = set.length[uint32](clone values)
+    bool has_maximum = set.contains[uint32](view values, 4294967295)
+    return "{count}:{has_maximum}"
+function parse_tag_set() returns string:
+    set[Tag] values = json.parse_exact[set[Tag]]("[\"ready\",\"ready\",\"go\"]") handle error:
+        return error
+    return json.serialize[set[Tag]](view values)
+function parse_bad_tag() returns string:
+    set[Tag] values = json.parse[set[Tag]]("[\"ok\",\"\"]") handle error:
+        return error
+    return "unexpected {set.length[Tag](values)}"
+function parse_bad_int8() returns string:
+    set[int8] values = json.parse[set[int8]]("[-129]") handle error:
+        return error
+    return "unexpected {set.length[int8](values)}"
+function parse_bag() returns string:
+    Bag bag = json.parse_exact[Bag]("{{\"values\":[-32768,32767,-32768]}}") handle error:
+        return error
+    return json.serialize[Bag](view bag)
+function main() returns nothing:
+    println(parse_int8_set())
+    println(parse_uint32_set())
+    println(parse_tag_set())
+    println(parse_bad_tag())
+    println(parse_bad_int8())
+    println(parse_bag())

@@ -3027,10 +3027,10 @@ impl<'a> TypeChecker<'a> {
             Type::List(element) => {
                 self.native_json_parse_source_supported_inner(*element, visiting)
             }
-            Type::Set(element) => matches!(
-                self.interner.resolve(*element),
-                Type::String | Type::Bool | Type::Int64 | Type::Uint64
-            ),
+            Type::Set(element) => {
+                self.is_primitive_hashable_type(*element)
+                    && self.native_json_parse_source_supported_inner(*element, visiting)
+            }
             Type::Map(key, value) if *key == TypeInterner::STRING => {
                 self.native_json_parse_source_supported_inner(*value, visiting)
             }

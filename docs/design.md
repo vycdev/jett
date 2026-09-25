@@ -7553,3 +7553,7 @@ Native `json.serialize` and `json.serialize_public` use the checked source
 serializer for sets of primitive-backed elements, including refinements, both
 at the top level and inside supported records. The serializer emits a JSON
 array by iterating a clone of the viewed set.
+Native `json.parse` and `json.parse_exact` likewise decode sets of any
+primitive-backed hashable element, including narrow integers and refinements.
+Each element is checked before insertion, and duplicate values collapse under
+the set's existing equality semantics.
