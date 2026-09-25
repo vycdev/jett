@@ -10,6 +10,10 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             ..
         } => true,
         ExpressionKind::View(value) => has_extractable_handle(value),
+        ExpressionKind::Unary { value, .. } => has_extractable_handle(value),
+        ExpressionKind::Binary { left, right, .. } => {
+            has_extractable_handle(left) || has_extractable_handle(right)
+        }
         ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
         ExpressionKind::StructConstruct {
             refinement_predicates,
@@ -17,6 +21,23 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         } => refinement_predicates.iter().any(|chain| !chain.is_empty()),
         _ => false,
     }
+}
+
+fn is_plain_copy_scalar(ty: TypeId) -> bool {
+    matches!(
+        ty,
+        TypeInterner::INT8
+            | TypeInterner::INT16
+            | TypeInterner::INT32
+            | TypeInterner::INT64
+            | TypeInterner::UINT8
+            | TypeInterner::UINT16
+            | TypeInterner::UINT32
+            | TypeInterner::UINT64
+            | TypeInterner::FLOAT32
+            | TypeInterner::FLOAT64
+            | TypeInterner::BOOL
+    )
 }
 
 impl Builder {
@@ -69,6 +90,119 @@ impl Builder {
         if let ExpressionKind::View(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::View(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::Unary { op, value } = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::Unary {
+                op: *op,
+                value: Box::new(self.lower_value(value)),
+            };
+            return lowered;
+        }
+        if let ExpressionKind::Binary { left, op, right } = &expression.kind
+            && matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
+            && (has_extractable_handle(left) || has_extractable_handle(right))
+        {
+            let left_value = self.lower_value(left);
+            if !has_extractable_handle(right) {
+                let mut lowered = expression.clone();
+                lowered.kind = ExpressionKind::Binary {
+                    left: Box::new(left_value),
+                    op: *op,
+                    right: right.clone(),
+                };
+                return lowered;
+            }
+            let span = expression.span;
+            let left_local = self.temporary(TypeInterner::BOOL, left.span);
+            self.push(
+                StatementKind::Let {
+                    local: left_local,
+                    value: left_value,
+                },
+                left.span,
+            );
+            let right_block = self.new_block(right.span);
+            let bypass = self.new_block(span);
+            let continuation = self.new_block(span);
+            let output = self.temporary(TypeInterner::BOOL, span);
+            let (then_block, else_block) = if *op == hir::BinaryOp::And {
+                (right_block, bypass)
+            } else {
+                (bypass, right_block)
+            };
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition: Expression {
+                        kind: ExpressionKind::Local(left_local),
+                        ty: TypeInterner::BOOL,
+                        span: left.span,
+                    },
+                    then_block,
+                    else_block,
+                },
+                span,
+            );
+            self.current = bypass;
+            self.push(
+                StatementKind::Let {
+                    local: output,
+                    value: Expression {
+                        kind: ExpressionKind::Bool(*op == hir::BinaryOp::Or),
+                        ty: TypeInterner::BOOL,
+                        span,
+                    },
+                },
+                span,
+            );
+            self.close_to(continuation, span);
+            self.current = right_block;
+            let right_value = self.lower_value(right);
+            self.push(
+                StatementKind::Let {
+                    local: output,
+                    value: right_value,
+                },
+                span,
+            );
+            self.close_to(continuation, span);
+            self.current = continuation;
+            return Expression {
+                kind: ExpressionKind::Local(output),
+                ty: TypeInterner::BOOL,
+                span,
+            };
+        }
+        if let ExpressionKind::Binary { left, op, right } = &expression.kind
+            && !matches!(op, hir::BinaryOp::And | hir::BinaryOp::Or)
+            && is_plain_copy_scalar(left.ty)
+            && (has_extractable_handle(left) || has_extractable_handle(right))
+        {
+            // Save the left value before extracting a handler from the right.
+            // Its failure block may mutate locals that the left side reads.
+            let left_value = self.lower_value(left);
+            let left_local = self.temporary(left.ty, left.span);
+            self.push(
+                StatementKind::Let {
+                    local: left_local,
+                    value: left_value,
+                },
+                left.span,
+            );
+            let right_value = self.lower_value(right);
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::Binary {
+                left: Box::new(Expression {
+                    kind: ExpressionKind::Local(left_local),
+                    ty: left.ty,
+                    span: left.span,
+                }),
+                op: *op,
+                right: Box::new(right_value),
+            };
             return lowered;
         }
         if let ExpressionKind::Handle {

@@ -291,7 +291,7 @@ lowering alone never changes an execution row to complete.
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
-| Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
+| Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call-argument, unary, plain-scalar binary, and short-circuit boolean handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, ordered direct-call arguments, scalar evaluation order, and short-circuit fallback skipping covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context; view-parameter function values pending | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls; linked fixtures cover nested closures, loop captures, higher-order callbacks, string and numeric captures |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
@@ -565,6 +565,13 @@ Nested result/optional handlers in direct-call arguments add
 execution. Differential mains cover both handler branches and named-argument
 evaluation order; arbitrary expression nesting and refinement handlers remain
 open.
+Handlers inside unary and plain-scalar binary expressions now extract into MIR
+before native ownership validation. Boolean `and` and `or` use explicit MIR
+branches so a right-side handler runs only when needed. The linked
+`tests/native/nested_handle_binary.jett` fixture checks both handler outcomes,
+left-value capture before a fallback mutation, unary negation, a binary value
+inside a call argument, and short-circuit skipping. Owned and refined binary
+operands, constructors, interpolation, and other nested forms remain open.
 Enforcing immutable-local rebinding in the frontend and correcting affected
 fixtures adds native objects for `string_iteration.jett`, `set_operations.jett`,
 and `uint64_checked_expression_runtime_types.jett`. The last also passes a

@@ -1308,3 +1308,18 @@ fn native_enum_aggregate_equality_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert!(actual.stderr.is_empty(), "{actual:?}");
 }
+
+#[test]
+fn native_binary_nested_handle_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_handle_binary.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated nested handle directory");
+    let binary = directory.path().join("nested_handle_binary.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile binary expression with a nested handle");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
