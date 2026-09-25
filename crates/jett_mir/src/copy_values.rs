@@ -50,7 +50,7 @@ impl CopyValuePlan {
                         if let StatementKind::SequenceGet { index, .. } = statement.kind {
                             reads.insert(index.index() as usize);
                             temporaries += usize::from(
-                                crate::move_values::is_string(
+                                crate::move_values::is_copy_owned(
                                     types,
                                     function.locals[target.index() as usize].ty,
                                 ) || crate::move_values::is_linear(
@@ -69,7 +69,7 @@ impl CopyValuePlan {
                         if matches!(statement.kind, StatementKind::SumTake { .. }) {
                             let ty = function.locals[target.index() as usize].ty;
                             temporaries += usize::from(
-                                crate::move_values::is_string(types, ty)
+                                crate::move_values::is_copy_owned(types, ty)
                                     || crate::move_values::is_linear(types, ty),
                             );
                         }
@@ -152,7 +152,7 @@ impl CopyValuePlan {
                                 .iter()
                                 .filter(|binding| {
                                     let ty = function.locals[binding.index() as usize].ty;
-                                    crate::move_values::is_string(types, ty)
+                                    crate::move_values::is_copy_owned(types, ty)
                                         || crate::move_values::is_linear(types, ty)
                                 })
                                 .count()
@@ -273,7 +273,7 @@ impl CopyValuePlan {
                 .locals
                 .iter()
                 .filter(|l| {
-                    crate::move_values::is_string(types, l.ty)
+                    crate::move_values::is_copy_owned(types, l.ty)
                         || (program.is_some()
                             && crate::move_values::is_linear(types, l.ty)
                             && !function
@@ -354,7 +354,7 @@ fn visit(
             _ => false,
         });
     }
-    // Count owning emitter operations, not string-typed AST nodes. Children
+    // Count owning emitter operations, not copy-owned AST nodes. Children
     // accumulate until full-expression cleanup; even short-circuit alternatives
     // receive distinct slots during emission. View/clone add no ownership.
     match &value.kind {
@@ -363,7 +363,8 @@ fn visit(
         | ExpressionKind::Call { .. }
         | ExpressionKind::IndirectCall { .. }
         | ExpressionKind::Field { .. }
-            if crate::move_values::is_string(types, value.ty) =>
+        | ExpressionKind::FunctionRef(_)
+            if crate::move_values::is_copy_owned(types, value.ty) =>
         {
             *temporaries += 1
         }
@@ -381,8 +382,8 @@ fn visit(
                     .iter()
                     .filter(|a| !crate::move_values::is_string(types, a.ty))
                     .count();
-            } else if crate::move_values::is_string(types, value.ty) {
-                // String-returning leaves and scalar conversion each own once.
+            } else if crate::move_values::is_copy_owned(types, value.ty) {
+                // Copy-owned leaves and scalar conversion each own once.
                 *temporaries += 1;
             }
         }

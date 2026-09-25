@@ -26,6 +26,16 @@ pub fn is_string(types: &TypeInterner, ty: TypeId) -> bool {
     (underlying.index() as usize) < types.len() && matches!(types.resolve(underlying), Type::String)
 }
 
+pub fn is_function(types: &TypeInterner, ty: TypeId) -> bool {
+    let underlying = representation_type(types, ty);
+    (underlying.index() as usize) < types.len()
+        && matches!(types.resolve(underlying), Type::Function { .. })
+}
+
+pub fn is_copy_owned(types: &TypeInterner, ty: TypeId) -> bool {
+    is_string(types, ty) || is_function(types, ty)
+}
+
 pub fn is_secret(types: &TypeInterner, ty: TypeId) -> bool {
     let mut current = ty;
     for _ in 0..types.len() {

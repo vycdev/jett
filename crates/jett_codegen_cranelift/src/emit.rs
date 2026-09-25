@@ -1,5 +1,7 @@
 mod values;
-use jett_mir::move_values::{MoveValuePlan, is_linear, is_string, representation_type};
+use jett_mir::move_values::{
+    MoveValuePlan, is_copy_owned, is_function, is_linear, is_string, representation_type,
+};
 use jett_runtime::native_abi::values::NativeLeaf;
 use std::str::FromStr;
 
@@ -672,6 +674,8 @@ fn translate_function(
                         .use_var(variables[parameter.local.index() as usize].unwrap());
                     let owned = if is_linear(types, parameter.ty) {
                         v
+                    } else if is_function(types, parameter.ty) {
+                        translator.leaf(NativeLeaf::StructClone, &[v], true)?
                     } else {
                         translator.leaf(NativeLeaf::Retain, &[v], true)?
                     };
@@ -983,9 +987,20 @@ impl Translator<'_, '_> {
                     Some(v) => self.expression(v)?,
                     None => LoweredValue::Nothing,
                 };
-                if value.as_ref().is_some_and(|v| is_string(self.types, v.ty)) {
+                if value
+                    .as_ref()
+                    .is_some_and(|v| is_copy_owned(self.types, v.ty))
+                {
                     let v = self.scalar(result, terminator.span)?;
-                    result = LoweredValue::Scalar(self.leaf(NativeLeaf::Retain, &[v], true)?);
+                    let leaf = if value
+                        .as_ref()
+                        .is_some_and(|v| is_function(self.types, v.ty))
+                    {
+                        NativeLeaf::StructClone
+                    } else {
+                        NativeLeaf::Retain
+                    };
+                    result = LoweredValue::Scalar(self.leaf(leaf, &[v], true)?);
                 }
                 if let LoweredValue::Owned(v, slot) = result {
                     self.clear_slot(slot);
@@ -1175,7 +1190,12 @@ impl Translator<'_, '_> {
                         self.clear_slot(slot);
                         return self.own_linear(v);
                     }
-                    let v = self.leaf(NativeLeaf::Retain, &[v], true)?;
+                    let leaf = if is_function(self.types, expression.ty) {
+                        NativeLeaf::StructClone
+                    } else {
+                        NativeLeaf::Retain
+                    };
+                    let v = self.leaf(leaf, &[v], true)?;
                     return self.own(v);
                 }
                 let value = self.builder.try_use_var(variable).map_err(|error| {
@@ -1209,7 +1229,17 @@ impl Translator<'_, '_> {
                 } else {
                     self.builder.ins().uextend(ir::types::I64, address)
                 };
-                Ok(LoweredValue::Scalar(address))
+                let one = self.builder.ins().iconst(ir::types::I64, 1);
+                let descriptor = self.leaf(NativeLeaf::StructNew, &[one], true)?;
+                let owned = self.own(descriptor)?;
+                let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
+                self.leaf(
+                    NativeLeaf::StructInit,
+                    &[descriptor, zero, address, borrowed],
+                    true,
+                )?;
+                Ok(owned)
             }
             ExpressionKind::Unary { op, value } => {
                 let lowered_value = self.expression(value)?;
@@ -1554,7 +1584,7 @@ impl Translator<'_, '_> {
             })?;
             if is_linear(self.types, expression.ty) {
                 self.own_linear(value)
-            } else if is_string(self.types, expression.ty) {
+            } else if is_copy_owned(self.types, expression.ty) {
                 self.own(value)
             } else {
                 Ok(LoweredValue::Scalar(value))
@@ -1583,7 +1613,9 @@ impl Translator<'_, '_> {
         let params = params.clone();
         let return_type = *return_type;
         let lowered_callee = self.expression(callee)?;
-        let address = self.scalar(lowered_callee, callee.span)?;
+        let descriptor = self.scalar(lowered_callee, callee.span)?;
+        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+        let address = self.leaf(NativeLeaf::StructField, &[descriptor, zero], true)?;
         let pointer_type = self.module.target_config().pointer_type();
         let address = if pointer_type == ir::types::I64 {
             address
@@ -1689,7 +1721,7 @@ impl Translator<'_, '_> {
         })?;
         if is_linear(self.types, expression.ty) {
             self.own_linear(value)
-        } else if is_string(self.types, expression.ty) {
+        } else if is_copy_owned(self.types, expression.ty) {
             self.own(value)
         } else {
             Ok(LoweredValue::Scalar(value))
@@ -1970,6 +2002,9 @@ impl Translator<'_, '_> {
                 };
                 self.clear_slot(source);
                 v
+            } else if is_function(self.types, self.local_types[local.index() as usize].ty) {
+                let value = self.scalar(value, span)?;
+                self.leaf(NativeLeaf::StructClone, &[value], true)?
             } else {
                 let value = self.scalar(value, span)?;
                 self.leaf(NativeLeaf::Retain, &[value], true)?

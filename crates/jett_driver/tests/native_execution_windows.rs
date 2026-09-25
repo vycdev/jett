@@ -270,6 +270,10 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         ("uuid_values", "../../tests/native/uuid_values.jett"),
         ("function_values", "../../tests/native/function_values.jett"),
         (
+            "function_descriptor_ownership",
+            "../../tests/native/function_descriptor_ownership.jett",
+        ),
+        (
             "inline_functions",
             "../../tests/native/inline_functions.jett",
         ),
@@ -437,6 +441,9 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         }
         if name == "function_values" {
             assert_eq!(expected.stdout, "8 14 4 3 z a b\n");
+        }
+        if name == "function_descriptor_ownership" {
+            assert_eq!(expected.stdout, "5 8\n10\n12\n");
         }
         if name == "list_source_values" {
             assert_eq!(expected.stdout, "a true true true true 2 true true true\n");

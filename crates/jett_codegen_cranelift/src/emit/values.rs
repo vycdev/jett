@@ -291,6 +291,14 @@ impl Translator<'_, '_> {
                 self.clone_linear(value, ty, span)
             };
         }
+        if is_function(self.types, ty) {
+            return if borrowed {
+                Ok(LoweredValue::Scalar(bits))
+            } else {
+                let cloned = self.leaf(NativeLeaf::StructClone, &[bits], true)?;
+                self.own(cloned)
+            };
+        }
         let bits = if is_string(self.types, ty) {
             self.leaf(NativeLeaf::Retain, &[bits], true)?
         } else {
@@ -361,7 +369,7 @@ impl Translator<'_, '_> {
         ty: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
-        if is_string(self.types, ty) || is_linear(self.types, ty) {
+        if is_copy_owned(self.types, ty) || is_linear(self.types, ty) {
             return self.own(bits);
         }
         let Some(native) = clif_type(self.types, ty, "sum payload")? else {
@@ -388,7 +396,7 @@ impl Translator<'_, '_> {
         let Type::List(element) = self.types.resolve(ty) else {
             return Err(self.unsupported(span, "invalid list layout"));
         };
-        let owned = is_string(self.types, *element) || is_linear(self.types, *element);
+        let owned = is_copy_owned(self.types, *element) || is_linear(self.types, *element);
         let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
         let value = self.leaf(NativeLeaf::ListNew, &[owned], true)?;
         self.own_linear(value)
@@ -430,7 +438,7 @@ impl Translator<'_, '_> {
             .iconst(ir::types::I32, i64::from(is_string(self.types, *key)));
         let value_owned = self.builder.ins().iconst(
             ir::types::I32,
-            i64::from(is_string(self.types, *value) || is_linear(self.types, *value)),
+            i64::from(is_copy_owned(self.types, *value) || is_linear(self.types, *value)),
         );
         let result = self.leaf(NativeLeaf::MapNew, &[key_strings, value_owned], true)?;
         self.own_linear(result)
@@ -530,7 +538,8 @@ impl Translator<'_, '_> {
                     return Err(self.unsupported(span, "invalid map result layout"));
                 };
                 let key_strings = is_string(self.types, *key);
-                let value_owned = is_string(self.types, *value) || is_linear(self.types, *value);
+                let value_owned =
+                    is_copy_owned(self.types, *value) || is_linear(self.types, *value);
                 let LoweredValue::Owned(keys, key_slot) = values[0] else {
                     return Err(self.unsupported(span, "map keys require owning list"));
                 };
@@ -748,7 +757,9 @@ impl Translator<'_, '_> {
         expression: &Expression,
         borrowed: bool,
     ) -> Result<LoweredValue, CodegenError> {
-        if borrowed && is_linear(self.types, expression.ty) {
+        if borrowed
+            && (is_linear(self.types, expression.ty) || is_function(self.types, expression.ty))
+        {
             match &expression.kind {
                 ExpressionKind::View(inner) => return self.argument(inner, true),
                 ExpressionKind::Field { base, field, .. } => {
@@ -1343,6 +1354,10 @@ impl Translator<'_, '_> {
                 let owned = self.leaf(NativeLeaf::Retain, &[bits], true)?;
                 return self.own(owned);
             }
+            if is_function(self.types, result_type) {
+                let owned = self.leaf(NativeLeaf::StructClone, &[bits], true)?;
+                return self.own(owned);
+            }
             return self.unpack_payload(bits, result_type, span);
         }
         if matches!(
@@ -1421,6 +1436,10 @@ impl Translator<'_, '_> {
             }
             if is_string(self.types, result_type) {
                 let owned = self.leaf(NativeLeaf::Retain, &[bits], true)?;
+                return self.own(owned);
+            }
+            if is_function(self.types, result_type) {
+                let owned = self.leaf(NativeLeaf::StructClone, &[bits], true)?;
                 return self.own(owned);
             }
             return self.unpack_payload(bits, result_type, span);

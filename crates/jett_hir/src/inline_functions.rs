@@ -1,6 +1,6 @@
 //! Extract capture-free inline functions into ordinary checked HIR functions.
-//! Captured closures keep their explicit HIR form until the native function
-//! value ABI can carry an environment alongside its code address.
+//! Captured closures keep their explicit HIR form until extraction and native
+//! environment lowering are implemented.
 
 use crate::{
     Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,

@@ -288,7 +288,7 @@ lowering alone never changes an execution row to complete.
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root and direct-call-argument handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, and ordered direct-call arguments covered; other nested-expression and refinement handlers pending |
-| Function values, closures, and indirect calls | covered; capture-free inline bodies extract to ordinary checked functions while captured closures retain an explicit unsupported form | named and capture-free inline function addresses plus indirect calls for supported signatures; captured closures and view-parameter function values pending | named and capture-free inline callbacks passed, returned, and invoked through indirect calls; a linked fixture covers zero-argument and nested capture-free functions; captured closures pending |
+| Function values, closures, and indirect calls | covered; capture-free inline bodies extract to ordinary checked functions while captured closures retain an explicit unsupported form | named and capture-free inline functions use owned descriptors with code addresses; indirect calls read the address for supported signatures; captured closures and view-parameter function values pending | named and capture-free inline callbacks passed, returned, copied through struct fields, lists, and maps, and invoked through indirect calls; a linked fixture covers zero-argument and nested capture-free functions; captured closures pending |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
@@ -308,6 +308,12 @@ These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
 gate is currently 159/182 (87.4%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
+Function values now use owned native descriptors instead of raw code addresses.
+The descriptor carries a code pointer today and gives captured closures a
+place for their environment when extraction is implemented. A linked
+native/interpreter fixture covers function values copied through struct
+fields, lists, and maps. The 207-row object audit remains 159/182 with no lost
+passes; captured closures still account for some of the remaining failures.
 Checked source JSON parsing now accepts sets of narrow integers and
 primitive-backed refinements as well as the earlier `string`, `bool`, `int64`,
 and `uint64` cases. A linked native/interpreter fixture covers duplicate
