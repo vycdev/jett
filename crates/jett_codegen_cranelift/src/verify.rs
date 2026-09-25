@@ -2694,6 +2694,7 @@ impl Verifier<'_> {
                             | ScalarKind::String)
                     )
                 })
+            && super::emit::debug::equality_layout(self.types, left.ty).is_none()
         {
             return Err(self.unsupported(function, expression.span, "enum equality payload type"));
         }

@@ -1618,43 +1618,63 @@ impl Translator<'_, '_> {
                         && !known_unit_enum_variant(left)
                         && !known_unit_enum_variant(right)
                     {
-                        let mut layout = b"JE\x01".to_vec();
-                        let count = u32::try_from(variants.len())
-                            .map_err(|_| self.unsupported(expression.span, "enum variant count"))?;
-                        layout.extend_from_slice(&count.to_le_bytes());
-                        for variant in variants {
-                            let count = u32::try_from(variant.fields.len()).map_err(|_| {
-                                self.unsupported(expression.span, "enum equality field count")
+                        let aggregate = variants.iter().flat_map(|variant| &variant.fields).any(
+                            |(_, field_ty)| {
+                                !matches!(
+                                    scalar_kind(self.types, *field_ty, "enum equality payload"),
+                                    Ok(ScalarKind::SignedInteger(_)
+                                        | ScalarKind::UnsignedInteger(_)
+                                        | ScalarKind::Float(32 | 64)
+                                        | ScalarKind::Bool
+                                        | ScalarKind::String)
+                                )
+                            },
+                        );
+                        let (layout, leaf) = if aggregate {
+                            (
+                                debug::equality_layout(self.types, left.ty).ok_or_else(|| {
+                                    self.unsupported(expression.span, "enum equality payload type")
+                                })?,
+                                NativeLeaf::EnumEqualAggregate,
+                            )
+                        } else {
+                            let mut layout = b"JE\x01".to_vec();
+                            let count = u32::try_from(variants.len()).map_err(|_| {
+                                self.unsupported(expression.span, "enum variant count")
                             })?;
                             layout.extend_from_slice(&count.to_le_bytes());
-                            for (_, field_ty) in &variant.fields {
-                                let kind = match scalar_kind(
-                                    self.types,
-                                    *field_ty,
-                                    "enum equality payload",
-                                )? {
-                                    ScalarKind::SignedInteger(_)
-                                    | ScalarKind::UnsignedInteger(_)
-                                    | ScalarKind::Bool => b'i',
-                                    ScalarKind::Float(32) => b'f',
-                                    ScalarKind::Float(64) => b'd',
-                                    ScalarKind::String => b's',
-                                    _ => {
-                                        return Err(self.unsupported(
-                                            expression.span,
-                                            "enum equality payload type",
-                                        ));
-                                    }
-                                };
-                                layout.push(kind);
+                            for variant in variants {
+                                let count = u32::try_from(variant.fields.len()).map_err(|_| {
+                                    self.unsupported(expression.span, "enum equality field count")
+                                })?;
+                                layout.extend_from_slice(&count.to_le_bytes());
+                                for (_, field_ty) in &variant.fields {
+                                    let kind = match scalar_kind(
+                                        self.types,
+                                        *field_ty,
+                                        "enum equality payload",
+                                    )? {
+                                        ScalarKind::SignedInteger(_)
+                                        | ScalarKind::UnsignedInteger(_)
+                                        | ScalarKind::Bool => b'i',
+                                        ScalarKind::Float(32) => b'f',
+                                        ScalarKind::Float(64) => b'd',
+                                        ScalarKind::String => b's',
+                                        _ => {
+                                            return Err(self.unsupported(
+                                                expression.span,
+                                                "enum equality payload type",
+                                            ));
+                                        }
+                                    };
+                                    layout.push(kind);
+                                }
                             }
-                        }
+                            (layout, NativeLeaf::EnumEqual)
+                        };
                         let (pointer, length) = self.static_data(&layout)?;
-                        let value = self.leaf(
-                            NativeLeaf::EnumEqual,
-                            &[left_value, right_value, pointer, length],
-                            true,
-                        )?;
+                        let value =
+                            self.leaf(leaf, &[left_value, right_value, pointer, length], true)?;
                         let value = self.builder.ins().ireduce(ir::types::I8, value);
                         let value = if *op == BinaryOp::NotEqual {
                             self.builder.ins().bxor_imm(value, 1)

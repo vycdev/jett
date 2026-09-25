@@ -1,0 +1,57 @@
+namespace test
+bitfield Header:
+    version: 4 bits
+    length: 8 bits
+machine Session:
+    states:
+        guest
+        active(user: string)
+    transitions:
+        guest to active
+enum Bundle:
+    empty
+    numbers(values: list[int64])
+    tags(values: set[string])
+    mapping(values: map[string, optional[int64]])
+    maybe(value: optional[list[int64]])
+    outcome(value: result[list[int64], string])
+    raw(value: bytes)
+    header(value: Header)
+    session(value: Session)
+    fractions(values: list[float64])
+    nested(inner: Bundle)
+function make_tags(first: string, second: string) returns set[string]:
+    mutable set[string] values = set.new[string]()
+    values = set.add[string](values, first)
+    values = set.add[string](values, second)
+    return values
+function main() returns nothing:
+    Bundle first = Bundle.numbers(list(1, 2))
+    Bundle same = Bundle.numbers(list(1, 2))
+    Bundle changed = Bundle.numbers(list(2, 1))
+    println(first == same, first != changed, first == Bundle.empty)
+    println(first == changed)
+    println(Bundle.tags(make_tags("a", "b")) == Bundle.tags(make_tags("a", "b")))
+    println(Bundle.tags(make_tags("a", "b")) == Bundle.tags(make_tags("b", "a")))
+    map[string, optional[int64]] entries = map("a": some(1), "b": none)
+    map[string, optional[int64]] matching = map("a": some(1), "b": none)
+    println(Bundle.mapping(entries) == Bundle.mapping(matching))
+    println(Bundle.mapping(map("a": some(1))) == Bundle.mapping(map("a": some(2))))
+    println(Bundle.maybe(some(list(3))) == Bundle.maybe(some(list(3))))
+    println(Bundle.maybe(none) == Bundle.maybe(some(list(3))))
+    println(Bundle.maybe(some(list(3))) == Bundle.maybe(some(list(4))))
+    println(Bundle.outcome(ok(list(5))) == Bundle.outcome(ok(list(5))))
+    println(Bundle.outcome(fail("bad")) != Bundle.outcome(ok(list(5))))
+    println(Bundle.outcome(fail("bad")) == Bundle.outcome(fail("other")))
+    println(Bundle.raw(bytes.from_string("Hi")) == Bundle.raw(bytes.from_string("Hi")))
+    println(Bundle.raw(bytes.from_string("Hi")) == Bundle.raw(bytes.from_string("Ho")))
+    println(Bundle.header(Header(version: 4, length: 12)) == Bundle.header(Header(version: 4, length: 12)))
+    println(Bundle.header(Header(version: 4, length: 12)) == Bundle.header(Header(version: 4, length: 13)))
+    println(Bundle.session(Session(active, "Lin")) == Bundle.session(Session(active, "Lin")))
+    println(Bundle.session(Session(active, "Lin")) == Bundle.session(Session(active, "Ada")))
+    float64 nan = 0.0 / 0.0
+    println(Bundle.fractions(list(-0.0)) == Bundle.fractions(list(0.0)))
+    println(Bundle.fractions(list(nan)) == Bundle.fractions(list(nan)))
+    println(Bundle.nested(Bundle.numbers(list(7))) == Bundle.nested(Bundle.numbers(list(7))))
+    println(Bundle.nested(Bundle.numbers(list(7))) == Bundle.nested(Bundle.numbers(list(8))))
+    return nothing

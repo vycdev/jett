@@ -1294,3 +1294,17 @@ fn native_assertion_compiles_interpolated_failure_message() {
     assert!(property_output.stdout.is_empty(), "{property_output:?}");
     assert!(property_output.stderr.is_empty(), "{property_output:?}");
 }
+
+#[test]
+fn native_enum_aggregate_equality_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/enum_aggregate_equality.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated enum equality directory");
+    let binary = directory.path().join("enum_aggregate_equality.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile aggregate enum equality");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}

@@ -588,6 +588,176 @@ impl NativeDebugLayout {
             }
         })
     }
+
+    fn equal_value(
+        &self,
+        values: &NativeValues,
+        left: u64,
+        right: u64,
+        index: usize,
+        depth: u32,
+    ) -> LeafResult<bool> {
+        if depth >= 128 {
+            return Err(INVALID_STRUCT);
+        }
+        let child = depth + 1;
+        Ok(match self.nodes.get(index).ok_or(INVALID_STRUCT)? {
+            NativeDebugNode::Primitive(raw) => {
+                match NativeSortKind::from_raw(*raw).map_err(|_| INVALID_STRUCT)? {
+                    NativeSortKind::Float32 => {
+                        f32::from_bits(left as u32) == f32::from_bits(right as u32)
+                    }
+                    NativeSortKind::Float64 => f64::from_bits(left) == f64::from_bits(right),
+                    NativeSortKind::String => values.text(left)? == values.text(right)?,
+                    _ => left == right,
+                }
+            }
+            NativeDebugNode::Nothing => true,
+            NativeDebugNode::Bytes => values.bytes(left)? == values.bytes(right)?,
+            NativeDebugNode::Alias(base) => {
+                return self.equal_value(values, left, right, *base, child);
+            }
+            NativeDebugNode::List(element) => {
+                let left = values.lists.get(&left).ok_or(INVALID_LIST)?;
+                let right = values.lists.get(&right).ok_or(INVALID_LIST)?;
+                if left.elements.len() != right.elements.len() {
+                    return Ok(false);
+                }
+                for (a, b) in left.elements.iter().zip(&right.elements) {
+                    if !self.equal_value(
+                        values,
+                        a.ok_or(INVALID_LIST)?,
+                        b.ok_or(INVALID_LIST)?,
+                        *element,
+                        child,
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            NativeDebugNode::Set(element) => {
+                let left = values.sets.get(&left).ok_or(INVALID_SET)?;
+                let right = values.sets.get(&right).ok_or(INVALID_SET)?;
+                if left.elements.len() != right.elements.len() {
+                    return Ok(false);
+                }
+                for (a, b) in left.elements.iter().zip(&right.elements) {
+                    if !self.equal_value(
+                        values,
+                        a.ok_or(INVALID_SET)?,
+                        b.ok_or(INVALID_SET)?,
+                        *element,
+                        child,
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            NativeDebugNode::Map(key, value) => {
+                let left = values.maps.get(&left).ok_or(INVALID_MAP)?;
+                let right = values.maps.get(&right).ok_or(INVALID_MAP)?;
+                if left.entries.len() != right.entries.len() {
+                    return Ok(false);
+                }
+                for (a, b) in left.entries.iter().zip(&right.entries) {
+                    let a = a.ok_or(INVALID_MAP)?;
+                    let b = b.ok_or(INVALID_MAP)?;
+                    if a.key_taken || b.key_taken {
+                        return Err(INVALID_MAP);
+                    }
+                    if !self.equal_value(values, a.key, b.key, *key, child)?
+                        || !self.equal_value(values, a.value, b.value, *value, child)?
+                    {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            NativeDebugNode::Optional(element) => {
+                let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
+                let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
+                if left.tag != right.tag {
+                    return Ok(false);
+                }
+                match left.tag {
+                    SUM_FAILURE => true,
+                    SUM_SUCCESS => {
+                        self.equal_value(values, left.bits, right.bits, *element, child)?
+                    }
+                    _ => return Err(INVALID_SUM),
+                }
+            }
+            NativeDebugNode::Result(ok, error) => {
+                let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
+                let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
+                if left.tag != right.tag {
+                    return Ok(false);
+                }
+                let payload = match left.tag {
+                    SUM_FAILURE => *error,
+                    SUM_SUCCESS => *ok,
+                    _ => return Err(INVALID_SUM),
+                };
+                self.equal_value(values, left.bits, right.bits, payload, child)?
+            }
+            NativeDebugNode::Record(_, fields) => {
+                let left = values.structs.get(&left).ok_or(INVALID_STRUCT)?;
+                let right = values.structs.get(&right).ok_or(INVALID_STRUCT)?;
+                if left.fields.len() != fields.len() || right.fields.len() != fields.len() {
+                    return Err(INVALID_STRUCT);
+                }
+                for (position, (_, field_type)) in fields.iter().enumerate() {
+                    let a = left.fields[position].ok_or(INVALID_STRUCT)?.bits;
+                    let b = right.fields[position].ok_or(INVALID_STRUCT)?.bits;
+                    if !self.equal_value(values, a, b, *field_type, child)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            NativeDebugNode::Enum(_, variants) | NativeDebugNode::Machine(_, variants) => {
+                let left = values.structs.get(&left).ok_or(INVALID_STRUCT)?;
+                let right = values.structs.get(&right).ok_or(INVALID_STRUCT)?;
+                let left_tag = usize::try_from(
+                    left.fields
+                        .first()
+                        .copied()
+                        .flatten()
+                        .ok_or(INVALID_STRUCT)?
+                        .bits,
+                )
+                .map_err(|_| INVALID_STRUCT)?;
+                let right_tag = usize::try_from(
+                    right
+                        .fields
+                        .first()
+                        .copied()
+                        .flatten()
+                        .ok_or(INVALID_STRUCT)?
+                        .bits,
+                )
+                .map_err(|_| INVALID_STRUCT)?;
+                if left_tag != right_tag {
+                    return Ok(false);
+                }
+                let (_, fields) = variants.get(left_tag).ok_or(INVALID_STRUCT)?;
+                if left.fields.len() != fields.len() + 1 || right.fields.len() != fields.len() + 1 {
+                    return Err(INVALID_STRUCT);
+                }
+                for (position, field_type) in fields.iter().enumerate() {
+                    let a = left.fields[position + 1].ok_or(INVALID_STRUCT)?.bits;
+                    let b = right.fields[position + 1].ok_or(INVALID_STRUCT)?.bits;
+                    if !self.equal_value(values, a, b, *field_type, child)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            NativeDebugNode::Capability(_) => return Err(INVALID_STRUCT),
+        })
+    }
 }
 struct BitfieldLayoutCursor<'a> {
     bytes: &'a [u8],
@@ -2756,6 +2926,22 @@ impl NativeValues {
         }
         Ok(u32::from(equal))
     }
+    fn aggregate_enum_equal(&self, left: u64, right: u64, layout: &[u8]) -> LeafResult<u32> {
+        let layout = NativeDebugLayout::parse(layout).map_err(|_| INVALID_STRUCT)?;
+        if !matches!(
+            layout.nodes.get(layout.root),
+            Some(NativeDebugNode::Enum(..))
+        ) {
+            return Err(INVALID_STRUCT);
+        }
+        Ok(u32::from(layout.equal_value(
+            self,
+            left,
+            right,
+            layout.root,
+            0,
+        )?))
+    }
     fn reflected_field_index(
         &self,
         actual: u64,
@@ -3877,6 +4063,12 @@ leaves! {
             if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
             s.enum_equal(left, right, layout) };
+    EnumEqualAggregate, jett_rt_v1_enum_equal_aggregate, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.aggregate_enum_equal(left, right, layout) };
     FromInt, jett_rt_v1_string_from_int, false, (value: i64 => I64), u64 => I64,
         |s| s.insert(value.to_string());
     FromUint, jett_rt_v1_string_from_uint, false, (value: u64 => I64), u64 => I64,

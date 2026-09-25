@@ -747,6 +747,29 @@ fn rejects_unbaked_comptime_instead_of_executing_it_at_runtime() {
 }
 
 #[test]
+fn rejects_implicit_struct_equality_inside_enum_payloads() {
+    let (program, types) = lower_source(
+        r#"namespace app
+struct Item:
+    id: int64
+enum Value:
+    empty
+    item(value: Item)
+function main() returns bool:
+    Value left = Value.item(Item(id: 1))
+    Value right = Value.item(Item(id: 1))
+    return left == right
+"#,
+    );
+    let error = emit_host_object(&program, &types)
+        .expect_err("nested user structs must not gain structural equality");
+    assert!(
+        error.to_string().contains("enum equality payload type"),
+        "{error}"
+    );
+}
+
+#[test]
 fn malformed_sequence_element_type_returns_error_without_panicking() {
     for by_view in [true, false] {
         let source = format!(

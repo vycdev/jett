@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use jett_runtime::native_abi::values::NativeDebugTag;
 use jett_types::{Type, TypeId, TypeInterner};
@@ -210,4 +210,71 @@ pub(crate) fn debug_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8>> 
         bytes.extend_from_slice(&encoded);
     }
     Some(bytes)
+}
+
+pub(crate) fn equality_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8>> {
+    fn supported(types: &TypeInterner, ty: TypeId, seen: &mut HashSet<TypeId>) -> bool {
+        if !seen.insert(ty) {
+            return true;
+        }
+        match types.resolve(ty) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing => true,
+            Type::List(element) | Type::Set(element) | Type::Optional(element) => {
+                supported(types, *element, seen)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => {
+                supported(types, *key, seen) && supported(types, *value, seen)
+            }
+            Type::Enum(id) => types.resolve_enum(*id).variants.iter().all(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .all(|(_, field_type)| supported(types, *field_type, seen))
+            }),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                types.resolve_machine(*id).states.iter().all(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .all(|(_, field_type)| supported(types, *field_type, seen))
+                })
+            }
+            Type::Bitfield(id) => types
+                .resolve_bitfield(*id)
+                .fields
+                .iter()
+                .all(|field| supported(types, field.ty, seen)),
+            Type::Refinement { base, .. } => supported(types, *base, seen),
+            // Exact Equatable dispatch must be retained for user structs.
+            Type::Struct(_)
+            | Type::Secret(_)
+            | Type::TypeConstruction
+            | Type::Never
+            | Type::Interface(_)
+            | Type::Actor(_)
+            | Type::Resource(_)
+            | Type::Capability(_)
+            | Type::Function { .. }
+            | Type::Error => false,
+        }
+    }
+
+    if supported(types, ty, &mut HashSet::new()) {
+        debug_layout(types, ty)
+    } else {
+        None
+    }
 }
