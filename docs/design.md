@@ -7550,6 +7550,12 @@ Within a generic function, equality between `type.name[T]()` and a string
 literal is a checked static branch selection, preserving the distinct raw
 `json.JsonTree` representation. Ordinary string comparisons retain runtime
 semantics.
+`type.has_secret[T]()` also selects a checked static branch in generic code.
+The public JSON serializer uses it inside reflected field bindings to omit
+entire secret-bearing fields, including fields whose contents are collections
+of secrets. The checked decoder may put an already validated refinement value
+into a record field; the native builder still rejects a base value offered to
+a refinement field because native builder finish cannot run its predicate yet.
 `float32` JSON decoding uses the same checked source path: it reads a `float64`
 JSON number and explicitly rounds with `float32.from_float64`.
 Checked source JSON serialization formats that rounded value using the

@@ -2757,7 +2757,14 @@ selects the raw `json.JsonTree` wire path by checked `type.name[T]()` equality
 with a string literal. Native
 source serialization supports bare and state-qualified machines with supported
 state fields; public serialization omits direct secret fields in records and
-machines. A trusted concrete bytes serializer emits the canonical hex JSON
+machines. Generic `type.has_secret[T]()` branches are checked static selections;
+the serializer uses them to omit whole fields containing secret collections.
+The trusted JSON record decoder passes already validated field values to the
+native builder, whose runtime checks exact field metadata and canonical type.
+General base-to-refinement builder inputs remain blocked until native finish
+can run the predicate. Validated struct construction reserves separate
+temporary owners for its record and result wrapper. A trusted concrete bytes
+serializer emits the canonical hex JSON
 string. Records with `json.JsonTree` fields use the checked
 source serializer, cloning borrowed raw trees before encoding them. Native MIR
 verification accepts checked inner-value promotion to a

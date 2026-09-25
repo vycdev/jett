@@ -2082,6 +2082,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         // legacy flat maps for the interpreter. Those descendant entries are
         // owned by `CheckedBodyFacts` and are validated while lowering each
         // specialized body, not as siblings in the enclosing function.
+        self.consumed_static_selections
+            .extend(self.static_selections.keys().copied().filter(|span| {
+                span.file == binding.body.span.file
+                    && span.start >= binding.body.span.start
+                    && span.end <= binding.body.span.end
+            }));
         self.consumed_comptime_type_bindings.extend(
             self.comptime_type_bindings.keys().copied().filter(|span| {
                 span.file == binding.body.span.file

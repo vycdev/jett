@@ -2920,7 +2920,7 @@ impl<'a> TypeChecker<'a> {
                         .fields
                         .iter()
                         .all(|(_, field_ty)| {
-                            matches!(self.interner.resolve(*field_ty), Type::Secret(_))
+                            self.type_contains_secret_data(*field_ty)
                                 || self.native_json_source_supported(*field_ty, visiting)
                         });
                 visiting.remove(&ty);
@@ -2937,7 +2937,7 @@ impl<'a> TypeChecker<'a> {
                     .iter()
                     .flat_map(|state| state.fields.iter())
                     .all(|(_, field_ty)| {
-                        matches!(self.interner.resolve(*field_ty), Type::Secret(_))
+                        self.type_contains_secret_data(*field_ty)
                             || self.native_json_source_supported(*field_ty, visiting)
                     });
                 visiting.remove(&ty);
@@ -7001,6 +7001,12 @@ impl<'a> TypeChecker<'a> {
         match expr {
             Expr::BoolLiteral(_, _) => true,
             Expr::Paren(inner, _) => self.expr_is_potential_static_reflection_condition(inner),
+            Expr::GenericCall(callee, _, args, _) => {
+                args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.has_secret")
+            }
             Expr::Unary(UnaryOp::Not, inner, _) => {
                 self.expr_is_potential_static_reflection_condition(inner)
             }
@@ -7223,6 +7229,15 @@ impl<'a> TypeChecker<'a> {
         match expr {
             Expr::BoolLiteral(value, _) => Some(*value),
             Expr::Paren(inner, _) => self.eval_static_type_condition(inner),
+            Expr::GenericCall(callee, type_args, args, _)
+                if args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.has_secret") =>
+            {
+                let type_id = self.reflection_type_arg_id(type_args)?;
+                Some(self.type_contains_secret_data(type_id))
+            }
             Expr::Unary(UnaryOp::Not, inner, _) => {
                 self.eval_static_type_condition(inner).map(|value| !value)
             }
@@ -18464,6 +18479,36 @@ function main() returns nothing:
         assert!(selections.contains(&CheckedStaticSelection::IfThen));
         assert!(selections.contains(&CheckedStaticSelection::IfElse));
         assert_eq!(selections.len(), 2);
+    }
+
+    #[test]
+    fn generic_has_secret_selects_a_checked_branch() {
+        let result = check_source_result(
+            r#"function classify[T]() returns string:
+    if type.has_secret[T]():
+        return "secret"
+    else:
+        return "public"
+function main() returns nothing:
+    string secret_label = classify[secret[string]]()
+    string public_label = classify[string]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let selections = result
+            .generic_function_instantiations
+            .iter()
+            .flat_map(|instantiation| instantiation.static_selections.values().copied())
+            .collect::<Vec<_>>();
+        assert!(selections.contains(&CheckedStaticSelection::IfThen));
+        assert!(selections.contains(&CheckedStaticSelection::IfElse));
     }
 
     #[test]

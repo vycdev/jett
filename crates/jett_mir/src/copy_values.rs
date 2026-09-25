@@ -427,7 +427,15 @@ fn visit(
             visit(right, reads, temporaries, types, program, false)?;
         }
         ExpressionKind::OptionalNone if program.is_some() => {}
-        ExpressionKind::StructConstruct { fields, .. } if program.is_some() => {
+        ExpressionKind::StructConstruct {
+            fields,
+            validates_refinements,
+            ..
+        } if program.is_some() => {
+            // A validated construction owns the record before wrapping it in
+            // a separately owned success sum. The expression type counts the
+            // sum above; reserve one more slot for the intermediate record.
+            *temporaries += usize::from(*validates_refinements);
             for field in fields {
                 visit(field, reads, temporaries, types, program, false)?;
             }

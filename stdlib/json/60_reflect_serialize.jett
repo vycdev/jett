@@ -128,7 +128,7 @@ function json_serialize_public_other_reflected[T](view value: T, view info: Type
         return json_serialize_public_primitive[T](view value, primitive)
     if kind == TypeKind.alias_type:
         comptime type Base = type.arg[T](0):
-            Base item = value
+            Base item = clone value
             return json_serialize_public_reflected[Base](view item)
     if kind == TypeKind.refinement_type:
         comptime type Base = type.arg[T](0):
@@ -266,9 +266,10 @@ function json_serialize_public_machine_reflected[T](view value: T) returns strin
         if field.has_secret == true:
             continue
         comptime type Field = field.type_info:
-            Field item = type.machine_field_value[T, Field](view value, view field)
-            string encoded = json_serialize_public_reflected[Field](view item)
-            payload_fields = list.append[string](payload_fields, json_stdlib_object_entry(field.serialize_name, encoded))
+            if not type.has_secret[Field]():
+                Field item = type.machine_field_value[T, Field](view value, view field)
+                string encoded = json_serialize_public_reflected[Field](view item)
+                payload_fields = list.append[string](payload_fields, json_stdlib_object_entry(field.serialize_name, encoded))
     string payload = json_stdlib_object_from_parts(payload_fields)
     mutable list[string] envelope = list.new[string]()
     envelope = list.append[string](envelope, json_stdlib_object_entry("state", json_stdlib_quote(state.name)))
@@ -280,7 +281,8 @@ function json_serialize_public_record_reflected[T](view value: T) returns string
         if field.has_secret == true:
             continue
         comptime type Field = field.type_info:
-            Field item = type.field_value[T, Field](view value, view field)
-            string encoded = json_serialize_public_reflected[Field](view item)
-            fields = list.append[string](fields, json_stdlib_object_entry(field.serialize_name, encoded))
+            if not type.has_secret[Field]():
+                Field item = type.field_value[T, Field](view value, view field)
+                string encoded = json_serialize_public_reflected[Field](view item)
+                fields = list.append[string](fields, json_stdlib_object_entry(field.serialize_name, encoded))
     return json_stdlib_object_from_parts(fields)

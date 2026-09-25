@@ -300,13 +300,13 @@ The current fixture gates are therefore:
 | Obligation | Passing | Denominator | Evidence |
 | --- | ---: | ---: | --- |
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
-| Native object generation | 166 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
+| Native object generation | 168 | 182 | exhaustive Windows MSVC 207-row checkpoint; original 29 staged deterministic manifest gates retained |
 | Successful/expected `main` execution | 25 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, and Environment inputs |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
 These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
-gate is currently 166/182 (91.2%), a useful progress measure rather than a
+gate is currently 168/182 (92.3%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a
@@ -317,8 +317,16 @@ exhaustive gate gained `json_reflection_bridge_parity.jett`,
 `json_shape_matrix.jett`, `json_tree_reflection_parse_wrapper.jett`, and
 `namespace_use_alias.jett` without losing an earlier object pass;
 `json_runtime_reflection_metadata.jett` also gained its `main` behavior match.
-Nested refinement construction and records containing collections of secret
-values remain outside this checked path.
+Checked generic `type.has_secret[T]()` branches now omit whole secret-bearing
+record fields before native serialization, including fields holding collections
+of secrets. The trusted reflected decoder inserts already validated refinement
+values; native builder insertion checks exact field metadata and type. Native
+ownership planning reserves separate temporaries for validated records and
+their result wrappers. Linked native/interpreter fixtures cover the nested
+serializer and decoder, including error paths. General builder insertion of a
+base value into a refinement field still needs predicate execution at finish.
+The exhaustive audit gained `json_reflection_nested_decoder.jett` and
+`json_reflection_nested_serializer.jett`, without losing an earlier pass.
 Captured inline functions now extract to checked functions with explicit
 capture parameters. An owned descriptor carries both the code address and a
 copied environment; indirect calls pass the environment through a hidden

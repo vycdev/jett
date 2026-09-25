@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use jett_common::Span;
+use jett_common::{SourceOrigin, Span};
 use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
 use jett_mir::{
     Function, Program, SequenceSource, Statement, StatementKind, Terminator, TerminatorKind,
@@ -1343,6 +1343,16 @@ impl Verifier<'_> {
                     };
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructPut {
+                    // The trusted decoder binds its value type from each
+                    // reflected field. Runtime BuilderPut still checks the
+                    // field index, name, and exact canonical type, so an
+                    // unrelated refinement field sharing this value's base
+                    // must not reject the whole record specialization.
+                    let checked_json_record_decoder = function.identity.declaration.origin
+                        == SourceOrigin::Stdlib
+                        && function.identity.declaration.namespace == "json"
+                        && function.identity.declaration.name
+                            == "json_decode_tree_record_reflected";
                     let unsupported_kind = reflection_arguments.first().is_some_and(|info| {
                         !matches!(
                             info.kind.as_str(),
@@ -1356,6 +1366,7 @@ impl Verifier<'_> {
                             || native_constructible_builder_kind(self.types, type_arguments[0])
                                 == Some(reflection_arguments[0].kind.as_str()))
                         && (unsupported_kind
+                            || checked_json_record_decoder
                             || native_builder_value_type_supported(
                                 self.types,
                                 type_arguments[0],

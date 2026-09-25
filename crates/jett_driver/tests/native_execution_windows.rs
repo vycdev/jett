@@ -549,6 +549,70 @@ fn native_nested_json_shapes_match_interpreter() {
 }
 
 #[test]
+fn native_nested_json_public_serializer_omits_secret_collections() {
+    let fixture = "json_reflection_nested_serializer.jett";
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/run_pass")
+            .join(fixture),
+    )
+    .expect("read nested serializer fixture");
+    let directory = tempfile::tempdir().expect("isolated nested serializer directory");
+    let source_path = directory.path().join(fixture);
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\nfunction main() returns nothing:\n    println(reflected_user_json(), reflected_alias_refinement_json(), reflected_enum_json(), reflected_bitfield_json(), reflected_control_string_json(), reflected_all_control_string_json(), reflected_unicode_roundtrip_hex())\n"
+        ),
+    )
+    .expect("write nested serializer executable");
+    let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&source_path, launcher(), &binary)
+        .unwrap_or_else(|error| panic!("{fixture}: {error:?}"));
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{fixture}: {actual:?}");
+    assert_eq!(
+        actual.stdout,
+        expected.stdout.as_bytes(),
+        "{fixture}: {actual:?}"
+    );
+    assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+}
+
+#[test]
+fn native_nested_json_decoder_matches_interpreter() {
+    let fixture = "json_reflection_nested_decoder.jett";
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/run_pass")
+            .join(fixture),
+    )
+    .expect("read nested decoder fixture");
+    let directory = tempfile::tempdir().expect("isolated nested decoder directory");
+    let source_path = directory.path().join(fixture);
+    std::fs::write(
+        &source_path,
+        format!(
+            "{source}\nfunction main() returns nothing:\n    println(decoded_nested_summary(), decoded_result_failure(), invalid_refinement_message(), missing_nested_message(), wrong_struct_shape_message(), wrong_list_item_message(), invalid_bitfield_message(), invalid_enum_payload_message(), invalid_bitfield_enum_message(), decoded_top_level_refinement(), invalid_top_level_refinement_message(), decoded_refined_list_count(), invalid_refined_list_message(), decoded_top_level_float(), decoded_null_as_nothing(), invalid_nothing_message(), decoded_top_level_bytes_length(), decoded_blob_bytes_first(), invalid_bytes_message(), decoded_top_level_secret_redaction(), decoded_secret_field_summary(), invalid_secret_field_message(), missing_secret_field_message())\n"
+        ),
+    )
+    .expect("write nested decoder executable");
+    let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&source_path, launcher(), &binary)
+        .unwrap_or_else(|error| panic!("{fixture}: {error:?}"));
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{fixture}: {actual:?}");
+    assert_eq!(
+        actual.stdout,
+        expected.stdout.as_bytes(),
+        "{fixture}: {actual:?}"
+    );
+    assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+}
+
+#[test]
 fn native_generic_struct_fields_match_interpreter() {
     let source = include_str!("../../../tests/run_pass/generic_struct.jett");
     let directory = tempfile::tempdir().expect("isolated execution directory");
