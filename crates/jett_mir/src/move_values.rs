@@ -473,6 +473,9 @@ impl Flow<'_> {
             ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::Run(value)
+            | ExpressionKind::Join(value)
+            | ExpressionKind::Cancel(value)
             | ExpressionKind::Unary { value, .. }
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)

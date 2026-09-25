@@ -2709,12 +2709,12 @@ variants carry aggregate payloads; comparison between two unknown aggregate
 payload values remains outside that path.
 
 The full native parity gate is still incomplete: the current object count is
-recorded in `active/native_codegen_parity_plan.md`, alongside 25/30 main
+recorded in `active/native_codegen_parity_plan.md`, alongside 26/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
 move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
-remaining reflection/JSON shapes, actors/tasks, other capabilities, and clean Windows release
+remaining reflection/JSON shapes, actors and full task scheduling, other capabilities, and clean Windows release
 verification are not established by this slice.
 Native JSON parsing now checks and emits the stdlib decoder for concrete
 structs, lists, sets of primitive-backed hashable types, string-keyed maps,

@@ -1587,8 +1587,20 @@ impl Translator<'_, '_> {
                     expected,
                 )))
             }
-            ExpressionKind::Run(_) | ExpressionKind::Join(_) | ExpressionKind::Cancel(_) => {
-                Err(self.unsupported(expression.span, "task operation"))
+            // The checked task model currently evaluates `run` immediately.
+            // `join` wraps a plain value as success and passes through results.
+            ExpressionKind::Run(value) => self.expression(value),
+            ExpressionKind::Join(value) => {
+                let result = self.expression(value)?;
+                if value.ty == expression.ty {
+                    Ok(result)
+                } else {
+                    self.construct_sum_value(true, result, expression.span)
+                }
+            }
+            ExpressionKind::Cancel(value) => {
+                self.expression(value)?;
+                Ok(LoweredValue::Nothing)
             }
             ExpressionKind::InlineFunction { .. } => {
                 Err(self.unsupported(expression.span, "inline function"))

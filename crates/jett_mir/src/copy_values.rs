@@ -342,6 +342,7 @@ fn visit(
             | ExpressionKind::ResultFail(_)
             | ExpressionKind::OptionalSome(_)
             | ExpressionKind::OptionalNone
+            | ExpressionKind::Join(_)
             | ExpressionKind::ListConstruct { .. }
             | ExpressionKind::MapConstruct { .. }
             | ExpressionKind::StructConstruct { .. }
@@ -490,6 +491,9 @@ fn visit(
         ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
+        | ExpressionKind::Run(value)
+        | ExpressionKind::Join(value)
+        | ExpressionKind::Cancel(value)
         | ExpressionKind::Unary { value, .. } => {
             visit(value, reads, temporaries, types, program, false)?
         }

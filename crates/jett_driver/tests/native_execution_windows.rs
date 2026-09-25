@@ -468,6 +468,21 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
 }
 
 #[test]
+fn native_structured_concurrency_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/structured_concurrency.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "hello:ready:failed\n");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile structured concurrency");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_captured_closures_match_interpreter() {
     for (fixture, main) in [
         (

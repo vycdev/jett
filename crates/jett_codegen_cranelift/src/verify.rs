@@ -2255,8 +2255,51 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
-            ExpressionKind::Run(_) | ExpressionKind::Join(_) | ExpressionKind::Cancel(_) => {
-                Err(self.unsupported(function, expression.span, "task operation"))
+            ExpressionKind::Run(value) => {
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    value.ty,
+                    expression.ty,
+                    "run result type mismatch",
+                )
+            }
+            ExpressionKind::Join(value) => {
+                self.expression(function, value)?;
+                // A bare `nothing` means cancellation to the interpreter,
+                // while `run` of a nothing-returning call is still pending.
+                // MIR has no pending marker on a nothing-typed local yet.
+                if value.ty == TypeInterner::NOTHING {
+                    return Err(self.unsupported(
+                        function,
+                        expression.span,
+                        "join of nothing-typed task",
+                    ));
+                }
+                let Type::Result(ok, error) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(function, expression, "task join"));
+                };
+                if value.ty == expression.ty || (*ok == value.ty && *error == TypeInterner::STRING)
+                {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "join result does not match task value",
+                    ))
+                }
+            }
+            ExpressionKind::Cancel(value) => {
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    TypeInterner::NOTHING,
+                    expression.ty,
+                    "cancel must return nothing",
+                )
             }
             ExpressionKind::InlineFunction { .. } => {
                 Err(self.unsupported(function, expression.span, "inline function"))

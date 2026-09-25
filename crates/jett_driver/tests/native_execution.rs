@@ -88,6 +88,21 @@ fn native_scalar_entry_links_and_executes_without_source_tree() {
 }
 
 #[test]
+fn native_structured_concurrency_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/structured_concurrency.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert_eq!(expected.stdout, "hello:ready:failed\n");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("structured_concurrency");
+    build_host_executable(&fixture, &launcher(), &binary).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_named_function_callbacks_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/function_values.jett");
