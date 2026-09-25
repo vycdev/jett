@@ -416,6 +416,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
         "tests/run_pass/fibonacci.jett".to_owned(),
         "tests/run_pass/graphics_callback_runtime_error.jett".to_owned(),
         "tests/run_pass/graphics_pipeline_scripted.jett".to_owned(),
+        "tests/run_pass/graphics_scene.jett".to_owned(),
         "tests/run_pass/graphics_scripted.jett".to_owned(),
         "tests/run_pass/handle_result_optional.jett".to_owned(),
         "tests/run_pass/hello_print.jett".to_owned(),
@@ -447,7 +448,7 @@ fn native_parity_manifest_matches_fixture_inventory() {
     );
     assert_eq!(
         manifested_object_emit.len(),
-        32,
+        33,
         "native object-emission coverage changed"
     );
 

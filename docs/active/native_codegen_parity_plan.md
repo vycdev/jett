@@ -831,9 +831,10 @@ link and match interpreter output or terminal callback failure.
 
 The September 2026 exhaustive Windows object audit reports 177/182 emitted
 objects (97.3%), 30/30 linked `main` outcomes, 25/25 runtime contracts, and
-182/182 typed lowerings. This percentage measures the current fixture set,
-not overall language coverage. The five remaining object gaps are
-`graphics_scene.jett` (inline callback values) and four verification/property
-fixtures without reachable native symbols. The full object audit is available
-as the ignored `native_parity_audit_all_run_pass_objects` test; the three new
-Graphics objects are part of the regular deterministic object gate.
+182/182 typed lowerings. Inline Graphics callbacks with `view` parameters now
+extract to checked functions and the `graphics_scene.jett` object joins the
+regular deterministic gate, raising current object coverage to 178/182
+(97.8%). This percentage measures the current fixture set, not overall language
+coverage. The four remaining object gaps are verification/property fixtures
+without reachable native symbols. The full object audit is available as the
+ignored `native_parity_audit_all_run_pass_objects` test.

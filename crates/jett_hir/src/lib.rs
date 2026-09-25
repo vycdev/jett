@@ -7047,6 +7047,25 @@ function make(seed: int64) returns function(int64) returns int64:
     }
 
     #[test]
+    fn extracts_inline_function_view_parameter() {
+        let program = lower_source(
+            r#"namespace app
+function make() returns function(view int64) returns int64:
+    return function(view value: int64) returns int64: return value
+"#,
+        );
+        assert_eq!(program.functions.len(), 2);
+        assert!(matches!(
+            program.functions[0].body.statements[0].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::FunctionRef(FunctionId(1)),
+                ..
+            }))
+        ));
+        assert_eq!(program.functions[1].params[0].mode, ParamMode::View);
+    }
+
+    #[test]
     fn desugars_pipeline_steps_to_checked_hir_calls() {
         let source = r#"namespace app
 struct Score:

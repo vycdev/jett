@@ -110,9 +110,6 @@ impl Extractor<'_> {
             body,
         } = &expression.kind
         {
-            if !view_params.is_empty() {
-                return;
-            }
             let captures = (0..*local_floor)
                 .filter(|id| block_uses_local(body, *id))
                 .map(LocalId::new)
@@ -136,7 +133,11 @@ impl Extractor<'_> {
                         local: *id,
                         name: local.name.clone(),
                         ty: local.ty,
-                        mode: ParamMode::Owned,
+                        mode: if view_params.contains(id) {
+                            ParamMode::View
+                        } else {
+                            ParamMode::Owned
+                        },
                         mutable: local.mutable,
                         span: local.span,
                     })

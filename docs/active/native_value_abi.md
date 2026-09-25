@@ -98,8 +98,9 @@ presents each rendered scene, and dispatches checked update and render
 callbacks until close. It tracks the state owner across updates and closes
 the session on handled domain failures; context destruction closes it after
 a terminal callback failure. Named callbacks, including render's `view`
-parameter, now match the interpreter in scripted fixtures. Native inline
-callback values remain unsupported.
+parameter, now match the interpreter in scripted fixtures. Inline Graphics
+callbacks with `view` parameters extract to checked function values before
+MIR lowering, preserving their borrow mode.
 For deterministic parity runs, the launcher configures a context-local Graphics
 event queue from `JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1` before entry. The runtime
 and interpreter share the JSON event grammar (key, close, host error); no
