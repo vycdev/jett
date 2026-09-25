@@ -2874,6 +2874,10 @@ impl<'a> TypeChecker<'a> {
             | Type::Float32
             | Type::Float64 => true,
             Type::List(element) => self.native_json_source_supported(*element, visiting),
+            Type::Set(element) => {
+                self.is_primitive_hashable_type(*element)
+                    && self.native_json_source_supported(*element, visiting)
+            }
             Type::Map(key, value) if *key == TypeInterner::STRING => {
                 self.native_json_source_supported(*value, visiting)
             }
@@ -9976,6 +9980,7 @@ impl<'a> TypeChecker<'a> {
                     | Type::Machine(_)
                     | Type::MachineState { .. }
                     | Type::List(_)
+                    | Type::Set(_)
                     | Type::Map(_, _)
                     | Type::Optional(_)
                     | Type::Result(_, _)
@@ -11943,6 +11948,7 @@ impl<'a> TypeChecker<'a> {
                     | Type::Machine(_)
                     | Type::MachineState { .. }
                     | Type::List(_)
+                    | Type::Set(_)
                     | Type::Map(_, _)
                     | Type::Optional(_)
                     | Type::Result(_, _)

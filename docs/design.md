@@ -7549,3 +7549,7 @@ source conversion, including when these values occur in supported aggregates.
 JSON number and explicitly rounds with `float32.from_float64`.
 Checked source JSON serialization formats that rounded value using the
 language's existing `float32` string display behavior.
+Native `json.serialize` and `json.serialize_public` use the checked source
+serializer for sets of primitive-backed elements, including refinements, both
+at the top level and inside supported records. The serializer emits a JSON
+array by iterating a clone of the viewed set.

@@ -2744,7 +2744,9 @@ dedicated checked native parse and serialize hooks. Raw trees retain their JSON
 wire behavior and are cloned when a decoder returns a borrowed tree. Pipeline
 calls to `json.serialize` and `json.serialize_public` select the same checked
 source serializer for supported structured types as direct calls. Supported
-bitfields use dedicated checked parse, exact-parse, and serialization hooks
+sets with primitive-backed elements use that serializer directly or as record
+fields; iteration clones the viewed set before consuming its elements.
+Supported bitfields use dedicated checked parse, exact-parse, and serialization hooks
 that dispatch unit-enum fields separately. Payload `list[uint8]` decoding uses
 a bounded source conversion after JSON integer range validation. Other nested
 enum parsing remains pending. Native

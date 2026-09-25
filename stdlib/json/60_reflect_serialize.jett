@@ -226,7 +226,7 @@ function json_serialize_public_list_reflected[T](view value: T) returns string:
         return json_stdlib_array_from_parts(parts)
 function json_serialize_public_set_reflected[T](view value: T) returns string:
     comptime type Elem = type.arg[T](0):
-        set[Elem] items = value
+        set[Elem] items = clone value
         mutable list[string] parts = list.new[string]()
         for item in items:
             parts = list.append[string](parts, json_serialize_public_reflected[Elem](view item))
