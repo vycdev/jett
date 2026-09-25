@@ -106,6 +106,7 @@ impl CopyValuePlan {
                     }
                     StatementKind::Trace(local) => {
                         reads.insert(local.index() as usize);
+                        temporaries += 1;
                         None
                     }
                     StatementKind::Breakpoint {
@@ -123,6 +124,7 @@ impl CopyValuePlan {
                             )?;
                         }
                         reads.extend(bindings.iter().map(|local| local.index() as usize));
+                        temporaries += usize::from(!bindings.is_empty());
                         None
                     }
                     _ => return Err("statement needs explicit ownership lowering".into()),

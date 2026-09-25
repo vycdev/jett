@@ -696,10 +696,12 @@ impl Verifier<'_> {
                         "trace target is absent from the local table",
                     ));
                 };
-                if local.ty == TypeInterner::INT64 {
+                if crate::values::list_sort_kind(self.types, local.ty).is_some()
+                    || matches!(self.types.resolve(local.ty), Type::Nothing | Type::Bytes)
+                {
                     Ok(())
                 } else {
-                    Err(self.unsupported(function, statement.span, "non-int64 trace"))
+                    Err(self.unsupported(function, statement.span, "aggregate trace value"))
                 }
             }
             StatementKind::Breakpoint {
@@ -716,13 +718,6 @@ impl Verifier<'_> {
                         "breakpoint condition must be bool",
                     )?;
                 }
-                if bindings.len() > 1 {
-                    return Err(self.unsupported(
-                        function,
-                        statement.span,
-                        "multi-binding breakpoint",
-                    ));
-                }
                 for binding in bindings {
                     let local = function.local(*binding).ok_or_else(|| {
                         self.contract_error(
@@ -731,11 +726,13 @@ impl Verifier<'_> {
                             "breakpoint binding is absent from local table",
                         )
                     })?;
-                    if local.ty != TypeInterner::INT64 {
+                    if crate::values::list_sort_kind(self.types, local.ty).is_none()
+                        && !matches!(self.types.resolve(local.ty), Type::Nothing | Type::Bytes)
+                    {
                         return Err(self.unsupported(
                             function,
                             statement.span,
-                            "non-int64 breakpoint binding",
+                            "aggregate breakpoint binding",
                         ));
                     }
                 }

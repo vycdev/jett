@@ -3,7 +3,7 @@ mod values;
 use jett_mir::move_values::{
     MoveValuePlan, is_copy_owned, is_function, is_linear, is_string, representation_type,
 };
-use jett_runtime::native_abi::values::NativeLeaf;
+use jett_runtime::native_abi::values::{DEBUG_BYTES_KIND, DEBUG_NOTHING_KIND, NativeLeaf};
 use std::str::FromStr;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -1068,41 +1068,7 @@ impl Translator<'_, '_> {
             StatementKind::Assert {
                 message: Some(_), ..
             } => Err(self.unsupported(statement.span, "assert message")),
-            StatementKind::Trace(local) => {
-                let id = local.index() as usize;
-                let local = &self.local_types[id];
-                let variable = variable_for(
-                    self.variables,
-                    local.id.index(),
-                    statement.span,
-                    self.symbol,
-                )?
-                .ok_or_else(|| self.unsupported(statement.span, "trace without a scalar local"))?;
-                let value = self.builder.try_use_var(variable).map_err(|error| {
-                    contract_error(
-                        self.symbol,
-                        statement.span,
-                        format!("cannot trace native local: {error}"),
-                    )
-                })?;
-                let prefix = format!("trace {}: int64 = ", local.name);
-                let length = i64::try_from(prefix.len())
-                    .map_err(|_| self.unsupported(statement.span, "trace label length"))?;
-                let item = self
-                    .module
-                    .declare_anonymous_data(false, false)
-                    .map_err(|error| CodegenError::Backend(error.to_string()))?;
-                let mut description = cranelift_module::DataDescription::new();
-                description.define(prefix.into_bytes().into_boxed_slice());
-                self.module
-                    .define_data(item, &description)
-                    .map_err(|error| CodegenError::Backend(error.to_string()))?;
-                let reference = self.module.declare_data_in_func(item, self.builder.func);
-                let pointer = self.builder.ins().global_value(ir::types::I64, reference);
-                let length = self.builder.ins().iconst(ir::types::I64, length);
-                self.leaf(NativeLeaf::TraceInt64, &[pointer, length, value], true)?;
-                Ok(())
-            }
+            StatementKind::Trace(local) => self.debug_line("trace ", &[*local], statement.span),
             StatementKind::Breakpoint {
                 condition,
                 bindings,
@@ -1114,42 +1080,86 @@ impl Translator<'_, '_> {
                     }
                     None => self.builder.ins().iconst(ir::types::I8, 1),
                 };
-                let enabled = self.builder.ins().uextend(ir::types::I32, enabled);
                 match bindings.as_slice() {
                     [] => {
+                        let enabled = self.builder.ins().uextend(ir::types::I32, enabled);
                         self.leaf(NativeLeaf::BreakpointEmpty, &[enabled], true)?;
                     }
-                    [binding] => {
-                        let local = &self.local_types[binding.index() as usize];
-                        let prefix = format!("breakpoint hit: {}: int64 = ", local.name);
-                        let variable = variable_for(
-                            self.variables,
-                            binding.index(),
-                            statement.span,
-                            self.symbol,
-                        )?
-                        .ok_or_else(|| {
-                            self.unsupported(statement.span, "non-scalar breakpoint binding")
-                        })?;
-                        let value = self.builder.try_use_var(variable).map_err(|error| {
-                            contract_error(
-                                self.symbol,
-                                statement.span,
-                                format!("cannot read native breakpoint binding: {error}"),
-                            )
-                        })?;
-                        let (pointer, length) = self.static_bytes(&prefix)?;
-                        self.leaf(
-                            NativeLeaf::BreakpointInt64,
-                            &[enabled, pointer, length, value],
-                            true,
-                        )?;
+                    _ => {
+                        let hit = self.builder.create_block();
+                        let done = self.builder.create_block();
+                        self.builder.ins().brif(enabled, hit, &[], done, &[]);
+                        self.builder.switch_to_block(hit);
+                        self.debug_line("breakpoint hit: ", bindings, statement.span)?;
+                        self.builder.ins().jump(done, &[]);
+                        self.builder.switch_to_block(done);
                     }
-                    _ => return Err(self.unsupported(statement.span, "multi-binding breakpoint")),
                 }
                 Ok(())
             }
         }
+    }
+
+    fn debug_line(
+        &mut self,
+        prefix: &str,
+        bindings: &[jett_mir::LocalId],
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (pointer, length) = self.static_bytes(prefix)?;
+        let text = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
+        let owned = self.own(text)?;
+        for (index, binding) in bindings.iter().enumerate() {
+            let local = self
+                .local_types
+                .get(binding.index() as usize)
+                .ok_or_else(|| contract_error(self.symbol, span, "debug binding is absent"))?;
+            let kind = if let Some(kind) = crate::values::list_sort_kind(self.types, local.ty) {
+                kind as u32
+            } else {
+                match self.types.resolve(local.ty) {
+                    Type::Nothing => DEBUG_NOTHING_KIND,
+                    Type::Bytes => DEBUG_BYTES_KIND,
+                    _ => return Err(self.unsupported(span, "aggregate debug value")),
+                }
+            };
+            let label = format!(
+                "{}{}: {} = ",
+                if index == 0 { "" } else { ", " },
+                local.name,
+                self.types.type_name(local.ty)
+            );
+            let value = if local.ty == TypeInterner::NOTHING {
+                self.builder.ins().iconst(ir::types::I64, 0)
+            } else if let Some(slot) = self.local_slots[binding.index() as usize] {
+                self.builder.ins().stack_load(ir::types::I64, slot, 0)
+            } else {
+                let variable = variable_for(self.variables, binding.index(), span, self.symbol)?
+                    .ok_or_else(|| {
+                        self.unsupported(span, "debug binding has no native variable")
+                    })?;
+                self.builder.try_use_var(variable).map_err(|error| {
+                    contract_error(
+                        self.symbol,
+                        span,
+                        format!("cannot read native debug binding: {error}"),
+                    )
+                })?
+            };
+            let bits = self.payload_bits(LoweredValue::Scalar(value)).0;
+            let (label_pointer, label_length) = self.static_bytes(&label)?;
+            let kind = self.builder.ins().iconst(ir::types::I32, i64::from(kind));
+            self.leaf(
+                NativeLeaf::DebugAppend,
+                &[text, label_pointer, label_length, bits, kind],
+                true,
+            )?;
+        }
+        self.leaf(NativeLeaf::DebugEmit, &[text], true)?;
+        if let LoweredValue::Owned(_, slot) = owned {
+            self.clear_slot(slot);
+        }
+        Ok(())
     }
 
     fn flush_actor_state(&mut self, span: Span) -> Result<(), CodegenError> {

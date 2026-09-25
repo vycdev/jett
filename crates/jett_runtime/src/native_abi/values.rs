@@ -107,6 +107,8 @@ struct NativeString {
 /// Stable discriminants for optional and result storage (not terminal status).
 pub const SUM_FAILURE: u32 = 0;
 pub const SUM_SUCCESS: u32 = 1;
+pub const DEBUG_NOTHING_KIND: u32 = 12;
+pub const DEBUG_BYTES_KIND: u32 = 13;
 
 enum NativeGraphicsSession {
     Window(graphics::Session),
@@ -535,6 +537,56 @@ impl NativeValues {
             },
         );
         Ok(id)
+    }
+    fn debug_value(&self, bits: u64, kind: u32) -> LeafResult<String> {
+        if kind == DEBUG_NOTHING_KIND {
+            return Ok("nothing".to_owned());
+        }
+        if kind == DEBUG_BYTES_KIND {
+            let mut text = "bytes(".to_owned();
+            for (index, byte) in self.bytes(bits)?.iter().enumerate() {
+                if index != 0 {
+                    text.push_str(", ");
+                }
+                text.push_str(&byte.to_string());
+            }
+            text.push(')');
+            return Ok(text);
+        }
+        let kind = NativeSortKind::from_raw(kind).map_err(|_| INVALID_TRACE_LABEL)?;
+        Ok(match kind {
+            NativeSortKind::Int8 => (bits as u8 as i8).to_string(),
+            NativeSortKind::Int16 => (bits as u16 as i16).to_string(),
+            NativeSortKind::Int32 => (bits as u32 as i32).to_string(),
+            NativeSortKind::Int64 => (bits as i64).to_string(),
+            NativeSortKind::Uint8 => (bits as u8).to_string(),
+            NativeSortKind::Uint16 => (bits as u16).to_string(),
+            NativeSortKind::Uint32 => (bits as u32).to_string(),
+            NativeSortKind::Uint64 => bits.to_string(),
+            NativeSortKind::Float32 => f64::from(f32::from_bits(bits as u32)).to_string(),
+            NativeSortKind::Float64 => f64::from_bits(bits).to_string(),
+            NativeSortKind::Bool => match bits {
+                0 => "false".to_owned(),
+                1 => "true".to_owned(),
+                _ => return Err(INVALID_TRACE_LABEL),
+            },
+            NativeSortKind::String => self.text(bits)?.to_owned(),
+        })
+    }
+    fn debug_append(&mut self, builder: u64, label: &str, bits: u64, kind: u32) -> LeafResult<u32> {
+        let value = self.debug_value(bits, kind)?;
+        let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
+        text.push_str(label);
+        text.push_str(&value);
+        Ok(0)
+    }
+    fn debug_emit(&mut self, builder: u64) -> LeafResult<u32> {
+        let mut stderr = io::stderr().lock();
+        write_all_bytes(&mut stderr, self.text(builder)?.as_bytes())
+            .and_then(|_| write_all_bytes(&mut stderr, b"\n"))
+            .and_then(|_| stderr.flush())
+            .map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?;
+        self.release(builder)
     }
     fn insert_bytes(&mut self, bytes: Vec<u8>) -> LeafResult<u64> {
         #[cfg(test)]
@@ -3594,6 +3646,15 @@ leaves! {
         };
     DebugPrint, jett_rt_v1_string_debug_print, false, (value: u64 => I64), u32 => I32,
         |s| { { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, s.text(value)?.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0) };
+    DebugAppend, jett_rt_v1_debug_append, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| { if label_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            if length > isize::MAX as usize { return Err(INVALID_TRACE_LABEL); }
+            let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, length) };
+            let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
+            s.debug_append(builder, label, bits, kind) };
+    DebugEmit, jett_rt_v1_debug_emit, false, (builder: u64 => I64), u32 => I32,
+        |s| s.debug_emit(builder);
     TraceInt64, jett_rt_v1_trace_int64, false, (prefix_pointer: u64 => I64, prefix_length: u64 => I64, value: i64 => I64), u32 => I32,
         |_s| { if prefix_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
             let length = usize::try_from(prefix_length).map_err(|_| INVALID_TRACE_LABEL)?;

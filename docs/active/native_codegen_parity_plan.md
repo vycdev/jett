@@ -283,7 +283,7 @@ lowering alone never changes an execution row to complete.
 
 | Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
 | --- | --- | --- | --- |
-| Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
+| Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | linked native/interpreter scalar, conversion, numeric aggregate, and debug-value fixtures cover representative widths and floating-point edges; a dedicated exhaustive arithmetic matrix remains pending |
 | Strings and bytes | covered | all current string intrinsics, direct Unicode-scalar string iteration, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, scalar `for` loops, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
 | Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields, including result-wrapped width validation; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, checked refinement predicates for base, intermediate-refined, and secret-backed inputs, and result-wrapped struct construction with validated fields | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus scalar payload-enum equality; bitfield field ownership, clone, byte roundtrip, and direct/reflected-builder width validation; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer, owned-string, and secret-backed refinements; aggregate payload-enum equality and broader refinement boundaries pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive and indexed-row list sorting, sortedness checks and sets, and primitive-backed refinement keys and set elements | compiled list access, insert/remove, reverse/repeat, scalar iteration and sort; stable `list.sort_by` and `list.group_by` with named callbacks; indexed-row sorting for interpreter-supported key types; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; borrowed iteration through nested struct-field collection paths; refinement string and integer keys and set elements; one contextual generic empty-list path covered; other projected views, collection shape conversions, and callback helpers pending |
@@ -295,17 +295,17 @@ lowering alone never changes an execution row to complete.
 | Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context; view-parameter function values pending | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls; linked fixtures cover nested closures, loop captures, higher-order callbacks, string and numeric captures |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
-| Actors and structured concurrency | covered | sequential `run`/`join`/`cancel` values and result propagation covered; actors and a distinct pending-task representation pending | native/interpreter differential probe covers successful and failed string tasks, cancellation cleanup, and the existing structured-concurrency `main`; actors, asynchronous scheduling, cancellation checkpoints, and nothing-typed pending tasks remain pending |
+| Actors and structured concurrency | covered | sequential `run`/`join`/`cancel` values and result propagation; actor constructors, registration, handler dispatch, and state writeback covered; a distinct pending-task representation remains pending | native/interpreter differential probes cover successful and failed string tasks, cancellation cleanup, actor allocation and owned-state cleanup, message ordering, state mutation, and responses; asynchronous scheduling, cancellation checkpoints, and nothing-typed pending tasks remain pending |
 | JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections including sets of primitive-backed elements, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32`, `uint16`/`uint32`, and `float32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of primitive-backed hashable types, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
-| Trace, breakpoint, assert, and failure reporting | covered | `int64` trace, zero- or one-binding `int64` breakpoints, and default-message `assert` in test bodies covered; other trace/breakpoint shapes and custom assertion messages pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; checked `verify` bodies run through native suite entries; other instrumentation pending |
+| Trace, breakpoint, assert, and failure reporting | covered | primitive numeric, boolean, string, bytes, and `nothing` trace; zero- and multi-binding breakpoints over those types; default-message `assert` in test bodies; aggregate formatting and custom assertion messages pending | native debug lines match interpreter stderr for primitive traces and all visible breakpoint bindings, including false conditions, Unicode strings, bytes, `nothing`, and an out-of-scope local; checked `verify` bodies run through native suite entries; aggregate instrumentation pending |
 
-Actor handler capability and state snapshots are now explicit leading HIR/MIR
+Actor handler capability and state snapshots are explicit leading HIR/MIR
 parameters, and `respond` participates in native ownership analysis. Checked
-actor state initializers now lower into constructor functions that source spawns
-reference directly. Typed runtime leaves now register actor-owned state records,
+actor state initializers lower into constructor functions that source spawns
+reference directly. Typed runtime leaves register actor-owned state records,
 replace owned fields, and clean them at context destruction. Native actor
-allocation emission, state writeback, and message dispatch still need implementations before actor rows can pass the
-object or execution gates.
+allocation, state writeback, and message dispatch pass linked differential
+fixtures; true asynchronous scheduling remains a separate task.
 
 The current fixture gates are:
 
@@ -466,8 +466,8 @@ adds one object and native `main`; primitive list sort adds
 `map_from_lists_duplicate_keys.jett`, `map_merge_helpers.jett`,
 `map_operations.jett`, and `map_set_source_surface.jett`.
 Scoped breakpoint bindings add `breakpoint_basic.jett` to both native object
-and linked `main` gates; multi-binding and non-`int64` breakpoint values remain
-explicitly unsupported.
+and linked `main` gates. Later primitive debug-value formatting adds
+multi-binding breakpoints; aggregate bindings still need a recursive formatter.
 Compiler-owned predicate functions and CFG lowering for base-value refinement
 boundaries add `integer_nonzero_proofs.jett` to the native object gate. The
 native/interpreter fixture covers ordered ancestor predicates, false-result
@@ -858,3 +858,12 @@ becoming independent zero-argument tests. The native property runner embeds
 the existing generator's typed cases into a separate suite entry. All 18
 property bodies across three run-pass fixtures execute 100 native trials each;
 failure-case shrinking and case-specific diagnostics are still pending.
+
+Direct bitfield constructors now route checked dynamic widths through the
+existing reflected construction validator, preserving the interpreter's
+result and error text. Primitive trace and breakpoint statements now assemble
+one debug line from live native bindings. The differential
+`tests/native/debug_primitives.jett` fixture covers every fixed-width integer
+category, both float widths, booleans, UTF-8 strings, bytes, `nothing`, and
+sorted multi-binding breakpoints. Aggregate debug values and custom assertion
+messages remain open.

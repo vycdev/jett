@@ -1,0 +1,36 @@
+namespace test
+function main() returns nothing:
+    int8 tiny = -8
+    int16 short = -32768
+    int32 medium = -2147483648
+    int64 large = -1234567890123
+    uint8 byte = 255
+    uint16 count = 65535
+    uint32 wide = 4294967295
+    uint64 maximum = 18446744073709551615
+    float32 fraction = 1.25
+    float32 rounded = 0.1
+    float64 precise = -2.5
+    bool ready = true
+    string label = "café"
+    nothing empty = nothing
+    bytes raw = bytes.from_hex("00ff") handle error:
+        return nothing
+    trace tiny
+    trace short
+    trace medium
+    trace large
+    trace byte
+    trace count
+    trace wide
+    trace maximum
+    trace fraction
+    trace rounded
+    trace precise
+    trace ready
+    trace label
+    trace empty
+    trace raw
+    breakpoint ready
+    breakpoint false
+    return nothing
