@@ -7521,7 +7521,7 @@ use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
 The full native parity gate is still incomplete: the current object count is
-recorded in `active/native_codegen_parity_plan.md`, alongside 23/30 main
+recorded in `active/native_codegen_parity_plan.md`, alongside 25/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -7545,6 +7545,11 @@ Supported bitfields parse and serialize through checked source hooks that handle
 unit-enum fields and ordinary payload fields. Native JSON decoding of `uint8`,
 `int8`/`int16`/`int32`, and `uint16`/`uint32` checks the range before a bounded
 source conversion, including when these values occur in supported aggregates.
+Supported nested enum and bitfield fields use the same checked source hooks.
+Within a generic function, equality between `type.name[T]()` and a string
+literal is a checked static branch selection, preserving the distinct raw
+`json.JsonTree` representation. Ordinary string comparisons retain runtime
+semantics.
 `float32` JSON decoding uses the same checked source path: it reads a `float64`
 JSON number and explicitly rounds with `float32.from_float64`.
 Checked source JSON serialization formats that rounded value using the

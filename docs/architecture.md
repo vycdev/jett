@@ -2709,7 +2709,7 @@ variants carry aggregate payloads; comparison between two unknown aggregate
 payload values remains outside that path.
 
 The full native parity gate is still incomplete: the current object count is
-recorded in `active/native_codegen_parity_plan.md`, alongside 23/30 main
+recorded in `active/native_codegen_parity_plan.md`, alongside 25/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
@@ -2750,8 +2750,11 @@ sets with primitive-backed elements use that serializer directly or as record
 fields; iteration clones the viewed set before consuming its elements.
 Supported bitfields use dedicated checked parse, exact-parse, and serialization hooks
 that dispatch unit-enum fields separately. Payload `list[uint8]` decoding uses
-a bounded source conversion after JSON integer range validation. Other nested
-enum parsing remains pending. Native
+a bounded source conversion after JSON integer range validation. Nested enums
+and bitfields composed of supported fields now use checked source parsing and
+serialization inside records and collections. Generic branch specialization
+selects the raw `json.JsonTree` wire path by checked `type.name[T]()` equality
+with a string literal. Native
 source serialization supports bare and state-qualified machines with supported
 state fields; public serialization omits direct secret fields in records and
 machines. A trusted concrete bytes serializer emits the canonical hex JSON

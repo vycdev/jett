@@ -29,6 +29,10 @@ function json_serialize_public_reflected[T](view value: T) returns string:
     TypeKind kind = info.kind_tag
     if kind == TypeKind.struct_type:
         return json_serialize_public_record_reflected[T](view value)
+    else if kind == TypeKind.enum_type:
+        return json_serialize_public_enum_reflected[T](view value)
+    else if kind == TypeKind.bitfield_type:
+        return json_serialize_public_record_reflected[T](view value)
     else if kind == TypeKind.primitive_type:
         return json_serialize_public_checked_primitive[T](view value)
     else if kind == TypeKind.list_type:
@@ -183,6 +187,8 @@ function json_serialize_public_bytes_value[T](view value: T) returns string:
     bytes item = value
     return json_stdlib_quote("0x{bytes.to_hex(item)}")
 function json_serialize_public_enum_reflected[T](view value: T) returns string:
+    if type.name[T]() == "json.JsonTree":
+        return json_serialize_public_raw_reflected[T](view value)
     TypeVariant selected = type.variant_value[T](view value)
     for variant in type.variants[T]():
         if variant.name != selected.name:

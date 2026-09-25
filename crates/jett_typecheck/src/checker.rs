@@ -2399,6 +2399,10 @@ impl<'a> TypeChecker<'a> {
         ident: &ast::Ident,
         namespace: Option<&str>,
     ) -> String {
+        let expanded = self.resolved_or_expanded_name(&ident.name, ident.span);
+        if self.reflection_type_name_is_registered(&expanded) {
+            return expanded;
+        }
         if let Some(definition) = self.resolve.resolutions.get(&ident.span) {
             let resolved = self.resolve.scope_table.def(*definition);
             if matches!(
@@ -2889,6 +2893,21 @@ impl<'a> TypeChecker<'a> {
             Type::Secret(_) => false,
             Type::Refinement { base, .. } => self.native_json_source_supported(*base, visiting),
             Type::Enum(id) if self.interner.resolve_enum(*id).name == "json.JsonTree" => true,
+            Type::Enum(id) => {
+                if !visiting.insert(ty) {
+                    return true;
+                }
+                let supported = self
+                    .interner
+                    .resolve_enum(*id)
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                    .all(|(_, field_ty)| self.native_json_source_supported(*field_ty, visiting));
+                visiting.remove(&ty);
+                supported
+            }
+            Type::Bitfield(_) => self.native_json_bitfield_source_supported(ty),
             Type::Struct(id) => {
                 // A checked finite self-reference reuses the same source
                 // specialization; the remaining fields still decide support.
@@ -3043,6 +3062,23 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Secret(inner) => self.native_json_parse_source_supported_inner(*inner, visiting),
             Type::Enum(id) if self.interner.resolve_enum(*id).name == "json.JsonTree" => true,
+            Type::Enum(id) => {
+                if !visiting.insert(ty) {
+                    return true;
+                }
+                let supported = self
+                    .interner
+                    .resolve_enum(*id)
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                    .all(|(_, field_ty)| {
+                        self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::Bitfield(_) => self.native_json_bitfield_parse_supported(ty),
             Type::Refinement { base, .. } => {
                 self.native_json_parse_source_supported_inner(*base, visiting)
             }
@@ -6973,10 +7009,12 @@ impl<'a> TypeChecker<'a> {
                     && self.expr_is_potential_static_reflection_condition(rhs)
             }
             Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
-                (self.expr_is_potential_static_reflection_value(lhs)
+                ((self.expr_is_potential_static_reflection_value(lhs)
+                    || self.expr_is_potential_type_name_value(lhs))
                     && self.expr_is_static_reflection_literal(rhs))
                     || (self.expr_is_static_reflection_literal(lhs)
-                        && self.expr_is_potential_static_reflection_value(rhs))
+                        && (self.expr_is_potential_static_reflection_value(rhs)
+                            || self.expr_is_potential_type_name_value(rhs)))
             }
             _ => false,
         }
@@ -7002,6 +7040,19 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn expr_is_potential_type_name_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Paren(inner, _) => self.expr_is_potential_type_name_value(inner),
+            Expr::GenericCall(callee, _, args, _) => {
+                args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.name")
+            }
+            _ => false,
+        }
+    }
+
     fn expr_is_potential_optional_type_primitive_reflection(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Paren(inner, _) => {
@@ -7021,10 +7072,28 @@ impl<'a> TypeChecker<'a> {
     fn expr_is_static_reflection_value(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
         self.expr_is_type_kind_reflection(expr, type_params)
             || self.expr_is_type_primitive_reflection_value(expr, type_params)
+            || self.expr_is_type_name_reflection(expr, type_params)
     }
 
     fn expr_is_static_reflection_literal(&self, expr: &Expr) -> bool {
-        self.expr_is_type_kind_literal(expr) || self.expr_is_type_primitive_literal(expr)
+        self.expr_is_type_kind_literal(expr)
+            || self.expr_is_type_primitive_literal(expr)
+            || matches!(expr, Expr::StringLiteral(_, _))
+    }
+
+    fn expr_is_type_name_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
+        match expr {
+            Expr::GenericCall(callee, type_args, args, _) => {
+                args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.name")
+                    && type_args.len() == 1
+                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
+            }
+            Expr::Paren(inner, _) => self.expr_is_type_name_reflection(inner, type_params),
+            _ => false,
+        }
     }
 
     fn expr_is_type_kind_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
@@ -7166,9 +7235,21 @@ impl<'a> TypeChecker<'a> {
                 false => self.eval_static_type_condition(rhs),
             },
             Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
-                let lhs_value = self.eval_static_reflection_enum_value(lhs)?;
-                let rhs_value = self.eval_static_reflection_enum_value(rhs)?;
-                let equal = lhs_value == rhs_value;
+                let lhs_name = self.eval_static_type_name_value(lhs);
+                let rhs_name = self.eval_static_type_name_value(rhs);
+                let equal = if let (Some(name), Some(literal)) =
+                    (lhs_name, Self::static_string_literal(rhs))
+                {
+                    name == literal
+                } else if let (Some(literal), Some(name)) =
+                    (Self::static_string_literal(lhs), rhs_name)
+                {
+                    literal == name
+                } else {
+                    let lhs_value = self.eval_static_reflection_enum_value(lhs)?;
+                    let rhs_value = self.eval_static_reflection_enum_value(rhs)?;
+                    lhs_value == rhs_value
+                };
                 Some(if matches!(expr, Expr::Binary(_, BinOp::Eq, _, _)) {
                     equal
                 } else {
@@ -7191,6 +7272,44 @@ impl<'a> TypeChecker<'a> {
         }
         self.eval_type_primitive_value(expr)
             .map(StaticReflectionEnumValue::TypePrimitive)
+    }
+
+    fn eval_static_type_name_value(&mut self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Paren(inner, _) => self.eval_static_type_name_value(inner),
+            Expr::GenericCall(callee, type_args, args, _)
+                if args.is_empty()
+                    && self
+                        .resolved_expr_name(callee)
+                        .is_some_and(|name| name == "type.name") =>
+            {
+                let [type_arg] = type_args.as_slice() else {
+                    return None;
+                };
+                let type_id = self.reflection_type_arg_id(type_args)?;
+                let namespace = self.current_function_name.as_deref().and_then(|name| {
+                    name.rsplit_once('.')
+                        .map(|(namespace, _)| namespace.to_string())
+                });
+                Some(
+                    self.reflection_type_info_for_type_expr(
+                        type_arg,
+                        namespace.as_deref(),
+                        type_id,
+                    )
+                    .type_name,
+                )
+            }
+            _ => None,
+        }
+    }
+
+    fn static_string_literal(expr: &Expr) -> Option<&str> {
+        match expr {
+            Expr::Paren(inner, _) => Self::static_string_literal(inner),
+            Expr::StringLiteral(value, _) => Some(value),
+            _ => None,
+        }
     }
 
     fn eval_type_kind_value(&mut self, expr: &Expr) -> Option<String> {
@@ -18312,6 +18431,39 @@ function main() returns nothing:
         assert!(selections.contains(&CheckedStaticSelection::IfElse));
         assert!(selections.contains(&CheckedStaticSelection::IfNoBranch));
         assert!(selections.contains(&CheckedStaticSelection::MatchArm(0)));
+    }
+
+    #[test]
+    fn generic_type_name_literal_equality_selects_a_checked_branch() {
+        let result = check_source_result(
+            r#"function classify[T]() returns string:
+    if "a" == "b":
+        return "unrelated"
+    if type.name[T]() == "int64":
+        return "integer"
+    else:
+        return "other"
+function main() returns nothing:
+    string integer = classify[int64]()
+    string other = classify[string]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        let selections = result
+            .generic_function_instantiations
+            .iter()
+            .flat_map(|instantiation| instantiation.static_selections.values().copied())
+            .collect::<Vec<_>>();
+        assert!(selections.contains(&CheckedStaticSelection::IfThen));
+        assert!(selections.contains(&CheckedStaticSelection::IfElse));
+        assert_eq!(selections.len(), 2);
     }
 
     #[test]
