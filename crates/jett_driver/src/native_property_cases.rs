@@ -19,6 +19,7 @@ pub(super) fn append_property_suite(
     cases: &[PropertyCase],
     types: &TypeInterner,
 ) -> Result<Option<FunctionId>, Vec<jett_hir::LowerError>> {
+    let function_values = function_value_candidates(&hir.functions);
     let mut statements = Vec::new();
     let mut first_identity = None;
     let mut first_span = None;
@@ -64,7 +65,9 @@ pub(super) fn append_property_suite(
                 .arguments
                 .iter()
                 .zip(&function.params)
-                .map(|(value, param)| value_expression(value, param.ty, property.span, types))
+                .map(|(value, param)| {
+                    value_expression(value, param.ty, property.span, types, &function_values)
+                })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|message| error(property.span, message))?;
             statements.push(Statement {
@@ -125,11 +128,45 @@ fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {
     }]
 }
 
+pub(super) struct FunctionValueCandidate {
+    name: String,
+    body_span: Span,
+    params: Vec<TypeId>,
+    return_type: TypeId,
+    id: FunctionId,
+}
+
+pub(super) fn function_value_candidates(functions: &[Function]) -> Vec<FunctionValueCandidate> {
+    functions
+        .iter()
+        .filter(|function| {
+            function.identity.declaration.kind == DeclarationKind::Function
+                && function.capture_count == 0
+        })
+        .map(|function| {
+            let declaration = &function.identity.declaration;
+            let name = if declaration.namespace.is_empty() {
+                declaration.name.clone()
+            } else {
+                format!("{}.{}", declaration.namespace, declaration.name)
+            };
+            FunctionValueCandidate {
+                name,
+                body_span: function.body.span,
+                params: function.params.iter().map(|param| param.ty).collect(),
+                return_type: function.return_type,
+                id: function.id,
+            }
+        })
+        .collect()
+}
+
 pub(super) fn value_expression(
     value: &Value,
     ty: TypeId,
     span: Span,
     types: &TypeInterner,
+    functions: &[FunctionValueCandidate],
 ) -> Result<Expression, String> {
     let kind = match (types.resolve(ty), value) {
         (
@@ -150,11 +187,51 @@ pub(super) fn value_expression(
         (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
         (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
         (Type::Nothing, Value::Nothing) => ExpressionKind::Nothing,
+        (
+            Type::Function {
+                params,
+                return_type,
+            },
+            Value::NamedFunction(name),
+        ) => {
+            let mut matches = functions.iter().filter(|function| {
+                function.name == *name
+                    && function.params == *params
+                    && function.return_type == *return_type
+            });
+            let function = matches
+                .next()
+                .ok_or_else(|| format!("checked function value `{name}` is absent"))?;
+            if matches.next().is_some() {
+                return Err(format!("checked function value `{name}` is ambiguous"));
+            }
+            ExpressionKind::FunctionRef(function.id)
+        }
+        (
+            Type::Function {
+                params,
+                return_type,
+            },
+            Value::Function { body, captures, .. },
+        ) if captures.is_empty() => {
+            let mut matches = functions.iter().filter(|function| {
+                function.body_span == body.span
+                    && function.params == *params
+                    && function.return_type == *return_type
+            });
+            let function = matches
+                .next()
+                .ok_or("checked capture-free inline function value is absent")?;
+            if matches.next().is_some() {
+                return Err("checked capture-free inline function value is ambiguous".into());
+            }
+            ExpressionKind::FunctionRef(function.id)
+        }
         (Type::Bytes, Value::Bytes(bytes)) => return bytes_expression(bytes, span, types),
         (Type::List(element), Value::List(values)) => ExpressionKind::ListConstruct {
             elements: values
                 .iter()
-                .map(|value| value_expression(value, *element, span, types))
+                .map(|value| value_expression(value, *element, span, types, functions))
                 .collect::<Result<_, _>>()?,
         },
         (Type::Map(key, mapped), Value::Map(entries)) => ExpressionKind::MapConstruct {
@@ -162,27 +239,27 @@ pub(super) fn value_expression(
                 .iter()
                 .map(|(key_value, mapped_value)| {
                     Ok(MapEntry {
-                        key: value_expression(key_value, *key, span, types)?,
-                        value: value_expression(mapped_value, *mapped, span, types)?,
+                        key: value_expression(key_value, *key, span, types, functions)?,
+                        value: value_expression(mapped_value, *mapped, span, types, functions)?,
                     })
                 })
                 .collect::<Result<_, String>>()?,
         },
         (Type::Set(element), Value::Set(values)) => {
-            return set_expression(values, *element, ty, span, types);
+            return set_expression(values, *element, ty, span, types, functions);
         }
         (Type::Optional(_), Value::OptionalNone) => ExpressionKind::OptionalNone,
-        (Type::Optional(inner), Value::OptionalSome(value)) => {
-            ExpressionKind::OptionalSome(Box::new(value_expression(value, *inner, span, types)?))
-        }
-        (Type::Result(ok, _), Value::ResultOk(value)) => {
-            ExpressionKind::ResultOk(Box::new(value_expression(value, *ok, span, types)?))
-        }
-        (Type::Result(_, failure), Value::ResultFail(value)) => {
-            ExpressionKind::ResultFail(Box::new(value_expression(value, *failure, span, types)?))
-        }
+        (Type::Optional(inner), Value::OptionalSome(value)) => ExpressionKind::OptionalSome(
+            Box::new(value_expression(value, *inner, span, types, functions)?),
+        ),
+        (Type::Result(ok, _), Value::ResultOk(value)) => ExpressionKind::ResultOk(Box::new(
+            value_expression(value, *ok, span, types, functions)?,
+        )),
+        (Type::Result(_, failure), Value::ResultFail(value)) => ExpressionKind::ResultFail(
+            Box::new(value_expression(value, *failure, span, types, functions)?),
+        ),
         (Type::Refinement { base, .. }, _) => ExpressionKind::RefinementValidated(Box::new(
-            value_expression(value, *base, span, types)?,
+            value_expression(value, *base, span, types, functions)?,
         )),
         (Type::Struct(id), Value::Struct { fields, .. }) => {
             let definition = types.resolve_struct(*id);
@@ -203,7 +280,7 @@ pub(super) fn value_expression(
                             .iter()
                             .find(|(candidate, _)| candidate == name)
                             .ok_or_else(|| format!("generated struct field `{name}` is absent"))?;
-                        value_expression(value, *field_type, span, types)
+                        value_expression(value, *field_type, span, types, functions)
                     })
                     .collect::<Result<_, _>>()?,
                 evaluation_order: (0..definition.fields.len()).collect(),
@@ -232,7 +309,7 @@ pub(super) fn value_expression(
                             .ok_or_else(|| {
                                 format!("generated bitfield field `{}` is absent", field.name)
                             })?;
-                        value_expression(value, field.ty, span, types)
+                        value_expression(value, field.ty, span, types, functions)
                     })
                     .collect::<Result<_, _>>()?,
                 evaluation_order: (0..definition.fields.len()).collect(),
@@ -267,7 +344,7 @@ pub(super) fn value_expression(
                     .iter()
                     .zip(&variant_def.fields)
                     .map(|(value, (_, field_type))| {
-                        value_expression(value, *field_type, span, types)
+                        value_expression(value, *field_type, span, types, functions)
                     })
                     .collect::<Result<_, _>>()?,
             }
@@ -319,7 +396,7 @@ pub(super) fn value_expression(
                         .iter()
                         .zip(&state_def.fields)
                         .map(|(value, (_, field_type))| {
-                            value_expression(value, *field_type, span, types)
+                            value_expression(value, *field_type, span, types, functions)
                         })
                         .collect::<Result<_, _>>()?,
                 },
@@ -342,6 +419,7 @@ fn set_expression(
     ty: TypeId,
     span: Span,
     types: &TypeInterner,
+    functions: &[FunctionValueCandidate],
 ) -> Result<Expression, String> {
     let mut current = Expression {
         kind: ExpressionKind::Intrinsic {
@@ -360,7 +438,10 @@ fn set_expression(
                 intrinsic: IntrinsicId::SetAdd,
                 type_arguments: vec![element],
                 reflection_arguments: Vec::new(),
-                args: vec![current, value_expression(value, element, span, types)?],
+                args: vec![
+                    current,
+                    value_expression(value, element, span, types, functions)?,
+                ],
                 evaluation_order: vec![0, 1],
             },
             ty,

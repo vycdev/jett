@@ -11,16 +11,20 @@ use jett_hir::{
 use jett_types::TypeInterner;
 use std::collections::HashMap;
 
-use crate::native_property_cases::value_expression;
+use crate::native_property_cases::{
+    FunctionValueCandidate, function_value_candidates, value_expression,
+};
 
 pub(crate) fn bake_values(
     program: &mut Program,
     values: &HashMap<Span, Value>,
     types: &TypeInterner,
 ) -> Result<(), Vec<LowerError>> {
+    let function_values = function_value_candidates(&program.functions);
     let mut baker = Baker {
         values,
         types,
+        function_values: &function_values,
         errors: Vec::new(),
     };
     for function in &mut program.functions {
@@ -36,6 +40,7 @@ pub(crate) fn bake_values(
 struct Baker<'a> {
     values: &'a HashMap<Span, Value>,
     types: &'a TypeInterner,
+    function_values: &'a [FunctionValueCandidate],
     errors: Vec<LowerError>,
 }
 
@@ -105,7 +110,13 @@ impl Baker<'_> {
     fn expression(&mut self, expr: &mut Expression) {
         if matches!(expr.kind, E::Comptime(_)) {
             match self.values.get(&expr.span) {
-                Some(value) => match value_expression(value, expr.ty, expr.span, self.types) {
+                Some(value) => match value_expression(
+                    value,
+                    expr.ty,
+                    expr.span,
+                    self.types,
+                    self.function_values,
+                ) {
                     Ok(replacement) => *expr = replacement,
                     Err(message) => self.errors.push(LowerError {
                         span: expr.span,
