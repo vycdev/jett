@@ -146,6 +146,18 @@ fn native_verify_suite_executes_all_checked_bodies() {
 }
 
 #[test]
+fn native_bitfield_constructor_checks_dynamic_widths() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/run_pass/bitfield_roundtrip.jett");
+    let directory = tempfile::tempdir().expect("bitfield verify directory");
+    let executable = directory.path().join("bitfield_widths.exe");
+    let artifact = build_host_verify_suite_executable(&fixture, launcher(), &executable)
+        .expect("link native bitfield verify suite");
+    let output = run_bounded(&artifact.path, directory.path());
+    assert!(output.status.success(), "native bitfield checks failed: {output:?}");
+}
+
+#[test]
 fn native_property_suite_executes_deterministic_scalar_trials() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/run_pass/namespace_runtime_verify_context.jett");
@@ -281,7 +293,7 @@ fn native_verify_suites_execute_for_all_run_pass_fixtures() {
     for failure in &failures {
         println!("{failure}");
     }
-    assert_eq!(attempted, 154, "native verify fixture denominator changed");
+    assert_eq!(attempted, 155, "native verify fixture denominator changed");
     assert_eq!(passed, attempted, "native verify suite failures");
 }
 

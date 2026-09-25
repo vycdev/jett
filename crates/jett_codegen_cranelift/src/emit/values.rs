@@ -60,6 +60,16 @@ impl Translator<'_, '_> {
         let handle = self.leaf(NativeLeaf::StructNew, &[count], true)?;
         // Own the partially initialized record before evaluating any field.
         let record = self.own_linear(handle)?;
+        self.initialize_struct(handle, fields, evaluation_order)?;
+        let _ = span;
+        Ok(record)
+    }
+    fn initialize_struct(
+        &mut self,
+        handle: Value,
+        fields: &[Expression],
+        evaluation_order: &[usize],
+    ) -> Result<(), CodegenError> {
         for &index in evaluation_order {
             let value = self.expression(&fields[index])?;
             let (bits, owned) = self.payload_bits(value);
@@ -70,8 +80,77 @@ impl Translator<'_, '_> {
                 self.clear_slot(slot);
             }
         }
-        let _ = span;
-        Ok(record)
+        Ok(())
+    }
+    pub(super) fn construct_validated_bitfield(
+        &mut self,
+        bitfield_type: TypeId,
+        fields: &[Expression],
+        evaluation_order: &[usize],
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let Type::Bitfield(id) = self.types.resolve(bitfield_type) else {
+            return Err(self.unsupported(span, "bitfield construction type"));
+        };
+        let layout = self.types.resolve_bitfield(*id).clone();
+        let mut data = b"JC\x03".to_vec();
+        fn name(data: &mut Vec<u8>, value: &str) -> Result<(), CodegenError> {
+            let length = u32::try_from(value.len())
+                .map_err(|_| CodegenError::Backend("bitfield layout name is too long".into()))?;
+            data.extend_from_slice(&length.to_le_bytes());
+            data.extend_from_slice(value.as_bytes());
+            Ok(())
+        }
+        name(&mut data, &layout.name)?;
+        let count = u32::try_from(layout.fields.len())
+            .map_err(|_| CodegenError::Backend("too many bitfield fields".into()))?;
+        data.extend_from_slice(&count.to_le_bytes());
+        for field in &layout.fields {
+            name(&mut data, &field.name)?;
+            let field_type = self.types.type_name(field.ty);
+            name(&mut data, &field_type)?;
+            name(&mut data, &field_type)?;
+        }
+        for field in &layout.fields {
+            match field.kind {
+                BitfieldFieldKind::Payload => data.push(0),
+                BitfieldFieldKind::Bits { width } => {
+                    let kind = match self.types.resolve(field.ty) {
+                        Type::Int64 => 1,
+                        Type::Uint64 => 2,
+                        Type::Enum(_) => 3,
+                        _ => return Err(self.unsupported(span, "bitfield field validation")),
+                    };
+                    data.push(kind);
+                    data.extend_from_slice(&u32::from(width).to_le_bytes());
+                    if let Type::Enum(enum_id) = self.types.resolve(field.ty) {
+                        let definition = self.types.resolve_enum(*enum_id);
+                        name(&mut data, &definition.name)?;
+                        let variants = u32::try_from(definition.variants.len())
+                            .map_err(|_| self.unsupported(span, "bitfield enum variants"))?;
+                        data.extend_from_slice(&variants.to_le_bytes());
+                        for variant in &definition.variants {
+                            name(&mut data, &variant.name)?;
+                            data.extend_from_slice(&variant.discriminant.to_le_bytes());
+                        }
+                    }
+                }
+            }
+        }
+        let (pointer, length) = self.static_data(&data)?;
+        let handle = self.leaf(NativeLeaf::BuilderNew, &[pointer, length], true)?;
+        let builder = self.own_linear(handle)?;
+        self.initialize_struct(handle, fields, evaluation_order)?;
+        let (owner_pointer, owner_length) = self.static_bytes(&layout.name)?;
+        let result = self.leaf(
+            NativeLeaf::BuilderFinish,
+            &[handle, owner_pointer, owner_length],
+            true,
+        )?;
+        if let LoweredValue::Owned(_, slot) = builder {
+            self.clear_slot(slot);
+        }
+        self.own_linear(result)
     }
     pub(super) fn construct_tagged_record(
         &mut self,

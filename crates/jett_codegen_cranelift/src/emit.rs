@@ -1696,10 +1696,22 @@ impl Translator<'_, '_> {
                 }
             }
             ExpressionKind::BitfieldConstruct {
+                bitfield_type,
                 fields,
                 evaluation_order,
-                ..
-            } => self.construct_struct(fields, evaluation_order, expression.span),
+                validates_widths,
+            } => {
+                if *validates_widths {
+                    self.construct_validated_bitfield(
+                        *bitfield_type,
+                        fields,
+                        evaluation_order,
+                        expression.span,
+                    )
+                } else {
+                    self.construct_struct(fields, evaluation_order, expression.span)
+                }
+            }
             ExpressionKind::MachineConstruct {
                 state, payloads, ..
             } => self.construct_tagged_record(state.index(), payloads, expression.span),

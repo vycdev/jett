@@ -1954,19 +1954,36 @@ impl Verifier<'_> {
                 ..
             } => {
                 if *validates_widths {
-                    return Err(self.unsupported(
+                    let Type::Result(ok, error) = self.types.resolve(expression.ty) else {
+                        return Err(self.expression_kind_error(
+                            function,
+                            expression,
+                            "validated bitfield construction result",
+                        ));
+                    };
+                    self.require_same_type(
                         function,
                         expression.span,
-                        "bitfield width validation",
-                    ));
+                        *bitfield_type,
+                        *ok,
+                        "bitfield construction success type mismatch",
+                    )?;
+                    self.require_same_type(
+                        function,
+                        expression.span,
+                        TypeInterner::STRING,
+                        *error,
+                        "bitfield construction failure type mismatch",
+                    )?;
+                } else {
+                    self.require_same_type(
+                        function,
+                        expression.span,
+                        *bitfield_type,
+                        expression.ty,
+                        "bitfield construction type mismatch",
+                    )?;
                 }
-                self.require_same_type(
-                    function,
-                    expression.span,
-                    *bitfield_type,
-                    expression.ty,
-                    "bitfield construction type mismatch",
-                )?;
                 let Type::Bitfield(id) = self.types.resolve(*bitfield_type) else {
                     return Err(self.expression_kind_error(
                         function,

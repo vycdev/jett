@@ -17,7 +17,7 @@ The current fixture inventory establishes five separate denominators:
 | --- | ---: | --- |
 | Native lowering | 182 | Every `tests/run_pass/*.jett` fixture reaches validated HIR and MIR and is accepted by native object generation. |
 | `main` execution | 30 | Every run-pass fixture that declares `main` links and runs on the supported host with its interpreter-equivalent expected outcome and observable behavior. One scripted graphics fixture intentionally returns a runtime error. |
-| `verify` execution | 154 | Every run-pass fixture with top-level `verify` blocks links a native suite that executes each body in declaration order and exits successfully. |
+| `verify` execution | 155 | Every run-pass fixture with top-level `verify` blocks links a native suite that executes each body in declaration order and exits successfully. |
 | `property` execution | 3 | Every run-pass fixture with top-level `property` blocks links a native suite that executes each body for 100 deterministic trials chosen by the existing generator. |
 | Runtime contracts | 25 | Every `tests/runtime_fail/*.jett` fixture links and matches its interpreter contract: 17 wrapping-success cases and 8 runtime-failure cases, including failure class, message contract, and cleanup behavior where applicable. |
 
@@ -29,7 +29,7 @@ explicitly marked unimplemented, with the reason recorded in the same change.
 Run-pass files without `main`, including verification and property fixtures,
 count toward the 182-fixture lowering obligation. They do not enter the
 30-fixture `main` execution denominator. The native verification suite now
-links and executes every checked top-level `verify` body in each of 154
+links and executes every checked top-level `verify` body in each of 155
 fixtures as a separate execution gate. A native property suite uses the
 interpreter's established deterministic `given` pools as test inputs, then
 executes the checked property bodies as native code. Native failure-case
@@ -285,7 +285,7 @@ lowering alone never changes an execution row to complete.
 | --- | --- | --- | --- |
 | Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | pending executable harness |
 | Strings and bytes | covered | all current string intrinsics, direct Unicode-scalar string iteration, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, scalar `for` loops, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
-| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, checked refinement predicates for base, intermediate-refined, and secret-backed inputs, and result-wrapped struct construction with validated fields | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus scalar payload-enum equality; bitfield field ownership, clone, byte roundtrip, and reflected-builder width validation; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer, owned-string, and secret-backed refinements; direct bitfield width validation, aggregate payload-enum equality and broader refinement boundaries pending |
+| Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields, including result-wrapped width validation; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, checked refinement predicates for base, intermediate-refined, and secret-backed inputs, and result-wrapped struct construction with validated fields | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus scalar payload-enum equality; bitfield field ownership, clone, byte roundtrip, and direct/reflected-builder width validation; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer, owned-string, and secret-backed refinements; aggregate payload-enum equality and broader refinement boundaries pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive and indexed-row list sorting, sortedness checks and sets, and primitive-backed refinement keys and set elements | compiled list access, insert/remove, reverse/repeat, scalar iteration and sort; stable `list.sort_by` and `list.group_by` with named callbacks; indexed-row sorting for interpreter-supported key types; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; borrowed iteration through nested struct-field collection paths; refinement string and integer keys and set elements; one contextual generic empty-list path covered; other projected views, collection shape conversions, and callback helpers pending |
 | Numeric aggregates | covered | `math.average` and `math.median` for `list[int64]`, `list[uint64]`, and `list[float64]` | native/interpreter differential fixtures cover all three element types and overflow-safe floating-point extremes; empty-list error contract covered |
 | CSV | covered | checked parse, parse-with-header, and stringify leaves over owned lists and maps | strict quoting, CRLF, header values/errors, and nested allocation cleanup match interpreter |
@@ -314,7 +314,7 @@ The current fixture gates are:
 | Typed backend lowering | 182 | 182 | `run_pass_backend_lowering_gaps_are_explicit_and_monotonic` |
 | Native object generation | 182 | 182 | `native_parity_object_emit_obligations_emit_host_objects`; every run-pass fixture emits reachable native code |
 | Successful/expected `main` execution | 30 | 30 | Windows MSVC production linking and exact interpreter stdout/debug-output comparison, including scripted Clock, Random, Environment, and Graphics inputs |
-| Native `verify` execution | 154 | 154 | `native_verify_suites_execute_for_all_run_pass_fixtures`; 506 top-level bodies execute across the 154 fixtures |
+| Native `verify` execution | 155 | 155 | `native_verify_suites_execute_for_all_run_pass_fixtures`; 507 top-level bodies execute across the 155 fixtures |
 | Native `property` execution | 3 | 3 | `native_property_suites_execute_for_all_run_pass_fixtures`; 18 top-level bodies each execute 100 generated trials |
 | Runtime contracts | 25 | 25 | exhaustive runtime-contract probe, including scripted Clock and Random failures; matched behavior and checked native-value cleanup |
 
@@ -851,7 +851,7 @@ preserve Jett's relaxed test-block ownership policy. The full 182-fixture
 test-body audit now emits 182/182 objects (100%). The regular object gate
 checks all 182 rows, with deterministic byte checks on representative objects.
 The native verify runner now synthesizes a source-file suite entry that calls
-only exact top-level `verify` bodies in declaration order. It runs the 154
+only exact top-level `verify` bodies in declaration order. It runs the 155
 verify-bearing fixtures through the production launcher and linker. Extracted
 inline callbacks remain reachable through their parent bodies, rather than
 becoming independent zero-argument tests. The native property runner embeds
