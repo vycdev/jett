@@ -519,6 +519,7 @@ fn clif_type(
         | ScalarKind::Machine
         | ScalarKind::Construction
         | ScalarKind::Function
+        | ScalarKind::Actor
         | ScalarKind::Stdout
         | ScalarKind::Clock
         | ScalarKind::Random
@@ -535,6 +536,72 @@ fn clif_type(
     Ok(ty)
 }
 
+fn actor_handler_state_range(
+    function: &Function,
+    types: &TypeInterner,
+    symbol: &str,
+) -> Result<Option<(usize, usize)>, CodegenError> {
+    if function.identity.declaration.kind != jett_hir::DeclarationKind::ActorHandler {
+        return Ok(None);
+    }
+    let Some((owner, _)) = function.identity.declaration.name.rsplit_once('.') else {
+        return Err(contract_error(
+            symbol,
+            function.span,
+            "actor handler has no owner name",
+        ));
+    };
+    let namespace = &function.identity.declaration.namespace;
+    let canonical = if namespace.is_empty() {
+        owner.to_owned()
+    } else {
+        format!("{namespace}.{owner}")
+    };
+    let Some(actor) = types.type_ids().find_map(|ty| match types.resolve(ty) {
+        Type::Actor(id) if types.resolve_actor(*id).name == canonical => {
+            Some(types.resolve_actor(*id))
+        }
+        _ => None,
+    }) else {
+        return Err(contract_error(
+            symbol,
+            function.span,
+            "actor handler type is absent",
+        ));
+    };
+    let start = actor.capability_params.len();
+    let end = start + actor.state_fields.len();
+    if function.capture_count != end {
+        return Err(contract_error(
+            symbol,
+            function.span,
+            "actor handler capture layout changed",
+        ));
+    }
+    for (index, (_, expected)) in actor
+        .capability_params
+        .iter()
+        .chain(&actor.state_fields)
+        .enumerate()
+    {
+        let Some(parameter) = function.params.get(index) else {
+            return Err(contract_error(
+                symbol,
+                function.span,
+                "actor handler capture is absent",
+            ));
+        };
+        if parameter.local.index() as usize != index || parameter.ty != *expected {
+            return Err(contract_error(
+                symbol,
+                parameter.span,
+                "actor handler capture layout changed",
+            ));
+        }
+    }
+    Ok(Some((start, end)))
+}
+
 fn translate_function(
     module: &mut ObjectModule,
     declarations: &DeclaredFunctions,
@@ -544,6 +611,7 @@ fn translate_function(
     symbol: &str,
     context: &mut Context,
 ) -> Result<(), CodegenError> {
+    let actor_state_range = actor_handler_state_range(function, types, symbol)?;
     let mut builder_context = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
     let blocks = function
@@ -555,6 +623,7 @@ fn translate_function(
     builder.append_block_params_for_function_params(entry);
 
     let runtime_context = builder.declare_var(module.target_config().pointer_type());
+    let environment_variable = builder.declare_var(ir::types::I64);
     let ownership = MoveValuePlan::analyze(program, function, types)
         .map_err(|message| contract_error(symbol, function.span, message))?;
     let local_slots = function
@@ -641,6 +710,8 @@ fn translate_function(
             blocks: &blocks,
             variables: &variables,
             runtime_context,
+            environment_variable,
+            actor_state_range,
             types,
             symbol,
             local_types: &function.locals,
@@ -658,6 +729,16 @@ fn translate_function(
                     "missing hidden native environment parameter",
                 )
             })?;
+            translator
+                .builder
+                .try_def_var(environment_variable, environment)
+                .map_err(|error| {
+                    contract_error(
+                        symbol,
+                        function.span,
+                        format!("cannot bind native actor environment: {error}"),
+                    )
+                })?;
             let mut incoming_index = 2_usize;
             for (index, parameter) in function.params.iter().enumerate() {
                 let variable =
@@ -720,7 +801,17 @@ fn translate_function(
                         .builder
                         .use_var(variables[parameter.local.index() as usize].unwrap());
                     let owned = if is_linear(types, parameter.ty) {
-                        v
+                        if actor_state_range.is_some()
+                            && function
+                                .params
+                                .iter()
+                                .take(function.capture_count)
+                                .any(|capture| capture.local == parameter.local)
+                        {
+                            translator.clone_linear_handle(v, parameter.ty)?
+                        } else {
+                            v
+                        }
                     } else if is_function(types, parameter.ty) {
                         translator.leaf(NativeLeaf::StructClone, &[v], true)?
                     } else {
@@ -747,6 +838,8 @@ fn translate_function(
         blocks: &blocks,
         variables: &variables,
         runtime_context,
+        environment_variable,
+        actor_state_range,
         types,
         symbol,
         local_types: &function.locals,
@@ -782,6 +875,8 @@ struct Translator<'a, 'builder> {
     blocks: &'a [ir::Block],
     variables: &'a [Option<Variable>],
     runtime_context: Variable,
+    environment_variable: Variable,
+    actor_state_range: Option<(usize, usize)>,
     types: &'a TypeInterner,
     symbol: &'a str,
     local_types: &'a [jett_mir::Local],
@@ -1027,43 +1122,76 @@ impl Translator<'_, '_> {
         }
     }
 
+    fn flush_actor_state(&mut self, span: Span) -> Result<(), CodegenError> {
+        let Some((start, end)) = self.actor_state_range else {
+            return Ok(());
+        };
+        let actor = self.builder.use_var(self.environment_variable);
+        for index in start..end {
+            if index >= self.local_types.len() {
+                return Err(contract_error(
+                    self.symbol,
+                    span,
+                    "actor state local is absent",
+                ));
+            }
+            let (value, owned) = if let Some(slot) = self.local_slots[index] {
+                (self.builder.ins().stack_load(ir::types::I64, slot, 0), true)
+            } else {
+                let variable = self.variables[index].ok_or_else(|| {
+                    contract_error(self.symbol, span, "actor state has no native variable")
+                })?;
+                (self.builder.use_var(variable), false)
+            };
+            let bits = if owned {
+                value
+            } else {
+                self.payload_bits(LoweredValue::Scalar(value)).0
+            };
+            let field = self.builder.ins().iconst(ir::types::I64, index as i64);
+            let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            self.leaf(NativeLeaf::ActorReplace, &[actor, field, bits, owns], true)?;
+            if let Some(slot) = self.local_slots[index] {
+                self.clear_slot(slot);
+            }
+        }
+        Ok(())
+    }
+
+    fn return_value(&mut self, value: Option<&Expression>, span: Span) -> Result<(), CodegenError> {
+        let mut result = match value {
+            Some(value) => self.expression(value)?,
+            None => LoweredValue::Nothing,
+        };
+        if value.is_some_and(|value| is_copy_owned(self.types, value.ty)) {
+            let v = self.scalar(result, span)?;
+            let leaf = if value.is_some_and(|value| is_function(self.types, value.ty)) {
+                NativeLeaf::StructClone
+            } else {
+                NativeLeaf::Retain
+            };
+            result = LoweredValue::Scalar(self.leaf(leaf, &[v], true)?);
+        }
+        if let LoweredValue::Owned(v, slot) = result {
+            self.clear_slot(slot);
+            result = LoweredValue::Scalar(v);
+        }
+        self.flush_actor_state(span)?;
+        self.drop_all()?;
+        match result {
+            LoweredValue::Scalar(v) | LoweredValue::Owned(v, _) => {
+                self.builder.ins().return_(&[v]);
+            }
+            LoweredValue::Nothing => {
+                self.builder.ins().return_(&[]);
+            }
+        }
+        Ok(())
+    }
+
     fn terminator(&mut self, terminator: &Terminator) -> Result<(), CodegenError> {
         match &terminator.kind {
-            TerminatorKind::Return(value) => {
-                let mut result = match value {
-                    Some(v) => self.expression(v)?,
-                    None => LoweredValue::Nothing,
-                };
-                if value
-                    .as_ref()
-                    .is_some_and(|v| is_copy_owned(self.types, v.ty))
-                {
-                    let v = self.scalar(result, terminator.span)?;
-                    let leaf = if value
-                        .as_ref()
-                        .is_some_and(|v| is_function(self.types, v.ty))
-                    {
-                        NativeLeaf::StructClone
-                    } else {
-                        NativeLeaf::Retain
-                    };
-                    result = LoweredValue::Scalar(self.leaf(leaf, &[v], true)?);
-                }
-                if let LoweredValue::Owned(v, slot) = result {
-                    self.clear_slot(slot);
-                    result = LoweredValue::Scalar(v);
-                }
-                self.drop_all()?;
-                match result {
-                    LoweredValue::Scalar(v) | LoweredValue::Owned(v, _) => {
-                        self.builder.ins().return_(&[v]);
-                    }
-                    LoweredValue::Nothing => {
-                        self.builder.ins().return_(&[]);
-                    }
-                }
-                Ok(())
-            }
+            TerminatorKind::Return(value) => self.return_value(value.as_ref(), terminator.span),
             TerminatorKind::Goto(target) => {
                 self.drop_temporaries()?;
                 let target = block_for(self.blocks, target.index(), terminator.span, self.symbol)?;
@@ -1099,7 +1227,7 @@ impl Translator<'_, '_> {
                 self.builder.ins().trap(TrapCode::unwrap_user(1));
                 Ok(())
             }
-            TerminatorKind::Respond(_) => Err(self.unsupported(terminator.span, "actor response")),
+            TerminatorKind::Respond(value) => self.return_value(Some(value), terminator.span),
             TerminatorKind::Switch {
                 scrutinee,
                 variants,
@@ -1605,8 +1733,67 @@ impl Translator<'_, '_> {
             ExpressionKind::InlineFunction { .. } => {
                 Err(self.unsupported(expression.span, "inline function"))
             }
-            ExpressionKind::ActorSpawn { .. } | ExpressionKind::ActorMessage { .. } => {
-                Err(self.unsupported(expression.span, "actor operation"))
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                constructor: Some(constructor),
+                ..
+            } => self.call(*constructor, args, evaluation_order, expression),
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                constructor: None,
+                ..
+            } => {
+                let record = self.construct_struct(args, evaluation_order, expression.span)?;
+                let handle = self.scalar(record, expression.span)?;
+                let actor = self.leaf(NativeLeaf::ActorRegister, &[handle], true)?;
+                if let LoweredValue::Owned(_, slot) = record {
+                    self.clear_slot(slot);
+                }
+                Ok(LoweredValue::Scalar(actor))
+            }
+            ExpressionKind::ActorMessage {
+                actor,
+                message,
+                handler,
+                args,
+                evaluation_order,
+                kind,
+            } => {
+                let Type::Actor(actor_id) = self.types.resolve(actor.ty) else {
+                    return Err(contract_error(
+                        self.symbol,
+                        expression.span,
+                        "actor message has no actor type",
+                    ));
+                };
+                let definition = self.types.resolve_actor(*actor_id);
+                let responds = definition
+                    .messages
+                    .iter()
+                    .find(|entry| entry.name == *message)
+                    .ok_or_else(|| {
+                        contract_error(self.symbol, expression.span, "actor message is absent")
+                    })?
+                    .responds;
+                let captured = definition.capability_params.len() + definition.state_fields.len();
+                let lowered_actor = self.expression(actor)?;
+                let environment = self.scalar(lowered_actor, actor.span)?;
+                let result = self.call_with_environment(
+                    *handler,
+                    args,
+                    evaluation_order,
+                    expression,
+                    environment,
+                    captured,
+                    responds,
+                )?;
+                if *kind == jett_hir::ActorMessageKind::Send {
+                    Ok(LoweredValue::Nothing)
+                } else {
+                    Ok(result)
+                }
             }
             ExpressionKind::Field { base, field, .. } => {
                 self.project_field(base, *field, expression.ty, expression.span, false)
@@ -1621,6 +1808,28 @@ impl Translator<'_, '_> {
         evaluation_order: &[usize],
         expression: &Expression,
     ) -> Result<LoweredValue, CodegenError> {
+        let environment = self.builder.ins().iconst(ir::types::I64, 0);
+        self.call_with_environment(
+            function,
+            args,
+            evaluation_order,
+            expression,
+            environment,
+            0,
+            expression.ty,
+        )
+    }
+
+    fn call_with_environment(
+        &mut self,
+        function: jett_mir::FunctionId,
+        args: &[Expression],
+        evaluation_order: &[usize],
+        expression: &Expression,
+        environment: Value,
+        captured: usize,
+        result_type: TypeId,
+    ) -> Result<LoweredValue, CodegenError> {
         let invalid_order = || {
             contract_error(
                 self.symbol,
@@ -1628,12 +1837,16 @@ impl Translator<'_, '_> {
                 "call evaluation order is not a permutation",
             )
         };
-        let modes = self
+        let all_modes = self
             .declarations
             .get(function)
             .ok_or_else(invalid_order)?
             .modes
             .clone();
+        let modes = all_modes.get(captured..).ok_or_else(invalid_order)?;
+        if modes.len() != args.len() {
+            return Err(invalid_order());
+        }
         let indexed = args.iter().enumerate().collect::<Vec<_>>();
         let evaluated = reordered_map(
             &indexed,
@@ -1667,7 +1880,7 @@ impl Translator<'_, '_> {
             })?;
         let mut native_args = Vec::with_capacity(evaluated.len() + 2);
         native_args.push(runtime_context);
-        native_args.push(self.builder.ins().iconst(ir::types::I64, 0));
+        native_args.push(environment);
         for (index, (argument, value)) in args.iter().zip(evaluated).enumerate() {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
@@ -1709,7 +1922,7 @@ impl Translator<'_, '_> {
         let call = self.builder.ins().call(reference, &native_args);
         let results = self.builder.func.dfg.inst_results(call).to_vec();
         self.check_failure()?;
-        if scalar_kind(self.types, expression.ty, "call result")? == ScalarKind::Nothing {
+        if scalar_kind(self.types, result_type, "call result")? == ScalarKind::Nothing {
             if results.is_empty() {
                 Ok(LoweredValue::Nothing)
             } else {
@@ -1727,9 +1940,9 @@ impl Translator<'_, '_> {
                     "value-returning call produced no native value",
                 )
             })?;
-            if is_linear(self.types, expression.ty) {
+            if is_linear(self.types, result_type) {
                 self.own_linear(value)
-            } else if is_copy_owned(self.types, expression.ty) {
+            } else if is_copy_owned(self.types, result_type) {
                 self.own(value)
             } else {
                 Ok(LoweredValue::Scalar(value))
@@ -2009,6 +2222,7 @@ impl Translator<'_, '_> {
             | ScalarKind::Machine
             | ScalarKind::Construction
             | ScalarKind::Function
+            | ScalarKind::Actor
             | ScalarKind::Stdout
             | ScalarKind::Clock
             | ScalarKind::Random

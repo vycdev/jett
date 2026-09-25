@@ -141,7 +141,25 @@ impl MoveValuePlan {
         function: &Function,
         types: &TypeInterner,
     ) -> Result<CopyValuePlan, String> {
-        let plan = CopyValuePlan::analyze_storage(function, types, Some(program))?;
+        let mut plan = CopyValuePlan::analyze_storage(function, types, Some(program))?;
+        if function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler {
+            // Captured state is written back after a return/respond terminator.
+            // Keep its owning slots live even when the source body stops reading it.
+            let captures = function
+                .params
+                .iter()
+                .take(function.capture_count)
+                .map(|param| param.local.index() as usize)
+                .collect::<Set>();
+            for live in plan.live_in.iter_mut().chain(&mut plan.live_out) {
+                live.extend(&captures);
+            }
+            for block in &mut plan.live_after_statement {
+                for live in block {
+                    live.extend(&captures);
+                }
+            }
+        }
         let cfg = ControlFlowGraph::analyze(function).map_err(|e| format!("{e:?}"))?;
         let all: Set = (0..function.locals.len()).collect();
         let params: Set = function
@@ -426,6 +444,42 @@ impl Flow<'_> {
                 for &index in evaluation_order {
                     let view = self.program.functions[function.index() as usize].params[index].mode
                         == ParamMode::View;
+                    let explicit_view = matches!(args[index].kind, ExpressionKind::View(_))
+                        && is_linear(self.types, args[index].ty);
+                    self.expr(&args[index], view || explicit_view)?;
+                }
+                self.loans = saved;
+            }
+            ExpressionKind::ActorSpawn {
+                args,
+                evaluation_order,
+                constructor,
+                ..
+            } => {
+                let saved = self.loans.clone();
+                for &index in evaluation_order {
+                    let view = constructor.is_some_and(|id| {
+                        self.program.functions[id.index() as usize].params[index].mode
+                            == ParamMode::View
+                    });
+                    let explicit_view = matches!(args[index].kind, ExpressionKind::View(_))
+                        && is_linear(self.types, args[index].ty);
+                    self.expr(&args[index], view || explicit_view)?;
+                }
+                self.loans = saved;
+            }
+            ExpressionKind::ActorMessage {
+                actor,
+                handler,
+                args,
+                evaluation_order,
+                ..
+            } => {
+                self.expr(actor, false)?;
+                let target = &self.program.functions[handler.index() as usize];
+                let saved = self.loans.clone();
+                for &index in evaluation_order {
+                    let view = target.params[target.capture_count + index].mode == ParamMode::View;
                     let explicit_view = matches!(args[index].kind, ExpressionKind::View(_))
                         && is_linear(self.types, args[index].ty);
                     self.expr(&args[index], view || explicit_view)?;

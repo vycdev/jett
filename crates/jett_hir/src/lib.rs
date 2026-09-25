@@ -367,6 +367,7 @@ pub enum ExpressionKind {
     ActorMessage {
         actor: Box<Expression>,
         message: String,
+        handler: FunctionId,
         args: Vec<Expression>,
         /// Parameter indexes in lexical source evaluation order.
         evaluation_order: Vec<usize>,
@@ -887,10 +888,19 @@ impl Validator<'_> {
             }
             ExpressionKind::ActorMessage {
                 actor,
+                handler,
                 args,
                 evaluation_order,
                 ..
             } => {
+                if self
+                    .program
+                    .functions
+                    .get(handler.index() as usize)
+                    .is_none()
+                {
+                    self.error(expression.span, "actor handler target is absent");
+                }
                 self.expression(actor);
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
@@ -977,6 +987,7 @@ struct Lowerer<'a> {
     functions: Vec<FunctionSource<'a>>,
     actor_constructors: Vec<ActorConstructorSource<'a>>,
     actor_constructor_ids: HashMap<TypeId, FunctionId>,
+    actor_handler_ids: HashMap<(TypeId, String), FunctionId>,
     actor_handlers: Vec<ActorHandlerSource<'a>>,
     refinement_sources: Vec<RefinementSource<'a>>,
     refinement_function_ids: HashMap<TypeId, FunctionId>,
@@ -999,6 +1010,7 @@ impl<'a> Lowerer<'a> {
             functions: Vec::new(),
             actor_constructors: Vec::new(),
             actor_constructor_ids: HashMap::new(),
+            actor_handler_ids: HashMap::new(),
             actor_handlers: Vec::new(),
             refinement_sources: Vec::new(),
             refinement_function_ids: HashMap::new(),
@@ -1183,12 +1195,18 @@ impl<'a> Lowerer<'a> {
                 self.error(actor.name.span, "actor has no resolved definition");
                 continue;
             };
+            let Some(&actor_type) = self.check.definition_types.get(&actor_definition) else {
+                self.error(actor.name.span, "actor handler has no checked actor type");
+                continue;
+            };
             for (message_index, handler) in actor.handlers.iter().enumerate() {
                 let id = FunctionId(
                     (self.functions.len()
                         + self.actor_constructors.len()
                         + self.actor_handlers.len()) as u32,
                 );
+                self.actor_handler_ids
+                    .insert((actor_type, handler.name.name.clone()), id);
                 self.actor_handlers.push(ActorHandlerSource {
                     id,
                     actor_definition,
@@ -2824,10 +2842,20 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return None;
         };
         let actor = Box::new(self.lower_expression(actor)?);
+        let Some(&handler) = self
+            .parent
+            .actor_handler_ids
+            .get(&(actor.ty, message.name.clone()))
+        else {
+            self.parent
+                .error(message.span, "actor message has no checked handler");
+            return None;
+        };
         let (args, evaluation_order) = self.lower_arguments_in_parameter_order(args, call_span)?;
         Some(ExpressionKind::ActorMessage {
             actor,
             message: message.name.clone(),
+            handler,
             args,
             evaluation_order,
             kind,

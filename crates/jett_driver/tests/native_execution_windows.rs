@@ -468,6 +468,81 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
 }
 
 #[test]
+fn native_actor_spawn_releases_state_with_context() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/actor_spawn.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "spawned\n");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile actor spawn");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_actor_messages_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/actor_messages.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "hits: 5\n");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile actor messages");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_actor_fixture_bodies_match_interpreter() {
+    for (fixture, main) in [
+        (
+            "actor_named_arguments.jett",
+            "function main() returns nothing:\n    println(actor_results())\n",
+        ),
+        (
+            "namespace_duplicate_leaf_actors.jett",
+            "function main() returns nothing:\n    println(direct_duplicate_leaf_actors(), alias_duplicate_leaf_actors())\n",
+        ),
+        (
+            "namespace_qualified_actors.jett",
+            "function main() returns nothing:\n    println(direct_actor(), alias_actor())\n",
+        ),
+        (
+            "numeric_literal_contexts.jett",
+            "function main() returns nothing:\n    ByteCounter counter = spawn ByteCounter(seed: 4 + 5)\n    send counter.add(10 + 11)\n    println(ask counter.current)\n",
+        ),
+    ] {
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/run_pass")
+                .join(fixture),
+        )
+        .expect("read actor fixture");
+        let directory = tempfile::tempdir().expect("isolated actor execution directory");
+        let source_path = directory.path().join(fixture);
+        std::fs::write(&source_path, format!("{source}\n{main}"))
+            .expect("write executable actor fixture");
+        let expected =
+            jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
+        let binary = directory.path().join("program.exe");
+        build_host_executable(&source_path, launcher(), &binary)
+            .unwrap_or_else(|error| panic!("{fixture}: {error:?}"));
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{fixture}: {actual:?}");
+        assert_eq!(
+            actual.stdout,
+            expected.stdout.as_bytes(),
+            "{fixture}: {actual:?}"
+        );
+        assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+    }
+}
+
+#[test]
 fn native_structured_concurrency_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/structured_concurrency.jett");

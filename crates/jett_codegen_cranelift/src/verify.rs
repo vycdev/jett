@@ -29,6 +29,7 @@ pub(crate) enum ScalarKind {
     Machine,
     Construction,
     Function,
+    Actor,
     Stdout,
     Clock,
     Random,
@@ -320,6 +321,31 @@ fn scalar_kind_inner(
                 scalar_kind_inner(types, *return_type, "function value result".into(), seen)?;
             }
             ScalarKind::Function
+        }
+        Type::Actor(id) => {
+            if seen.insert(ty) {
+                let actor = types.resolve_actor(*id);
+                for (_, field) in actor.capability_params.iter().chain(&actor.state_fields) {
+                    scalar_kind_inner(types, *field, "actor state field".into(), seen)?;
+                }
+                for message in &actor.messages {
+                    for (_, parameter) in &message.params {
+                        scalar_kind_inner(
+                            types,
+                            *parameter,
+                            "actor message parameter".into(),
+                            seen,
+                        )?;
+                    }
+                    scalar_kind_inner(
+                        types,
+                        message.responds,
+                        "actor message response".into(),
+                        seen,
+                    )?;
+                }
+            }
+            ScalarKind::Actor
         }
         Type::List(inner) => {
             if *inner != TypeInterner::NEVER {
@@ -812,8 +838,22 @@ impl Verifier<'_> {
                     ))
                 }
             }
-            TerminatorKind::Respond(_) => {
-                Err(self.unsupported(function, terminator.span, "actor response"))
+            TerminatorKind::Respond(value) => {
+                if function.identity.declaration.kind != jett_hir::DeclarationKind::ActorHandler {
+                    return Err(self.contract_error(
+                        function,
+                        terminator.span,
+                        "response outside actor handler",
+                    ));
+                }
+                self.expression(function, value)?;
+                self.require_same_type(
+                    function,
+                    terminator.span,
+                    function.return_type,
+                    value.ty,
+                    "actor response type does not match handler return type",
+                )
             }
             TerminatorKind::Switch {
                 scrutinee,
@@ -2304,8 +2344,156 @@ impl Verifier<'_> {
             ExpressionKind::InlineFunction { .. } => {
                 Err(self.unsupported(function, expression.span, "inline function"))
             }
-            ExpressionKind::ActorSpawn { .. } | ExpressionKind::ActorMessage { .. } => {
-                Err(self.unsupported(function, expression.span, "actor operation"))
+            ExpressionKind::ActorSpawn {
+                actor_type,
+                args,
+                constructor,
+                ..
+            } => {
+                let Type::Actor(actor_id) = self.types.resolve(expression.ty) else {
+                    return Err(self.expression_kind_error(function, expression, "actor spawn"));
+                };
+                let actor = self.types.resolve_actor(*actor_id);
+                let expected = if let Some(constructor) = constructor {
+                    let (_, target) = function_by_id(self.program, *constructor)?;
+                    if target.identity.declaration.kind
+                        != jett_hir::DeclarationKind::ActorConstructor
+                        || target.return_type != expression.ty
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "actor spawn target is not its checked constructor",
+                        ));
+                    }
+                    target
+                        .params
+                        .iter()
+                        .map(|param| param.ty)
+                        .collect::<Vec<_>>()
+                } else {
+                    if function.identity.declaration.kind
+                        != jett_hir::DeclarationKind::ActorConstructor
+                        || function.return_type != expression.ty
+                        || actor_type != &actor.name
+                    {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "actor allocation is outside its checked constructor",
+                        ));
+                    }
+                    actor
+                        .capability_params
+                        .iter()
+                        .chain(&actor.state_fields)
+                        .map(|(_, ty)| *ty)
+                        .collect::<Vec<_>>()
+                };
+                if args.len() != expected.len() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "actor spawn argument count does not match its checked fields",
+                    ));
+                }
+                for (argument, expected) in args.iter().zip(expected) {
+                    self.expression(function, argument)?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        expected,
+                        argument.ty,
+                        "actor spawn argument type mismatch",
+                    )?;
+                }
+                Ok(())
+            }
+            ExpressionKind::ActorMessage {
+                actor,
+                message,
+                handler,
+                args,
+                kind: message_kind,
+                ..
+            } => {
+                self.expression(function, actor)?;
+                let Type::Actor(actor_id) = self.types.resolve(actor.ty) else {
+                    return Err(self.expression_kind_error(function, expression, "actor message"));
+                };
+                let definition = self.types.resolve_actor(*actor_id);
+                let Some(checked_message) = definition.messages.iter().find(|m| m.name == *message)
+                else {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "actor message is absent from its checked actor type",
+                    ));
+                };
+                let (_, target) = function_by_id(self.program, *handler)?;
+                let capture_count =
+                    definition.capability_params.len() + definition.state_fields.len();
+                let (expected_namespace, actor_name) = definition
+                    .name
+                    .rsplit_once('.')
+                    .unwrap_or(("", &definition.name));
+                let expected_name = format!("{actor_name}.{message}");
+                if target.identity.declaration.kind != jett_hir::DeclarationKind::ActorHandler
+                    || target.identity.declaration.name != expected_name
+                    || target.identity.declaration.namespace != expected_namespace
+                    || target.capture_count != capture_count
+                    || target.return_type != checked_message.responds
+                    || target.params.len() != capture_count + args.len()
+                    || args.len() != checked_message.params.len()
+                    || target.params[..capture_count]
+                        .iter()
+                        .zip(
+                            definition
+                                .capability_params
+                                .iter()
+                                .chain(&definition.state_fields),
+                        )
+                        .any(|(parameter, (_, expected))| parameter.ty != *expected)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "actor message target does not match its checked handler",
+                    ));
+                }
+                for ((argument, parameter), (_, checked_type)) in args
+                    .iter()
+                    .zip(&target.params[capture_count..])
+                    .zip(&checked_message.params)
+                {
+                    self.expression(function, argument)?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        parameter.ty,
+                        argument.ty,
+                        "actor message argument type mismatch",
+                    )?;
+                    self.require_same_type(
+                        function,
+                        argument.span,
+                        *checked_type,
+                        parameter.ty,
+                        "actor handler parameter type mismatch",
+                    )?;
+                }
+                let expected = if *message_kind == jett_hir::ActorMessageKind::Send {
+                    TypeInterner::NOTHING
+                } else {
+                    checked_message.responds
+                };
+                self.require_same_type(
+                    function,
+                    expression.span,
+                    expected,
+                    expression.ty,
+                    "actor message result type mismatch",
+                )
             }
             ExpressionKind::Field {
                 base,
@@ -2468,6 +2656,7 @@ impl Verifier<'_> {
                         | ScalarKind::Bitfield
                         | ScalarKind::Machine
                         | ScalarKind::Function
+                        | ScalarKind::Actor
                 ) && result == ScalarKind::Bool
             }
             BinaryOp::Less | BinaryOp::Greater | BinaryOp::LessEqual | BinaryOp::GreaterEqual => {

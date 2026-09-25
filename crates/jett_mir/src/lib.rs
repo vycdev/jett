@@ -827,8 +827,10 @@ impl FunctionValidator<'_, '_> {
                 actor,
                 args,
                 evaluation_order,
+                handler,
                 ..
             } => {
+                self.check_function(*handler, expression.span);
                 self.expression(actor);
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {

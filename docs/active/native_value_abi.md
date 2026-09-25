@@ -76,8 +76,15 @@ An actor is a runtime-owned state record rather than an ordinary frame owner.
 actor registry. `ActorReplace` transfers a new state field and releases the
 previous owned field. Ordinary `DropValue` rejects a registered actor. Context
 destruction releases registered actor records before checking for leaked frame
-owners, including any nested owned state. Native actor construction and message
-dispatch are still pending; these leaves only establish the ownership boundary.
+owners, including any nested owned state. Checked actor constructors evaluate
+capability arguments and state initializers in source order, then register the
+complete record. `send` and `ask` call the checked handler identity with the
+actor record as their hidden environment. Handlers copy or clone captured
+fields into local owners, write mutable state back through `ActorReplace` on
+return or response, and release their local copies. A discarded `send` response
+is still owned and cleaned up. Linked native/interpreter fixtures cover scalar
+and owned string state, named arguments, duplicate actor names across
+namespaces, and actor responses.
 
 Runtime exports use fixed-width scalar parameters and typed leaf operations;
 no universal operation/name dispatcher. Panics are contained at each C boundary.

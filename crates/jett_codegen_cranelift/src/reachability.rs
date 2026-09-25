@@ -340,7 +340,13 @@ fn collect_expression_references(
         ExpressionKind::InlineFunction { body, .. } => {
             collect_hir_block_references(body, references);
         }
-        ExpressionKind::ActorMessage { actor, args, .. } => {
+        ExpressionKind::ActorMessage {
+            actor,
+            args,
+            handler,
+            ..
+        } => {
+            references.push((*handler, expression.span));
             collect_expression_references(actor, references);
             for argument in args {
                 collect_expression_references(argument, references);

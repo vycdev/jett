@@ -805,3 +805,17 @@ into compiled calls. One emitted object is tested with four real process inputs.
 The full workspace checkpoint passed 1763 tests; complete remains false. Enum
 payloads, refinement-validating construction and projected-owner escapes remain
 continuation work. See `native_value_abi.md` for the precise supported boundary.
+
+The September 2026 actor slice gives spawn expressions a checked constructor
+identity and message expressions a checked handler identity in HIR and MIR.
+Native constructors allocate context-owned actor state; handlers receive the
+actor as their hidden environment, evaluate ordered arguments, write mutable
+state back, and return or discard responses with owned-value cleanup. Native
+execution tests compare actor state mutation, string ownership, named arguments,
+numeric contexts, and duplicate namespace names with the interpreter. The
+exhaustive Windows audit now reports 174/182 emitted objects (95.6%), 27/30
+linked `main` outcomes, 25/25 runtime contracts, and 182/182 typed lowerings.
+This percentage tracks fixture object coverage, not overall language coverage.
+The eight remaining object failures are four Graphics fixtures and four
+verify-only fixtures with no reachable code symbols; the three remaining
+linked-main failures are scripted Graphics fixtures.

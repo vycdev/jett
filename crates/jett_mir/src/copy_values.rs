@@ -517,6 +517,66 @@ fn visit(
                 }
             }
         }
+        ExpressionKind::ActorSpawn {
+            args,
+            evaluation_order,
+            constructor,
+            ..
+        } => {
+            if constructor.is_none() && program.is_some() {
+                // Allocation owns a record before transferring it to the actor registry.
+                *temporaries += 1;
+            }
+            for &index in evaluation_order {
+                let argument = &args[index];
+                let borrowed = constructor.is_some_and(|id| {
+                    program.is_some_and(|program| {
+                        program.functions[id.index() as usize].params[index].mode
+                            == crate::ParamMode::View
+                    })
+                });
+                visit(argument, reads, temporaries, types, program, borrowed)?;
+                if !borrowed
+                    && matches!(argument.kind, ExpressionKind::View(_))
+                    && crate::move_values::is_linear(types, argument.ty)
+                {
+                    *temporaries += 1;
+                }
+            }
+        }
+        ExpressionKind::ActorMessage {
+            actor,
+            handler,
+            args,
+            evaluation_order,
+            ..
+        } => {
+            visit(actor, reads, temporaries, types, program, false)?;
+            let target = program
+                .and_then(|program| program.functions.get(handler.index() as usize))
+                .ok_or("actor message needs its checked handler")?;
+            if crate::move_values::is_copy_owned(types, target.return_type)
+                || crate::move_values::is_linear(types, target.return_type)
+            {
+                // A send discards a response only after the call has owned it.
+                *temporaries += 1;
+            }
+            for &index in evaluation_order {
+                let argument = &args[index];
+                let parameter = target
+                    .params
+                    .get(target.capture_count + index)
+                    .ok_or("actor message argument is absent from its handler")?;
+                let borrowed = parameter.mode == crate::ParamMode::View;
+                visit(argument, reads, temporaries, types, program, borrowed)?;
+                if !borrowed
+                    && matches!(argument.kind, ExpressionKind::View(_))
+                    && crate::move_values::is_linear(types, argument.ty)
+                {
+                    *temporaries += 1;
+                }
+            }
+        }
         ExpressionKind::IndirectCall { callee, args, .. } => {
             visit(callee, reads, temporaries, types, program, false)?;
             for argument in args {
@@ -596,6 +656,7 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
             | Type::Capability(CapabilityKind::Clock)
             | Type::Capability(CapabilityKind::Random)
             | Type::Capability(CapabilityKind::Environment)
+            | Type::Actor(_)
     ) {
         return Ok(());
     }

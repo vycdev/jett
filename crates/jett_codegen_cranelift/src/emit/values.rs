@@ -255,6 +255,14 @@ impl Translator<'_, '_> {
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
         let value = self.scalar(borrowed, span)?;
+        let cloned = self.clone_linear_handle(value, ty)?;
+        self.own_linear(cloned)
+    }
+    pub(super) fn clone_linear_handle(
+        &mut self,
+        value: Value,
+        ty: TypeId,
+    ) -> Result<Value, CodegenError> {
         let leaf = match self.types.resolve(representation_type(self.types, ty)) {
             Type::Bytes => NativeLeaf::BytesClone,
             Type::List(_) => NativeLeaf::ListClone,
@@ -266,8 +274,7 @@ impl Translator<'_, '_> {
             Type::Machine(_) | Type::MachineState { .. } => NativeLeaf::StructClone,
             _ => NativeLeaf::SumClone,
         };
-        let cloned = self.leaf(leaf, &[value], true)?;
-        self.own_linear(cloned)
+        self.leaf(leaf, &[value], true)
     }
     fn struct_field(
         &mut self,

@@ -1,0 +1,18 @@
+namespace test
+actor Counter(label: string):
+    mutable int64 count = 0
+    mutable string title = "{label}!"
+    receive increment(amount: int64):
+        count = count + amount
+    receive rename(text: string):
+        title = text
+    receive read responds string:
+        respond "{title}: {count}"
+function main() returns nothing:
+    Counter counter = spawn Counter(label: "hits")
+    send counter.increment(2)
+    send counter.increment(3)
+    send counter.rename("hits")
+    send counter.read
+    string reading = ask counter.read
+    println(reading)
