@@ -34,6 +34,7 @@ pub(crate) enum ScalarKind {
     Clock,
     Random,
     Environment,
+    Graphics,
 }
 
 pub(crate) fn known_unit_enum_variant(expression: &Expression) -> bool {
@@ -376,6 +377,7 @@ fn scalar_kind_inner(
         Type::Capability(jett_types::CapabilityKind::Clock) => ScalarKind::Clock,
         Type::Capability(jett_types::CapabilityKind::Random) => ScalarKind::Random,
         Type::Capability(jett_types::CapabilityKind::Environment) => ScalarKind::Environment,
+        Type::Capability(jett_types::CapabilityKind::Graphics) => ScalarKind::Graphics,
         unsupported => {
             return Err(CodegenError::UnsupportedType {
                 type_name: types.type_name(ty),
@@ -2648,6 +2650,7 @@ impl Verifier<'_> {
                         | ScalarKind::Clock
                         | ScalarKind::Random
                         | ScalarKind::Environment
+                        | ScalarKind::Graphics
                         | ScalarKind::Bytes
                         | ScalarKind::Sum
                         | ScalarKind::List

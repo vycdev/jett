@@ -656,6 +656,7 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
             | Type::Capability(CapabilityKind::Clock)
             | Type::Capability(CapabilityKind::Random)
             | Type::Capability(CapabilityKind::Environment)
+            | Type::Capability(CapabilityKind::Graphics)
             | Type::Actor(_)
     ) {
         return Ok(());

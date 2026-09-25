@@ -86,6 +86,11 @@ is still owned and cleaned up. Linked native/interpreter fixtures cover scalar
 and owned string state, named arguments, duplicate actor names across
 namespaces, and actor responses.
 
+`Graphics` now has a distinct context-bound entry authority token, and native
+function signatures can carry that token through checked `view` parameters.
+This establishes capability injection only; the graphics session kernel and
+callback loop still need native lowering before a graphics program can run.
+
 Runtime exports use fixed-width scalar parameters and typed leaf operations;
 no universal operation/name dispatcher. Panics are contained at each C boundary.
 The existing ABI v1 lifecycle remains compatible; added leaf signatures are

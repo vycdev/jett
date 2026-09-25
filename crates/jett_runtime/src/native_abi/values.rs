@@ -473,6 +473,7 @@ pub(super) struct NativeValues {
     random_provider: Option<RandomProvider>,
     environment: Option<u64>,
     environment_snapshot: Option<LaunchEnvironmentSnapshot>,
+    graphics: Option<u64>,
 }
 impl NativeValues {
     #[cfg(test)]
@@ -3295,6 +3296,9 @@ leaves! {
                     .map_err(|message| (JettRuntimeStatusV1::INVALID_ARGUMENT, message.as_bytes()))?);
             }
             let token = next_identity()?; s.environment = Some(token); Ok(token) };
+    GrantGraphics, jett_rt_v1_grant_graphics, false, (), u64 => I64,
+        |s| { if let Some(token) = s.graphics { return Ok(token); }
+            let token = next_identity()?; s.graphics = Some(token); Ok(token) };
     EnvironmentArgs, jett_rt_v1_environment_args, false, (authority: u64 => I64), u64 => I64,
         |s| { if s.environment != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Environment authority")); }
             let arguments = s.environment_snapshot.as_ref().ok_or((JettRuntimeStatusV1::INVALID_ARGUMENT, b"Environment: launch data unavailable".as_slice()))?

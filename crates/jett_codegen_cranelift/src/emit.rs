@@ -335,6 +335,7 @@ fn validate_program_entry_contract(
                     | TypeInterner::CLOCK
                     | TypeInterner::RANDOM
                     | TypeInterner::ENVIRONMENT
+                    | TypeInterner::GRAPHICS
             )
         })
         .map(|p| {
@@ -449,6 +450,7 @@ fn translate_program_entry_wrapper(
             TypeInterner::CLOCK => NativeLeaf::GrantClock,
             TypeInterner::RANDOM => NativeLeaf::GrantRandom,
             TypeInterner::ENVIRONMENT => NativeLeaf::GrantEnvironment,
+            TypeInterner::GRAPHICS => NativeLeaf::GrantGraphics,
             _ => {
                 return Err(CodegenError::IncompatibleProgramEntry {
                     function_id: entry.index(),
@@ -523,7 +525,8 @@ fn clif_type(
         | ScalarKind::Stdout
         | ScalarKind::Clock
         | ScalarKind::Random
-        | ScalarKind::Environment => Some(ir::types::I64),
+        | ScalarKind::Environment
+        | ScalarKind::Graphics => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -2226,7 +2229,8 @@ impl Translator<'_, '_> {
             | ScalarKind::Stdout
             | ScalarKind::Clock
             | ScalarKind::Random
-            | ScalarKind::Environment => {
+            | ScalarKind::Environment
+            | ScalarKind::Graphics => {
                 return Err(contract_error(
                     self.symbol,
                     span,
