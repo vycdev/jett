@@ -2645,7 +2645,7 @@ mod tests {
             &HashMap::from([(file, SourceOrigin::Project)]),
         )
         .expect("HIR lowering");
-        let mir = jett_mir::lower(&hir).expect("MIR lowering");
+        let mir = jett_mir::lower(&hir, &checked.interner).expect("MIR lowering");
         (mir, checked.interner)
     }
 
@@ -2674,7 +2674,7 @@ mod tests {
             &HashMap::from([(file, SourceOrigin::Project)]),
         )
         .expect("test-body HIR lowering");
-        let program = jett_mir::lower(&hir).expect("test-body MIR lowering");
+        let program = jett_mir::lower(&hir, &checked.interner).expect("test-body MIR lowering");
         let entry = program
             .functions
             .iter()

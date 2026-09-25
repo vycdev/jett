@@ -834,13 +834,15 @@ exhaustive matches rather than rediscovering policy from names. Inline
 functions and indirect calls retain explicit parameter/local identity. An
 indirect call evaluates arguments in lexical source order before resolving its
 function-valued local, matching interpreter behavior when an argument handler
-rebinds that local. Comptime type-bind scopes erase to checked HIR scopes;
-actor spawn/send/ask carry typed operands and message identity. Actor receive
+rebinds that local. MIR lowering receives the checked type interner so a view
+used before a later handler can be snapshotted only when its recursive value
+type is cloneable; resource-bearing values are never cloned by this extraction.
+Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
+carry typed operands and message identity. Actor receive
 handlers are deterministic HIR functions whose locals preserve checked
 capability, state, and message bindings; actor construction, persistent state
-layout, scheduling,
-and dispatch remain actor-runtime work. Remaining source constructs are staged
-by the [initial HIR lowering plan](active/hir_lowering_plan.md).
+layout, scheduling, and dispatch remain actor-runtime work. Remaining source
+constructs are staged by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 
 The initial implemented `jett_mir` boundary accepts only HIR that passes the
 HIR structural validator. It lowers top-level `if`, `while`, exhaustive

@@ -12,7 +12,7 @@ pub use jett_hir::{FunctionId, Local, LocalId, Param, ParamMode};
 
 use jett_common::Span;
 use jett_hir::{self as hir, Expression, FieldId, FunctionIdentity, VariantId};
-use jett_types::TypeId;
+use jett_types::{TypeId, TypeInterner};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockId(u32);
@@ -848,7 +848,7 @@ impl FunctionValidator<'_, '_> {
     }
 }
 
-pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
+pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Vec<LowerError>> {
     if let Err(errors) = hir::validate(program) {
         return Err(errors
             .into_iter()
@@ -859,12 +859,16 @@ pub fn lower(program: &hir::Program) -> Result<Program, Vec<LowerError>> {
             .collect());
     }
     Ok(Program {
-        functions: program.functions.iter().map(lower_function).collect(),
+        functions: program
+            .functions
+            .iter()
+            .map(|function| lower_function(function, types))
+            .collect(),
     })
 }
 
-fn lower_function(function: &hir::Function) -> Function {
-    let mut builder = Builder::new(function.body.span);
+fn lower_function(function: &hir::Function, types: &TypeInterner) -> Function {
+    let mut builder = Builder::new(function.body.span, types);
     builder.locals = function.locals.clone();
     builder.view_params = function
         .params
@@ -889,7 +893,8 @@ fn lower_function(function: &hir::Function) -> Function {
     }
 }
 
-struct Builder {
+struct Builder<'a> {
+    types: &'a TypeInterner,
     blocks: Vec<BasicBlock>,
     current: BlockId,
     loops: Vec<(BlockId, BlockId)>,
@@ -898,9 +903,10 @@ struct Builder {
     view_params: Vec<LocalId>,
 }
 
-impl Builder {
-    fn new(span: Span) -> Self {
+impl<'a> Builder<'a> {
+    fn new(span: Span, types: &'a TypeInterner) -> Self {
         Self {
+            types,
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 statements: Vec::new(),
@@ -1331,7 +1337,7 @@ function main() returns string:
             &HashMap::from([(file, SourceOrigin::Project)]),
         )
         .expect("HIR lowering");
-        lower(&hir).expect("MIR lowering")
+        lower(&hir, &checked.interner).expect("MIR lowering")
     }
 
     fn reachable_blocks(function: &Function) -> HashSet<BlockId> {

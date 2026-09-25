@@ -1384,3 +1384,37 @@ fn native_intrinsic_nested_handle_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert!(actual.stderr.is_empty(), "{actual:?}");
 }
+
+#[test]
+fn native_indirect_aggregate_view_before_handler_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_handle_indirect_aggregate_view.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated aggregate view directory");
+    let binary = directory
+        .path()
+        .join("nested_handle_indirect_aggregate_view.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile indirect aggregate view before a handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_borrowed_stdlib_call_before_handler_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_handle_borrowed_stdlib_call.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated borrowed stdlib directory");
+    let binary = directory
+        .path()
+        .join("nested_handle_borrowed_stdlib_call.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile borrowed stdlib call before a handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}

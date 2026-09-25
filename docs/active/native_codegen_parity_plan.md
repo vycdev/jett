@@ -582,14 +582,19 @@ argument handlers into MIR in lexical order before reading the callee.
 `tests/native/nested_handle_indirect_call.jett` checks both handler branches
 and a fallback that rebinds the mutable callback;
 native emission also evaluates ordinary indirect-call arguments before the
-callee to match the interpreter. Direct view arguments of plain scalars and
-strings now snapshot into MIR locals before a later handler can mutate their
-source. Supported intrinsic arguments also extract handlers in lexical order;
-`tests/native/nested_handle_indirect_view.jett` and
+callee to match the interpreter. Direct view arguments of cloneable values now
+snapshot into MIR locals before a later handler can mutate their source. MIR
+lowering uses the checked type interner and rejects resource-bearing aggregates
+at this boundary. Supported intrinsic arguments also extract handlers in
+lexical order; `tests/native/nested_handle_indirect_view.jett` and
 `tests/native/nested_handle_intrinsic.jett` compare both paths with the
-interpreter. Borrowed aggregate intrinsic arguments, other direct view types,
-owned and refined binary operands, other nested forms, and source syntax for
-a handler inside interpolation remain open.
+interpreter. `tests/native/nested_handle_indirect_aggregate_view.jett` checks
+that a list view captures the old value before a fallback replaces its source.
+`tests/native/nested_handle_borrowed_stdlib_call.jett` checks the same rule for
+a source stdlib call with a borrowed list parameter and handled index. Borrowed
+aggregate compiler intrinsics, authority-bearing direct views, owned
+and refined binary operands, other nested forms, and source syntax for a
+handler inside interpolation remain open.
 Enforcing immutable-local rebinding in the frontend and correcting affected
 fixtures adds native objects for `string_iteration.jett`, `set_operations.jett`,
 and `uint64_checked_expression_runtime_types.jett`. The last also passes a

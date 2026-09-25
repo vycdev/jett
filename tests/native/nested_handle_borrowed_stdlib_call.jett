@@ -1,0 +1,15 @@
+namespace test
+function first_or_zero(items: list[int64]) returns int64:
+    return list.get[int64](view items, 0) handle:
+        default 0
+function main() returns nothing:
+    mutable list[int64] items = list(3)
+    optional[int64] maybe = none
+    optional[int64] selected = list.get[int64](view items, maybe handle:
+        items = list(8)
+        default 0
+    )
+    int64 old_first = selected handle:
+        default -1
+    println(old_first, first_or_zero(view items))
+    return nothing

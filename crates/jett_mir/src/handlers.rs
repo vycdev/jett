@@ -1,7 +1,7 @@
 //! Extract source result/optional handlers into ordinary MIR CFG edges.
 use super::*;
 use jett_hir::{ExpressionKind, HandleKind};
-use jett_types::TypeInterner;
+use jett_types::{Type, TypeInterner};
 
 fn has_extractable_handle(expression: &Expression) -> bool {
     match &expression.kind {
@@ -62,9 +62,86 @@ fn is_plain_copy_scalar(ty: TypeId) -> bool {
     )
 }
 
-fn valid_ordered_owned_values(values: &[Expression], order: &[usize]) -> bool {
-    // MIR has no borrowed temporary. Only copy scalars and retained strings can
-    // safely snapshot a direct view before a later handler changes its source.
+fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
+    fn supported(
+        types: &TypeInterner,
+        ty: TypeId,
+        seen: &mut std::collections::HashSet<TypeId>,
+    ) -> bool {
+        if ty.index() as usize >= types.len() {
+            return false;
+        }
+        if !seen.insert(ty) {
+            return true;
+        }
+        match types.resolve(ty) {
+            Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
+            | Type::Uint64
+            | Type::Float32
+            | Type::Float64
+            | Type::String
+            | Type::Bool
+            | Type::Bytes
+            | Type::Nothing
+            | Type::Function { .. } => true,
+            Type::List(inner)
+            | Type::Set(inner)
+            | Type::Optional(inner)
+            | Type::Secret(inner)
+            | Type::Refinement { base: inner, .. } => supported(types, *inner, seen),
+            Type::Map(key, value) | Type::Result(key, value) => {
+                supported(types, *key, seen) && supported(types, *value, seen)
+            }
+            Type::Struct(id) => types
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .all(|(_, field_ty)| supported(types, *field_ty, seen)),
+            Type::Enum(id) => types.resolve_enum(*id).variants.iter().all(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .all(|(_, field_ty)| supported(types, *field_ty, seen))
+            }),
+            Type::Bitfield(id) => types
+                .resolve_bitfield(*id)
+                .fields
+                .iter()
+                .all(|field| supported(types, field.ty, seen)),
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                types.resolve_machine(*id).states.iter().all(|state| {
+                    state
+                        .fields
+                        .iter()
+                        .all(|(_, field_ty)| supported(types, *field_ty, seen))
+                })
+            }
+            Type::Resource(_)
+            | Type::Capability(_)
+            | Type::Actor(_)
+            | Type::Interface(_)
+            | Type::TypeConstruction
+            | Type::Never
+            | Type::Error => false,
+        }
+    }
+
+    supported(types, ty, &mut std::collections::HashSet::new())
+}
+
+fn valid_ordered_owned_values(
+    types: &TypeInterner,
+    values: &[Expression],
+    order: &[usize],
+) -> bool {
+    // MIR has no borrowed temporary. Cloneable views can be snapshotted into
+    // owned locals before a later handler changes their source.
     order.len() == values.len()
         && order.iter().all(|&index| index < values.len())
         && order
@@ -74,13 +151,11 @@ fn valid_ordered_owned_values(values: &[Expression], order: &[usize]) -> bool {
             .len()
             == values.len()
         && values.iter().all(|value| {
-            !matches!(value.kind, ExpressionKind::View(_))
-                || is_plain_copy_scalar(value.ty)
-                || value.ty == TypeInterner::STRING
+            !matches!(value.kind, ExpressionKind::View(_)) || can_snapshot_view(types, value.ty)
         })
 }
 
-impl Builder {
+impl Builder<'_> {
     fn refinement_predicate_input(
         &self,
         source: LocalId,
@@ -132,12 +207,21 @@ impl Builder {
         values: &[Expression],
         order: &[usize],
     ) -> Option<Vec<Expression>> {
-        if !valid_ordered_owned_values(values, order) {
+        if !valid_ordered_owned_values(self.types, values, order) {
             return None;
         }
         let mut lowered = values.to_vec();
         for &index in order {
-            let value = self.lower_value(&values[index]);
+            let mut value = self.lower_value(&values[index]);
+            if matches!(values[index].kind, ExpressionKind::View(_))
+                && crate::move_values::is_linear(self.types, value.ty)
+            {
+                value = Expression {
+                    kind: ExpressionKind::Clone(Box::new(value)),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+            }
             let local = self.temporary(value.ty, value.span);
             self.push(StatementKind::Let { local, value }, values[index].span);
             lowered[index] = Expression {
@@ -437,20 +521,38 @@ impl Builder {
             && args.iter().any(has_extractable_handle)
             && args.iter().enumerate().all(|(index, arg)| {
                 !crate::move_values::intrinsic_borrows(*intrinsic, index)
-                    || is_plain_copy_scalar(arg.ty)
-                    || arg.ty == TypeInterner::STRING
+                    || can_snapshot_view(self.types, arg.ty)
             })
-            && let Some(args) = self.lower_ordered_owned_values(args, evaluation_order)
         {
-            let mut lowered = expression.clone();
-            lowered.kind = ExpressionKind::Intrinsic {
-                intrinsic: *intrinsic,
-                type_arguments: type_arguments.clone(),
-                reflection_arguments: reflection_arguments.clone(),
-                args,
-                evaluation_order: evaluation_order.clone(),
-            };
-            return lowered;
+            let inputs = args
+                .iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    if crate::move_values::intrinsic_borrows(*intrinsic, index)
+                        && crate::move_values::is_linear(self.types, arg.ty)
+                        && !matches!(arg.kind, ExpressionKind::View(_))
+                    {
+                        Expression {
+                            kind: ExpressionKind::View(Box::new(arg.clone())),
+                            ty: arg.ty,
+                            span: arg.span,
+                        }
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            if let Some(args) = self.lower_ordered_owned_values(&inputs, evaluation_order) {
+                let mut lowered = expression.clone();
+                lowered.kind = ExpressionKind::Intrinsic {
+                    intrinsic: *intrinsic,
+                    type_arguments: type_arguments.clone(),
+                    reflection_arguments: reflection_arguments.clone(),
+                    args,
+                    evaluation_order: evaluation_order.clone(),
+                };
+                return lowered;
+            }
         }
         if let ExpressionKind::IndirectCall {
             callee,
@@ -459,7 +561,7 @@ impl Builder {
         } = &expression.kind
             && (has_extractable_handle(callee) || args.iter().any(has_extractable_handle))
             && !matches!(callee.kind, ExpressionKind::View(_))
-            && valid_ordered_owned_values(args, evaluation_order)
+            && valid_ordered_owned_values(self.types, args, evaluation_order)
         {
             let args = self
                 .lower_ordered_owned_values(args, evaluation_order)
@@ -493,49 +595,12 @@ impl Builder {
             evaluation_order,
         } = &expression.kind
             && args.iter().any(has_extractable_handle)
+            && let Some(args) = self.lower_ordered_owned_values(args, evaluation_order)
         {
-            let unique_order = evaluation_order
-                .iter()
-                .copied()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                == args.len();
-            if args.len() != evaluation_order.len()
-                || !unique_order
-                || evaluation_order.iter().any(|&index| index >= args.len())
-                || args.iter().any(|arg| {
-                    matches!(&arg.kind, ExpressionKind::View(inner) if !matches!(&inner.kind, ExpressionKind::Local(_) | ExpressionKind::Handle { kind: HandleKind::Result | HandleKind::Optional | HandleKind::Refinement { .. }, .. }))
-                })
-            {
-                return expression.clone();
-            }
-            let mut lowered_args = args.clone();
-            for &index in evaluation_order {
-                let lowered = self.lower_value(&args[index]);
-                if args.len() == 1 || matches!(lowered.kind, ExpressionKind::View(_)) {
-                    lowered_args[index] = lowered;
-                    continue;
-                }
-                let local = self.temporary(lowered.ty, lowered.span);
-                let span = lowered.span;
-                let ty = lowered.ty;
-                self.push(
-                    StatementKind::Let {
-                        local,
-                        value: lowered,
-                    },
-                    span,
-                );
-                lowered_args[index] = Expression {
-                    kind: ExpressionKind::Local(local),
-                    ty,
-                    span,
-                };
-            }
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Call {
                 function: *function,
-                args: lowered_args,
+                args,
                 evaluation_order: evaluation_order.clone(),
             };
             return lowered;
@@ -865,5 +930,22 @@ impl Builder {
             ty: expression.ty,
             span,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_view_snapshot_rejects_nested_resources() {
+        let mut types = TypeInterner::new();
+        let resource = types.intern(Type::Resource("Socket".to_string()));
+        let list_of_resources = types.intern(Type::List(resource));
+        let list_of_integers = types.intern(Type::List(TypeInterner::INT64));
+
+        assert!(!can_snapshot_view(&types, resource));
+        assert!(!can_snapshot_view(&types, list_of_resources));
+        assert!(can_snapshot_view(&types, list_of_integers));
     }
 }

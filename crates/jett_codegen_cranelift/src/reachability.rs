@@ -396,7 +396,7 @@ mod tests {
             &HashMap::from([(file, SourceOrigin::Project)]),
         )
         .expect("HIR lowering");
-        jett_mir::lower(&hir).expect("MIR lowering")
+        jett_mir::lower(&hir, &checked.interner).expect("MIR lowering")
     }
 
     fn set_origin(program: &mut Program, name: &str, origin: SourceOrigin) {

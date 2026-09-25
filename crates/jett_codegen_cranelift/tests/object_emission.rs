@@ -37,7 +37,7 @@ fn lower_source(source: &str) -> (Program, TypeInterner) {
         &HashMap::from([(file, SourceOrigin::Project)]),
     )
     .expect("HIR lowering");
-    let mir = jett_mir::lower(&hir).expect("MIR lowering");
+    let mir = jett_mir::lower(&hir, &checked.interner).expect("MIR lowering");
     (mir, checked.interner)
 }
 
