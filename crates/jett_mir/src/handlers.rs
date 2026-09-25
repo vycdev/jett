@@ -15,6 +15,7 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             has_extractable_handle(left) || has_extractable_handle(right)
         }
         ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
+        ExpressionKind::Intrinsic { args, .. } => args.iter().any(has_extractable_handle),
         ExpressionKind::IndirectCall { callee, args, .. } => {
             has_extractable_handle(callee) || args.iter().any(has_extractable_handle)
         }
@@ -62,6 +63,8 @@ fn is_plain_copy_scalar(ty: TypeId) -> bool {
 }
 
 fn valid_ordered_owned_values(values: &[Expression], order: &[usize]) -> bool {
+    // MIR has no borrowed temporary. Only copy scalars and retained strings can
+    // safely snapshot a direct view before a later handler changes its source.
     order.len() == values.len()
         && order.iter().all(|&index| index < values.len())
         && order
@@ -70,9 +73,11 @@ fn valid_ordered_owned_values(values: &[Expression], order: &[usize]) -> bool {
             .collect::<std::collections::BTreeSet<_>>()
             .len()
             == values.len()
-        && values
-            .iter()
-            .all(|value| !matches!(value.kind, ExpressionKind::View(_)))
+        && values.iter().all(|value| {
+            !matches!(value.kind, ExpressionKind::View(_))
+                || is_plain_copy_scalar(value.ty)
+                || value.ty == TypeInterner::STRING
+        })
 }
 
 impl Builder {
@@ -420,6 +425,31 @@ impl Builder {
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::OptionalSome(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::Intrinsic {
+            intrinsic,
+            type_arguments,
+            reflection_arguments,
+            args,
+            evaluation_order,
+        } = &expression.kind
+            && args.iter().any(has_extractable_handle)
+            && args.iter().enumerate().all(|(index, arg)| {
+                !crate::move_values::intrinsic_borrows(*intrinsic, index)
+                    || is_plain_copy_scalar(arg.ty)
+                    || arg.ty == TypeInterner::STRING
+            })
+            && let Some(args) = self.lower_ordered_owned_values(args, evaluation_order)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::Intrinsic {
+                intrinsic: *intrinsic,
+                type_arguments: type_arguments.clone(),
+                reflection_arguments: reflection_arguments.clone(),
+                args,
+                evaluation_order: evaluation_order.clone(),
+            };
             return lowered;
         }
         if let ExpressionKind::IndirectCall {

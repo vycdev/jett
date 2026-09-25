@@ -1,0 +1,11 @@
+namespace test
+function record(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function main() returns nothing:
+    optional[int64] maybe = none
+    println(record("first", 1), maybe handle:
+        println("fallback")
+        default record("second", 2)
+    )
+    return nothing
