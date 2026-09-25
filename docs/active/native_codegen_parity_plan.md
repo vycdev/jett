@@ -294,6 +294,7 @@ lowering alone never changes an execution row to complete.
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call, indirect-call, supported intrinsic-argument, unary, cloneable binary, short-circuit boolean, collection, and value-constructor handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, ordered call arguments and constructor fields, scalar, string, and enum evaluation order, and short-circuit fallback skipping covered; other nested-expression and refinement handlers pending |
 | Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context; view-parameter function values pending | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls; linked fixtures cover nested closures, loop captures, higher-order callbacks, string and numeric captures |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
+| Explicit `comptime` values | checked closed pure expressions and contextual expected types covered | evaluated scalar and supported composite values materialize as typed HIR; original source bodies are not emitted | linked native/interpreter fixture covers nested collections, sums, structs, bitfields, enums, machines, bytes, and contextual `ok`/`fail`/`none`; function values and runtime authority remain unsupported |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | sequential `run`/`join`/`cancel` values and result propagation; actor constructors, registration, handler dispatch, and state writeback covered; a distinct pending-task representation remains pending | native/interpreter differential probes cover successful and failed string tasks, cancellation cleanup, actor allocation and owned-state cleanup, message ordering, state mutation, and responses; asynchronous scheduling, cancellation checkpoints, and nothing-typed pending tasks remain pending |
 | JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections including sets of primitive-backed elements, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32`, `uint16`/`uint32`, and `float32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of primitive-backed hashable types, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
@@ -811,12 +812,17 @@ with an empty environment and a deadline. The executable needs no compiler
 source at runtime. This is one executable seed, not full native parity or a
 clean-distribution packaging claim. All remaining fixture obligations remain.
 
-Explicit `comptime` primitive results are imported into typed HIR before MIR
-lowering, retaining their checked type and span. Ordinary pure calls remain
-runtime calls. The backend rejects any unresolved `Comptime` marker instead of
-emitting its source computation. Composite constants still need native layout
-lowering and remain an explicit native parity gap. A native regression executes
-baked `math.factorial(5)` after removing its source file.
+Explicit `comptime` values are materialized into typed HIR before MIR lowering,
+retaining the checked type and span. The native property-case value materializer
+also reconstructs supported composite values: lists, maps, sets, sums, structs,
+bitfields, enums, machines, and bytes. The checker propagates contextual expected
+types through `comptime`, so a closed `ok` or `none` can adopt the declared sum
+type. Ordinary pure calls remain runtime calls. Missing or unsupported baked
+values fail before codegen rather than executing their source computation. Native
+regressions execute baked `math.factorial(5)` after removing its source file and
+compare `tests/native/comptime_composites.jett` with the interpreter. Other
+compile-time value kinds, including function values and runtime authority, remain
+outside this materialization boundary.
 
 
 ## Native runtime-value slice

@@ -2692,12 +2692,15 @@ automated deadline without source-tree or compiler environment dependencies.
 Full language/runtime parity and clean Windows execution are still release
 gates, not claims made by this seed. See `active/native_codegen_parity_plan.md`.
 
-Explicit `comptime` primitive results are imported into typed HIR before MIR
-lowering, retaining their checked type and span. Ordinary pure calls remain
-runtime calls. The backend rejects any unresolved `Comptime` marker instead of
-emitting its source computation. Composite constants still need native layout
-lowering and remain an explicit native parity gap. A native regression executes
-baked `math.factorial(5)` after removing its source file.
+Explicit `comptime` results are materialized into typed HIR before MIR lowering,
+retaining their checked type and span. The shared native value materializer
+constructs supported aggregates from the evaluated value, including collections,
+sums, structs, bitfields, enums, machines, and bytes. The checker passes the
+surrounding expected type through `comptime` for contextual sum values. Ordinary
+pure calls remain runtime calls. Missing or unsupported baked values fail before
+codegen; the original source computation is never emitted as a fallback. Native
+regressions execute a baked `math.factorial(5)` after removing its source file
+and compare supported composite results with the interpreter.
 
 
 ### Native string and numeric execution slice

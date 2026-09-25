@@ -2364,6 +2364,8 @@ syntax, or preprocessor. **One function form, two execution times.**
 Required compile-time value evaluation is always explicit and has the canonical
 form `comptime expression`. The expression must be closed: it may use literals,
 types, and pure functions, but it cannot depend on a runtime parameter or local.
+It receives the same expected type as an ordinary expression in that position,
+so `comptime ok(value)` and `comptime none` can use a declared sum type's context.
 Compilation fails if the compiler cannot produce the value. An ordinary pure
 call remains a runtime call in source semantics. The optimizer may fold it when
 safe, but that invisible optimization cannot introduce diagnostics, suppress

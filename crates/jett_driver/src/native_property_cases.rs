@@ -6,7 +6,8 @@ use jett_comptime::value::Value;
 use jett_comptime::verify::{PROPERTY_DEFAULT_ITERATIONS, PropertyCase};
 use jett_hir::{
     Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,
-    FunctionIdentity, HandleKind, IntrinsicId, MapEntry, Statement, StatementKind, VariantId,
+    FunctionIdentity, HandleKind, IntrinsicId, MapEntry, StateId, Statement, StatementKind,
+    VariantId,
 };
 use jett_parser::ast::{Item, Module};
 use jett_types::{Type, TypeId, TypeInterner};
@@ -124,7 +125,7 @@ fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {
     }]
 }
 
-fn value_expression(
+pub(super) fn value_expression(
     value: &Value,
     ty: TypeId,
     span: Span,
@@ -142,7 +143,9 @@ fn value_expression(
             | Type::Uint64,
             Value::Int64(number),
         ) => ExpressionKind::Int(i128::from(*number)),
-        (Type::Uint64, Value::Uint64(number)) => ExpressionKind::Int(i128::from(*number)),
+        (Type::Uint8 | Type::Uint16 | Type::Uint32 | Type::Uint64, Value::Uint64(number)) => {
+            ExpressionKind::Int(i128::from(*number))
+        }
         (Type::Float32 | Type::Float64, Value::Float64(number)) => ExpressionKind::Float(*number),
         (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
         (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
@@ -268,6 +271,61 @@ fn value_expression(
                     })
                     .collect::<Result<_, _>>()?,
             }
+        }
+        (
+            Type::Machine(machine) | Type::MachineState { machine, .. },
+            Value::Machine { state, fields, .. },
+        ) => {
+            let definition = types.resolve_machine(*machine);
+            let (index, state_def) = definition
+                .states
+                .iter()
+                .enumerate()
+                .find(|(_, candidate)| candidate.name == *state)
+                .ok_or_else(|| format!("generated machine state `{state}` is absent"))?;
+            let index = u32::try_from(index)
+                .map_err(|_| "generated machine state index exceeds u32".to_owned())?;
+            if let Type::MachineState {
+                state: expected, ..
+            } = types.resolve(ty)
+                && expected.index() != index
+            {
+                return Err(format!(
+                    "generated machine state `{state}` disagrees with checked state"
+                ));
+            }
+            if fields.len() != state_def.fields.len() {
+                return Err(format!("generated machine state `{state}` has wrong arity"));
+            }
+            let state_type = if matches!(types.resolve(ty), Type::MachineState { .. }) {
+                ty
+            } else {
+                types
+                    .type_ids()
+                    .find(|candidate| {
+                        matches!(
+                            types.resolve(*candidate),
+                            Type::MachineState { machine: owner, state: state_id }
+                                if owner == machine && state_id.index() == index
+                        )
+                    })
+                    .ok_or("checked machine state type is absent")?
+            };
+            return Ok(Expression {
+                kind: ExpressionKind::MachineConstruct {
+                    state_type,
+                    state: StateId::new(index),
+                    payloads: fields
+                        .iter()
+                        .zip(&state_def.fields)
+                        .map(|(value, (_, field_type))| {
+                            value_expression(value, *field_type, span, types)
+                        })
+                        .collect::<Result<_, _>>()?,
+                },
+                ty: state_type,
+                span,
+            });
         }
         (expected, actual) => {
             return Err(format!(

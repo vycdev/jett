@@ -1355,6 +1355,21 @@ fn native_refined_binary_nested_handle_matches_interpreter() {
 }
 
 #[test]
+fn native_comptime_composites_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/comptime_composites.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated comptime composite directory");
+    let binary = directory.path().join("comptime_composites.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile a baked composite without running its source expression");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_constructor_nested_handles_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_constructors.jett");

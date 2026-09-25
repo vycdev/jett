@@ -82,6 +82,11 @@ impl VariantId {
 pub struct StateId(u32);
 
 impl StateId {
+    /// Select a checked machine state when building compiler-owned HIR.
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }

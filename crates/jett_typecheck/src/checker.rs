@@ -8658,6 +8658,12 @@ impl<'a> TypeChecker<'a> {
                     _ => self.check_expr(expr),
                 }
             }
+            Expr::Comptime(inner, _) => {
+                self.comptime_expr_depth += 1;
+                let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
+                self.comptime_expr_depth -= 1;
+                ty
+            }
             Expr::Coarsen(inner, span) => {
                 let inner_ty = self.check_expr(inner);
                 if inner_ty == TypeInterner::ERROR {
@@ -14872,6 +14878,45 @@ mod tests {
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    #[test]
+    fn explicit_comptime_preserves_contextual_sum_types() {
+        let source = r#"namespace test
+function main() returns nothing:
+    result[int64, string] success = comptime ok(13)
+    result[int64, string] failure = comptime fail("bad")
+    optional[int64] absent = comptime none
+    return nothing
+"#;
+        let checked = check_source_result(source);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            checked.diagnostics
+        );
+        for (text, expected) in [
+            ("comptime ok(13)", "result"),
+            ("comptime fail(\"bad\")", "result"),
+            ("comptime none", "optional"),
+        ] {
+            let start = source.find(text).expect("checked expression") as u32;
+            let span = Span::new(FileId::new(0), start, start + text.len() as u32);
+            let ty = checked.type_map[&span];
+            match (expected, checked.interner.resolve(ty)) {
+                ("result", Type::Result(ok, error)) => {
+                    assert_eq!(*ok, TypeInterner::INT64);
+                    assert_eq!(*error, TypeInterner::STRING);
+                }
+                ("optional", Type::Optional(inner)) => {
+                    assert_eq!(*inner, TypeInterner::INT64);
+                }
+                (_, actual) => panic!("unexpected contextual type: {actual:?}"),
+            }
+        }
     }
 
     #[test]

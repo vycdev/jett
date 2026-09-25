@@ -1,178 +1,201 @@
-//! Import explicitly evaluated primitive constants into the typed handoff.
+//! Materialize explicitly evaluated values as typed, compiler-owned HIR.
 //!
-//! This pass never evaluates ordinary expressions. Composite baked values stay
-//! explicitly marked Comptime until their native constant layouts are defined;
-//! the backend rejects those markers rather than running their source bodies.
+//! Ordinary expressions are never evaluated here. A failed or absent baked
+//! value cannot fall back to running the original computation at runtime.
 
 use jett_common::Span;
 use jett_comptime::Value;
 use jett_hir::{
-    Block, Expression, ExpressionKind as E, Program, StatementKind as S, StringSegment,
+    Block, Expression, ExpressionKind as E, LowerError, Program, StatementKind as S, StringSegment,
 };
+use jett_types::TypeInterner;
 use std::collections::HashMap;
 
-pub(crate) fn bake_primitives(program: &mut Program, values: &HashMap<Span, Value>) {
+use crate::native_property_cases::value_expression;
+
+pub(crate) fn bake_values(
+    program: &mut Program,
+    values: &HashMap<Span, Value>,
+    types: &TypeInterner,
+) -> Result<(), Vec<LowerError>> {
+    let mut baker = Baker {
+        values,
+        types,
+        errors: Vec::new(),
+    };
     for function in &mut program.functions {
-        block(&mut function.body, values);
+        baker.block(&mut function.body);
+    }
+    if baker.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(baker.errors)
     }
 }
 
-fn block(body: &mut Block, values: &HashMap<Span, Value>) {
-    for statement in &mut body.statements {
-        match &mut statement.kind {
-            S::Let { value, .. }
-            | S::Expression(value)
-            | S::HandleDefault(value)
-            | S::Respond(value) => expression(value, values),
-            S::Assign { target, value } => {
-                expression(target, values);
-                expression(value, values);
+struct Baker<'a> {
+    values: &'a HashMap<Span, Value>,
+    types: &'a TypeInterner,
+    errors: Vec<LowerError>,
+}
+
+impl Baker<'_> {
+    fn block(&mut self, body: &mut Block) {
+        for statement in &mut body.statements {
+            match &mut statement.kind {
+                S::Let { value, .. }
+                | S::Expression(value)
+                | S::HandleDefault(value)
+                | S::Respond(value) => self.expression(value),
+                S::Assign { target, value } => {
+                    self.expression(target);
+                    self.expression(value);
+                }
+                S::Return(value)
+                | S::Breakpoint {
+                    condition: value, ..
+                } => {
+                    if let Some(value) = value {
+                        self.expression(value);
+                    }
+                }
+                S::If {
+                    condition,
+                    then_block,
+                    else_block,
+                } => {
+                    self.expression(condition);
+                    self.block(then_block);
+                    if let Some(body) = else_block {
+                        self.block(body);
+                    }
+                }
+                S::While { condition, body } => {
+                    self.expression(condition);
+                    self.block(body);
+                }
+                S::For { iterable, body, .. } => {
+                    self.expression(iterable);
+                    self.block(body);
+                }
+                S::Match { scrutinee, arms } => {
+                    self.expression(scrutinee);
+                    for arm in arms {
+                        self.block(&mut arm.body);
+                    }
+                }
+                S::Assert { condition, message } => {
+                    self.expression(condition);
+                    if let Some(message) = message {
+                        self.expression(message);
+                    }
+                }
+                S::Scope(body) => self.block(body),
+                S::ReflectedTypeDispatch { type_info, arms } => {
+                    self.expression(type_info);
+                    for arm in arms {
+                        self.block(&mut arm.body);
+                    }
+                }
+                S::Break | S::Continue | S::Trace(_) => {}
             }
-            S::Return(value)
-            | S::Breakpoint {
-                condition: value, ..
+        }
+    }
+
+    fn expression(&mut self, expr: &mut Expression) {
+        if matches!(expr.kind, E::Comptime(_)) {
+            match self.values.get(&expr.span) {
+                Some(value) => match value_expression(value, expr.ty, expr.span, self.types) {
+                    Ok(replacement) => *expr = replacement,
+                    Err(message) => self.errors.push(LowerError {
+                        span: expr.span,
+                        message: format!("cannot materialize compile-time value: {message}"),
+                    }),
+                },
+                None => self.errors.push(LowerError {
+                    span: expr.span,
+                    message: "explicit comptime expression has no evaluated value".into(),
+                }),
+            }
+            return;
+        }
+        match &mut expr.kind {
+            E::Binary { left, right, .. } => {
+                self.expression(left);
+                self.expression(right);
+            }
+            E::Unary { value, .. }
+            | E::ResultOk(value)
+            | E::ResultFail(value)
+            | E::OptionalSome(value)
+            | E::Declassify(value)
+            | E::Coarsen(value)
+            | E::RefinementValidated(value)
+            | E::StateIs { value, .. }
+            | E::Run(value)
+            | E::Join(value)
+            | E::Cancel(value)
+            | E::View(value)
+            | E::Clone(value)
+            | E::Field { base: value, .. } => self.expression(value),
+            E::Call { args, .. }
+            | E::Intrinsic { args, .. }
+            | E::ActorSpawn { args, .. }
+            | E::StructConstruct { fields: args, .. }
+            | E::BitfieldConstruct { fields: args, .. }
+            | E::MachineConstruct { payloads: args, .. }
+            | E::EnumConstruct { payloads: args, .. }
+            | E::ListConstruct { elements: args } => self.expressions(args),
+            E::IndirectCall { callee, args, .. } => {
+                self.expression(callee);
+                self.expressions(args);
+            }
+            E::MachineTransition {
+                source, payloads, ..
             } => {
-                if let Some(value) = value {
-                    expression(value, values);
+                self.expression(source);
+                self.expressions(payloads);
+            }
+            E::ActorMessage { actor, args, .. } => {
+                self.expression(actor);
+                self.expressions(args);
+            }
+            E::MapConstruct { entries } => {
+                for entry in entries {
+                    self.expression(&mut entry.key);
+                    self.expression(&mut entry.value);
                 }
             }
-            S::If {
-                condition,
-                then_block,
-                else_block,
+            E::Handle {
+                target, failure, ..
             } => {
-                expression(condition, values);
-                block(then_block, values);
-                if let Some(body) = else_block {
-                    block(body, values);
+                self.expression(target);
+                self.block(failure);
+            }
+            E::StringInterpolation(parts) => {
+                for part in parts {
+                    if let StringSegment::Value(value) = part {
+                        self.expression(value);
+                    }
                 }
             }
-            S::While { condition, body } => {
-                expression(condition, values);
-                block(body, values);
-            }
-            S::For { iterable, body, .. } => {
-                expression(iterable, values);
-                block(body, values);
-            }
-            S::Match { scrutinee, arms } => {
-                expression(scrutinee, values);
-                for arm in arms {
-                    block(&mut arm.body, values);
-                }
-            }
-            S::Assert { condition, message } => {
-                expression(condition, values);
-                if let Some(message) = message {
-                    expression(message, values);
-                }
-            }
-            S::Scope(body) => block(body, values),
-            S::ReflectedTypeDispatch { type_info, arms } => {
-                expression(type_info, values);
-                for arm in arms {
-                    block(&mut arm.body, values);
-                }
-            }
-            S::Break | S::Continue | S::Trace(_) => {}
+            E::InlineFunction { body, .. } => self.block(body),
+            E::Int(_)
+            | E::Float(_)
+            | E::String(_)
+            | E::Bool(_)
+            | E::Nothing
+            | E::OptionalNone
+            | E::Local(_)
+            | E::FunctionRef(_)
+            | E::ClosureRef { .. }
+            | E::Comptime(_) => {}
         }
     }
-}
 
-fn expression(expr: &mut Expression, values: &HashMap<Span, Value>) {
-    if matches!(expr.kind, E::Comptime(_)) {
-        let replacement = match values.get(&expr.span) {
-            Some(Value::Int64(value)) => Some(E::Int(i128::from(*value))),
-            Some(Value::Uint64(value)) => Some(E::Int(i128::from(*value))),
-            Some(Value::Float64(value)) => Some(E::Float(*value)),
-            Some(Value::Bool(value)) => Some(E::Bool(*value)),
-            Some(Value::String(value)) => Some(E::String(value.clone())),
-            Some(Value::Nothing) => Some(E::Nothing),
-            _ => None,
-        };
-        if let Some(replacement) = replacement {
-            expr.kind = replacement;
+    fn expressions(&mut self, expressions: &mut [Expression]) {
+        for expr in expressions {
+            self.expression(expr);
         }
-        // Never lower or execute the original computation as a substitute for
-        // a missing baked value. Preserve the checked type and span exactly.
-        return;
-    }
-    match &mut expr.kind {
-        E::Binary { left, right, .. } => {
-            expression(left, values);
-            expression(right, values);
-        }
-        E::Unary { value, .. }
-        | E::ResultOk(value)
-        | E::ResultFail(value)
-        | E::OptionalSome(value)
-        | E::Declassify(value)
-        | E::Coarsen(value)
-        | E::RefinementValidated(value)
-        | E::StateIs { value, .. }
-        | E::Run(value)
-        | E::Join(value)
-        | E::Cancel(value)
-        | E::View(value)
-        | E::Clone(value)
-        | E::Field { base: value, .. } => expression(value, values),
-        E::Call { args, .. }
-        | E::Intrinsic { args, .. }
-        | E::ActorSpawn { args, .. }
-        | E::StructConstruct { fields: args, .. }
-        | E::BitfieldConstruct { fields: args, .. }
-        | E::MachineConstruct { payloads: args, .. }
-        | E::EnumConstruct { payloads: args, .. }
-        | E::ListConstruct { elements: args } => expressions(args, values),
-        E::IndirectCall { callee, args, .. } => {
-            expression(callee, values);
-            expressions(args, values);
-        }
-        E::MachineTransition {
-            source, payloads, ..
-        } => {
-            expression(source, values);
-            expressions(payloads, values);
-        }
-        E::ActorMessage { actor, args, .. } => {
-            expression(actor, values);
-            expressions(args, values);
-        }
-        E::MapConstruct { entries } => {
-            for entry in entries {
-                expression(&mut entry.key, values);
-                expression(&mut entry.value, values);
-            }
-        }
-        E::Handle {
-            target, failure, ..
-        } => {
-            expression(target, values);
-            block(failure, values);
-        }
-        E::StringInterpolation(parts) => {
-            for part in parts {
-                if let StringSegment::Value(value) = part {
-                    expression(value, values);
-                }
-            }
-        }
-        E::InlineFunction { body, .. } => block(body, values),
-        E::Int(_)
-        | E::Float(_)
-        | E::String(_)
-        | E::Bool(_)
-        | E::Nothing
-        | E::OptionalNone
-        | E::Local(_)
-        | E::FunctionRef(_)
-        | E::ClosureRef { .. }
-        | E::Comptime(_) => {}
-    }
-}
-
-fn expressions(expressions: &mut [Expression], values: &HashMap<Span, Value>) {
-    for expr in expressions {
-        expression(expr, values);
     }
 }

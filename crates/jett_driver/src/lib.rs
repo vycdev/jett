@@ -2820,7 +2820,8 @@ fn lower_file_for_backend_inner(
         )
     }
     .map_err(BackendLoweringError::Hir)?;
-    native_constants::bake_primitives(&mut hir, &explicit_comptime_values);
+    native_constants::bake_values(&mut hir, &explicit_comptime_values, &check_result.interner)
+        .map_err(BackendLoweringError::Hir)?;
     let native_verify_entry = if mode == BackendLoweringMode::VerifySuite {
         append_native_verify_suite(&mut hir, &parse_result.module, entry_file)?
     } else {
