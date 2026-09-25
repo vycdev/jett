@@ -554,6 +554,20 @@ fn native_refined_struct_derived_inputs_match_interpreter() {
 }
 
 #[test]
+fn native_json_narrow_integers_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_narrow_integers.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile narrow JSON decoders");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_alias_json_parse_matches_interpreter() {
     let source = include_str!("../../../tests/run_pass/reflection_type_id_duplicate_aliases.jett");
     let directory = tempfile::tempdir().expect("isolated execution directory");

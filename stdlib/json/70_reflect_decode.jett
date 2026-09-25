@@ -5,8 +5,21 @@ mutual:
     function json_decode_tree_checked_primitive[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_checked_other_primitive[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_checked_numeric[T](view raw: JsonTree) returns result[T, string]
+    function json_decode_tree_checked_narrow_numeric[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
+    function json_decode_tree_checked_unsigned_numeric[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]
     function json_decode_tree_uint8_reflected(view raw: JsonTree) returns result[uint8, string]
     function json_uint8_from_bounded_int64(value: int64) returns uint8
+    function json_decode_tree_bounded_int64(view raw: JsonTree, minimum: int64, maximum: int64, name: string) returns result[int64, string]
+    function json_decode_tree_int8_reflected(view raw: JsonTree) returns result[int8, string]
+    function json_decode_tree_int16_reflected(view raw: JsonTree) returns result[int16, string]
+    function json_decode_tree_int32_reflected(view raw: JsonTree) returns result[int32, string]
+    function json_decode_tree_uint16_reflected(view raw: JsonTree) returns result[uint16, string]
+    function json_decode_tree_uint32_reflected(view raw: JsonTree) returns result[uint32, string]
+    function json_int8_from_bounded_int64(value: int64) returns int8
+    function json_int16_from_bounded_int64(value: int64) returns int16
+    function json_int32_from_bounded_int64(value: int64) returns int32
+    function json_uint16_from_bounded_int64(value: int64) returns uint16
+    function json_uint32_from_bounded_int64(value: int64) returns uint32
     function json_decode_tree_other_reflected[T](view raw: JsonTree, view info: TypeInfo) returns result[T, string]
     function json_decode_tree_raw_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_alias_reflected[T](view raw: JsonTree) returns result[T, string]
@@ -136,6 +149,37 @@ function json_decode_tree_checked_numeric[T](view raw: JsonTree) returns result[
         T typed = item
         return ok(typed)
     else:
+        return json_decode_tree_checked_narrow_numeric[T](view raw, primitive)
+function json_decode_tree_checked_narrow_numeric[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
+    if primitive == TypePrimitive.int8_type:
+        int8 item = json_decode_tree_int8_reflected(view raw) handle error:
+            return fail(error)
+        T typed = item
+        return ok(typed)
+    else if primitive == TypePrimitive.int16_type:
+        int16 item = json_decode_tree_int16_reflected(view raw) handle error:
+            return fail(error)
+        T typed = item
+        return ok(typed)
+    else if primitive == TypePrimitive.int32_type:
+        int32 item = json_decode_tree_int32_reflected(view raw) handle error:
+            return fail(error)
+        T typed = item
+        return ok(typed)
+    else:
+        return json_decode_tree_checked_unsigned_numeric[T](view raw, primitive)
+function json_decode_tree_checked_unsigned_numeric[T](view raw: JsonTree, primitive: TypePrimitive) returns result[T, string]:
+    if primitive == TypePrimitive.uint16_type:
+        uint16 item = json_decode_tree_uint16_reflected(view raw) handle error:
+            return fail(error)
+        T typed = item
+        return ok(typed)
+    else if primitive == TypePrimitive.uint32_type:
+        uint32 item = json_decode_tree_uint32_reflected(view raw) handle error:
+            return fail(error)
+        T typed = item
+        return ok(typed)
+    else:
         return json_decode_tree_primitive_reflected[T](view raw, primitive)
 function json_decode_tree_uint8_reflected(view raw: JsonTree) returns result[uint8, string]:
     int64 item = json_tree_as_int64(view raw) handle error:
@@ -148,6 +192,101 @@ function json_uint8_from_bounded_int64(value: int64) returns uint8:
     mutable int64 place = 128
     mutable uint8 place_value = 128
     mutable uint8 converted = 0
+    while place > 0:
+        if remaining >= place:
+            remaining = remaining - place
+            converted = converted + place_value
+        place = place / 2
+        place_value = place_value / 2
+    return converted
+function json_decode_tree_bounded_int64(view raw: JsonTree, minimum: int64, maximum: int64, name: string) returns result[int64, string]:
+    int64 item = json_tree_as_int64(view raw) handle error:
+        return fail(error)
+    if item < minimum or item > maximum:
+        return fail("expected {name} in range {minimum}..{maximum}")
+    return ok(item)
+function json_decode_tree_int8_reflected(view raw: JsonTree) returns result[int8, string]:
+    int64 item = json_decode_tree_bounded_int64(view raw, -128, 127, "int8") handle error:
+        return fail(error)
+    return ok(json_int8_from_bounded_int64(item))
+function json_decode_tree_int16_reflected(view raw: JsonTree) returns result[int16, string]:
+    int64 item = json_decode_tree_bounded_int64(view raw, -32768, 32767, "int16") handle error:
+        return fail(error)
+    return ok(json_int16_from_bounded_int64(item))
+function json_decode_tree_int32_reflected(view raw: JsonTree) returns result[int32, string]:
+    int64 item = json_decode_tree_bounded_int64(view raw, -2147483648, 2147483647, "int32") handle error:
+        return fail(error)
+    return ok(json_int32_from_bounded_int64(item))
+function json_decode_tree_uint16_reflected(view raw: JsonTree) returns result[uint16, string]:
+    int64 item = json_decode_tree_bounded_int64(view raw, 0, 65535, "uint16") handle error:
+        return fail(error)
+    return ok(json_uint16_from_bounded_int64(item))
+function json_decode_tree_uint32_reflected(view raw: JsonTree) returns result[uint32, string]:
+    int64 item = json_decode_tree_bounded_int64(view raw, 0, 4294967295, "uint32") handle error:
+        return fail(error)
+    return ok(json_uint32_from_bounded_int64(item))
+function json_int8_from_bounded_int64(value: int64) returns int8:
+    mutable int64 remaining = value + 128
+    mutable int8 converted = -128
+    if remaining >= 128:
+        remaining = remaining - 128
+        converted = 0
+    mutable int64 place = 64
+    mutable int8 place_value = 64
+    while place > 0:
+        if remaining >= place:
+            remaining = remaining - place
+            converted = converted + place_value
+        place = place / 2
+        place_value = place_value / 2
+    return converted
+function json_int16_from_bounded_int64(value: int64) returns int16:
+    mutable int64 remaining = value + 32768
+    mutable int16 converted = -32768
+    if remaining >= 32768:
+        remaining = remaining - 32768
+        converted = 0
+    mutable int64 place = 16384
+    mutable int16 place_value = 16384
+    while place > 0:
+        if remaining >= place:
+            remaining = remaining - place
+            converted = converted + place_value
+        place = place / 2
+        place_value = place_value / 2
+    return converted
+function json_int32_from_bounded_int64(value: int64) returns int32:
+    mutable int64 remaining = value + 2147483648
+    mutable int32 converted = -2147483648
+    if remaining >= 2147483648:
+        remaining = remaining - 2147483648
+        converted = 0
+    mutable int64 place = 1073741824
+    mutable int32 place_value = 1073741824
+    while place > 0:
+        if remaining >= place:
+            remaining = remaining - place
+            converted = converted + place_value
+        place = place / 2
+        place_value = place_value / 2
+    return converted
+function json_uint16_from_bounded_int64(value: int64) returns uint16:
+    mutable int64 remaining = value
+    mutable int64 place = 32768
+    mutable uint16 place_value = 32768
+    mutable uint16 converted = 0
+    while place > 0:
+        if remaining >= place:
+            remaining = remaining - place
+            converted = converted + place_value
+        place = place / 2
+        place_value = place_value / 2
+    return converted
+function json_uint32_from_bounded_int64(value: int64) returns uint32:
+    mutable int64 remaining = value
+    mutable int64 place = 2147483648
+    mutable uint32 place_value = 2147483648
+    mutable uint32 converted = 0
     while place > 0:
         if remaining >= place:
             remaining = remaining - place

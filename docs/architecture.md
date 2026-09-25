@@ -2706,8 +2706,9 @@ against a known unit variant checks only the variant tag, including when other
 variants carry aggregate payloads; comparison between two unknown aggregate
 payload values remains outside that path.
 
-The full native parity gate is still incomplete: 152/182 genuine objects, 23/30
-main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
+The full native parity gate is still incomplete: the current object count is
+recorded in `active/native_codegen_parity_plan.md`, alongside 23/30 main
+outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
 move-only value/drop elaboration, handlers, aggregates, collections, callbacks,
@@ -2722,7 +2723,11 @@ specializations, and HIR lowers its checked empty field loop as an empty scope.
 Raw `secret[json.JsonTree]` uses a dedicated trusted parser; nested refinements and
 other unsupported field shapes remain on the generic intrinsic path. Top-level
 refinements with a supported base use checked source parsing and serialization;
-record fields with supported refinements now decode through a checked source
+signed `int8`/`int16`/`int32` and unsigned `uint16`/`uint32` JSON values now
+use checked source decoding, both directly and inside supported aggregates.
+The decoder checks the `int64` range before constructing the narrow value
+through bounded arithmetic; `float32` JSON decoding remains outside this path.
+Record fields with supported refinements now decode through a checked source
 conversion before entering the native reflected builder. The builder accepts
 the exact refined type; direct struct constructors now lower checked field
 predicates into MIR branches and emit a success or failure result. Inputs with

@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
 | Actors and structured concurrency | covered | pending | pending |
-| JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
+| JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32` and `uint16`/`uint32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of supported hashable primitives, string-keyed maps, optionals, and results specialize the checked source parser; `float32` and other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections, result branches, errors, and owned cleanup; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | `int64` trace and zero- or one-binding `int64` breakpoints covered; other trace/breakpoint shapes and assert pending | `int64` trace and breakpoint debug lines match interpreter stderr, including false conditions and an out-of-scope local; other instrumentation pending |
 
 The current fixture gates are therefore:
@@ -308,6 +308,13 @@ These counts track fixture gates, not a weighted percentage of Jett syntax or
 runtime semantics: fixtures differ in size, overlap, and coverage. The object
 gate is currently 157/182 (86.3%), a useful progress measure rather than a
 claim that the same fraction of the language has native support.
+Checked stdlib JSON decoders now construct `int8`, `int16`, `int32`, `uint16`,
+and `uint32` from range-validated `int64` values, including inside supported
+aggregates. A linked native/interpreter fixture covers bounds, malformed
+shapes, and a record with a `list[uint16]`; its output also matches the
+pre-change interpreter. The exhaustive audit keeps the same 157 object passes.
+`json_parse_exact_primitive_edges.jett` and `json_sized_primitives.jett` now
+reach their later `float32` parse blocker.
 Direct struct constructors lower checked base-value field predicates into MIR
 branches before creating their required `result[Struct, string]`. Native
 execution matches the interpreter for successful string and integer fields,
@@ -414,19 +421,18 @@ native/interpreter execution fixtures. Private source decoders now handle
 checked scalar parses for `string`, `bool`, `int64`, `uint64`, `float64`,
 `bytes`, and `nothing`, including both public parse entrypoints. A dedicated
 native/interpreter fixture checks values and shape/range errors. This moves
-`json_parse_exact_primitive_edges.jett` to its later narrow-numeric parse
-blocker, but does not yet add an object gate. Narrow numeric and other structured
-JSON parsing remain blockers.
+`json_parse_exact_primitive_edges.jett` to its then-later narrow-numeric parse
+blocker, but did not add an object gate. The checked integer decoders described
+above leave `float32` and other JSON shapes pending.
 Lists, string-keyed maps, optionals, and results whose leaves are `string`, `bool`,
 `int64`, `uint64`, `float64`, `bytes`, or `nothing` now instantiate the checked
 stdlib decoder for both public parse spellings. A linked differential fixture
 covers nested lists, numeric lists, optional null/present values, map bytes,
 indexed list errors, and map value errors. Another linked fixture covers result
 success/failure branches, nested results, exact parsing, and malformed envelopes.
-Named aggregates and narrow numeric leaves retain their existing lowering until
-their concrete source decoders can be checked and emitted. The exhaustive object count remains
-118/182 because the affected run-pass fixtures still contain other unsupported
-JSON shapes.
+At that checkpoint, named aggregates and narrow numeric leaves retained their
+existing lowering. Later source decoders cover supported aggregates and narrow
+integers; `float32` and other JSON shapes still block the affected fixtures.
 Sets of `string`, `bool`, `int64`, or `uint64` now use the checked decoder,
 including exact parsing, duplicate elimination, membership, and indexed
 element errors in a linked differential fixture. The interpreter handoff drops

@@ -3009,8 +3009,13 @@ impl<'a> TypeChecker<'a> {
             | Type::Bool
             | Type::Bytes
             | Type::Nothing
+            | Type::Int8
+            | Type::Int16
+            | Type::Int32
             | Type::Int64
             | Type::Uint8
+            | Type::Uint16
+            | Type::Uint32
             | Type::Uint64
             | Type::Float64 => true,
             Type::List(element) => {
@@ -11952,6 +11957,11 @@ impl<'a> TypeChecker<'a> {
                     | Type::Map(_, _)
                     | Type::Optional(_)
                     | Type::Result(_, _)
+                    | Type::Int8
+                    | Type::Int16
+                    | Type::Int32
+                    | Type::Uint16
+                    | Type::Uint32
             )
             && self.native_json_parse_source_supported(*value_ty)
         {

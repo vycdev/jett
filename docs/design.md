@@ -7517,8 +7517,9 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
-The full native parity gate is still incomplete: 152/182 genuine objects, 23/30
-main outcomes, and 25/25 runtime contracts, with 182/182 typed lowering. See
+The full native parity gate is still incomplete: the current object count is
+recorded in `active/native_codegen_parity_plan.md`, alongside 23/30 main
+outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,
 remaining reflection/JSON shapes, actors/tasks, other capabilities, and clean
@@ -7526,8 +7527,8 @@ Windows release verification are not established by this slice.
 The native JSON source path handles top-level refinements over supported bases,
 including exact parse validation and serialization. Supported refined record
 fields decode and validate before entering the reflected native builder. Direct
-struct construction with field validation and builder inputs of the unrefined
-base type remain native gaps.
+struct construction validates refined fields from base, already-refined, and
+secret-backed inputs.
 Native serialization of `bytes` uses the trusted hex-string source hook, and
 supported records containing raw `json.JsonTree` fields retain raw JSON wire
 values through the checked source serializer. Supported enum payloads and
@@ -7538,6 +7539,7 @@ other variants have aggregate payloads.
 Pipeline calls to `json.serialize` and `json.serialize_public` use the checked
 native source path for the same supported structured types as direct calls.
 Supported bitfields parse and serialize through checked source hooks that handle
-unit-enum fields and ordinary payload fields. Native uint8 JSON decoding checks
-the range before a bounded source conversion; other narrow numeric shapes remain
-coverage gaps.
+unit-enum fields and ordinary payload fields. Native JSON decoding of `uint8`,
+`int8`/`int16`/`int32`, and `uint16`/`uint32` checks the range before a bounded
+source conversion, including when these values occur in supported aggregates.
+`float32` decoding remains a gap.

@@ -1,0 +1,52 @@
+namespace test
+struct NarrowBundle:
+    low: int8
+    high: uint32
+    values: list[uint16]
+function parse_int8(raw: string) returns string:
+    int8 value = json.parse_exact[int8](raw) handle error:
+        return error
+    return "{value}"
+function parse_int16(raw: string) returns string:
+    int16 value = json.parse[int16](raw) handle error:
+        return error
+    return "{value}"
+function parse_int32(raw: string) returns string:
+    int32 value = json.parse_exact[int32](raw) handle error:
+        return error
+    return "{value}"
+function parse_uint16(raw: string) returns string:
+    uint16 value = json.parse_exact[uint16](raw) handle error:
+        return error
+    return "{value}"
+function parse_uint32(raw: string) returns string:
+    uint32 value = json.parse[uint32](raw) handle error:
+        return error
+    return "{value}"
+function parse_bundle(raw: string) returns string:
+    NarrowBundle bundle = json.parse_exact[NarrowBundle](raw) handle error:
+        return error
+    uint16 last = list.get[uint16](view bundle.values, 1) handle:
+        default 0
+    return "{bundle.low}:{bundle.high}:{last}"
+function main() returns nothing:
+    println(parse_int8("-128"))
+    println(parse_int8("127"))
+    println(parse_int8("128"))
+    println(parse_int8("9223372036854775808"))
+    println(parse_int8("2.5"))
+    println(parse_int16("-32768"))
+    println(parse_int16("32767"))
+    println(parse_int16("32768"))
+    println(parse_int32("-2147483648"))
+    println(parse_int32("2147483647"))
+    println(parse_int32("2147483648"))
+    println(parse_uint16("0"))
+    println(parse_uint16("65535"))
+    println(parse_uint16("65536"))
+    println(parse_uint16("\"9\""))
+    println(parse_uint32("0"))
+    println(parse_uint32("4294967295"))
+    println(parse_uint32("4294967296"))
+    println(parse_bundle("{{\"low\":-5,\"high\":4294967295,\"values\":[1,65535]}}"))
+    println(parse_bundle("{{\"low\":128,\"high\":9,\"values\":[1,2]}}"))
