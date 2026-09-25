@@ -2072,18 +2072,6 @@ impl Translator<'_, '_> {
         };
         let params = params.clone();
         let return_type = *return_type;
-        let lowered_callee = self.expression(callee)?;
-        let descriptor = self.scalar(lowered_callee, callee.span)?;
-        let zero = self.builder.ins().iconst(ir::types::I64, 0);
-        let address = self.leaf(NativeLeaf::StructField, &[descriptor, zero], true)?;
-        let one = self.builder.ins().iconst(ir::types::I64, 1);
-        let environment = self.leaf(NativeLeaf::StructField, &[descriptor, one], true)?;
-        let pointer_type = self.module.target_config().pointer_type();
-        let address = if pointer_type == ir::types::I64 {
-            address
-        } else {
-            self.builder.ins().ireduce(pointer_type, address)
-        };
         let invalid_order = || {
             contract_error(
                 self.symbol,
@@ -2111,6 +2099,20 @@ impl Translator<'_, '_> {
             },
             invalid_order,
         )?;
+        // The interpreter resolves a function-valued local after evaluating
+        // source arguments, which can rebind that local through a handler.
+        let lowered_callee = self.expression(callee)?;
+        let descriptor = self.scalar(lowered_callee, callee.span)?;
+        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+        let address = self.leaf(NativeLeaf::StructField, &[descriptor, zero], true)?;
+        let one = self.builder.ins().iconst(ir::types::I64, 1);
+        let environment = self.leaf(NativeLeaf::StructField, &[descriptor, one], true)?;
+        let pointer_type = self.module.target_config().pointer_type();
+        let address = if pointer_type == ir::types::I64 {
+            address
+        } else {
+            self.builder.ins().ireduce(pointer_type, address)
+        };
         let context = self
             .builder
             .try_use_var(self.runtime_context)

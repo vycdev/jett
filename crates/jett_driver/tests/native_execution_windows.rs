@@ -1339,3 +1339,18 @@ fn native_constructor_nested_handles_match_interpreter() {
     let debug = format!("{}\n", expected.debug_output.join("\n"));
     assert_eq!(String::from_utf8_lossy(&actual.stderr), debug);
 }
+
+#[test]
+fn native_indirect_call_nested_handle_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_handle_indirect_call.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated indirect handle directory");
+    let binary = directory.path().join("nested_handle_indirect_call.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile indirect call with a nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}

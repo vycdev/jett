@@ -831,11 +831,14 @@ lexical evaluation order after type checking has authorized them. The shared
 registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,
 comptime/runtime dispatch, and native codegen consume the checked ID and use
 exhaustive matches rather than rediscovering policy from names. Inline
-functions and indirect calls retain explicit parameter/local identity;
-comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
-carry typed operands and message identity. Actor receive handlers are
-deterministic HIR functions whose locals preserve checked capability, state,
-and message bindings; actor construction, persistent state layout, scheduling,
+functions and indirect calls retain explicit parameter/local identity. An
+indirect call evaluates arguments in lexical source order before resolving its
+function-valued local, matching interpreter behavior when an argument handler
+rebinds that local. Comptime type-bind scopes erase to checked HIR scopes;
+actor spawn/send/ask carry typed operands and message identity. Actor receive
+handlers are deterministic HIR functions whose locals preserve checked
+capability, state, and message bindings; actor construction, persistent state
+layout, scheduling,
 and dispatch remain actor-runtime work. Remaining source constructs are staged
 by the [initial HIR lowering plan](active/hir_lowering_plan.md).
 

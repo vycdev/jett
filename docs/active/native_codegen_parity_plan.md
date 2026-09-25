@@ -577,8 +577,14 @@ evaluated into owned locals in source order before aggregate construction.
 `tests/native/nested_handle_constructors.jett` compares native stdout and
 debug lines with the interpreter for present and missing values, including a
 handled map key, named-field order, checked bitfield width, and owned string
-payloads. Owned and refined binary operands, interpolation, indirect calls,
-and other nested forms remain open.
+payloads. Indirect function-value calls with owned arguments now extract
+argument handlers into MIR in lexical order before reading the callee.
+`tests/native/nested_handle_indirect_call.jett` checks both handler branches
+and a fallback that rebinds the mutable callback;
+native emission also evaluates ordinary indirect-call arguments before the
+callee to match the interpreter. Direct view arguments with nested handlers,
+owned and refined binary operands, other nested forms, and source syntax for
+a handler inside interpolation remain open.
 Enforcing immutable-local rebinding in the frontend and correcting affected
 fixtures adds native objects for `string_iteration.jett`, `set_operations.jett`,
 and `uint64_checked_expression_runtime_types.jett`. The last also passes a

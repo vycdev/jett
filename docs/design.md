@@ -7086,6 +7086,10 @@ function(int64) returns int64 add5 = make_adder(5)
 int64 result = add5(10)    # result == 15
 ```
 
+A call through a function-valued local evaluates arguments in lexical source
+order, then reads the local to select the function. If an argument's handled
+failure reassigns a mutable function local, the call uses its new value.
+
 ### Explicit Typing
 
 Every variable declaration requires a type annotation. There is no type inference for variable declarations.

@@ -1,0 +1,29 @@
+namespace test
+function combine(first: int64, second: int64) returns int64:
+    return first * 10 + second
+function alternate(first: int64, second: int64) returns int64:
+    return first - second
+function choose() returns function(int64, int64) returns int64:
+    println("choose")
+    return combine
+function record(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function evaluate(maybe: optional[int64]) returns int64:
+    function(int64, int64) returns int64 callback = choose()
+    return callback(record("first", 2), maybe handle:
+        println("fallback")
+        default record("second", 4)
+    )
+function evaluate_mutating(maybe: optional[int64]) returns int64:
+    mutable function(int64, int64) returns int64 callback = combine
+    return callback(record("captured first", 5), maybe handle:
+        callback = alternate
+        default record("captured second", 6)
+    )
+function main() returns nothing:
+    println(evaluate(some(3)))
+    println(evaluate(none))
+    println(evaluate_mutating(some(3)))
+    println(evaluate_mutating(none))
+    return nothing

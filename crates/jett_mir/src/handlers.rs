@@ -15,6 +15,9 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             has_extractable_handle(left) || has_extractable_handle(right)
         }
         ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
+        ExpressionKind::IndirectCall { callee, args, .. } => {
+            has_extractable_handle(callee) || args.iter().any(has_extractable_handle)
+        }
         ExpressionKind::ListConstruct { elements } => elements.iter().any(has_extractable_handle),
         ExpressionKind::MapConstruct { entries } => entries.iter().any(|entry| {
             has_extractable_handle(&entry.key) || has_extractable_handle(&entry.value)
@@ -56,6 +59,20 @@ fn is_plain_copy_scalar(ty: TypeId) -> bool {
             | TypeInterner::FLOAT64
             | TypeInterner::BOOL
     )
+}
+
+fn valid_ordered_owned_values(values: &[Expression], order: &[usize]) -> bool {
+    order.len() == values.len()
+        && order.iter().all(|&index| index < values.len())
+        && order
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == values.len()
+        && values
+            .iter()
+            .all(|value| !matches!(value.kind, ExpressionKind::View(_)))
 }
 
 impl Builder {
@@ -110,18 +127,7 @@ impl Builder {
         values: &[Expression],
         order: &[usize],
     ) -> Option<Vec<Expression>> {
-        if order.len() != values.len()
-            || order.iter().any(|&index| index >= values.len())
-            || order
-                .iter()
-                .copied()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != values.len()
-            || values
-                .iter()
-                .any(|value| matches!(value.kind, ExpressionKind::View(_)))
-        {
+        if !valid_ordered_owned_values(values, order) {
             return None;
         }
         let mut lowered = values.to_vec();
@@ -414,6 +420,41 @@ impl Builder {
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::OptionalSome(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::IndirectCall {
+            callee,
+            args,
+            evaluation_order,
+        } = &expression.kind
+            && (has_extractable_handle(callee) || args.iter().any(has_extractable_handle))
+            && !matches!(callee.kind, ExpressionKind::View(_))
+            && valid_ordered_owned_values(args, evaluation_order)
+        {
+            let args = self
+                .lower_ordered_owned_values(args, evaluation_order)
+                .expect("validated indirect argument order");
+            // Source evaluates call arguments before resolving a function value
+            // held in a mutable local. A handler may rebind that local.
+            let callee_value = self.lower_value(callee);
+            let callee_local = self.temporary(callee.ty, callee.span);
+            self.push(
+                StatementKind::Let {
+                    local: callee_local,
+                    value: callee_value,
+                },
+                callee.span,
+            );
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::IndirectCall {
+                callee: Box::new(Expression {
+                    kind: ExpressionKind::Local(callee_local),
+                    ty: callee.ty,
+                    span: callee.span,
+                }),
+                args,
+                evaluation_order: evaluation_order.clone(),
+            };
             return lowered;
         }
         if let ExpressionKind::Call {
