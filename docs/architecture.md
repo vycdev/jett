@@ -2697,13 +2697,15 @@ retaining their checked type and span. The shared native value materializer
 constructs supported aggregates from the evaluated value, including collections,
 sums, structs, bitfields, enums, machines, and bytes. It resolves named function
 values by checked identity and capture-free inline functions by source body span
-and signature; captured compile-time closure environments remain unsupported.
+and signature. Captured inline functions resolve by the same checked span and
+signature; their evaluated capture values become typed caller-local bindings
+that feed the existing closure environment path.
 The checker passes the surrounding expected type through `comptime` for contextual
 sum values. Ordinary pure calls remain runtime calls. Missing or unsupported
 baked values fail before codegen; the original source computation is never
 emitted as a fallback. Native regressions execute baked `math.factorial(5)`
 after removing its source file
-and compare supported composite results with the interpreter.
+and compare supported composite and closure results with the interpreter.
 
 
 ### Native string and numeric execution slice

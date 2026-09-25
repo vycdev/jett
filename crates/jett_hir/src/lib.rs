@@ -269,7 +269,7 @@ pub enum ExpressionKind {
     Local(LocalId),
     /// A checked, concrete source function used as a first-class value.
     FunctionRef(FunctionId),
-    /// A checked inline function with an environment of copied enclosing locals.
+    /// A checked inline function with an environment copied from caller locals.
     ClosureRef {
         function: FunctionId,
         captures: Vec<LocalId>,
@@ -479,6 +479,7 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
         program,
         errors: Vec::new(),
         local_count: 0,
+        local_types: Vec::new(),
         loop_depth: 0,
         handle_depth: 0,
     };
@@ -487,6 +488,7 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
             validator.error(function.span, "function IDs must be dense and ordered");
         }
         validator.local_count = function.locals.len();
+        validator.local_types = function.locals.iter().map(|local| local.ty).collect();
         for (local_index, local) in function.locals.iter().enumerate() {
             if local.id.index() as usize != local_index {
                 validator.error(local.span, "local IDs must be dense and ordered");
@@ -508,6 +510,7 @@ struct Validator<'a> {
     program: &'a Program,
     errors: Vec<ValidationError>,
     local_count: usize,
+    local_types: Vec<TypeId>,
     loop_depth: usize,
     handle_depth: usize,
 }
@@ -682,12 +685,14 @@ impl Validator<'_> {
                     return;
                 };
                 if target.capture_count != captures.len()
-                    || !target
+                    || target
                         .params
                         .iter()
                         .take(target.capture_count)
                         .zip(captures)
-                        .all(|(parameter, capture)| parameter.local == *capture)
+                        .any(|(parameter, capture)| {
+                            self.local_types.get(capture.index() as usize) != Some(&parameter.ty)
+                        })
                 {
                     self.error(
                         expression.span,
@@ -7237,6 +7242,31 @@ function make(seed: int64) returns function(int64) returns int64:
         ));
         assert_eq!(program.functions[1].capture_count, 1);
         assert_eq!(program.functions[1].params.len(), 2);
+    }
+
+    #[test]
+    fn validates_closure_captures_by_type_across_local_id_spaces() {
+        let source = r#"namespace app
+function make(seed: int64) returns function(int64) returns int64:
+    int64 alternate = 2
+    return function(value: int64) returns int64: return value + seed
+"#;
+        let mut program = lower_source(source);
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::ClosureRef { captures, .. },
+            ..
+        })) = &mut program.functions[0].body.statements[1].kind
+        else {
+            panic!("expected captured closure return");
+        };
+        captures[0] = LocalId::new(1);
+        validate(&program).expect("caller capture IDs need only match target parameter types");
+
+        program.functions[0].locals[1].ty = TypeInterner::STRING;
+        assert!(
+            validate(&program).is_err(),
+            "capture type mismatch must fail"
+        );
     }
 
     #[test]

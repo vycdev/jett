@@ -1142,7 +1142,7 @@ impl Verifier<'_> {
                             "closure capture local is absent",
                         ));
                     };
-                    if local.ty != parameter.ty || parameter.local != *capture {
+                    if local.ty != parameter.ty {
                         return Err(self.contract_error(
                             function,
                             expression.span,

@@ -1385,6 +1385,35 @@ fn native_comptime_function_values_match_interpreter() {
 }
 
 #[test]
+fn native_comptime_captured_functions_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/comptime_captured_functions.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated comptime closure directory");
+    let binary = directory.path().join("comptime_captured_functions.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile a baked closure with an evaluated capture environment");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_comptime_function_values_execute_in_verify_suite() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/comptime_captured_functions.jett");
+    let directory = tempfile::tempdir().expect("isolated comptime verify directory");
+    let binary = directory.path().join("comptime_captured_verify.exe");
+    let artifact = build_host_verify_suite_executable(&fixture, launcher(), &binary)
+        .expect("compile baked function values inside a verify body");
+    let actual = run_bounded(&artifact.path, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_constructor_nested_handles_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_constructors.jett");

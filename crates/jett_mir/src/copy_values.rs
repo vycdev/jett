@@ -423,10 +423,7 @@ fn visit(
             if closure.capture_count != captures.len() {
                 return Err("closure capture count disagrees with its function".into());
             }
-            for (capture, param) in captures.iter().zip(&closure.params) {
-                if param.local != *capture {
-                    return Err("closure capture order disagrees with its function".into());
-                }
+            for param in closure.params.iter().take(closure.capture_count) {
                 *temporaries += usize::from(crate::move_values::is_copy_owned(types, param.ty));
             }
         }

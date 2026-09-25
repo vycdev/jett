@@ -6,13 +6,14 @@
 use jett_common::Span;
 use jett_comptime::Value;
 use jett_hir::{
-    Block, Expression, ExpressionKind as E, LowerError, Program, StatementKind as S, StringSegment,
+    Block, Expression, ExpressionKind as E, Local, LowerError, Program, Statement,
+    StatementKind as S, StringSegment,
 };
 use jett_types::TypeInterner;
 use std::collections::HashMap;
 
 use crate::native_property_cases::{
-    FunctionValueCandidate, function_value_candidates, value_expression,
+    FunctionValueCandidate, ValueContext, function_value_candidates, value_expression,
 };
 
 pub(crate) fn bake_values(
@@ -21,19 +22,24 @@ pub(crate) fn bake_values(
     types: &TypeInterner,
 ) -> Result<(), Vec<LowerError>> {
     let function_values = function_value_candidates(&program.functions);
-    let mut baker = Baker {
-        values,
-        types,
-        function_values: &function_values,
-        errors: Vec::new(),
-    };
+    let mut errors = Vec::new();
     for function in &mut program.functions {
+        let mut baker = Baker {
+            values,
+            types,
+            function_values: &function_values,
+            locals: &mut function.locals,
+            bindings: Vec::new(),
+            errors: Vec::new(),
+        };
         baker.block(&mut function.body);
+        function.body.statements.splice(0..0, baker.bindings);
+        errors.extend(baker.errors);
     }
-    if baker.errors.is_empty() {
+    if errors.is_empty() {
         Ok(())
     } else {
-        Err(baker.errors)
+        Err(errors)
     }
 }
 
@@ -41,6 +47,8 @@ struct Baker<'a> {
     values: &'a HashMap<Span, Value>,
     types: &'a TypeInterner,
     function_values: &'a [FunctionValueCandidate],
+    locals: &'a mut Vec<Local>,
+    bindings: Vec<Statement>,
     errors: Vec<LowerError>,
 }
 
@@ -114,8 +122,12 @@ impl Baker<'_> {
                     value,
                     expr.ty,
                     expr.span,
-                    self.types,
-                    self.function_values,
+                    &mut ValueContext {
+                        types: self.types,
+                        functions: self.function_values,
+                        locals: &mut *self.locals,
+                        bindings: &mut self.bindings,
+                    },
                 ) {
                     Ok(replacement) => *expr = replacement,
                     Err(message) => self.errors.push(LowerError {

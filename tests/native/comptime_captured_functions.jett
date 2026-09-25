@@ -1,0 +1,34 @@
+namespace test
+function make_shift() returns function(int64) returns int64:
+    int64 offset = 5
+    return function(value: int64) returns int64: return value + offset
+function make_pair() returns function(int64) returns int64:
+    int64 unused = 100
+    int64 first = 3
+    int64 second = 4
+    return function(value: int64) returns int64: return value + first + second
+function make_label(prefix: string) returns function(int64) returns string:
+    return function(value: int64) returns string: return "{prefix}:{value}"
+function make_plain() returns function(int64) returns int64:
+    int64 unused = 100
+    return function(value: int64) returns int64: return value + 2
+verify baked_function_values:
+    function(int64) returns int64 inline = comptime function(value: int64) returns int64: return value + 1
+    assert inline(3) == 4
+    function(int64) returns int64 captured = comptime make_shift()
+    assert captured(3) == 8
+function main() returns nothing:
+    function(int64) returns int64 shifted = comptime make_shift()
+    println(shifted(7))
+    function(int64) returns int64 pair = comptime make_pair()
+    println(pair(7))
+    function(int64) returns string label = comptime make_label("item")
+    println(label(7))
+    list[function(int64) returns string] labels = comptime list(make_label("a"), make_label("b"))
+    optional[function(int64) returns string] last = list.get[function(int64) returns string](view labels, 1)
+    function(int64) returns string selected = last handle:
+        default label
+    println(selected(7))
+    function(int64) returns int64 plain = comptime make_plain()
+    println(plain(7))
+    return nothing
