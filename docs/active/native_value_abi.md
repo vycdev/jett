@@ -82,9 +82,12 @@ direct string equality and inequality report the interpreter's runtime error
 while aggregate equality compares both text and pending depth. Owned bytes
 handles keep the same depth in a sparse runtime registry: `BytesRun` and
 `BytesTaskJoin` create independent byte handles, cloning preserves depth, and
-trace and aggregate equality observe the wrapper. Other runtime operations on
-pending strings and bytes, along with other value kinds, still need the general
-pending-task representation.
+trace and aggregate equality observe the wrapper. Lists, sets, and maps carry
+pending depth in their native handles. Their task leaves clone the collection,
+preserve nested owned values, and change one depth level; debug output and
+aggregate equality observe the depth. Other runtime operations on pending
+values, along with other value kinds, still need the general pending-task
+representation.
 
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index

@@ -328,10 +328,12 @@ enum BuilderFieldValidation {
 struct NativeList {
     elements: Vec<Option<u64>>,
     owned: bool,
+    pending_depth: u64,
 }
 struct NativeSet {
     elements: Vec<Option<u64>>,
     strings: bool,
+    pending_depth: u64,
 }
 #[derive(Clone, Copy)]
 struct NativeMapEntry {
@@ -343,6 +345,7 @@ struct NativeMap {
     entries: Vec<Option<NativeMapEntry>>,
     key_strings: bool,
     value_owned: bool,
+    pending_depth: u64,
 }
 struct NativeSum {
     tag: u32,
@@ -574,7 +577,7 @@ impl NativeDebugLayout {
                     )?);
                 }
                 result.push(')');
-                result
+                format_pending_value(&result, list.pending_depth)?
             }
             NativeDebugNode::Set(element) => {
                 let set = values.sets.get(&bits).ok_or(INVALID_SET)?;
@@ -591,7 +594,7 @@ impl NativeDebugLayout {
                     )?);
                 }
                 result.push(')');
-                result
+                format_pending_value(&result, set.pending_depth)?
             }
             NativeDebugNode::Map(key, value) => {
                 let map = values.maps.get(&bits).ok_or(INVALID_MAP)?;
@@ -609,7 +612,7 @@ impl NativeDebugLayout {
                     result.push_str(&self.format_value(values, entry.value, *value, child)?);
                 }
                 result.push(')');
-                result
+                format_pending_value(&result, map.pending_depth)?
             }
             NativeDebugNode::Optional(element) => {
                 let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
@@ -728,6 +731,9 @@ impl NativeDebugLayout {
             NativeDebugNode::List(element) => {
                 let left = values.lists.get(&left).ok_or(INVALID_LIST)?;
                 let right = values.lists.get(&right).ok_or(INVALID_LIST)?;
+                if left.pending_depth != right.pending_depth {
+                    return Ok(false);
+                }
                 if left.elements.len() != right.elements.len() {
                     return Ok(false);
                 }
@@ -747,6 +753,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Set(element) => {
                 let left = values.sets.get(&left).ok_or(INVALID_SET)?;
                 let right = values.sets.get(&right).ok_or(INVALID_SET)?;
+                if left.pending_depth != right.pending_depth {
+                    return Ok(false);
+                }
                 if left.elements.len() != right.elements.len() {
                     return Ok(false);
                 }
@@ -766,6 +775,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Map(key, value) => {
                 let left = values.maps.get(&left).ok_or(INVALID_MAP)?;
                 let right = values.maps.get(&right).ok_or(INVALID_MAP)?;
+                if left.pending_depth != right.pending_depth {
+                    return Ok(false);
+                }
                 if left.entries.len() != right.entries.len() {
                     return Ok(false);
                 }
@@ -1672,6 +1684,7 @@ impl NativeValues {
             NativeList {
                 elements: Vec::new(),
                 owned,
+                pending_depth: 0,
             },
         );
         self.lists_created += 1;
@@ -1699,6 +1712,7 @@ impl NativeValues {
             NativeSet {
                 elements: Vec::new(),
                 strings: strings != 0,
+                pending_depth: 0,
             },
         );
         self.sets_created += 1;
@@ -1717,6 +1731,7 @@ impl NativeValues {
                 entries: Vec::new(),
                 key_strings: key_strings != 0,
                 value_owned: value_owned != 0,
+                pending_depth: 0,
             },
         );
         self.maps_created += 1;
@@ -1853,8 +1868,12 @@ impl NativeValues {
     }
     fn clone_map(&mut self, id: u64) -> LeafResult<u64> {
         let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
-        let (entries, key_strings, value_owned) =
-            (map.entries.clone(), map.key_strings, map.value_owned);
+        let (entries, key_strings, value_owned, pending_depth) = (
+            map.entries.clone(),
+            map.key_strings,
+            map.value_owned,
+            map.pending_depth,
+        );
         let output = self.new_map(u32::from(key_strings), u32::from(value_owned))?;
         if let Err(error) = self
             .maps
@@ -1915,7 +1934,34 @@ impl NativeValues {
                     key_taken: false,
                 }));
         }
+        self.maps.get_mut(&output).ok_or(INVALID_MAP)?.pending_depth = pending_depth;
         Ok(output)
+    }
+    fn run_map(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .maps
+            .get(&id)
+            .ok_or(INVALID_MAP)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_map(id)?;
+        self.maps
+            .get_mut(&pending)
+            .ok_or(INVALID_MAP)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_map(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .maps
+            .get(&id)
+            .ok_or(INVALID_MAP)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_map(id)?;
+        self.maps.get_mut(&joined).ok_or(INVALID_MAP)?.pending_depth = depth;
+        Ok(joined)
     }
     fn map_from_lists(
         &mut self,
@@ -2028,7 +2074,8 @@ impl NativeValues {
     }
     fn clone_set(&mut self, id: u64) -> LeafResult<u64> {
         let set = self.sets.get(&id).ok_or(INVALID_SET)?;
-        let (elements, strings) = (set.elements.clone(), set.strings);
+        let (elements, strings, pending_depth) =
+            (set.elements.clone(), set.strings, set.pending_depth);
         let output = self.new_set(u32::from(strings))?;
         if let Err(error) = self
             .sets
@@ -2059,7 +2106,34 @@ impl NativeValues {
                 .elements
                 .push(value);
         }
+        self.sets.get_mut(&output).ok_or(INVALID_SET)?.pending_depth = pending_depth;
         Ok(output)
+    }
+    fn run_set(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sets
+            .get(&id)
+            .ok_or(INVALID_SET)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_set(id)?;
+        self.sets
+            .get_mut(&pending)
+            .ok_or(INVALID_SET)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_set(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sets
+            .get(&id)
+            .ok_or(INVALID_SET)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_set(id)?;
+        self.sets.get_mut(&joined).ok_or(INVALID_SET)?.pending_depth = depth;
+        Ok(joined)
     }
     fn sort_list(&mut self, id: u64, raw_kind: u32) -> LeafResult<u64> {
         let kind = NativeSortKind::from_raw(raw_kind)?;
@@ -2289,7 +2363,8 @@ impl NativeValues {
     }
     fn clone_list(&mut self, id: u64) -> LeafResult<u64> {
         let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
-        let (elements, owned) = (list.elements.clone(), list.owned);
+        let (elements, owned, pending_depth) =
+            (list.elements.clone(), list.owned, list.pending_depth);
         let mut output = Vec::new();
         output
             .try_reserve_exact(elements.len())
@@ -2324,8 +2399,39 @@ impl NativeValues {
                 return Err(error);
             }
         };
-        self.lists.get_mut(&id).ok_or(INVALID_LIST)?.elements = output;
+        let list = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
+        list.elements = output;
+        list.pending_depth = pending_depth;
         Ok(id)
+    }
+    fn run_list(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .lists
+            .get(&id)
+            .ok_or(INVALID_LIST)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_list(id)?;
+        self.lists
+            .get_mut(&pending)
+            .ok_or(INVALID_LIST)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_list(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .lists
+            .get(&id)
+            .ok_or(INVALID_LIST)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_list(id)?;
+        self.lists
+            .get_mut(&joined)
+            .ok_or(INVALID_LIST)?
+            .pending_depth = depth;
+        Ok(joined)
     }
     fn new_struct(&mut self, count: u64) -> LeafResult<u64> {
         #[cfg(test)]
@@ -4102,6 +4208,10 @@ leaves! {
         |s| Ok(s.sets.get(&value).ok_or(INVALID_SET)?.elements.len() as i64);
     SetClone, jett_rt_v1_set_clone, false, (value: u64 => I64), u64 => I64,
         |s| s.clone_set(value);
+    SetRun, jett_rt_v1_set_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_set(value);
+    SetTaskJoin, jett_rt_v1_set_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_set(value);
     SetElementTake, jett_rt_v1_set_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| s.sets.get_mut(&value).ok_or(INVALID_SET)?
             .elements.get_mut(usize::try_from(index).map_err(|_| INVALID_SET)?)
@@ -4127,6 +4237,10 @@ leaves! {
         |s| s.map_get(map, key);
     MapClone, jett_rt_v1_map_clone, false, (map: u64 => I64), u64 => I64,
         |s| s.clone_map(map);
+    MapRun, jett_rt_v1_map_run, false, (map: u64 => I64), u64 => I64,
+        |s| s.run_map(map);
+    MapTaskJoin, jett_rt_v1_map_task_join, false, (map: u64 => I64), u64 => I64,
+        |s| s.join_map(map);
     MapFromLists, jett_rt_v1_map_from_lists, false, (keys: u64 => I64, values: u64 => I64, key_strings: u32 => I32, value_owned: u32 => I32), u64 => I64,
         |s| s.map_from_lists(keys, values, key_strings, value_owned);
     MapKeyTake, jett_rt_v1_map_key_take, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
@@ -4152,6 +4266,10 @@ leaves! {
             match s.sum(SUM_SUCCESS, bits, owned) { Ok(v) => Ok(v), Err(e) => { if owned { s.drop_value(bits)?; } Err(e) } } };
     ListClone, jett_rt_v1_list_clone, false, (value: u64 => I64), u64 => I64,
         |s| s.clone_list(value);
+    ListRun, jett_rt_v1_list_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_list(value);
+    ListTaskJoin, jett_rt_v1_list_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_list(value);
 
     ParseInt, jett_rt_v1_parse_int, false, (value: u64 => I64), u64 => I64,
         |s| { let text = s.text(value)?; let parsed = text.parse::<i64>().map(|v| v as u64).map_err(|_| format!("int64.from_string: cannot parse '{text}' as int64")); s.parsed_sum(parsed) };

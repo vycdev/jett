@@ -1777,6 +1777,18 @@ impl Translator<'_, '_> {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::BytesRun, &[source], true)?;
                     self.own_linear(pending)
+                } else if matches!(self.types.resolve(value.ty), Type::List(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::ListRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(self.types.resolve(value.ty), Type::Set(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::SetRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(self.types.resolve(value.ty), Type::Map(..)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::MapRun, &[source], true)?;
+                    self.own_linear(pending)
                 } else {
                     Ok(lowered)
                 }
@@ -1795,6 +1807,21 @@ impl Translator<'_, '_> {
                 } else if matches!(self.types.resolve(value.ty), Type::Bytes) {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::BytesTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(value.ty), Type::List(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::ListTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(value.ty), Type::Set(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::SetTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(value.ty), Type::Map(..)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::MapTaskJoin, &[source], true)?;
                     let joined = self.own_linear(joined)?;
                     self.construct_sum_value(true, joined, expression.span)
                 } else if value.ty == expression.ty {
