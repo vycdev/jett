@@ -1,0 +1,30 @@
+namespace alpha
+export function increment(value: int64) returns int64:
+    return value + 1
+export function choose() returns function(int64) returns int64:
+    return increment
+namespace beta
+export function increment(value: int64) returns int64:
+    return value + 100
+namespace app
+verify scoped_alias_bake:
+    use alpha as selected
+    function(int64) returns int64 callback = comptime selected.increment
+    assert callback(3) == 4
+property scoped_alias_trials:
+    given input: int64
+    use beta as selected
+    function(int64) returns int64 callback = comptime selected.increment
+    assert callback(input) == input + 100
+function main() returns nothing:
+    use alpha as selected
+    function(int64) returns int64 first = comptime selected.increment
+    function(int64) returns int64 chosen = comptime selected.choose()
+    println(first(5), chosen(5))
+    if true:
+        use beta as selected
+        function(int64) returns int64 shadowed = comptime selected.increment
+        println(shadowed(5))
+    function(int64) returns int64 restored = comptime selected.increment
+    println(restored(5))
+    return nothing

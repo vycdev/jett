@@ -423,11 +423,12 @@ so lexical helper references agree with native execution. The differential
 `tests/native/method_function_values.jett` fixture exercises these paths in
 `main`, `verify`, and 100 property trials. The broad native percentage remains
 the coarse 80% estimate pending further coverage-matrix closure.
-Separately, explicit `comptime` extraction still omits function-local namespace
-aliases from the expression's evaluation context. A canonical-name bake in the
-declaration namespace does preserve aliases captured inside the returned
-closure and is covered by the native fixture; invoking the factory through a
-local alias in the `comptime` expression itself remains a frontend follow-up.
+Explicit `comptime` extraction now retains the visible block-local `use`
+aliases for each closed expression. An inner alias may shadow an outer one;
+evaluation isolates each expression so the outer binding is restored afterward.
+`tests/native/comptime_namespace_aliases.jett` compares baked named and returned
+callbacks through both scopes with the interpreter. This removes the previous
+local-alias frontend gap without admitting runtime locals to comptime.
 
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a

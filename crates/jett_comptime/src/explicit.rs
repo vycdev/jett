@@ -8,11 +8,13 @@ use jett_types::ReflectionMetadata;
 
 use crate::{Interpreter, Value};
 
+type CollectedExpression<'a> = (Option<String>, HashMap<String, String>, &'a Expr, Span);
+
 /// Evaluate every explicit `comptime` expression in a checked module.
 ///
-/// The expressions are evaluated with an empty lexical environment. This is
-/// deliberate: an explicit comptime value must be closed and reproducible at
-/// build time, rather than depending on a runtime parameter or local.
+/// The expressions are evaluated without runtime locals or parameters. Visible
+/// `use` aliases are lexical name bindings and are carried into evaluation.
+/// An explicit comptime value remains closed and reproducible at build time.
 pub fn evaluate_explicit_comptime_expressions(
     module: &Module,
     reflection_metadata: Arc<ReflectionMetadata>,
@@ -28,8 +30,12 @@ pub fn evaluate_explicit_comptime_expressions(
 
     let mut values = HashMap::new();
     let mut diagnostics = Vec::new();
-    for (namespace, expression, span) in expressions {
-        match interpreter.eval_expr_in_namespace(namespace.as_deref(), expression) {
+    for (namespace, aliases, expression, span) in expressions {
+        match interpreter.eval_expr_in_namespace_with_aliases(
+            namespace.as_deref(),
+            &aliases,
+            expression,
+        ) {
             Ok(value) => {
                 values.insert(span, value);
             }
@@ -48,7 +54,7 @@ pub fn evaluate_explicit_comptime_expressions(
 
 fn collect_module_expressions<'a>(
     module: &'a Module,
-    expressions: &mut Vec<(Option<String>, &'a Expr, Span)>,
+    expressions: &mut Vec<CollectedExpression<'a>>,
 ) {
     let mut current_file = None;
     let mut current_namespace = None;
@@ -88,34 +94,37 @@ fn item_file(item: &Item) -> FileId {
 fn collect_item<'a>(
     item: &'a Item,
     namespace: Option<&str>,
-    expressions: &mut Vec<(Option<String>, &'a Expr, Span)>,
+    expressions: &mut Vec<CollectedExpression<'a>>,
 ) {
+    let aliases = &HashMap::new();
     match item {
-        Item::Function(function) => collect_block(&function.body, namespace, expressions),
+        Item::Function(function) => collect_block(&function.body, namespace, aliases, expressions),
         Item::Implement(implementation) => {
             for method in &implementation.methods {
-                collect_block(&method.body, namespace, expressions);
+                collect_block(&method.body, namespace, aliases, expressions);
             }
         }
         Item::Struct(structure) => {
             for method in &structure.methods {
-                collect_block(&method.body, namespace, expressions);
+                collect_block(&method.body, namespace, aliases, expressions);
             }
         }
         Item::Actor(actor) => {
             for field in &actor.state_fields {
-                collect_expr(&field.value, namespace, expressions);
+                collect_expr(&field.value, namespace, aliases, expressions);
             }
             for handler in &actor.handlers {
-                collect_block(&handler.body, namespace, expressions);
+                collect_block(&handler.body, namespace, aliases, expressions);
             }
         }
-        Item::VarDecl(declaration) => collect_expr(&declaration.value, namespace, expressions),
-        Item::Verify(verify) => collect_block(&verify.body, namespace, expressions),
-        Item::Property(property) => collect_block(&property.body, namespace, expressions),
+        Item::VarDecl(declaration) => {
+            collect_expr(&declaration.value, namespace, aliases, expressions)
+        }
+        Item::Verify(verify) => collect_block(&verify.body, namespace, aliases, expressions),
+        Item::Property(property) => collect_block(&property.body, namespace, aliases, expressions),
         Item::TypeAlias(alias) => {
             if let Some(constraint) = &alias.constraint {
-                collect_expr(constraint, namespace, expressions);
+                collect_expr(constraint, namespace, aliases, expressions);
             }
         }
         Item::Namespace(_)
@@ -131,87 +140,98 @@ fn collect_item<'a>(
 fn collect_block<'a>(
     block: &'a Block,
     namespace: Option<&str>,
-    expressions: &mut Vec<(Option<String>, &'a Expr, Span)>,
+    aliases: &HashMap<String, String>,
+    expressions: &mut Vec<CollectedExpression<'a>>,
 ) {
+    let mut visible_aliases = aliases.clone();
     for statement in &block.stmts {
-        collect_stmt(statement, namespace, expressions);
+        collect_stmt(statement, namespace, &mut visible_aliases, expressions);
     }
 }
 
 fn collect_stmt<'a>(
     statement: &'a Stmt,
     namespace: Option<&str>,
-    expressions: &mut Vec<(Option<String>, &'a Expr, Span)>,
+    aliases: &mut HashMap<String, String>,
+    expressions: &mut Vec<CollectedExpression<'a>>,
 ) {
     match statement {
-        Stmt::VarDecl(declaration) => collect_expr(&declaration.value, namespace, expressions),
+        Stmt::VarDecl(declaration) => {
+            collect_expr(&declaration.value, namespace, aliases, expressions)
+        }
         Stmt::Assign(assignment) => {
-            collect_expr(&assignment.target, namespace, expressions);
-            collect_expr(&assignment.value, namespace, expressions);
+            collect_expr(&assignment.target, namespace, aliases, expressions);
+            collect_expr(&assignment.value, namespace, aliases, expressions);
         }
         Stmt::Return(statement) => {
             if let Some(value) = &statement.value {
-                collect_expr(value, namespace, expressions);
+                collect_expr(value, namespace, aliases, expressions);
             }
         }
-        Stmt::Respond(statement) => collect_expr(&statement.value, namespace, expressions),
+        Stmt::Respond(statement) => collect_expr(&statement.value, namespace, aliases, expressions),
         Stmt::ComptimeTypeBind(binding) => {
-            collect_expr(&binding.value, namespace, expressions);
-            collect_block(&binding.body, namespace, expressions);
+            collect_expr(&binding.value, namespace, aliases, expressions);
+            collect_block(&binding.body, namespace, aliases, expressions);
         }
         Stmt::If(statement) => {
-            collect_expr(&statement.condition, namespace, expressions);
-            collect_block(&statement.then_block, namespace, expressions);
+            collect_expr(&statement.condition, namespace, aliases, expressions);
+            collect_block(&statement.then_block, namespace, aliases, expressions);
             for (condition, block) in &statement.else_ifs {
-                collect_expr(condition, namespace, expressions);
-                collect_block(block, namespace, expressions);
+                collect_expr(condition, namespace, aliases, expressions);
+                collect_block(block, namespace, aliases, expressions);
             }
             if let Some(block) = &statement.else_block {
-                collect_block(block, namespace, expressions);
+                collect_block(block, namespace, aliases, expressions);
             }
         }
         Stmt::For(statement) => {
-            collect_expr(&statement.iterable, namespace, expressions);
-            collect_block(&statement.body, namespace, expressions);
+            collect_expr(&statement.iterable, namespace, aliases, expressions);
+            collect_block(&statement.body, namespace, aliases, expressions);
         }
         Stmt::While(statement) => {
-            collect_expr(&statement.condition, namespace, expressions);
-            collect_block(&statement.body, namespace, expressions);
+            collect_expr(&statement.condition, namespace, aliases, expressions);
+            collect_block(&statement.body, namespace, aliases, expressions);
         }
         Stmt::Match(statement) => {
-            collect_expr(&statement.expr, namespace, expressions);
+            collect_expr(&statement.expr, namespace, aliases, expressions);
             for arm in &statement.arms {
-                collect_block(&arm.body, namespace, expressions);
+                collect_block(&arm.body, namespace, aliases, expressions);
             }
         }
-        Stmt::Expr(statement) => collect_expr(&statement.expr, namespace, expressions),
+        Stmt::Expr(statement) => collect_expr(&statement.expr, namespace, aliases, expressions),
         Stmt::Assert(statement) => {
-            collect_expr(&statement.condition, namespace, expressions);
+            collect_expr(&statement.condition, namespace, aliases, expressions);
             if let Some(message) = &statement.message {
-                collect_expr(message, namespace, expressions);
+                collect_expr(message, namespace, aliases, expressions);
             }
         }
         Stmt::Breakpoint(statement) => {
             if let Some(condition) = &statement.condition {
-                collect_expr(condition, namespace, expressions);
+                collect_expr(condition, namespace, aliases, expressions);
             }
         }
-        Stmt::Use(_) | Stmt::Trace(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::Use(declaration) => {
+            let bound_name =
+                Interpreter::use_bound_name(&declaration.path.name, declaration.alias.as_ref());
+            aliases.insert(bound_name, declaration.path.name.clone());
+        }
+        Stmt::Trace(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
     }
 }
 
 fn collect_expr<'a>(
     expression: &'a Expr,
     namespace: Option<&str>,
-    expressions: &mut Vec<(Option<String>, &'a Expr, Span)>,
+    aliases: &HashMap<String, String>,
+    expressions: &mut Vec<CollectedExpression<'a>>,
 ) {
     match expression {
         Expr::Comptime(inner, span) => {
-            expressions.push((namespace.map(str::to_string), inner, *span));
+            expressions.push((namespace.map(str::to_string), aliases.clone(), inner, *span));
         }
         Expr::Binary(left, _, right, _) => {
-            collect_expr(left, namespace, expressions);
-            collect_expr(right, namespace, expressions);
+            collect_expr(left, namespace, aliases, expressions);
+            collect_expr(right, namespace, aliases, expressions);
         }
         Expr::Unary(_, inner, _)
         | Expr::FieldAccess(inner, _, _)
@@ -230,54 +250,54 @@ fn collect_expr<'a>(
         | Expr::Clone(inner, _)
         | Expr::Run(inner, _)
         | Expr::Join(inner, _)
-        | Expr::Cancel(inner, _) => collect_expr(inner, namespace, expressions),
+        | Expr::Cancel(inner, _) => collect_expr(inner, namespace, aliases, expressions),
         Expr::Call(callee, arguments, _) => {
-            collect_expr(callee, namespace, expressions);
+            collect_expr(callee, namespace, aliases, expressions);
             for argument in arguments {
-                collect_expr(&argument.value, namespace, expressions);
+                collect_expr(&argument.value, namespace, aliases, expressions);
             }
         }
         Expr::GenericCall(callee, _, arguments, _) => {
-            collect_expr(callee, namespace, expressions);
+            collect_expr(callee, namespace, aliases, expressions);
             for argument in arguments {
-                collect_expr(&argument.value, namespace, expressions);
+                collect_expr(&argument.value, namespace, aliases, expressions);
             }
         }
         Expr::ListConstruct(items, _) => {
             for item in items {
-                collect_expr(item, namespace, expressions);
+                collect_expr(item, namespace, aliases, expressions);
             }
         }
         Expr::MapConstruct(entries, _) => {
             for (key, value) in entries {
-                collect_expr(key, namespace, expressions);
-                collect_expr(value, namespace, expressions);
+                collect_expr(key, namespace, aliases, expressions);
+                collect_expr(value, namespace, aliases, expressions);
             }
         }
         Expr::Handle(target, _, block, _) => {
-            collect_expr(target, namespace, expressions);
-            collect_block(block, namespace, expressions);
+            collect_expr(target, namespace, aliases, expressions);
+            collect_block(block, namespace, aliases, expressions);
         }
         Expr::StringInterpolation(parts, _) => {
             for part in parts {
                 if let StringPart::Expr(expression) = part {
-                    collect_expr(expression, namespace, expressions);
+                    collect_expr(expression, namespace, aliases, expressions);
                 }
             }
         }
         Expr::Pipeline(initial, steps, _) => {
-            collect_expr(initial, namespace, expressions);
+            collect_expr(initial, namespace, aliases, expressions);
             for step in steps {
-                collect_expr(&step.function, namespace, expressions);
+                collect_expr(&step.function, namespace, aliases, expressions);
                 for argument in &step.extra_args {
-                    collect_expr(&argument.value, namespace, expressions);
+                    collect_expr(&argument.value, namespace, aliases, expressions);
                 }
                 if let Some(handle) = &step.handle {
-                    collect_block(&handle.body, namespace, expressions);
+                    collect_block(&handle.body, namespace, aliases, expressions);
                 }
             }
         }
-        Expr::InlineFn(_, _, block, _) => collect_block(block, namespace, expressions),
+        Expr::InlineFn(_, _, block, _) => collect_block(block, namespace, aliases, expressions),
         Expr::IntLiteral(_, _)
         | Expr::FloatLiteral(_, _)
         | Expr::StringLiteral(_, _)

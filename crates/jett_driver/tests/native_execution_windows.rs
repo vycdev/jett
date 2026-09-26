@@ -1384,6 +1384,42 @@ fn native_function_debug_values_match_interpreter() {
 }
 
 #[test]
+fn native_comptime_namespace_aliases_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/comptime_namespace_aliases.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "6 6\n105\n6\n");
+    let directory = tempfile::tempdir().expect("isolated comptime namespace alias directory");
+    let binary = directory.path().join("comptime_namespace_aliases.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile baked callbacks through scoped namespace aliases");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+
+    let verify_binary = directory
+        .path()
+        .join("comptime_namespace_aliases_verify.exe");
+    build_host_verify_suite_executable(&fixture, launcher(), &verify_binary)
+        .expect("compile alias-aware baked callback in native verify body");
+    let verified = run_bounded(&verify_binary, directory.path());
+    assert!(verified.status.success(), "{verified:?}");
+    assert!(verified.stdout.is_empty(), "{verified:?}");
+    assert!(verified.stderr.is_empty(), "{verified:?}");
+
+    let property_binary = directory
+        .path()
+        .join("comptime_namespace_aliases_property.exe");
+    build_host_property_suite_executable(&fixture, launcher(), &property_binary)
+        .expect("compile alias-aware baked callback across native property trials");
+    let property = run_bounded(&property_binary, directory.path());
+    assert!(property.status.success(), "{property:?}");
+    assert!(property.stdout.is_empty(), "{property:?}");
+    assert!(property.stderr.is_empty(), "{property:?}");
+}
+
+#[test]
 fn native_method_function_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/method_function_values.jett");

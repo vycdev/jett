@@ -1098,6 +1098,9 @@ type checking and stores the resulting value by source span. Runtime
 interpretation consumes that stored value instead of evaluating the expression
 again. Explicit expressions are evaluated in an empty lexical environment, so
 runtime parameters and locals cannot leak into required compile-time work.
+The collector carries visible block-local `use` aliases as name bindings for
+each expression, including shadowing in nested blocks. Each evaluation has an
+isolated alias scope, so aliases cannot leak between baked expressions.
 
 ### What Runs at Comptime
 

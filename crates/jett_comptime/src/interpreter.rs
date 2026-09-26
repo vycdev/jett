@@ -964,7 +964,7 @@ impl Interpreter {
             })
     }
 
-    fn use_bound_name(path: &str, alias: Option<&Ident>) -> String {
+    pub(crate) fn use_bound_name(path: &str, alias: Option<&Ident>) -> String {
         alias
             .map(|ident| ident.name.clone())
             .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(path).to_string())
@@ -1622,6 +1622,23 @@ impl Interpreter {
         self.current_namespace = namespace.map(str::to_string);
         let result = self.eval_expr(expr);
         self.current_namespace = saved_namespace;
+        result
+    }
+
+    /// Evaluate a closed expression with only its lexically visible `use`
+    /// aliases. The temporary scope is removed even when evaluation fails.
+    pub(crate) fn eval_expr_in_namespace_with_aliases(
+        &mut self,
+        namespace: Option<&str>,
+        aliases: &HashMap<String, String>,
+        expr: &Expr,
+    ) -> Result<Value, String> {
+        self.push_scope();
+        for (name, target) in aliases {
+            self.set_namespace_alias(name.clone(), target.clone());
+        }
+        let result = self.eval_expr_in_namespace(namespace, expr);
+        self.pop_scope();
         result
     }
 
