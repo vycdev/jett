@@ -1710,7 +1710,7 @@ impl Interpreter {
                         StringPart::Literal(s) => result.push_str(s),
                         StringPart::Expr(expr) => {
                             let val = value_or_signal!(self, expr);
-                            result.push_str(&val.to_string());
+                            result.push_str(&self.display_interpolation_value(val)?);
                         }
                     }
                 }
@@ -10648,6 +10648,24 @@ impl Interpreter {
             })
             .and_then(|methods| methods.get(&receiver_type))
             .cloned()
+    }
+
+    fn display_interpolation_value(&mut self, value: Value) -> Result<String, String> {
+        let display_method = runtime_type_name(&value).and_then(|receiver| {
+            self.interface_methods
+                .get("Displayable.display")
+                .and_then(|methods| methods.get(&receiver))
+                .cloned()
+        });
+        let Some(display_method) = display_method else {
+            return Ok(value.to_string());
+        };
+        match self.call_function(&display_method, vec![value])? {
+            Value::String(text) => Ok(text),
+            other => Err(format!(
+                "Displayable.display returned {other} instead of string"
+            )),
+        }
     }
 
     fn construct_struct(

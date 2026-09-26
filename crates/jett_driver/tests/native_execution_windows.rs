@@ -1924,6 +1924,22 @@ fn native_generic_empty_collections_match_interpreter() {
 }
 
 #[test]
+fn native_displayable_interpolation_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/displayable_interpolation.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "Hello user:Ada!\nResult user:Grace\n");
+    let directory = tempfile::tempdir().expect("isolated displayable directory");
+    let binary = directory.path().join("displayable_interpolation.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile displayable interpolation");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");

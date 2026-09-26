@@ -2797,6 +2797,71 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         tail
     }
 
+    fn lower_interpolation_value(&mut self, expression: &Expr) -> Option<Expression> {
+        let value = self.lower_expression(expression)?;
+        if matches!(
+            self.parent.check.interner.resolve(value.ty),
+            Type::Int8
+                | Type::Int16
+                | Type::Int32
+                | Type::Int64
+                | Type::Uint8
+                | Type::Uint16
+                | Type::Uint32
+                | Type::Uint64
+                | Type::Float32
+                | Type::Float64
+                | Type::String
+                | Type::Bool
+                | Type::Nothing
+        ) {
+            return Some(value);
+        }
+
+        let method_span = self
+            .parent
+            .check
+            .method_definitions
+            .iter()
+            .find(|method| {
+                method.owner_type == value.ty
+                    && method.interface_name.as_deref() == Some("Displayable")
+                    && method.method_name == "display"
+                    && method.parameter_types == [value.ty]
+                    && method.return_type == TypeInterner::STRING
+            })
+            .map(|method| method.source_span);
+        let Some(method_span) = method_span else {
+            self.parent.error(
+                expression.span(),
+                "displayable interpolation has no checked display method",
+            );
+            return None;
+        };
+        let Some(function) = self
+            .function_ids
+            .get(&FunctionKey::Method {
+                source_span: method_span,
+            })
+            .copied()
+        else {
+            self.parent.error(
+                expression.span(),
+                "displayable interpolation has no concrete HIR method",
+            );
+            return None;
+        };
+        Some(Expression {
+            kind: ExpressionKind::Call {
+                function,
+                args: vec![value],
+                evaluation_order: vec![0],
+            },
+            ty: TypeInterner::STRING,
+            span: expression.span(),
+        })
+    }
+
     fn lower_expression(&mut self, expression: &Expr) -> Option<Expression> {
         let span = expression.span();
         let ty = self.expression_type(expression)?;
@@ -2912,17 +2977,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ExpressionKind::OptionalSome(Box::new(self.lower_expression(value)?))
             }
             Expr::None(_) => ExpressionKind::OptionalNone,
-            Expr::StringInterpolation(parts, _) => ExpressionKind::StringInterpolation(
-                parts
-                    .iter()
-                    .map(|part| match part {
-                        ast::StringPart::Literal(text) => Some(StringSegment::Text(text.clone())),
+            Expr::StringInterpolation(parts, _) => {
+                let mut segments = Vec::with_capacity(parts.len());
+                for part in parts {
+                    segments.push(match part {
+                        ast::StringPart::Literal(text) => StringSegment::Text(text.clone()),
                         ast::StringPart::Expr(value) => {
-                            Some(StringSegment::Value(self.lower_expression(value)?))
+                            StringSegment::Value(self.lower_interpolation_value(value)?)
                         }
-                    })
-                    .collect::<Option<Vec<_>>>()?,
-            ),
+                    });
+                }
+                ExpressionKind::StringInterpolation(segments)
+            }
             Expr::EnumVariant(_, variant, _) => {
                 self.lower_enum_construct(ty, variant, &[], span)?
             }
