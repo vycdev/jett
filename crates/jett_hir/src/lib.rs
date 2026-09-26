@@ -322,8 +322,8 @@ pub enum ExpressionKind {
         /// carries the checked source type of each struct field in layout order.
         reflection_arguments: Vec<ReflectionTypeInfo>,
         /// Field predicate chains for reflected struct fields or flattened
-        /// enum variant payloads. Empty for other intrinsics and targets
-        /// without refinement fields.
+        /// enum variant payloads, or machine state payloads. Empty for other
+        /// intrinsics and targets without refinement fields.
         refinement_predicates: Vec<Vec<RefinementPredicate>>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
@@ -3174,6 +3174,26 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .variants
                 .iter()
                 .flat_map(|variant| variant.fields.iter().map(|(_, ty)| *ty))
+                .collect::<Vec<_>>(),
+            Type::Machine(id) => self
+                .parent
+                .check
+                .interner
+                .resolve_machine(*id)
+                .states
+                .iter()
+                .flat_map(|state| state.fields.iter().map(|(_, ty)| *ty))
+                .collect::<Vec<_>>(),
+            Type::MachineState { machine, state } => self
+                .parent
+                .check
+                .interner
+                .resolve_machine(*machine)
+                .state(*state)
+                .expect("checked machine state")
+                .fields
+                .iter()
+                .map(|(_, ty)| *ty)
                 .collect::<Vec<_>>(),
             _ => return Some(Vec::new()),
         };

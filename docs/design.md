@@ -7624,10 +7624,9 @@ semantics.
 The public JSON serializer uses it inside reflected field bindings to omit
 entire secret-bearing fields, including fields whose contents are collections
 of secrets. The checked decoder may put an already validated refinement value
-into a record field; the native struct builder accepts base values for
-refinement fields and runs their checked predicates at finish. Native enum
-builders likewise validate the selected variant's payloads at finish. Machine
-builders still require already validated exact refinement payloads.
+into a record field; native struct, enum, and machine builders accept base
+values for refinement fields and run their checked predicates at finish.
+Enum and machine builders validate only the selected variant or state.
 `float32` JSON decoding uses the same checked source path: it reads a `float64`
 JSON number and explicitly rounds with `float32.from_float64`.
 Checked source JSON serialization formats that rounded value using the

@@ -91,7 +91,10 @@ fn native_constructible_record(types: &TypeInterner, ty: TypeId) -> bool {
 }
 
 fn native_builder_value_type_supported(types: &TypeInterner, owner: TypeId, value: TypeId) -> bool {
-    if matches!(types.resolve(owner), Type::Struct(_) | Type::Enum(_)) {
+    if matches!(
+        types.resolve(owner),
+        Type::Struct(_) | Type::Enum(_) | Type::Machine(_) | Type::MachineState { .. }
+    ) {
         // Reflected completion now validates the checked field predicates.
         return true;
     }

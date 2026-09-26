@@ -2867,13 +2867,13 @@ machines. The checked type arguments select a field layout, including source
 alias spellings for field metadata, while runtime leaves own partially filled
 records, validate `TypeField` metadata, and return handled duplicate/missing-field
 errors.
-Native struct builders accept base values for refined fields and invoke the
-checked field predicates at completion, after ordinary builder errors. This
-also handles nested refinements and mixed refined and ordinary fields sharing
-the same base type. Enum builders now do the same for the selected variant's
-payloads, including nested refinements. Machine builders still require exact
-refinement payload values validated at their creation boundary. Trusted JSON
-decoders bind each payload's exact reflected type before insertion.
+Native struct, enum, and machine builders accept base values for refined
+fields and invoke checked predicates at completion, after ordinary builder
+errors. Enum and machine completion validates only the selected variant or
+state. This handles nested refinements and mixed refined and ordinary fields
+sharing the same base type, including both bare and state-qualified machine
+targets. Trusted JSON decoders also bind each payload's exact reflected type
+before insertion.
 Native debug layouts recognize `TypeConstruction` handles. Builder metadata
 also carries checked debug layouts for each field and records successful put
 order, so trace and breakpoint render partial struct, bitfield, enum, and

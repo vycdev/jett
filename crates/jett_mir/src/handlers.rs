@@ -1031,6 +1031,257 @@ impl Builder<'_> {
         }
     }
 
+    fn lower_refinement_machine_builder_finish(
+        &mut self,
+        expression: &Expression,
+        owner_type: TypeId,
+        refinement_predicates: &[Vec<hir::RefinementPredicate>],
+    ) -> Expression {
+        let (machine, selected_state) = match self.types.resolve(owner_type) {
+            Type::Machine(machine) => (*machine, None),
+            Type::MachineState { machine, state } => (*machine, Some(*state)),
+            _ => return expression.clone(),
+        };
+        let states =
+            self.types
+                .resolve_machine(machine)
+                .states
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| {
+                    selected_state.is_none_or(|state| state.index() as usize == *index)
+                })
+                .map(|(index, state)| {
+                    let narrowed =
+                        if selected_state.is_some() {
+                            owner_type
+                        } else {
+                            self.types.type_ids().find(|id| matches!(
+                        self.types.resolve(*id),
+                        Type::MachineState { machine: id_machine, state }
+                            if *id_machine == machine && state.index() as usize == index
+                    )).expect("checked reflected finish interns all machine states")
+                        };
+                    (
+                        hir::StateId::new(index as u32),
+                        narrowed,
+                        state.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+        if states
+            .iter()
+            .map(|(_, _, fields)| fields.len())
+            .sum::<usize>()
+            != refinement_predicates.len()
+        {
+            return expression.clone();
+        }
+        let span = expression.span;
+        let mut raw = expression.clone();
+        if let ExpressionKind::Intrinsic {
+            refinement_predicates,
+            ..
+        } = &mut raw.kind
+        {
+            refinement_predicates.clear();
+        }
+        let raw = self.lower_value(&raw);
+        let source = self.temporary(expression.ty, span);
+        self.push(
+            StatementKind::Let {
+                local: source,
+                value: raw,
+            },
+            span,
+        );
+        let tag = self.temporary(TypeInterner::BOOL, span);
+        self.push(
+            StatementKind::SumTag {
+                source,
+                target: tag,
+            },
+            span,
+        );
+        let accepted = self.new_block(span);
+        let failed = self.new_block(span);
+        let validated = self.new_block(span);
+        let continuation = self.new_block(span);
+        let output = self.temporary(expression.ty, span);
+        self.terminate(
+            TerminatorKind::Branch {
+                condition: Expression {
+                    kind: ExpressionKind::Local(tag),
+                    ty: TypeInterner::BOOL,
+                    span,
+                },
+                then_block: accepted,
+                else_block: failed,
+            },
+            span,
+        );
+        self.current = failed;
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::Local(source),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
+        self.current = accepted;
+        let built = self.temporary(owner_type, span);
+        self.push(
+            StatementKind::SumTake {
+                source,
+                target: built,
+                success: true,
+            },
+            span,
+        );
+        let mut offset = 0;
+        for (state, narrowed_type, fields) in states {
+            let selected = self.new_block(span);
+            let next_state = self.new_block(span);
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition: Expression {
+                        kind: ExpressionKind::StateIs {
+                            value: Box::new(Expression {
+                                kind: ExpressionKind::Local(built),
+                                ty: owner_type,
+                                span,
+                            }),
+                            state,
+                        },
+                        ty: TypeInterner::BOOL,
+                        span,
+                    },
+                    then_block: selected,
+                    else_block: next_state,
+                },
+                span,
+            );
+            self.current = selected;
+            for (index, field_type) in fields.iter().enumerate() {
+                for predicate in &refinement_predicates[offset + index] {
+                    let field = Expression {
+                        kind: ExpressionKind::Field {
+                            base: Box::new(Expression {
+                                kind: ExpressionKind::Local(built),
+                                ty: narrowed_type,
+                                span,
+                            }),
+                            owner_type: narrowed_type,
+                            field: hir::FieldId::new(index as u32),
+                        },
+                        ty: *field_type,
+                        span,
+                    };
+                    let value = self.temporary(*field_type, span);
+                    self.push(
+                        StatementKind::Let {
+                            local: value,
+                            value: Expression {
+                                kind: ExpressionKind::Clone(Box::new(field)),
+                                ty: *field_type,
+                                span,
+                            },
+                        },
+                        span,
+                    );
+                    let passed = self.temporary(TypeInterner::BOOL, span);
+                    self.push(
+                        StatementKind::Let {
+                            local: passed,
+                            value: Expression {
+                                kind: ExpressionKind::Call {
+                                    function: predicate.function,
+                                    args: vec![self.refinement_predicate_input(
+                                        value,
+                                        *field_type,
+                                        predicate,
+                                        span,
+                                    )],
+                                    evaluation_order: vec![0],
+                                },
+                                ty: TypeInterner::BOOL,
+                                span,
+                            },
+                        },
+                        span,
+                    );
+                    let next = self.new_block(span);
+                    let rejected = self.new_block(span);
+                    self.terminate(
+                        TerminatorKind::Branch {
+                            condition: Expression {
+                                kind: ExpressionKind::Local(passed),
+                                ty: TypeInterner::BOOL,
+                                span,
+                            },
+                            then_block: next,
+                            else_block: rejected,
+                        },
+                        span,
+                    );
+                    self.current = rejected;
+                    self.push(
+                        StatementKind::Let {
+                            local: output,
+                            value: Expression {
+                                kind: ExpressionKind::ResultFail(Box::new(Expression {
+                                    kind: ExpressionKind::String(format!(
+                                        "refinement type constraint failed for '{}'",
+                                        predicate.type_name
+                                    )),
+                                    ty: TypeInterner::STRING,
+                                    span,
+                                })),
+                                ty: expression.ty,
+                                span,
+                            },
+                        },
+                        span,
+                    );
+                    self.close_to(continuation, span);
+                    self.current = next;
+                }
+            }
+            self.close_to(validated, span);
+            self.current = next_state;
+            offset += fields.len();
+        }
+        self.terminate(TerminatorKind::Unreachable, span);
+        self.current = validated;
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::ResultOk(Box::new(Expression {
+                        kind: ExpressionKind::Local(built),
+                        ty: owner_type,
+                        span,
+                    })),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
+        self.current = continuation;
+        Expression {
+            kind: ExpressionKind::Local(output),
+            ty: expression.ty,
+            span,
+        }
+    }
+
     fn lower_refinement_builder_finish(
         &mut self,
         expression: &Expression,
@@ -1042,6 +1293,16 @@ impl Builder<'_> {
         let struct_type = *struct_type;
         if matches!(self.types.resolve(struct_type), Type::Enum(_)) {
             return self.lower_refinement_enum_builder_finish(
+                expression,
+                struct_type,
+                refinement_predicates,
+            );
+        }
+        if matches!(
+            self.types.resolve(struct_type),
+            Type::Machine(_) | Type::MachineState { .. }
+        ) {
+            return self.lower_refinement_machine_builder_finish(
                 expression,
                 struct_type,
                 refinement_predicates,

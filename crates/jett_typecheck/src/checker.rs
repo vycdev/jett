@@ -3946,6 +3946,16 @@ impl<'a> TypeChecker<'a> {
                     return Some((vec![TypeInterner::TYPE_CONSTRUCTION], TypeInterner::ERROR));
                 }
                 let target_ty = self.resolve_type_expr(&type_args[0]);
+                if let Type::Machine(machine) = self.interner.resolve(target_ty) {
+                    let machine = *machine;
+                    let states = self.interner.resolve_machine(machine).states.len();
+                    for index in 0..states {
+                        self.interner.intern(Type::MachineState {
+                            machine,
+                            state: MachineStateId::new(index as u32),
+                        });
+                    }
+                }
                 if !matches!(
                     self.interner.resolve(target_ty),
                     Type::Struct(_)

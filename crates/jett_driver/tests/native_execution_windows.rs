@@ -1165,6 +1165,25 @@ fn native_reflected_enum_base_values_match_interpreter() {
 }
 
 #[test]
+fn native_reflected_machine_base_values_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/refined_machine_builder_base.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "Ada:Agent:ready\nrefinement type constraint failed for 'app.NonEmpty'\nrefinement type constraint failed for 'app.Long'\nNia\nrefinement type constraint failed for 'app.NonEmpty'\nfilled\nrefinement type constraint failed for 'app.Positive'\nempty\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated execution directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile reflected machine base-value builder");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_refined_struct_base_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/refined_struct_base_values.jett");

@@ -1179,7 +1179,11 @@ impl Translator<'_, '_> {
                         .ok_or_else(|| self.unsupported(span, "checked machine payload type"))?
                         .type_name,
                 )?;
-                name(&mut layout, &self.types.type_name(*field_ty))?;
+                let mut storage_type = *field_ty;
+                while let Type::Refinement { base, .. } = self.types.resolve(storage_type) {
+                    storage_type = *base;
+                }
+                name(&mut layout, &self.types.type_name(storage_type))?;
                 append_builder_debug_layout(&mut layout, self.types, *field_ty)?;
             }
         }
@@ -1356,7 +1360,7 @@ impl Translator<'_, '_> {
             let mut value_type = type_arguments[1];
             if matches!(
                 self.types.resolve(type_arguments[0]),
-                Type::Struct(_) | Type::Enum(_)
+                Type::Struct(_) | Type::Enum(_) | Type::Machine(_) | Type::MachineState { .. }
             ) {
                 while let Type::Refinement { base, .. } = self.types.resolve(value_type) {
                     value_type = *base;
