@@ -91,6 +91,10 @@ fn native_constructible_record(types: &TypeInterner, ty: TypeId) -> bool {
 }
 
 fn native_builder_value_type_supported(types: &TypeInterner, owner: TypeId, value: TypeId) -> bool {
+    if matches!(types.resolve(owner), Type::Struct(_)) {
+        // Reflected struct completion now validates the checked field predicates.
+        return true;
+    }
     let fields: Vec<TypeId> = match types.resolve(owner) {
         Type::Struct(id) => types
             .resolve_struct(*id)

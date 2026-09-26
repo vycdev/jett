@@ -267,6 +267,7 @@ fn collect_expression_references(
             intrinsic: _,
             type_arguments: _,
             reflection_arguments: _,
+            refinement_predicates: _,
             args,
             evaluation_order: _,
         } => {

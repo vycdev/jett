@@ -15,7 +15,14 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             has_extractable_handle(left) || has_extractable_handle(right)
         }
         ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
-        ExpressionKind::Intrinsic { args, .. } => args.iter().any(has_extractable_handle),
+        ExpressionKind::Intrinsic {
+            args,
+            refinement_predicates,
+            ..
+        } => {
+            args.iter().any(has_extractable_handle)
+                || refinement_predicates.iter().any(|chain| !chain.is_empty())
+        }
         ExpressionKind::IndirectCall { callee, args, .. } => {
             has_extractable_handle(callee) || args.iter().any(has_extractable_handle)
         }
@@ -384,6 +391,15 @@ impl Builder<'_> {
                 refinement_predicates,
             );
         }
+        if let ExpressionKind::Intrinsic {
+            intrinsic: hir::IntrinsicId::TypeConstructFinish,
+            refinement_predicates,
+            ..
+        } = &expression.kind
+            && refinement_predicates.iter().any(|chain| !chain.is_empty())
+        {
+            return self.lower_refinement_builder_finish(expression, refinement_predicates);
+        }
         if let ExpressionKind::ListConstruct { elements } = &expression.kind
             && elements.iter().any(has_extractable_handle)
             && let Some(elements) =
@@ -515,6 +531,7 @@ impl Builder<'_> {
             intrinsic,
             type_arguments,
             reflection_arguments,
+            refinement_predicates,
             args,
             evaluation_order,
         } = &expression.kind
@@ -548,6 +565,7 @@ impl Builder<'_> {
                     intrinsic: *intrinsic,
                     type_arguments: type_arguments.clone(),
                     reflection_arguments: reflection_arguments.clone(),
+                    refinement_predicates: refinement_predicates.clone(),
                     args,
                     evaluation_order: evaluation_order.clone(),
                 };
@@ -788,6 +806,202 @@ impl Builder<'_> {
         if self.open() {
             self.terminate(TerminatorKind::Unreachable, span);
         }
+        self.current = continuation;
+        Expression {
+            kind: ExpressionKind::Local(output),
+            ty: expression.ty,
+            span,
+        }
+    }
+
+    fn lower_refinement_builder_finish(
+        &mut self,
+        expression: &Expression,
+        refinement_predicates: &[Vec<hir::RefinementPredicate>],
+    ) -> Expression {
+        let Type::Result(struct_type, _) = self.types.resolve(expression.ty) else {
+            return expression.clone();
+        };
+        let struct_type = *struct_type;
+        let Type::Struct(id) = self.types.resolve(struct_type) else {
+            return expression.clone();
+        };
+        let field_types = self
+            .types
+            .resolve_struct(*id)
+            .fields
+            .iter()
+            .map(|(_, ty)| *ty)
+            .collect::<Vec<_>>();
+        if field_types.len() != refinement_predicates.len() {
+            return expression.clone();
+        }
+        let span = expression.span;
+        let mut raw = expression.clone();
+        if let ExpressionKind::Intrinsic {
+            refinement_predicates,
+            ..
+        } = &mut raw.kind
+        {
+            refinement_predicates.clear();
+        }
+        let raw = self.lower_value(&raw);
+        let source = self.temporary(expression.ty, span);
+        self.push(
+            StatementKind::Let {
+                local: source,
+                value: raw,
+            },
+            span,
+        );
+        let tag = self.temporary(TypeInterner::BOOL, span);
+        self.push(
+            StatementKind::SumTag {
+                source,
+                target: tag,
+            },
+            span,
+        );
+        let accepted = self.new_block(span);
+        let failed = self.new_block(span);
+        let continuation = self.new_block(span);
+        let output = self.temporary(expression.ty, span);
+        self.terminate(
+            TerminatorKind::Branch {
+                condition: Expression {
+                    kind: ExpressionKind::Local(tag),
+                    ty: TypeInterner::BOOL,
+                    span,
+                },
+                then_block: accepted,
+                else_block: failed,
+            },
+            span,
+        );
+        self.current = failed;
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::Local(source),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
+        self.current = accepted;
+        let built = self.temporary(struct_type, span);
+        self.push(
+            StatementKind::SumTake {
+                source,
+                target: built,
+                success: true,
+            },
+            span,
+        );
+        for (index, predicates) in refinement_predicates.iter().enumerate() {
+            for predicate in predicates {
+                let field = Expression {
+                    kind: ExpressionKind::Field {
+                        base: Box::new(Expression {
+                            kind: ExpressionKind::Local(built),
+                            ty: struct_type,
+                            span,
+                        }),
+                        owner_type: struct_type,
+                        field: hir::FieldId::new(index as u32),
+                    },
+                    ty: field_types[index],
+                    span,
+                };
+                let value = self.temporary(field.ty, span);
+                self.push(
+                    StatementKind::Let {
+                        local: value,
+                        value: Expression {
+                            kind: ExpressionKind::Clone(Box::new(field)),
+                            ty: field_types[index],
+                            span,
+                        },
+                    },
+                    span,
+                );
+                let passed = self.temporary(TypeInterner::BOOL, span);
+                self.push(
+                    StatementKind::Let {
+                        local: passed,
+                        value: Expression {
+                            kind: ExpressionKind::Call {
+                                function: predicate.function,
+                                args: vec![self.refinement_predicate_input(
+                                    value,
+                                    field_types[index],
+                                    predicate,
+                                    span,
+                                )],
+                                evaluation_order: vec![0],
+                            },
+                            ty: TypeInterner::BOOL,
+                            span,
+                        },
+                    },
+                    span,
+                );
+                let next = self.new_block(span);
+                let rejected = self.new_block(span);
+                self.terminate(
+                    TerminatorKind::Branch {
+                        condition: Expression {
+                            kind: ExpressionKind::Local(passed),
+                            ty: TypeInterner::BOOL,
+                            span,
+                        },
+                        then_block: next,
+                        else_block: rejected,
+                    },
+                    span,
+                );
+                self.current = rejected;
+                self.push(
+                    StatementKind::Let {
+                        local: output,
+                        value: Expression {
+                            kind: ExpressionKind::ResultFail(Box::new(Expression {
+                                kind: ExpressionKind::String(format!(
+                                    "refinement type constraint failed for '{}'",
+                                    predicate.type_name
+                                )),
+                                ty: TypeInterner::STRING,
+                                span,
+                            })),
+                            ty: expression.ty,
+                            span,
+                        },
+                    },
+                    span,
+                );
+                self.close_to(continuation, span);
+                self.current = next;
+            }
+        }
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::ResultOk(Box::new(Expression {
+                        kind: ExpressionKind::Local(built),
+                        ty: struct_type,
+                        span,
+                    })),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
         self.current = continuation;
         Expression {
             kind: ExpressionKind::Local(output),

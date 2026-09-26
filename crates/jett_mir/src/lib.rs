@@ -1752,6 +1752,7 @@ function first(left: int64, right: int64) returns int64:
             intrinsic: hir::IntrinsicId::TypeName,
             type_arguments: vec![bound_type],
             reflection_arguments: Vec::new(),
+            refinement_predicates: Vec::new(),
             args: Vec::new(),
             evaluation_order: vec![0],
         };

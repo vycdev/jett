@@ -1019,7 +1019,13 @@ impl Translator<'_, '_> {
         for ((name, field_ty), field_info) in fields.iter().zip(&reflection_arguments[1..]) {
             encode_name(&mut layout, name)?;
             encode_name(&mut layout, &field_info.type_name)?;
-            encode_name(&mut layout, &self.types.type_name(*field_ty))?;
+            let mut storage_type = *field_ty;
+            if !bitfield {
+                while let Type::Refinement { base, .. } = self.types.resolve(storage_type) {
+                    storage_type = *base;
+                }
+            }
+            encode_name(&mut layout, &self.types.type_name(storage_type))?;
         }
         if let Type::Bitfield(id) = self.types.resolve(owner) {
             for field in &self.types.resolve_bitfield(*id).fields {
@@ -1343,7 +1349,13 @@ impl Translator<'_, '_> {
                 .ok_or_else(|| self.unsupported(span, "checked construction field type"))?;
             let (owner_pointer, owner_length) = self.static_bytes(&owner.type_name)?;
             let (type_pointer, type_length) = self.static_bytes(&field_type.type_name)?;
-            let canonical_type = self.types.type_name(type_arguments[1]);
+            let mut value_type = type_arguments[1];
+            if matches!(self.types.resolve(type_arguments[0]), Type::Struct(_)) {
+                while let Type::Refinement { base, .. } = self.types.resolve(value_type) {
+                    value_type = *base;
+                }
+            }
+            let canonical_type = self.types.type_name(value_type);
             let (canonical_pointer, canonical_length) = self.static_bytes(&canonical_type)?;
             let result = self.leaf(
                 NativeLeaf::BuilderPut,

@@ -59,6 +59,10 @@ impl LocalId {
 pub struct FieldId(u32);
 
 impl FieldId {
+    pub fn new(index: u32) -> Self {
+        Self(index)
+    }
+
     pub fn index(self) -> u32 {
         self.0
     }
@@ -317,6 +321,9 @@ pub enum ExpressionKind {
         /// aliases that share a canonical type ID. Construction start also
         /// carries the checked source type of each struct field in layout order.
         reflection_arguments: Vec<ReflectionTypeInfo>,
+        /// Field predicate chains for reflected struct completion. Empty for
+        /// other intrinsics and targets without refinement fields.
+        refinement_predicates: Vec<Vec<RefinementPredicate>>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
     },
@@ -3139,6 +3146,50 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         Some(predicates)
     }
 
+    fn reflected_finish_predicates(
+        &mut self,
+        intrinsic: IntrinsicId,
+        type_arguments: &[TypeId],
+        span: Span,
+    ) -> Option<Vec<Vec<RefinementPredicate>>> {
+        if intrinsic != IntrinsicId::TypeConstructFinish || type_arguments.len() != 1 {
+            return Some(Vec::new());
+        }
+        let Type::Struct(id) = self.parent.check.interner.resolve(type_arguments[0]) else {
+            return Some(Vec::new());
+        };
+        let field_types = self
+            .parent
+            .check
+            .interner
+            .resolve_struct(*id)
+            .fields
+            .iter()
+            .map(|(_, ty)| *ty)
+            .collect::<Vec<_>>();
+        if !field_types.iter().any(|ty| {
+            matches!(
+                self.parent.check.interner.resolve(*ty),
+                Type::Refinement { .. }
+            )
+        }) {
+            return Some(Vec::new());
+        }
+        field_types
+            .into_iter()
+            .map(|ty| {
+                if matches!(
+                    self.parent.check.interner.resolve(ty),
+                    Type::Refinement { .. }
+                ) {
+                    self.checked_refinement_predicates(ty, span)
+                } else {
+                    Some(Vec::new())
+                }
+            })
+            .collect()
+    }
+
     fn lower_handle(
         &mut self,
         target: Expression,
@@ -3806,10 +3857,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     }
                 }
             }
+            let refinement_predicates =
+                self.reflected_finish_predicates(intrinsic, &type_arguments, call_span)?;
             Some(ExpressionKind::Intrinsic {
                 intrinsic,
                 type_arguments,
                 reflection_arguments,
+                refinement_predicates,
                 args: lowered_args,
                 evaluation_order,
             })
@@ -5546,15 +5600,20 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
         } else {
             let has_explicit_type_arguments = Self::has_explicit_type_arguments(&step.function);
+            let intrinsic = self.checked_intrinsic_id(step.span)?;
+            let type_arguments =
+                self.checked_intrinsic_type_arguments(step.span, has_explicit_type_arguments)?;
+            let refinement_predicates =
+                self.reflected_finish_predicates(intrinsic, &type_arguments, step.span)?;
             ExpressionKind::Intrinsic {
-                intrinsic: self.checked_intrinsic_id(step.span)?,
-                type_arguments: self
-                    .checked_intrinsic_type_arguments(step.span, has_explicit_type_arguments)?,
+                intrinsic,
+                type_arguments,
                 reflection_arguments: self
                     .intrinsic_reflection_arguments
                     .get(&step.span)
                     .cloned()
                     .unwrap_or_default(),
+                refinement_predicates,
                 args,
                 evaluation_order,
             }

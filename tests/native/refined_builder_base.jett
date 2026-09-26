@@ -1,0 +1,29 @@
+namespace app
+type NonEmpty = string where value != ""
+type Long = NonEmpty where string.char_count(value) >= 3
+struct User:
+    name: NonEmpty
+    alias: Long
+    label: string
+function build_user(raw: string, alias: string) returns string:
+    mutable TypeConstruction builder = type.construct_start[User]()
+    TypeField name_field = list.get[TypeField](type.fields[User](), 0) handle:
+        return "missing field"
+    builder = type.construct_put[User, string](builder, view name_field, raw) handle error:
+        return error
+    TypeField alias_field = list.get[TypeField](type.fields[User](), 1) handle:
+        return "missing field"
+    builder = type.construct_put[User, string](builder, view alias_field, alias) handle error:
+        return error
+    TypeField label_field = list.get[TypeField](type.fields[User](), 2) handle:
+        return "missing field"
+    builder = type.construct_put[User, string](builder, view label_field, "account") handle error:
+        return error
+    User built = type.construct_finish[User](builder) handle error:
+        return error
+    return coarsen built.name
+function main() returns nothing:
+    println(build_user("Ada", "Agent"))
+    println(build_user("", "Agent"))
+    println(build_user("Ada", "Al"))
+    return nothing
