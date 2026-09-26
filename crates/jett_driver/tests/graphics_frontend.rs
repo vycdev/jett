@@ -99,7 +99,10 @@ fn graphics_frontend_policy_failures() {
         ),
         ("graphics_callback_capability_alias.jett", vec![300, 372]),
         ("graphics_private_kernel_values.jett", vec![303, 313, 313]),
-        ("graphics_state_callback_authority.jett", vec![372, 402]),
+        (
+            "graphics_state_callback_authority.jett",
+            vec![372, 402, 500],
+        ),
         (
             "graphics_pipeline_callback_effect.jett",
             vec![372, 372, 500],

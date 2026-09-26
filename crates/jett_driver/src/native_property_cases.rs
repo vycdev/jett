@@ -423,6 +423,7 @@ pub(super) fn value_expression(
             ExpressionKind::EnumConstruct {
                 enum_type: ty,
                 variant: VariantId::new(index),
+                evaluation_order: (0..fields.len()).collect(),
                 payloads: fields
                     .iter()
                     .zip(&variant_def.fields)

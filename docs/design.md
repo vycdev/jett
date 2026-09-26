@@ -6720,7 +6720,12 @@ Every function always has a `returns` clause — functions that produce no value
 
 **Every code path must end with an explicit `return` — except `returns nothing` functions.** A function that `returns int64` must have `return <value>` on every code path. If any path is missing a return, the compiler rejects it. The one exception: functions that `returns nothing` may omit the final `return nothing` — the function implicitly returns when execution reaches the end. Early `return nothing` is still allowed for exiting mid-function.
 
-Named arguments work in both struct construction AND function calls. Any parameter can be passed by name for clarity. This allows `GuiCapability.create_text_field(gui, label, width: 200, height: 30)` — mixing positional and named arguments in a single call.
+Named arguments work in struct and enum construction and in calls to declared
+functions. Any parameter can be passed by name for clarity. This allows
+`GuiCapability.create_text_field(gui, label, width: 200, height: 30)` to mix
+positional and named arguments in a single call. A positional argument fills
+the first parameter not yet supplied; a pipeline input reserves the first
+parameter before the remaining arguments are assigned.
 
 Argument expressions are always evaluated once in lexical left-to-right source
 order. Named arguments change which parameter receives a value, not when the
@@ -7096,9 +7101,24 @@ function(int64) returns int64 add5 = make_adder(5)
 int64 result = add5(10)    # result == 15
 ```
 
-A call through a function-valued local evaluates arguments in lexical source
-order, then reads the local to select the function. If an argument's handled
-failure reassigns a mutable function local, the call uses its new value.
+A call through a function-valued expression evaluates arguments in lexical
+source order, then evaluates the callee to select the function. This includes
+parenthesized callbacks, returned functions, and function-valued fields. If an
+argument's handled failure reassigns a mutable callback or its containing
+record, the call uses its new value. An argument's early return skips callee
+evaluation. Ownership checking uses the same order; parentheses preserve moves
+and views. Capability-bearing signatures remain impure for every callee form.
+Inline function bodies follow the same signature-based purity rule as declared
+functions. Creating a closure does not execute its body: a pure or `comptime`
+expression may create a callback that accepts a capability when invoked later.
+The body is checked in its own function context and cannot acquire authority
+from the surrounding expression.
+
+Named arguments use parameter names from a checked function or constructor
+declaration, and parentheses preserve that declaration metadata. Anonymous
+function types contain parameter types and ownership modes but no names; calls
+through such values require positional arguments. Unknown or duplicate labels
+are rejected rather than silently treated as positional arguments.
 
 ### Explicit Typing
 

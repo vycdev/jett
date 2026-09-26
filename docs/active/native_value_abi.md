@@ -212,6 +212,12 @@ Function types retain the checked view mode of every parameter. Native
 indirect calls borrow view arguments until the call returns and transfer only
 owned arguments; the borrowed callee parameter never destroys the caller's
 value. A call-site `view` to an owned parameter is rejected before codegen.
+Function-valued callee expressions use the same descriptor ABI as named local
+callbacks. Argument temporaries remain owned while a returned, projected, or
+handled callee expression is evaluated; a callee failure or handler return
+cleans them up before any transfer to the selected function. Native differential
+fixtures cover successful calls and terminal callee failure with owned list
+arguments.
 
 Bytes new/from_string/slice/concat, explicit clone, length and to_hex execute
 natively. Concat creates real checked-capacity byte storage. No byte mutation

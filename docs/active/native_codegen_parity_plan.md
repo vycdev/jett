@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call, indirect-call, supported intrinsic-argument, unary, cloneable binary, short-circuit boolean, collection, and value-constructor handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, ordered call arguments and constructor fields, scalar, string, and enum evaluation order, and short-circuit fallback skipping covered; other nested-expression and refinement handlers pending |
-| Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters and ownership modes | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context and borrow view parameters | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls, including named and captured callbacks with view parameters; explicit `comptime` materializes named, capture-free, and captured inline function values from closed pure expressions, including returned and list-contained closures |
+| Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters and ownership modes | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context and borrow view parameters; parenthesized, returned, projected, inline, and pipeline callee expressions retain checked call order | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls, including view and capability parameters; callee handlers and terminal failures clean already evaluated owned arguments; explicit `comptime` materializes named, capture-free, and captured inline function values from closed pure expressions, including capability-accepting callbacks whose bodies execute only with runtime authority |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Explicit `comptime` values | checked closed pure expressions and contextual expected types covered | evaluated scalar and supported composite values materialize as typed HIR; captured closure values gain typed caller-local bindings; original source bodies are not emitted | linked native/interpreter fixtures cover nested collections, sums, structs, bitfields, enums, machines, bytes, contextual `ok`/`fail`/`none`, named functions, capture-free inline functions, captured closures, and pending `nothing` values, including captured and list-contained values; runtime authority remains unsupported |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
@@ -329,9 +329,10 @@ As of 2026-09-26, the working estimate for overall native language coverage is
 **about 80%**. This is a deliberately coarse progress marker, reviewed in
 five-percentage-point steps against the coverage matrix above, not a computed
 ratio or a release gate. The fixture counts remain the reproducible measures.
-View-parameter function values and pending `nothing` tasks gained native
-execution, closing known gaps without yet supporting the next five-point step
-of the estimate. It stays below full parity while known semantic gaps remain in
+View-parameter function values, pending `nothing` tasks, and general
+function-expression calls gained native execution, closing known gaps without
+yet supporting the next five-point step of the estimate. It stays below full
+parity while known semantic gaps remain in
 ownership and nested handlers, capability/resource providers, asynchronous
 task behavior, JSON shapes, reflection, and special-value diagnostics.
 
@@ -355,10 +356,51 @@ comptime function values, generic forwarding, pipelines, and views evaluated
 before handlers. Generic calls and pipelines reject a view passed to an owned
 parameter at the frontend; affected JSON map observers explicitly clone their
 owned-input API arguments instead of relying on an implicit native clone.
-General function-expression callees remain open: parenthesized callbacks,
-immediately invoked returned functions, and function-valued struct fields pass
-frontend checking but currently fail in both the interpreter and HIR lowering.
-Their frontend acceptance is not evidence of execution coverage.
+General function-expression calls now lower and execute through parenthesized
+callbacks, immediately invoked returned functions, function-valued fields, and
+pipeline targets. They retain the existing indirect-call order: evaluate
+arguments in source order, then evaluate the callee expression, then invoke the
+selected function value.
+Argument handlers may therefore change which callback is selected, and an early
+return from an argument must skip callee evaluation. Constructor, declared
+function, and compiler-intrinsic identities retain their checked dispatch.
+Function parameter ownership, purity, and capability rules apply to expression
+callees exactly as to existing function values; no new call syntax is introduced.
+The frontend must check ownership in that same argument-before-callee order,
+including parenthesized owners, and must enforce capability purity for all
+callee shapes. Named arguments require checked declaration parameter names.
+Parentheses around a declared function preserve those names; an anonymous
+function type supplies no names, so labels on such calls must be rejected
+instead of silently interpreted as positional arguments. This conservative
+boundary avoids adding parameter names to function type identity or deriving
+them from whichever implementation happens to be stored at runtime.
+Inline function bodies follow the same signature-based purity rule as declared
+functions. Checking a closure body uses its own function context; constructing
+a closure does not execute that body or inherit the caller's comptime authority.
+Pure expression calls retain secret input taint on their return values.
+Enum constructor payloads carry checked parameter order and a separate source
+evaluation permutation through HIR, MIR, and native emission. Reordered named
+payloads, handlers, early returns, pipelines, and baked enum values preserve
+both their field layout and lexical effects. A function-valued field whose name
+matches a variant of its result enum still invokes the callback.
+Mixed named and positional arguments fill the next unbound parameter in both
+execution paths. Interpreter calls isolate the callee's lexical locals and
+namespace aliases, including aliases retained by returned closures.
+Validation passed all 56 Windows native execution tests and the unchanged
+182/182 object gate. After the final argument-binding and lexical-scope fixes,
+all 296 interpreter tests, 578 frontend fixtures, 10 Graphics frontend tests,
+and the three dedicated native expression-call/enum tests passed again.
+The new native fixtures extend focused coverage without changing the fixed
+run-pass object denominator.
+Function-valued trace and breakpoint bindings remain a confirmed native gap:
+the interpreter renders named and captured callbacks, while native emission
+currently rejects those debug operands. The same programs without those debug
+statements emit successfully.
+Separately, explicit `comptime` extraction still omits function-local namespace
+aliases from the expression's evaluation context. A canonical-name bake in the
+declaration namespace does preserve aliases captured inside the returned
+closure and is covered by the native fixture; invoking the factory through a
+local alias in the `comptime` expression itself remains a frontend follow-up.
 
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a

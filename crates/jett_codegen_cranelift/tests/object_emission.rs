@@ -42,6 +42,175 @@ fn lower_source(source: &str) -> (Program, TypeInterner) {
 }
 
 #[test]
+fn emits_checked_secret_arguments_for_direct_and_indirect_calls() {
+    for callee in ["callback", "factory()"] {
+        for (parameter, returned, body, argument, result) in [
+            ("int64", "int64", "value", "secret[int64]", "secret[int64]"),
+            ("secret[int64]", "int64", "7", "int64", "int64"),
+            ("secret[int64]", "int64", "7", "secret[int64]", "int64"),
+            (
+                "int64",
+                "secret[int64]",
+                "value",
+                "secret[int64]",
+                "secret[int64]",
+            ),
+            ("int64", "nothing", "nothing", "secret[int64]", "nothing"),
+            (
+                "Positive",
+                "Positive",
+                "value",
+                "secret[Positive]",
+                "secret[Positive]",
+            ),
+            ("Count", "Count", "value", "secret[Count]", "secret[Count]"),
+            ("int64", "int64", "value", "Classified", "secret[int64]"),
+            (
+                "Classified",
+                "Classified",
+                "value",
+                "secret[Classified]",
+                "Classified",
+            ),
+        ] {
+            let source = format!(
+                "namespace app\n\
+                 type Positive = int64 where value > 0\n\
+                 type Count = int64\n\
+                 type Classified = secret[int64] where true\n\
+                 function callback(value: {parameter}) returns {returned}:\n    return {body}\n\
+                 function factory() returns function({parameter}) returns {returned}:\n    return callback\n\
+                 function caller(value: {argument}) returns {result}:\n    return {callee}(value)\n"
+            );
+            let (program, types) = lower_source(&source);
+            emit_host_object(&program, &types)
+                .unwrap_or_else(|error| panic!("{source}\nobject emission failed: {error:?}"));
+        }
+    }
+}
+
+fn returned_call_mut(function: &mut jett_mir::Function) -> &mut jett_hir::Expression {
+    let entry = function.entry.index() as usize;
+    let TerminatorKind::Return(Some(expression)) = &mut function.blocks[entry].terminator.kind
+    else {
+        panic!("expected returned call");
+    };
+    assert!(matches!(
+        expression.kind,
+        jett_hir::ExpressionKind::Call { .. } | jett_hir::ExpressionKind::IndirectCall { .. }
+    ));
+    expression
+}
+
+#[test]
+fn rejects_secret_lifted_calls_with_untainted_mir_results() {
+    for callee in ["callback", "factory()"] {
+        let source = format!(
+            "namespace app\n\
+             function callback(value: int64) returns int64:\n    return value\n\
+             function factory() returns function(int64) returns int64:\n    return callback\n\
+             function caller(value: secret[int64]) returns secret[int64]:\n    return {callee}(value)\n"
+        );
+        let (mut program, types) = lower_source(&source);
+        let caller = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "caller")
+            .expect("caller");
+        caller.return_type = TypeInterner::INT64;
+        returned_call_mut(caller).ty = TypeInterner::INT64;
+
+        let error = emit_host_object(&program, &types)
+            .expect_err("secret lifting must retain the checked result taint");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("call result type")),
+            "{callee}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_secret_lifting_with_mismatched_argument_types() {
+    for callee in ["callback", "factory()"] {
+        for parameter in ["int64", "Positive"] {
+            let source = format!(
+                "namespace app\n\
+                 type Positive = int64 where value > 0\n\
+                 function callback(value: {parameter}) returns {parameter}:\n    return value\n\
+                 function factory() returns function({parameter}) returns {parameter}:\n    return callback\n\
+                 function caller(value: secret[{parameter}]) returns secret[{parameter}]:\n    return {callee}(value)\n"
+            );
+            let (mut program, mut types) = lower_source(&source);
+            let expression = returned_call_mut(
+                program
+                    .functions
+                    .iter_mut()
+                    .find(|function| function.identity.declaration.name == "caller")
+                    .expect("caller"),
+            );
+            let (jett_hir::ExpressionKind::Call { args, .. }
+            | jett_hir::ExpressionKind::IndirectCall { args, .. }) = &mut expression.kind
+            else {
+                unreachable!("returned_call_mut validates the expression kind");
+            };
+            // Neither an unrelated primitive nor the refinement's bare base is
+            // a valid replacement for its checked secret payload type.
+            let payload_type = if parameter == "Positive" {
+                TypeInterner::INT64
+            } else {
+                TypeInterner::INT32
+            };
+            args[0].ty = types.intern(Type::Secret(payload_type));
+            args[0].kind = jett_hir::ExpressionKind::Int(7);
+
+            let error = emit_host_object(&program, &types)
+                .expect_err("secret lifting must preserve the expected payload type");
+            assert!(
+                matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                    if message.contains("call argument type")),
+                "{callee}({parameter}): {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_secret_lifting_into_impure_call_parameters() {
+    for callee in ["callback", "factory()"] {
+        let source = format!(
+            "namespace app\n\
+             function callback(view stdout: Stdout, value: int64) returns int64:\n    return value\n\
+             function factory() returns function(view Stdout, int64) returns int64:\n    return callback\n\
+             function caller(view stdout: Stdout, value: int64) returns int64:\n    return {callee}(view stdout, value)\n"
+        );
+        let (mut program, mut types) = lower_source(&source);
+        let expression = returned_call_mut(
+            program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "caller")
+                .expect("caller"),
+        );
+        let (jett_hir::ExpressionKind::Call { args, .. }
+        | jett_hir::ExpressionKind::IndirectCall { args, .. }) = &mut expression.kind
+        else {
+            unreachable!("returned_call_mut validates the expression kind");
+        };
+        args[1].ty = types.intern(Type::Secret(TypeInterner::INT64));
+        args[1].kind = jett_hir::ExpressionKind::Int(7);
+
+        let error = emit_host_object(&program, &types)
+            .expect_err("impure calls cannot accept secret-lifted arguments");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("call argument type")),
+            "{callee}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn emits_arithmetic_with_a_refined_integer_operand() {
     let (program, types) = lower_source(
         r#"namespace app

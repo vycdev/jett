@@ -1763,7 +1763,12 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::MachineConstruct {
                 state, payloads, ..
-            } => self.construct_tagged_record(state.index(), payloads, expression.span),
+            } => self.construct_tagged_record(
+                state.index(),
+                payloads,
+                0..payloads.len(),
+                expression.span,
+            ),
             ExpressionKind::MachineTransition {
                 source,
                 target,
@@ -1771,7 +1776,12 @@ impl Translator<'_, '_> {
                 ..
             } => {
                 self.expression(source)?;
-                self.construct_tagged_record(target.index(), payloads, expression.span)
+                self.construct_tagged_record(
+                    target.index(),
+                    payloads,
+                    0..payloads.len(),
+                    expression.span,
+                )
             }
             ExpressionKind::ListConstruct { elements } => {
                 self.construct_list(elements, expression.ty, expression.span)
@@ -1790,8 +1800,16 @@ impl Translator<'_, '_> {
                 Err(self.unsupported(expression.span, "failure handler"))
             }
             ExpressionKind::EnumConstruct {
-                variant, payloads, ..
-            } => self.construct_tagged_record(variant.index(), payloads, expression.span),
+                variant,
+                payloads,
+                evaluation_order,
+                ..
+            } => self.construct_tagged_record(
+                variant.index(),
+                payloads,
+                evaluation_order.iter().copied(),
+                expression.span,
+            ),
             ExpressionKind::StringInterpolation(segments) => {
                 self.interpolate(segments, expression.span)
             }

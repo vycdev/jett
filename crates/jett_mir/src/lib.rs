@@ -766,14 +766,18 @@ impl FunctionValidator<'_, '_> {
                 fields,
                 evaluation_order,
                 ..
+            }
+            | hir::ExpressionKind::EnumConstruct {
+                payloads: fields,
+                evaluation_order,
+                ..
             } => {
                 self.check_evaluation_order(evaluation_order, fields.len(), expression.span);
                 for field in fields {
                     self.expression(field);
                 }
             }
-            hir::ExpressionKind::MachineConstruct { payloads, .. }
-            | hir::ExpressionKind::EnumConstruct { payloads, .. } => {
+            hir::ExpressionKind::MachineConstruct { payloads, .. } => {
                 for payload in payloads {
                     self.expression(payload);
                 }
@@ -1516,6 +1520,73 @@ function caller() returns int64:
         *evaluation_order = vec![0, 0];
 
         let errors = validate(&program).expect_err("invalid order must be rejected");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].message,
+            "evaluation order must be a permutation of the operand indexes"
+        );
+    }
+
+    #[test]
+    fn enum_payload_handlers_preserve_named_argument_evaluation_order() {
+        let mut program = lower_source(
+            r#"namespace app
+enum PairValue:
+    pair(left: int64, right: int64)
+function make(mutable seed: int64, missing: optional[int64]) returns PairValue:
+    return PairValue.pair(right: seed, left: missing handle:
+        seed = 9
+        default 5
+    )
+"#,
+        );
+        let returned = returned_expression(&mut program.functions[0]);
+        let hir::ExpressionKind::EnumConstruct {
+            payloads,
+            evaluation_order,
+            ..
+        } = &returned.kind
+        else {
+            panic!("expected enum construction after its payload handler");
+        };
+        assert_eq!(evaluation_order, &[1, 0]);
+        let hir::ExpressionKind::Local(right) = payloads[1].kind else {
+            panic!("expected saved right payload");
+        };
+        let function = &program.functions[0];
+        assert!(
+            matches!(
+                &function.blocks[function.entry.index() as usize].statements[0].kind,
+                StatementKind::Let {
+                    local,
+                    value: Expression { kind: hir::ExpressionKind::Local(source), .. },
+                } if *local == right && *source == function.params[0].local
+            ),
+            "the right payload must be saved before extracting the left payload's handler"
+        );
+        validate(&program).expect("lowered enum handler order must validate");
+    }
+
+    #[test]
+    fn validation_rejects_an_enum_payload_order_that_is_not_a_permutation() {
+        let mut program = lower_source(
+            r#"namespace app
+enum PairValue:
+    pair(left: int64, right: int64)
+function make() returns PairValue:
+    return PairValue.pair(right: 4, left: 9)
+"#,
+        );
+        let expression = returned_expression(&mut program.functions[0]);
+        let hir::ExpressionKind::EnumConstruct {
+            evaluation_order, ..
+        } = &mut expression.kind
+        else {
+            panic!("expected enum construction");
+        };
+        assert_eq!(evaluation_order, &[1, 0]);
+        *evaluation_order = vec![1, 1];
+        let errors = validate(&program).expect_err("invalid enum payload order must fail");
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].message,

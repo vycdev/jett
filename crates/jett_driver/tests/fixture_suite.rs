@@ -393,6 +393,14 @@ compile_pass_fixture!(
 
 compile_fail_fixture!(compile_fail_type_mismatch, "type_mismatch.jett");
 compile_fail_fixture!(compile_fail_function_view_modes, "function_view_modes.jett");
+compile_fail_fixture!(
+    compile_fail_function_expression_ownership,
+    "function_expression_ownership.jett"
+);
+compile_fail_fixture!(
+    compile_fail_function_expression_policy,
+    "function_expression_policy.jett"
+);
 compile_fail_fixture!(compile_fail_secret_stdout, "secret_stdout.jett");
 compile_fail_fixture!(compile_fail_secret_print, "secret_print.jett");
 

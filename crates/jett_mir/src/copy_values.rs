@@ -465,9 +465,13 @@ fn visit(
                 visit(field, reads, temporaries, types, program, false)?;
             }
         }
-        ExpressionKind::EnumConstruct { payloads, .. } if program.is_some() => {
-            for payload in payloads {
-                visit(payload, reads, temporaries, types, program, false)?;
+        ExpressionKind::EnumConstruct {
+            payloads,
+            evaluation_order,
+            ..
+        } if program.is_some() => {
+            for &index in evaluation_order {
+                visit(&payloads[index], reads, temporaries, types, program, false)?;
             }
         }
         ExpressionKind::MachineConstruct { payloads, .. } if program.is_some() => {

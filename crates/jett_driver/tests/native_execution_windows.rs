@@ -1493,6 +1493,56 @@ fn native_view_function_values_match_interpreter() {
 }
 
 #[test]
+fn native_function_expression_calls_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/function_expression_calls.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated expression callback directory");
+    let binary = directory.path().join("function_expression_calls.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile calls through function expressions");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_function_expression_callee_failure_cleans_owned_arguments() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/function_expression_callee_failure.jett");
+    let expected = jett_driver::run_file_capture_outcome(&fixture)
+        .expect_err("callee selection must fail after evaluating owned arguments");
+    let directory = tempfile::tempdir().expect("isolated callee failure directory");
+    let binary = directory
+        .path()
+        .join("function_expression_callee_failure.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile failing callee");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
+fn native_named_enum_arguments_preserve_source_order() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/named_enum_arguments.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "amount\nlabel\nnumbers\nlabel 2 7\nfirst\nhandler\nafter\nafter 2 9\nallocated\nreturned 1 11\npiped\npiped amount\npiped numbers\npiped 2 12\nbaked 3 8\nmixed amount\nmixed label\nmixed numbers\nmixed label 2 13\nmixed piped\nmixed piped amount\nmixed piped numbers\nmixed piped 2 14\nmixed baked 1 15\nmixed function 2 16\nmixed function piped 1 17\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated named enum directory");
+    let binary = directory.path().join("named_enum_arguments.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile named enum payloads");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_constructor_nested_handles_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_constructors.jett");

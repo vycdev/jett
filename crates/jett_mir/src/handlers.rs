@@ -459,16 +459,17 @@ impl Builder<'_> {
             enum_type,
             variant,
             payloads,
+            evaluation_order,
         } = &expression.kind
             && payloads.iter().any(has_extractable_handle)
-            && let Some(payloads) =
-                self.lower_ordered_owned_values(payloads, &(0..payloads.len()).collect::<Vec<_>>())
+            && let Some(payloads) = self.lower_ordered_owned_values(payloads, evaluation_order)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::EnumConstruct {
                 enum_type: *enum_type,
                 variant: *variant,
                 payloads,
+                evaluation_order: evaluation_order.clone(),
             };
             return lowered;
         }

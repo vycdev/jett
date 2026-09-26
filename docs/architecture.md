@@ -834,12 +834,23 @@ comptime/runtime dispatch, and native codegen consume the checked ID and use
 exhaustive matches rather than rediscovering policy from names. Inline
 functions and indirect calls retain explicit parameter/local identity. An
 indirect call evaluates arguments in lexical source order before resolving its
-function-valued local, matching interpreter behavior when an argument handler
-rebinds that local. Function types carry parameter `view` modes through HIR and
+function-valued expression, including a returned function or projected field.
+Argument handlers can change callback selection or return before the callee is
+evaluated. HIR preserves checked constructor, source function, and intrinsic
+identities through parentheses; other checked function expressions become
+`IndirectCall`. Checked declaration parameter names order named arguments;
+anonymous function values reject argument labels. Ownership analysis follows
+the same evaluation order, and capability signatures enforce call purity for
+every callee shape. Function types carry parameter `view` modes through HIR and
 MIR; native indirect calls borrow view arguments through the call and transfer
 only owned arguments. MIR lowering receives the checked type interner so a view
 used before a later handler can be snapshotted only when its recursive value
 type is cloneable; resource-bearing values are never cloned by this extraction.
+Interpreter function and closure invocations expose their own lexical scopes
+and the initial global environment, excluding unrelated caller locals and
+namespace aliases. Closures retain the namespace aliases visible at creation.
+Generic body checking similarly saves and restores the triggering closure's capture
+scope so a generic callee's parameters cannot be mistaken for captures.
 For a non-short-circuit binary expression with a nested handler, the left value
 is captured before lowering the right; owned cloneable operands are cloned so
 the handler cannot change the value compared by a later enum equality.

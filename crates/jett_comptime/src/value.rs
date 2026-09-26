@@ -73,6 +73,7 @@ pub enum Value {
         params: Vec<Param>,
         body: Block,
         captures: HashMap<String, Value>,
+        namespace_aliases: HashMap<String, String>,
         namespace: Option<String>,
     },
 }

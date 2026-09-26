@@ -156,6 +156,7 @@ impl Translator<'_, '_> {
         &mut self,
         tag: u32,
         payloads: &[Expression],
+        evaluation_order: impl IntoIterator<Item = usize>,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
         let count = i64::try_from(payloads.len() + 1)
@@ -167,8 +168,8 @@ impl Translator<'_, '_> {
         let tag = self.builder.ins().iconst(ir::types::I64, i64::from(tag));
         let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
         self.leaf(NativeLeaf::StructInit, &[handle, zero, tag, borrowed], true)?;
-        for (field, payload) in payloads.iter().enumerate() {
-            let value = self.expression(payload)?;
+        for field in evaluation_order {
+            let value = self.expression(&payloads[field])?;
             let (bits, owned) = self.payload_bits(value);
             let index = self.builder.ins().iconst(ir::types::I64, field as i64 + 1);
             let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));

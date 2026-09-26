@@ -612,6 +612,9 @@ pub struct Interpreter {
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
     /// Namespace of the qualified function body currently executing.
     current_namespace: Option<String>,
+    /// First scope belonging to the current function or closure invocation.
+    /// The initial global environment remains visible across calls.
+    lexical_scope_floor: usize,
     /// Whether the current function body came from compiler-shipped stdlib source.
     current_function_trusted_stdlib: bool,
     /// Trusted field metadata currently produced by direct `type.fields[T]()` loops.
@@ -685,6 +688,7 @@ impl Interpreter {
             actor_defs: HashMap::new(),
             type_arg_scopes: Vec::new(),
             current_namespace: None,
+            lexical_scope_floor: 0,
             current_function_trusted_stdlib: false,
             reflected_field_scopes: Vec::new(),
             reflected_type_info_scopes: Vec::new(),
@@ -825,7 +829,10 @@ impl Interpreter {
     }
 
     fn get_variable(&self, name: &str) -> Option<&Value> {
-        for scope in self.scopes.iter().rev() {
+        for (index, scope) in self.scopes.iter().enumerate().rev() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             if let Some(v) = scope.get(name) {
                 return Some(v);
             }
@@ -852,7 +859,10 @@ impl Interpreter {
     }
 
     fn get_variable_type(&self, name: &str) -> Option<&TypeExpr> {
-        for scope in self.variable_type_scopes.iter().rev() {
+        for (index, scope) in self.variable_type_scopes.iter().enumerate().rev() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             if let Some(ty) = scope.get(name) {
                 return Some(ty);
             }
@@ -864,6 +874,9 @@ impl Interpreter {
     /// contains it.  Returns `Err` if the variable was never declared.
     fn assign_variable(&mut self, name: &str, value: Value) -> Result<(), String> {
         for index in (0..self.scopes.len()).rev() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             if self.scopes[index].contains_key(name) {
                 let ty = self.variable_type_scopes[index].get(name).cloned();
                 let value = if let Some(ty) = ty {
@@ -971,9 +984,26 @@ impl Interpreter {
         let (prefix, suffix) = name.split_once('.')?;
         self.namespace_alias_scopes
             .iter()
+            .enumerate()
             .rev()
-            .find_map(|scope| scope.get(prefix))
+            .filter(|(index, _)| *index == 0 || *index >= self.lexical_scope_floor)
+            .find_map(|(_, scope)| scope.get(prefix))
             .map(|target| format!("{target}.{suffix}"))
+    }
+
+    fn visible_namespace_aliases(&self) -> HashMap<String, String> {
+        let mut aliases = HashMap::new();
+        for (index, scope) in self.namespace_alias_scopes.iter().enumerate() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
+            aliases.extend(
+                scope
+                    .iter()
+                    .map(|(name, target)| (name.clone(), target.clone())),
+            );
+        }
+        aliases
     }
 
     fn runtime_name(&self, name: &str) -> String {
@@ -1800,12 +1830,16 @@ impl Interpreter {
 
             // Field access: struct field access, or enum variant like `Color.red`
             Expr::FieldAccess(obj, field, _) => {
-                if let Some(name) = Self::dotted_expr_name(expr) {
+                if !self.is_value_call_target(expr)
+                    && let Some(name) = Self::dotted_expr_name(expr)
+                {
                     if let Some(function) = self.registry_name(&self.functions, &name) {
                         return Ok(ExprFlow::Value(Value::NamedFunction(function)));
                     }
                 }
-                if let Some(owner_name) = Self::dotted_expr_name(obj) {
+                if !self.is_value_call_target(expr)
+                    && let Some(owner_name) = Self::dotted_expr_name(obj)
+                {
                     if let Some(enum_name) = self.registry_name(&self.enums, &owner_name) {
                         return Ok(ExprFlow::Value(Value::Enum {
                             type_name: enum_name,
@@ -1998,7 +2032,10 @@ impl Interpreter {
             Expr::InlineFn(params, _return_type, body, _) => {
                 // Capture the current environment (all visible variables) for closure semantics.
                 let mut captures = HashMap::new();
-                for scope in &self.scopes {
+                for (index, scope) in self.scopes.iter().enumerate() {
+                    if index != 0 && index < self.lexical_scope_floor {
+                        continue;
+                    }
                     for (name, value) in scope {
                         captures.insert(name.clone(), value.clone());
                     }
@@ -2007,6 +2044,7 @@ impl Interpreter {
                     params: params.clone(),
                     body: body.clone(),
                     captures,
+                    namespace_aliases: self.visible_namespace_aliases(),
                     namespace: self.current_namespace.clone(),
                 }))
             }
@@ -2067,50 +2105,84 @@ impl Interpreter {
         args: &[CallArg],
         piped: bool,
     ) -> Result<Option<Vec<usize>>, String> {
-        if args.iter().all(|arg| arg.name.is_none()) {
+        let callee = Self::unparenthesized(callee);
+        if self.is_value_call_target(callee) || args.iter().all(|arg| arg.name.is_none()) {
             return Ok(None);
         }
-        let Some(source_name) = Self::dotted_expr_name(callee) else {
-            return Ok(None);
-        };
-        let name = self.runtime_name(&source_name);
-        let Some(function) = self.functions.get(&name) else {
+        let Some((callable, parameter_names)) = self.source_call_parameters(callee) else {
             return Ok(None);
         };
         let offset = usize::from(piped);
-        if function.params.len() != args.len() + offset {
+        if parameter_names.len() != args.len() + offset {
             return Err(format!(
-                "function '{name}' argument count does not match parameter count"
+                "{callable} argument count does not match parameter count"
             ));
         }
-        let mut order = vec![None; function.params.len()];
+        let mut order = vec![None; parameter_names.len()];
         if piped {
             order[0] = Some(0);
         }
         for (index, arg) in args.iter().enumerate() {
             let source_index = index + offset;
             let parameter_index = match &arg.name {
-                Some(argument_name) => function
-                    .params
+                Some(argument_name) => parameter_names
                     .iter()
-                    .position(|param| param.name.name == argument_name.name)
+                    .position(|param| *param == argument_name.name)
                     .ok_or_else(|| {
-                        format!(
-                            "unknown argument '{}' for function '{name}'",
-                            argument_name.name
-                        )
+                        format!("unknown argument '{}' for {callable}", argument_name.name)
                     })?,
-                None => source_index,
+                None => order
+                    .iter()
+                    .position(Option::is_none)
+                    .ok_or_else(|| format!("too many arguments for {callable}"))?,
             };
             if order[parameter_index].replace(source_index).is_some() {
-                return Err(format!("duplicate argument for function '{name}'"));
+                return Err(format!("duplicate argument for {callable}"));
             }
         }
         order
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .map(Some)
-            .ok_or_else(|| format!("missing argument for function '{name}'"))
+            .ok_or_else(|| format!("missing argument for {callable}"))
+    }
+
+    fn source_call_parameters(&self, callee: &Expr) -> Option<(String, Vec<&str>)> {
+        if let Some(source_name) = Self::dotted_expr_name(callee) {
+            let name = self.runtime_name(&source_name);
+            if let Some(function) = self.functions.get(&name) {
+                return Some((
+                    format!("function '{name}'"),
+                    function
+                        .params
+                        .iter()
+                        .map(|param| param.name.name.as_str())
+                        .collect(),
+                ));
+            }
+        }
+        let (owner, variant_name) = match callee {
+            Expr::EnumVariant(owner, variant, _) => (owner.name.clone(), variant.name.as_str()),
+            Expr::FieldAccess(owner, variant, _) => {
+                (Self::dotted_expr_name(owner)?, variant.name.as_str())
+            }
+            _ => return None,
+        };
+        let enum_name = self.registry_name(&self.enums, &owner)?;
+        let variant = self
+            .enums
+            .get(&enum_name)?
+            .variants
+            .iter()
+            .find(|variant| variant.name.name == variant_name)?;
+        Some((
+            format!("enum variant '{enum_name}.{variant_name}'"),
+            variant
+                .fields
+                .iter()
+                .map(|field| field.name.name.as_str())
+                .collect(),
+        ))
     }
 
     fn reorder_function_arguments<T>(
@@ -2156,7 +2228,8 @@ impl Interpreter {
         callee: &Expr,
         type_args: &[TypeExpr],
     ) -> Option<&FunctionDef> {
-        if !type_args.is_empty() {
+        let callee = Self::unparenthesized(callee);
+        if self.is_value_call_target(callee) || !type_args.is_empty() {
             return None;
         }
         let source_name = match callee {
@@ -2218,9 +2291,8 @@ impl Interpreter {
     }
 
     fn named_function_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
-        if let Expr::Ident(ident) = expression
-            && self.get_variable(&ident.name).is_some()
-        {
+        let expression = Self::unparenthesized(expression);
+        if self.is_value_call_target(expression) {
             // Captures can omit runtime type metadata and shadow a namespaced
             // function. Their checked expression type remains authoritative.
             return None;
@@ -2316,16 +2388,36 @@ impl Interpreter {
         }))
     }
 
+    fn unparenthesized(mut expression: &Expr) -> &Expr {
+        while let Expr::Paren(inner, _) = expression {
+            expression = inner;
+        }
+        expression
+    }
+
+    /// Locals and computed expressions denote values; an unbound dotted root
+    /// can instead denote a namespace, type, or registered function.
+    fn is_value_call_target(&self, expression: &Expr) -> bool {
+        match expression {
+            Expr::Ident(ident) => self.get_variable(&ident.name).is_some(),
+            Expr::FieldAccess(base, _, _) => self.is_value_call_target(base),
+            Expr::EnumVariant(_, _, _) => false,
+            _ => true,
+        }
+    }
+
     fn eval_call_flow(
         &mut self,
         callee: &Expr,
         type_args: &[TypeExpr],
         args: &[CallArg],
     ) -> Result<ExprFlow, String> {
+        let callee = Self::unparenthesized(callee);
         // Check for machine construction/transition BEFORE evaluating args,
         // since state-name arguments are bare identifiers (not variables) and
         // would fail evaluation.
         match callee {
+            _ if self.is_value_call_target(callee) => {}
             Expr::Ident(ident) if self.registry_name(&self.structs, &ident.name).is_some() => {}
             Expr::Ident(ident) => {
                 if let Some(machine_name) = self.registry_name(&self.machines, &ident.name) {
@@ -2370,6 +2462,11 @@ impl Interpreter {
             arg_values.push(value_or_signal!(self, &arg.value));
         }
         let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
+
+        if self.is_value_call_target(callee) {
+            let function = value_or_signal!(self, callee);
+            return Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?));
+        }
 
         match callee {
             Expr::Ident(ident) => {
@@ -2478,10 +2575,16 @@ impl Interpreter {
                     Some(name) => Ok(ExprFlow::Value(
                         self.call_function_with_type_args(&name, type_args, arg_values)?,
                     )),
-                    None => Err("only named function calls are supported in comptime".to_string()),
+                    None => {
+                        let function = value_or_signal!(self, callee);
+                        Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?))
+                    }
                 }
             }
-            _ => Err("only named function calls are supported in comptime".to_string()),
+            _ => {
+                let function = value_or_signal!(self, callee);
+                Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?))
+            }
         }
     }
 
@@ -2575,6 +2678,7 @@ impl Interpreter {
             Expr::Call(callee, args, _) => (callee, &[], args),
             _ => (function, &[], &step.extra_args),
         };
+        let function = Self::unparenthesized(function);
         let argument_order = self.source_function_argument_order(function, extra_args, true)?;
 
         let mut actual_types = Vec::with_capacity(extra_args.len() + 1);
@@ -2610,8 +2714,23 @@ impl Interpreter {
         }
         let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
 
+        if self.is_value_call_target(function) {
+            let function = value_or_signal!(self, function);
+            return Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?));
+        }
+
         // Resolve the function name from the expression.
         match function {
+            Expr::EnumVariant(type_name, variant, _) => {
+                let enum_name = self
+                    .registry_name(&self.enums, &type_name.name)
+                    .unwrap_or_else(|| type_name.name.clone());
+                Ok(ExprFlow::Value(self.construct_enum_variant(
+                    &enum_name,
+                    &variant.name,
+                    arg_values,
+                )?))
+            }
             Expr::Ident(ident) => {
                 let name = self
                     .registry_name(&self.functions, &ident.name)
@@ -2650,6 +2769,15 @@ impl Interpreter {
                             arg_values,
                         )?));
                     }
+                }
+                if let Some(owner_name) = Self::dotted_expr_name(obj)
+                    && let Some(enum_name) = self.registry_name(&self.enums, &owner_name)
+                {
+                    return Ok(ExprFlow::Value(self.construct_enum_variant(
+                        &enum_name,
+                        &field.name,
+                        arg_values,
+                    )?));
                 }
                 match dotted {
                     Some(name) => {
@@ -10164,6 +10292,15 @@ impl Interpreter {
             }
         }
 
+        self.call_registered_function_with_type_args(name, type_args, args)
+    }
+
+    fn call_registered_function_with_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+    ) -> Result<Value, String> {
         let resolved_name = self
             .resolve_interface_dispatch(name, &args)
             .unwrap_or_else(|| name.to_string());
@@ -10194,6 +10331,8 @@ impl Interpreter {
             self.trusted_stdlib_functions.contains(&resolved_name);
 
         let scope_depth = self.scopes.len();
+        let saved_scope_floor = self.lexical_scope_floor;
+        self.lexical_scope_floor = scope_depth;
         self.push_scope();
         let call_result = (|| {
             for (param, arg) in func.params.iter().zip(args) {
@@ -10225,6 +10364,7 @@ impl Interpreter {
         while self.scopes.len() > scope_depth {
             self.pop_scope();
         }
+        self.lexical_scope_floor = saved_scope_floor;
         self.type_arg_scopes.pop();
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
@@ -10388,11 +10528,14 @@ impl Interpreter {
     /// Call a `Value::Function` (inline function) with the given arguments.
     fn call_fn_value(&mut self, fn_val: Value, args: Vec<Value>) -> Result<Value, String> {
         match fn_val {
-            Value::NamedFunction(name) => self.call_function(&name, args),
+            Value::NamedFunction(name) => {
+                self.call_registered_function_with_type_args(&name, &[], args)
+            }
             Value::Function {
                 params,
                 body,
                 captures,
+                namespace_aliases,
                 namespace,
             } => {
                 if args.len() != params.len() {
@@ -10410,9 +10553,14 @@ impl Interpreter {
 
                 // Push the captured environment as a scope, then the parameter scope on top.
                 let scope_depth = self.scopes.len();
+                let saved_scope_floor = self.lexical_scope_floor;
+                self.lexical_scope_floor = scope_depth;
                 self.push_scope();
                 for (name, value) in &captures {
                     self.set_variable(name, value.clone());
+                }
+                for (name, target) in namespace_aliases {
+                    self.set_namespace_alias(name, target);
                 }
                 self.push_scope();
                 for (param, arg) in params.iter().zip(normalized_args) {
@@ -10429,6 +10577,7 @@ impl Interpreter {
                 while self.scopes.len() > scope_depth {
                     self.pop_scope();
                 }
+                self.lexical_scope_floor = saved_scope_floor;
                 let result = result?;
                 Ok(match result {
                     Some(Signal::Return(v)) => v,
@@ -11742,8 +11891,12 @@ mod tests {
 
     /// Helper: create a function call expression.
     fn call(name: &str, args: Vec<Expr>) -> Expr {
+        call_expression(var(name), args)
+    }
+
+    fn call_expression(callee: Expr, args: Vec<Expr>) -> Expr {
         Expr::Call(
-            Box::new(var(name)),
+            Box::new(callee),
             args.into_iter()
                 .map(|value| CallArg {
                     name: None,
@@ -15604,6 +15757,7 @@ mod tests {
             }],
             body: block(vec![return_stmt(var("value"))]),
             captures: HashMap::new(),
+            namespace_aliases: HashMap::new(),
             namespace: None,
         };
 
@@ -15948,6 +16102,660 @@ mod tests {
 
         let result = interp.eval_expr(&call("noop", vec![])).unwrap();
         assert_eq!(result, Value::Nothing);
+    }
+
+    #[test]
+    fn function_expression_callees_support_named_captured_and_comptime_values() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "increment",
+            vec![("value", "int64")],
+            block(vec![return_stmt(binary(var("value"), BinOp::Add, int(1)))]),
+        ));
+        let callback = Expr::InlineFn(
+            vec![Param {
+                view: true,
+                mutable: false,
+                name: ident("value"),
+                ty: type_named("int64"),
+                span: sp(),
+            }],
+            Some(type_named("int64")),
+            block(vec![return_stmt(binary(
+                var("value"),
+                BinOp::Add,
+                var("delta"),
+            ))]),
+            sp(),
+        );
+        interp.register_function(&func_def(
+            "factory",
+            vec![("delta", "int64")],
+            block(vec![return_stmt(callback.clone())]),
+        ));
+        interp.set_variable("callback", Value::NamedFunction("increment".into()));
+        assert_eq!(
+            interp.eval_expr(&call_expression(
+                Expr::Paren(Box::new(var("callback")), sp()),
+                vec![int(4)]
+            )),
+            Ok(Value::Int64(5))
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(
+                call("factory", vec![int(10)]),
+                vec![Expr::View(Box::new(int(4)), sp())]
+            )),
+            Ok(Value::Int64(14))
+        );
+        interp.set_variable("delta", Value::Int64(20));
+        assert_eq!(
+            interp.eval_expr(&call_expression(callback, vec![int(4)])),
+            Ok(Value::Int64(24))
+        );
+        let computed = Expr::Comptime(
+            Box::new(call_expression(
+                call("factory", vec![int(30)]),
+                vec![int(4)],
+            )),
+            sp(),
+        );
+        assert_eq!(interp.eval_expr(&computed), Ok(Value::Int64(34)));
+    }
+
+    #[test]
+    fn function_expression_fields_prefer_local_values_over_dotted_declarations() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "increment",
+            vec![("value", "int64")],
+            block(vec![return_stmt(binary(var("value"), BinOp::Add, int(1)))]),
+        ));
+        interp.register_function_in_namespace(
+            Some("wrapper"),
+            &func_def(
+                "invoke",
+                vec![("value", "int64")],
+                block(vec![return_stmt(int(99))]),
+            ),
+        );
+        let field = Expr::FieldAccess(Box::new(var("wrapper")), ident("invoke"), sp());
+        assert_eq!(
+            interp.eval_expr(&call_expression(field.clone(), vec![int(4)])),
+            Ok(Value::Int64(99))
+        );
+        interp.set_variable(
+            "wrapper",
+            Value::Struct {
+                type_name: "Wrapper".into(),
+                fields: vec![("invoke".into(), Value::NamedFunction("increment".into()))],
+            },
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(field.clone(), vec![int(4)])),
+            Ok(Value::Int64(5))
+        );
+        assert!(
+            matches!(interp.eval_expr(&field), Ok(Value::NamedFunction(name)) if name == "increment")
+        );
+        interp.register_function(&func_def(
+            "wrapper_factory",
+            vec![],
+            block(vec![return_stmt(var("wrapper"))]),
+        ));
+        let computed_field = Expr::FieldAccess(
+            Box::new(call("wrapper_factory", vec![])),
+            ident("invoke"),
+            sp(),
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(computed_field, vec![int(4)])),
+            Ok(Value::Int64(5))
+        );
+    }
+
+    #[test]
+    fn function_expression_named_values_keep_their_registered_target_when_shadowed() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "target",
+            vec![],
+            block(vec![return_stmt(int(1))]),
+        ));
+        interp.register_function(&func_def(
+            "replacement",
+            vec![],
+            block(vec![return_stmt(int(2))]),
+        ));
+        let original = interp.eval_expr(&var("target")).unwrap();
+        interp.set_variable("target", Value::NamedFunction("replacement".into()));
+        interp.set_variable("saved", original);
+        assert_eq!(
+            interp.eval_expr(&call("target", vec![])),
+            Ok(Value::Int64(2))
+        );
+        assert_eq!(
+            interp.eval_expr(&call("saved", vec![])),
+            Ok(Value::Int64(1))
+        );
+    }
+
+    #[test]
+    fn function_expression_parenthesized_declarations_keep_named_argument_order() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "subtract",
+            vec![("first", "int64"), ("second", "int64")],
+            block(vec![return_stmt(binary(
+                var("first"),
+                BinOp::Sub,
+                var("second"),
+            ))]),
+        ));
+        let call = Expr::Call(
+            Box::new(Expr::Paren(Box::new(var("subtract")), sp())),
+            vec![named_arg("second", int(4)), named_arg("first", int(10))],
+            sp(),
+        );
+        assert_eq!(interp.eval_expr(&call), Ok(Value::Int64(6)));
+    }
+
+    #[test]
+    fn function_expression_enum_constructor_labels_preserve_source_evaluation_order() {
+        let mut interp = Interpreter::new();
+        let mut pair = enum_def_with_field("Pair", "values", "first", "int64");
+        pair.variants[0].fields.push(FieldDef {
+            name: ident("second"),
+            ty: type_named("int64"),
+            serialize_name: None,
+            span: sp(),
+        });
+        interp.register_enum(&pair);
+        interp.register_enum_in_namespace(Some("types"), &pair);
+        interp.set_namespace_alias("alias".into(), "types".into());
+        for (callee, expected_type) in [
+            (
+                Expr::EnumVariant(ident("Pair"), ident("values"), sp()),
+                "Pair",
+            ),
+            (
+                Expr::Paren(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(var("Pair")),
+                        ident("values"),
+                        sp(),
+                    )),
+                    sp(),
+                ),
+                "Pair",
+            ),
+            (
+                Expr::FieldAccess(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(var("types")),
+                        ident("Pair"),
+                        sp(),
+                    )),
+                    ident("values"),
+                    sp(),
+                ),
+                "types.Pair",
+            ),
+            (
+                Expr::FieldAccess(
+                    Box::new(Expr::FieldAccess(
+                        Box::new(var("alias")),
+                        ident("Pair"),
+                        sp(),
+                    )),
+                    ident("values"),
+                    sp(),
+                ),
+                "types.Pair",
+            ),
+        ] {
+            interp.set_variable("events", Value::Int64(0));
+            let argument = |value, marker| {
+                Expr::Handle(
+                    Box::new(Expr::None(sp())),
+                    None,
+                    block(vec![
+                        assign(
+                            "events",
+                            binary(
+                                binary(var("events"), BinOp::Mul, int(10)),
+                                BinOp::Add,
+                                int(marker),
+                            ),
+                        ),
+                        Stmt::Expr(ExprStmt {
+                            expr: Expr::Default(Box::new(int(value)), sp()),
+                            span: sp(),
+                        }),
+                    ]),
+                    sp(),
+                )
+            };
+            let expression = Expr::Call(
+                Box::new(callee),
+                vec![
+                    named_arg("second", argument(4, 1)),
+                    named_arg("first", argument(10, 2)),
+                ],
+                sp(),
+            );
+            assert_eq!(
+                interp.eval_expr(&expression),
+                Ok(Value::Enum {
+                    type_name: expected_type.into(),
+                    variant: "values".into(),
+                    fields: vec![Value::Int64(10), Value::Int64(4)],
+                })
+            );
+            assert_eq!(interp.get_variable("events"), Some(&Value::Int64(12)));
+        }
+    }
+
+    #[test]
+    fn enum_pipeline_payloads_keep_named_order_and_lexical_effects() {
+        for constructor in ["Triple.values", "(Triple.values)", "sample.Triple.values"] {
+            let source = format!(
+                r#"namespace sample
+enum Triple:
+    values(first: int64, second: int64, third: int64)
+function mark(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function make() returns Triple:
+    return mark("input", 1) into {constructor}(third: mark("third", 3), second: mark("second", 2))
+"#
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let mut interp = Interpreter::new();
+            interp.register_module(&parsed.module);
+            interp.enable_stdout_capture();
+            assert_eq!(
+                interp.call_function("sample.make", vec![]),
+                Ok(Value::Enum {
+                    type_name: "sample.Triple".into(),
+                    variant: "values".into(),
+                    fields: vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)],
+                })
+            );
+            assert_eq!(interp.take_stdout_output(), "input\nthird\nsecond\n");
+        }
+    }
+
+    #[test]
+    fn mixed_named_and_positional_function_arguments_fill_unassigned_parameters() {
+        for callee in ["combine", "(combine)", "sample.combine"] {
+            for piped in [false, true] {
+                let call = if piped {
+                    format!(
+                        "mark(\"first\", 1) into {callee}(third: mark(\"third\", 3), mark(\"second\", 2))"
+                    )
+                } else {
+                    format!(
+                        "{callee}(third: mark(\"third\", 3), mark(\"first\", 1), mark(\"second\", 2))"
+                    )
+                };
+                let source = format!(
+                    r#"namespace sample
+function combine(first: int64, second: int64, third: int64) returns int64:
+    return first * 100 + second * 10 + third
+function mark(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function make() returns int64:
+    return {call}
+"#
+                );
+                let parsed = jett_parser::parse(&source, FileId::new(0));
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                let mut interp = Interpreter::new();
+                interp.register_module(&parsed.module);
+                interp.enable_stdout_capture();
+                assert_eq!(
+                    interp.call_function("sample.make", vec![]),
+                    Ok(Value::Int64(123)),
+                    "{call}"
+                );
+                assert_eq!(
+                    interp.take_stdout_output(),
+                    if piped {
+                        "first\nthird\nsecond\n"
+                    } else {
+                        "third\nfirst\nsecond\n"
+                    },
+                    "{call}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_named_and_positional_enum_arguments_fill_unassigned_payloads() {
+        for constructor in ["Triple.values", "(Triple.values)", "sample.Triple.values"] {
+            for piped in [false, true] {
+                let call = if piped {
+                    format!(
+                        "mark(\"first\", 1) into {constructor}(third: mark(\"third\", 3), mark(\"second\", 2))"
+                    )
+                } else {
+                    format!(
+                        "{constructor}(third: mark(\"third\", 3), mark(\"first\", 1), mark(\"second\", 2))"
+                    )
+                };
+                let source = format!(
+                    r#"namespace sample
+enum Triple:
+    values(first: int64, second: int64, third: int64)
+function mark(label: string, value: int64) returns int64:
+    println(label)
+    return value
+function make() returns Triple:
+    return {call}
+"#
+                );
+                let parsed = jett_parser::parse(&source, FileId::new(0));
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                let mut interp = Interpreter::new();
+                interp.register_module(&parsed.module);
+                interp.enable_stdout_capture();
+                assert_eq!(
+                    interp.call_function("sample.make", vec![]),
+                    Ok(Value::Enum {
+                        type_name: "sample.Triple".into(),
+                        variant: "values".into(),
+                        fields: vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)],
+                    }),
+                    "{call}"
+                );
+                assert_eq!(
+                    interp.take_stdout_output(),
+                    if piped {
+                        "first\nthird\nsecond\n"
+                    } else {
+                        "third\nfirst\nsecond\n"
+                    },
+                    "{call}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn function_expression_callee_is_resolved_after_argument_handlers() {
+        let mut interp = Interpreter::new();
+        for (name, delta) in [("first", 10), ("second", 20)] {
+            interp.register_function(&func_def(
+                name,
+                vec![("value", "int64")],
+                block(vec![return_stmt(binary(
+                    var("value"),
+                    BinOp::Add,
+                    int(delta),
+                ))]),
+            ));
+        }
+        interp.set_variable("selected", Value::NamedFunction("first".into()));
+        let argument = Expr::Handle(
+            Box::new(Expr::None(sp())),
+            None,
+            block(vec![
+                assign("selected", var("second")),
+                Stmt::Expr(ExprStmt {
+                    expr: Expr::Default(Box::new(int(4)), sp()),
+                    span: sp(),
+                }),
+            ]),
+            sp(),
+        );
+        let expression =
+            call_expression(Expr::Paren(Box::new(var("selected")), sp()), vec![argument]);
+        assert_eq!(interp.eval_expr(&expression), Ok(Value::Int64(24)));
+
+        interp.set_variable("events", Value::Int64(0));
+        interp.register_function(&func_def(
+            "factory",
+            vec![],
+            block(vec![
+                assign(
+                    "events",
+                    binary(
+                        binary(var("events"), BinOp::Mul, int(10)),
+                        BinOp::Add,
+                        int(2),
+                    ),
+                ),
+                return_stmt(var("second")),
+            ]),
+        ));
+        let argument = Expr::Handle(
+            Box::new(Expr::None(sp())),
+            None,
+            block(vec![
+                assign("events", int(1)),
+                Stmt::Expr(ExprStmt {
+                    expr: Expr::Default(Box::new(int(4)), sp()),
+                    span: sp(),
+                }),
+            ]),
+            sp(),
+        );
+        assert_eq!(
+            interp.eval_expr(&call_expression(call("factory", vec![]), vec![argument])),
+            Ok(Value::Int64(24))
+        );
+        assert_eq!(interp.get_variable("events"), Some(&Value::Int64(12)));
+    }
+
+    #[test]
+    fn function_expression_signals_propagate_from_arguments_and_callee() {
+        let mut interp = Interpreter::new();
+        interp.set_variable("events", Value::Int64(0));
+        let signal = Expr::Handle(
+            Box::new(Expr::None(sp())),
+            None,
+            block(vec![return_stmt(int(7))]),
+            sp(),
+        );
+        let marker = || {
+            Expr::Handle(
+                Box::new(Expr::None(sp())),
+                None,
+                block(vec![
+                    assign("events", binary(var("events"), BinOp::Add, int(1))),
+                    Stmt::Expr(ExprStmt {
+                        expr: Expr::Default(Box::new(int(4)), sp()),
+                        span: sp(),
+                    }),
+                ]),
+                sp(),
+            )
+        };
+        let expression = call_expression(signal.clone(), vec![marker()]);
+        assert!(matches!(
+            interp.eval_expr_flow(&expression),
+            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7))))
+        ));
+        assert_eq!(interp.get_variable("events"), Some(&Value::Int64(1)));
+        let expression = call_expression(marker(), vec![signal]);
+        assert!(matches!(
+            interp.eval_expr_flow(&expression),
+            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7))))
+        ));
+        assert_eq!(
+            interp.get_variable("events"),
+            Some(&Value::Int64(1)),
+            "callee must not run after an argument returns"
+        );
+    }
+
+    #[test]
+    fn function_expression_factories_do_not_capture_unrelated_caller_bindings() {
+        let mut interp = Interpreter::new();
+        interp.register_function(&func_def(
+            "target",
+            vec![],
+            block(vec![return_stmt(int(7))]),
+        ));
+        interp.register_function(&func_def(
+            "named_factory",
+            vec![],
+            block(vec![return_stmt(var("target"))]),
+        ));
+        interp.register_function(&func_def(
+            "closure_factory",
+            vec![],
+            block(vec![return_stmt(Expr::InlineFn(
+                vec![],
+                Some(type_named("int64")),
+                block(vec![return_stmt(call("target", vec![]))]),
+                sp(),
+            ))]),
+        ));
+        for factory in ["named_factory", "closure_factory"] {
+            interp.register_function(&func_def(
+                "caller",
+                vec![("target", "int64")],
+                block(vec![return_stmt(call_expression(
+                    call(factory, vec![]),
+                    vec![],
+                ))]),
+            ));
+            assert_eq!(
+                interp.eval_expr(&call("caller", vec![int(99)])),
+                Ok(Value::Int64(7))
+            );
+        }
+        assert_eq!(interp.lexical_scope_floor, 0);
+        assert_eq!(interp.scopes.len(), 1);
+    }
+
+    #[test]
+    fn declared_functions_do_not_inherit_caller_namespace_aliases() {
+        for invocation in [
+            "return original.read_value()",
+            "return (original.read_value)()",
+            "function() returns int64 callback = original.read_value\n    return callback()",
+            "return original.named_factory()()",
+            "return original.read_alias()",
+        ] {
+            let source = format!(
+                r#"namespace beta
+export function value() returns int64:
+    return 9
+namespace alpha
+export function value() returns int64:
+    return 1
+export function read_value() returns int64:
+    return alpha.value()
+export function read_alias() returns int64:
+    use alpha as selected
+    return selected.value()
+export function named_factory() returns function() returns int64:
+    return alpha.read_value
+namespace app
+function main() returns int64:
+    use alpha as original
+    use beta as alpha
+    use beta as selected
+    {invocation}
+"#
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let mut interp = Interpreter::new();
+            interp.register_module(&parsed.module);
+            assert_eq!(
+                interp.call_function("app.main", vec![]),
+                Ok(Value::Int64(1)),
+                "{invocation}"
+            );
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.namespace_alias_scopes.len(), 1);
+            assert!(interp.visible_namespace_aliases().is_empty());
+        }
+    }
+
+    #[test]
+    fn returned_closures_preserve_lexical_namespace_aliases() {
+        for (invocation, expected) in [
+            ("return original.make_reader()()", 1),
+            (
+                "function() returns int64 callback = original.make_reader()\n    return callback()",
+                1,
+            ),
+            ("return original.invoke(original.make_reader())", 1),
+            ("return original.make_canonical_reader()()", 1),
+            ("return original.make_shadowing_reader()()", 9),
+            ("return comptime original.make_reader()()", 1),
+        ] {
+            let source = format!(
+                r#"namespace beta
+export function value() returns int64:
+    return 9
+namespace alpha
+export function value() returns int64:
+    return 1
+export function make_reader() returns function() returns int64:
+    use alpha as selected
+    return function() returns int64:
+        return selected.value()
+export function make_canonical_reader() returns function() returns int64:
+    return function() returns int64:
+        return alpha.value()
+export function make_shadowing_reader() returns function() returns int64:
+    use alpha as selected
+    return function() returns int64:
+        use beta as selected
+        return selected.value()
+export function invoke(callback: function() returns int64) returns int64:
+    use beta as selected
+    return callback()
+namespace app
+function main() returns int64:
+    use alpha as original
+    use beta as alpha
+    use beta as selected
+    {invocation}
+"#
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let mut interp = Interpreter::new();
+            interp.register_module(&parsed.module);
+            assert_eq!(
+                interp.call_function("app.main", vec![]),
+                Ok(Value::Int64(expected)),
+                "{invocation}"
+            );
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.namespace_alias_scopes.len(), 1);
+            assert!(interp.visible_namespace_aliases().is_empty());
+        }
+    }
+
+    #[test]
+    fn function_expression_errors_restore_scope_visibility() {
+        let mut interp = Interpreter::new();
+        interp.set_variable("visible", Value::Int64(7));
+        let failure = block(vec![assert_stmt(bool_expr(false), None)]);
+        interp.register_function(&func_def("failure", vec![], failure.clone()));
+        for expression in [
+            call_expression(Expr::Paren(Box::new(var("failure")), sp()), vec![]),
+            call_expression(Expr::InlineFn(vec![], None, failure, sp()), vec![]),
+        ] {
+            assert_eq!(
+                interp.eval_expr(&expression),
+                Err("assertion failed".into())
+            );
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.scopes.len(), 1);
+            assert_eq!(interp.get_variable("visible"), Some(&Value::Int64(7)));
+        }
     }
 
     #[test]

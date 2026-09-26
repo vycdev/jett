@@ -1,0 +1,50 @@
+# ERROR: E0500 x4
+# ERROR: E0368 x2
+# ERROR: E0375
+# ERROR: E0305 x2
+namespace test
+struct Authority:
+    stdout: Stdout
+function write(view stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "effect")
+    return nothing
+function select_write() returns function(view Stdout) returns nothing:
+    return write
+struct EffectHolder:
+    callback: function(view Stdout) returns nothing
+function parenthesized_effect(view authority: Authority) returns nothing:
+    (write)(view authority.stdout)
+    return nothing
+function returned_effect(view authority: Authority) returns nothing:
+    select_write()(view authority.stdout)
+    return nothing
+function field_effect(view authority: Authority, holder: EffectHolder) returns nothing:
+    holder.callback(view authority.stdout)
+    return nothing
+function hidden_inline_effect(view authority: Authority) returns nothing:
+    function(view Authority) returns nothing callback = function(view argument: Authority) returns nothing:
+        write(view argument.stdout)
+        return nothing
+    callback(view authority)
+    return nothing
+function increment(value: int64) returns int64:
+    return value + 1
+struct Holder:
+    callback: function(int64) returns int64
+function unknown_field_parameter() returns int64:
+    Holder holder = Holder(callback: increment)
+    return holder.callback(value: 3)
+function unknown_local_parameter(callback: function(int64) returns int64) returns int64:
+    return(callback)(value: 4)
+function take(items: list[int64]) returns int64:
+    return list.length[int64](view items)
+function select_take() returns function(list[int64]) returns int64:
+    return take
+function returned_owned_parameter(view items: list[int64]) returns int64:
+    return select_take()(view items)
+function select_increment() returns function(int64) returns int64:
+    return increment
+function secret_return_cannot_escape(value: secret[int64]) returns int64:
+    return select_increment()(value)
+function secret_pipeline_cannot_escape(value: secret[int64]) returns int64:
+    return value into(select_increment())

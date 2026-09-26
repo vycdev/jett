@@ -351,7 +351,10 @@ pub enum ExpressionKind {
     EnumConstruct {
         enum_type: TypeId,
         variant: VariantId,
+        /// Variant payloads in declaration order.
         payloads: Vec<Expression>,
+        /// Payload indices in lexical source evaluation order.
+        evaluation_order: Vec<usize>,
     },
     StringInterpolation(Vec<StringSegment>),
     Comptime(Box<Expression>),
@@ -843,7 +846,12 @@ impl Validator<'_> {
                 self.block(failure);
                 self.handle_depth -= 1;
             }
-            ExpressionKind::EnumConstruct { payloads, .. } => {
+            ExpressionKind::EnumConstruct {
+                payloads,
+                evaluation_order,
+                ..
+            } => {
+                self.check_evaluation_order(evaluation_order, payloads.len(), expression.span);
                 for payload in payloads {
                     self.expression(payload);
                 }
@@ -3138,18 +3146,14 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         call_span: Span,
         has_explicit_type_arguments: bool,
     ) -> Option<ExpressionKind> {
-        let enum_variant = match callee {
-            Expr::EnumVariant(_, variant, _) => Some(variant),
-            Expr::FieldAccess(_, field, _)
-                if self
-                    .expression_types
-                    .get(&call_span)
-                    .is_some_and(|ty| self.enum_variant_index(*ty, field).is_some()) =>
-            {
-                Some(field)
-            }
-            _ => None,
-        };
+        // Call checking treats parentheses as transparent when selecting a
+        // declaration, intrinsic, or function-value signature. Its checked
+        // callee type and definition therefore belong to the inner expression.
+        let callee = Self::unparenthesized(callee);
+        let enum_variant = self
+            .expression_types
+            .get(&call_span)
+            .and_then(|ty| self.enum_constructor_variant(callee, *ty));
         if let Some(variant) = enum_variant {
             let ty = self.expression_types.get(&call_span).copied().or_else(|| {
                 self.parent
@@ -3231,17 +3235,21 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
         let (mut lowered_args, mut evaluation_order) =
             self.lower_arguments_in_parameter_order(args, call_span)?;
-        if matches!(
-            self.resolved_expression_kind(callee),
-            Some(DefKind::Variable | DefKind::Param)
-        ) {
+        let source_call = self.is_source_call(callee, call_span);
+        // A callee can be any checked function value, including a projected
+        // field or another call's result. Declaration and intrinsic identities
+        // still select their existing direct paths.
+        if !source_call
+            && !self.intrinsic_ids.contains_key(&call_span)
+            && self.is_checked_function_value(callee)
+        {
             return Some(ExpressionKind::IndirectCall {
                 callee: Box::new(self.lower_expression(callee)?),
                 args: lowered_args,
                 evaluation_order,
             });
         }
-        if self.is_source_call(callee, call_span) {
+        if source_call {
             Some(ExpressionKind::Call {
                 function: self.resolve_user_call_target(callee, call_span)?,
                 args: lowered_args,
@@ -3766,6 +3774,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 enum_type: ty,
                 variant: VariantId(index as u32),
                 payloads: Vec::new(),
+                evaluation_order: Vec::new(),
             },
             ty,
             span,
@@ -4807,14 +4816,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .error(span, "checked enum construction has no matching variant");
             return None;
         };
-        let payloads = args
-            .iter()
-            .map(|arg| self.lower_expression(&arg.value))
-            .collect::<Option<Vec<_>>>()?;
+        let (payloads, evaluation_order) = self.lower_arguments_in_parameter_order(args, span)?;
         Some(ExpressionKind::EnumConstruct {
             enum_type,
             variant: VariantId(index as u32),
             payloads,
+            evaluation_order,
         })
     }
 
@@ -4829,6 +4836,46 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             .variants
             .iter()
             .position(|candidate| candidate.name == variant.name)
+    }
+
+    fn enum_constructor_variant<'b>(
+        &self,
+        callee: &'b Expr,
+        output_type: TypeId,
+    ) -> Option<&'b ast::Ident> {
+        match callee {
+            Expr::EnumVariant(_, variant, _) => Some(variant),
+            Expr::FieldAccess(base, variant, _)
+                if (matches!(
+                    self.resolved_expression_kind(base),
+                    Some(DefKind::Enum | DefKind::Type)
+                ) || matches!(
+                    self.resolved_expression_kind(callee),
+                    Some(DefKind::Enum | DefKind::Type)
+                )) && self.enum_variant_index(output_type, variant).is_some() =>
+            {
+                Some(variant)
+            }
+            _ => None,
+        }
+    }
+
+    fn is_checked_function_value(&self, expression: &Expr) -> bool {
+        self.expression_types
+            .get(&expression.span())
+            .is_some_and(|ty| {
+                matches!(
+                    self.parent.check.interner.resolve(*ty),
+                    Type::Function { .. }
+                )
+            })
+    }
+
+    fn unparenthesized(mut expression: &Expr) -> &Expr {
+        while let Expr::Paren(inner, _) = expression {
+            expression = inner;
+        }
+        expression
     }
 
     fn resolved_definition(&self, expression: &Expr) -> Option<DefId> {
@@ -4994,11 +5041,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             .iter()
             .position(|candidate| candidate.name == variant_name)?;
         let function = self.trusted_stdlib_function("json", "serialize_raw")?;
+        let payloads = payload.into_iter().collect::<Vec<_>>();
         let tree = Expression {
             kind: ExpressionKind::EnumConstruct {
                 enum_type: tree_type,
                 variant: VariantId(variant as u32),
-                payloads: payload.into_iter().collect(),
+                evaluation_order: (0..payloads.len()).collect(),
+                payloads,
             },
             ty: tree_type,
             span,
@@ -5386,16 +5435,24 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         };
         let (args, evaluation_order) =
             self.lower_pipeline_arguments(piped, extra_args, step.span)?;
-        let kind = if matches!(
-            self.resolved_expression_kind(callee),
-            Some(DefKind::Variable | DefKind::Param)
-        ) {
+        let source_call = self.is_source_call(callee, step.span);
+        let kind = if let Some(variant) = self.enum_constructor_variant(callee, output_type) {
+            ExpressionKind::EnumConstruct {
+                enum_type: output_type,
+                variant: VariantId(self.enum_variant_index(output_type, variant)? as u32),
+                payloads: args,
+                evaluation_order,
+            }
+        } else if !source_call
+            && !self.intrinsic_ids.contains_key(&step.span)
+            && self.is_checked_function_value(callee)
+        {
             ExpressionKind::IndirectCall {
                 callee: Box::new(self.lower_expression(callee)?),
                 args,
                 evaluation_order,
             }
-        } else if self.is_source_call(callee, step.span) {
+        } else if source_call {
             ExpressionKind::Call {
                 function: self.resolve_user_call_target(callee, step.span)?,
                 args,
@@ -5429,9 +5486,14 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             _ => (&step.function, false),
         };
         match function {
-            Expr::Call(callee, args, _) => (callee, args, piped_as_view),
-            Expr::GenericCall(callee, _, args, _) => (callee, args, piped_as_view),
-            _ => (function, &step.extra_args, piped_as_view),
+            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
+                (Self::unparenthesized(callee), args, piped_as_view)
+            }
+            _ => (
+                Self::unparenthesized(function),
+                &step.extra_args,
+                piped_as_view,
+            ),
         }
     }
 
@@ -5937,6 +5999,38 @@ function main() returns int64:
                 .message
                 .contains("argument evaluation order must be a permutation")
         }));
+    }
+
+    #[test]
+    fn validator_rejects_invalid_enum_payload_evaluation_orders() {
+        let original = lower_source(
+            r#"namespace app
+enum Pair:
+    values(left: int64, right: int64)
+function make() returns Pair:
+    return Pair.values(right: 2, left: 7)
+"#,
+        );
+        for invalid_order in [vec![0, 0], vec![1], vec![0, 2]] {
+            let mut program = original.clone();
+            let StatementKind::Return(Some(Expression {
+                kind:
+                    ExpressionKind::EnumConstruct {
+                        evaluation_order, ..
+                    },
+                ..
+            })) = &mut program.functions[0].body.statements[0].kind
+            else {
+                panic!("expected enum constructor");
+            };
+            *evaluation_order = invalid_order;
+            let errors = validate(&program).expect_err("invalid enum payload order");
+            assert!(errors.iter().any(|error| {
+                error
+                    .message
+                    .contains("argument evaluation order must be a permutation")
+            }));
+        }
     }
 
     #[test]
@@ -7233,6 +7327,239 @@ function main() returns int64:
     }
 
     #[test]
+    fn lowers_checked_function_expression_callees_without_losing_direct_calls() {
+        let source = r#"namespace app
+function increment(value: int64) returns int64:
+    return value + 1
+function factory(delta: int64) returns function(int64) returns int64:
+    return function(value: int64) returns int64: return value + delta
+struct Wrapper:
+    invoke: function(int64) returns int64
+function parenthesized() returns int64:
+    function(int64) returns int64 callback = increment
+    return (callback)(4)
+function returned() returns int64:
+    return factory(3)(4)
+function projected() returns int64:
+    Wrapper wrapper = Wrapper(invoke: increment)
+    return wrapper.invoke(4)
+function inline_call() returns int64:
+    return (function(value: int64) returns int64: return value * 2)(4)
+function captured_call() returns int64:
+    int64 delta = 3
+    return (function(value: int64) returns int64: return value + delta)(4)
+function direct() returns int64:
+    return increment(4)
+"#;
+        let program = lower_source(source);
+        let returned_value = |name: &str| {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .expect("checked caller");
+            let StatementKind::Return(Some(value)) = &function
+                .body
+                .statements
+                .last()
+                .expect("return statement")
+                .kind
+            else {
+                panic!("expected returned value in {name}");
+            };
+            value
+        };
+        for name in [
+            "parenthesized",
+            "returned",
+            "projected",
+            "inline_call",
+            "captured_call",
+        ] {
+            let ExpressionKind::IndirectCall {
+                callee,
+                args,
+                evaluation_order,
+            } = &returned_value(name).kind
+            else {
+                panic!("expected indirect call in {name}");
+            };
+            assert_eq!(evaluation_order, &[0]);
+            assert!(matches!(args[0].kind, ExpressionKind::Int(4)));
+            assert!(match name {
+                "parenthesized" => matches!(callee.kind, ExpressionKind::Local(_)),
+                "returned" => matches!(callee.kind, ExpressionKind::Call { .. }),
+                "projected" => matches!(callee.kind, ExpressionKind::Field { .. }),
+                "inline_call" => matches!(callee.kind, ExpressionKind::FunctionRef(_)),
+                "captured_call" => matches!(callee.kind, ExpressionKind::ClosureRef { .. }),
+                _ => unreachable!(),
+            });
+        }
+        assert!(matches!(
+            returned_value("direct").kind,
+            ExpressionKind::Call { .. }
+        ));
+        let projected = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "projected")
+            .expect("projected caller");
+        assert!(matches!(
+            projected.body.statements[0].kind,
+            StatementKind::Let {
+                value: Expression {
+                    kind: ExpressionKind::StructConstruct { .. },
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn expression_callees_retain_view_arguments_and_argument_handlers() {
+        let source = r#"namespace app
+function choose(view first: int64, second: int64) returns int64:
+    return first + second
+function main() returns int64:
+    function(view int64, int64) returns int64 callback = choose
+    optional[int64] fallback = none
+    return (callback)(view 3, fallback handle:
+        default 4
+    )
+"#;
+        let program = lower_source(source);
+        let StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::IndirectCall {
+                    callee,
+                    args,
+                    evaluation_order,
+                },
+            ..
+        })) = &program.functions[1].body.statements[2].kind
+        else {
+            panic!("expected handled expression-callee call");
+        };
+        assert!(matches!(callee.kind, ExpressionKind::Local(_)));
+        assert_eq!(evaluation_order, &[0, 1]);
+        assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+        assert!(matches!(args[1].kind, ExpressionKind::Handle { .. }));
+        assert_eq!(program.functions[0].params[0].mode, ParamMode::View);
+    }
+
+    #[test]
+    fn parenthesized_callees_preserve_checked_declaration_and_intrinsic_identity() {
+        let source = r#"namespace app
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function identity[T](value: T) returns T:
+    return value
+struct Pair:
+    left: int64
+    right: int64
+enum Choice:
+    item(left: int64, right: int64)
+function main() returns int64:
+    int64 named = ((subtract))(right: 3, left: 10)
+    int64 qualified = (app.subtract)(right: 2, left: 9)
+    int64 explicit = (identity)[int64](value: 8)
+    int64 inferred = (identity)(value: 7)
+    Pair pair = (Pair)(right: 5, left: 6)
+    Choice choice = (Choice.item)(right: 4, left: 9)
+    (println)(named)
+    return qualified
+"#;
+        let program = lower_source(source);
+        let main = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .expect("main function");
+        for (index, first, second) in [(0, 10, 3), (1, 9, 2)] {
+            let StatementKind::Let {
+                value:
+                    Expression {
+                        kind:
+                            ExpressionKind::Call {
+                                args,
+                                evaluation_order,
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } = &main.body.statements[index].kind
+            else {
+                panic!("expected direct named call");
+            };
+            assert_eq!(evaluation_order, &[1, 0]);
+            assert!(matches!(args[0].kind, ExpressionKind::Int(value) if value == first));
+            assert!(matches!(args[1].kind, ExpressionKind::Int(value) if value == second));
+        }
+        for index in [2, 3] {
+            assert!(matches!(
+                main.body.statements[index].kind,
+                StatementKind::Let {
+                    value: Expression {
+                        kind: ExpressionKind::Call { .. },
+                        ..
+                    },
+                    ..
+                }
+            ));
+        }
+        let StatementKind::Let {
+            value:
+                Expression {
+                    kind:
+                        ExpressionKind::StructConstruct {
+                            fields,
+                            evaluation_order,
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } = &main.body.statements[4].kind
+        else {
+            panic!("expected parenthesized struct constructor");
+        };
+        assert_eq!(evaluation_order, &[1, 0]);
+        assert!(matches!(fields[0].kind, ExpressionKind::Int(6)));
+        assert!(matches!(fields[1].kind, ExpressionKind::Int(5)));
+        let StatementKind::Let {
+            value:
+                Expression {
+                    kind:
+                        ExpressionKind::EnumConstruct {
+                            payloads,
+                            evaluation_order,
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } = &main.body.statements[5].kind
+        else {
+            panic!("expected parenthesized named enum constructor");
+        };
+        assert_eq!(evaluation_order, &[1, 0]);
+        assert!(matches!(payloads[0].kind, ExpressionKind::Int(9)));
+        assert!(matches!(payloads[1].kind, ExpressionKind::Int(4)));
+        assert!(matches!(
+            main.body.statements[6].kind,
+            StatementKind::Expression(Expression {
+                kind: ExpressionKind::Intrinsic {
+                    intrinsic: IntrinsicId::Println,
+                    ..
+                },
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn extracts_captured_inline_functions_with_environment_parameters() {
         let source = r#"namespace app
 function make(seed: int64) returns function(int64) returns int64:
@@ -7414,6 +7741,145 @@ function main() returns int64:
             };
             assert!(matches!(input.kind, ExpressionKind::Int(value) if value == first));
             assert!(matches!(args[1].kind, ExpressionKind::Int(value) if value == second));
+        }
+    }
+
+    #[test]
+    fn lowers_expression_pipeline_targets_without_unwrapping_grouped_calls() {
+        let source = r#"namespace app
+function choose(view first: int64, second: int64) returns int64:
+    return first + second
+function factory() returns function(view int64, int64) returns int64:
+    return choose
+struct Wrapper:
+    invoke: function(view int64, int64) returns int64
+function projected() returns int64:
+    Wrapper wrapper = Wrapper(invoke: choose)
+    return 3 into view wrapper.invoke(4)
+function grouped() returns int64:
+    return 3 into view (factory())(4)
+function parenthesized() returns int64:
+    function(view int64, int64) returns int64 callback = choose
+    return 3 into view (callback)(4)
+function unary_factory() returns function(int64) returns int64:
+    return function(value: int64) returns int64: return value + 1
+function grouped_without_arguments() returns int64:
+    return 3 into (unary_factory())
+"#;
+        let program = lower_source(source);
+        for name in [
+            "projected",
+            "grouped",
+            "parenthesized",
+            "grouped_without_arguments",
+        ] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .expect("pipeline caller");
+            let StatementKind::Return(Some(Expression {
+                kind:
+                    ExpressionKind::IndirectCall {
+                        callee,
+                        args,
+                        evaluation_order,
+                    },
+                ..
+            })) = &function
+                .body
+                .statements
+                .last()
+                .expect("return statement")
+                .kind
+            else {
+                panic!("expected expression pipeline call in {name}");
+            };
+            assert!(match name {
+                "projected" => matches!(callee.kind, ExpressionKind::Field { .. }),
+                "grouped" | "grouped_without_arguments" => {
+                    matches!(&callee.kind, ExpressionKind::Call { args, .. } if args.is_empty())
+                }
+                "parenthesized" => matches!(callee.kind, ExpressionKind::Local(_)),
+                _ => unreachable!(),
+            });
+            if name == "grouped_without_arguments" {
+                assert_eq!(evaluation_order, &[0]);
+                assert!(matches!(args[0].kind, ExpressionKind::Int(3)));
+            } else {
+                assert_eq!(evaluation_order, &[0, 1]);
+                assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+                assert!(matches!(args[1].kind, ExpressionKind::Int(4)));
+            }
+        }
+    }
+
+    #[test]
+    fn named_enum_calls_and_pipeline_payloads_use_checked_order_through_aliases() {
+        let source = r#"namespace models
+export enum Choice:
+    item(first: int64, second: int64, third: int64)
+namespace app
+function direct() returns models.Choice:
+    use models as m
+    return (m.Choice.item)(third: 3, first: 1, second: 2)
+function piped() returns models.Choice:
+    use models as m
+    return 1 into (m.Choice.item)(third: 3, second: 2)
+"#;
+        let program = lower_source(source);
+        for (index, expected_order) in [(0, vec![2, 0, 1]), (1, vec![0, 2, 1])] {
+            let StatementKind::Return(Some(Expression {
+                kind:
+                    ExpressionKind::EnumConstruct {
+                        payloads,
+                        evaluation_order,
+                        ..
+                    },
+                ..
+            })) = &program.functions[index]
+                .body
+                .statements
+                .last()
+                .expect("return statement")
+                .kind
+            else {
+                panic!("expected named enum construction");
+            };
+            assert_eq!(evaluation_order, &expected_order);
+            assert!(matches!(payloads[0].kind, ExpressionKind::Int(1)));
+            assert!(matches!(payloads[1].kind, ExpressionKind::Int(2)));
+            assert!(matches!(payloads[2].kind, ExpressionKind::Int(3)));
+        }
+    }
+
+    #[test]
+    fn function_fields_returning_enums_are_not_variant_constructors() {
+        let source = r#"namespace app
+enum Choice:
+    item(value: int64)
+    other(value: int64)
+function other(value: int64) returns Choice:
+    return Choice.other(value)
+struct Holder:
+    item: function(int64) returns Choice
+function direct() returns Choice:
+    Holder holder = Holder(item: other)
+    return holder.item(4)
+function piped() returns Choice:
+    Holder holder = Holder(item: other)
+    return 4 into holder.item
+"#;
+        let program = lower_source(source);
+        for function in &program.functions[1..] {
+            let StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::IndirectCall { callee, .. },
+                ..
+            })) = &function.body.statements[1].kind
+            else {
+                panic!("expected function field call");
+            };
+            assert!(matches!(callee.kind, ExpressionKind::Field { .. }));
         }
     }
 

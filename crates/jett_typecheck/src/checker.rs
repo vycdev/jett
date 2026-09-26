@@ -1531,6 +1531,31 @@ impl<'a> TypeChecker<'a> {
         !Self::is_impure_builtin(name) && self.purity_map.get(name).copied().unwrap_or(true)
     }
 
+    fn check_call_purity(&mut self, callee_name: &str, span: Span) {
+        if self.current_function_pure
+            && let Some(caller_name) = &self.current_function_name
+        {
+            self.sink
+                .emit(errors::pure_calls_impure(caller_name, callee_name, span));
+        }
+        if self.in_verify_block
+            && let Some(verify_name) = &self.current_verify_name
+        {
+            self.sink
+                .emit(errors::verify_calls_impure(verify_name, callee_name, span));
+        }
+        if self.comptime_expr_depth > 0 {
+            self.sink
+                .emit(errors::comptime_calls_impure(callee_name, span));
+        }
+    }
+
+    fn function_parameters_are_pure(&self, params: &[TypeId]) -> bool {
+        params
+            .iter()
+            .all(|param| !matches!(self.interner.resolve(*param), Type::Capability(_)))
+    }
+
     fn is_secret_safe_builtin(name: &str) -> bool {
         matches!(name, "secret.redact" | "secret.compare")
     }
@@ -6265,6 +6290,9 @@ impl<'a> TypeChecker<'a> {
         // Nested generic checks reuse source DefIds for parameters and locals.
         // Preserve the outer concrete types while checking the inner body.
         let old_type_env = self.type_env.clone();
+        // The instantiated body belongs to its own declaration, not to the
+        // closure whose call triggered instantiation.
+        let old_closure_capture_scopes = std::mem::take(&mut self.closure_capture_scopes);
 
         self.in_verify_block = false;
         self.in_property_block = false;
@@ -6345,6 +6373,7 @@ impl<'a> TypeChecker<'a> {
         self.current_respond_type = old_respond_type;
         self.specialize_reflection_branches = old_specialize_reflection_branches;
         self.type_env = old_type_env;
+        self.closure_capture_scopes = old_closure_capture_scopes;
     }
 
     fn record_expression_type(&mut self, span: Span, ty: TypeId) {
@@ -9843,7 +9872,9 @@ impl<'a> TypeChecker<'a> {
                 let saved_return_type = self.current_return_type;
                 let saved_fn_name = self.current_function_name.take();
                 let saved_pure = self.current_function_pure;
+                let saved_in_verify_block = self.in_verify_block;
                 let saved_in_property_block = self.in_property_block;
+                let saved_comptime_expr_depth = self.comptime_expr_depth;
                 let saved_graphics_callback = self.in_graphics_callback;
 
                 let ret = return_type
@@ -9853,25 +9884,26 @@ impl<'a> TypeChecker<'a> {
                 self.current_return_type = Some(ret);
                 self.in_graphics_callback =
                     saved_graphics_callback || self.graphics_inline_callbacks.contains(inline_span);
-                // Callback purity is audited once all method targets are known;
-                // checking it here would make mutual declarations order-sensitive.
-                self.current_function_pure = false;
+                let param_types: Vec<_> = params
+                    .iter()
+                    .map(|param| self.resolve_type_expr(&param.ty))
+                    .collect();
+                self.current_function_name = Some("<inline function>".to_string());
+                self.current_function_pure = self.function_parameters_are_pure(&param_types);
+                // Creating a closure does not execute its body. Check its own
+                // signature's effects independently from the enclosing context.
+                self.in_verify_block = false;
                 self.in_property_block = false;
+                self.comptime_expr_depth = 0;
                 self.closure_capture_scopes
                     .push(ClosureCaptureScope::default());
 
-                for param in params {
-                    let param_type = self.resolve_type_expr(&param.ty);
+                for (param, &param_type) in params.iter().zip(&param_types) {
                     if let Some(def_id) = self.declaration_def_id(param.name.span) {
                         self.type_env.insert(def_id, param_type);
                         self.record_closure_local(def_id);
                     }
                 }
-
-                let param_types: Vec<_> = params
-                    .iter()
-                    .map(|p| self.resolve_type_expr(&p.ty))
-                    .collect();
 
                 self.check_block(body);
                 self.closure_capture_scopes.pop();
@@ -9879,7 +9911,9 @@ impl<'a> TypeChecker<'a> {
                 self.current_return_type = saved_return_type;
                 self.current_function_name = saved_fn_name;
                 self.current_function_pure = saved_pure;
+                self.in_verify_block = saved_in_verify_block;
                 self.in_property_block = saved_in_property_block;
+                self.comptime_expr_depth = saved_comptime_expr_depth;
                 self.in_graphics_callback = saved_graphics_callback;
 
                 self.interner.intern(Type::Function {
@@ -9915,11 +9949,21 @@ impl<'a> TypeChecker<'a> {
             _ => (&step.function, false),
         };
         match function {
-            Expr::Call(callee, args, _) => (callee, &[], args, piped_as_view),
-            Expr::GenericCall(callee, type_args, args, _) => {
-                (callee, type_args, args, piped_as_view)
+            Expr::Call(callee, args, _) => {
+                (Self::unparenthesized(callee), &[], args, piped_as_view)
             }
-            _ => (function, &[], &step.extra_args, piped_as_view),
+            Expr::GenericCall(callee, type_args, args, _) => (
+                Self::unparenthesized(callee),
+                type_args,
+                args,
+                piped_as_view,
+            ),
+            _ => (
+                Self::unparenthesized(function),
+                &[],
+                &step.extra_args,
+                piped_as_view,
+            ),
         }
     }
 
@@ -9972,7 +10016,7 @@ impl<'a> TypeChecker<'a> {
         let piped_as_view = piped_as_view || initial.is_some_and(Self::is_explicit_view);
         let callee_name = self.resolved_expr_name(function);
         self.check_test_mock_constructor_call(callee_name.as_deref(), step.span);
-        let callee_is_pure = callee_name
+        let mut callee_is_pure = callee_name
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
             .unwrap_or(false);
@@ -9980,28 +10024,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(callee_name) = callee_name.as_deref()
             && !callee_is_pure
         {
-            if self.current_function_pure
-                && let Some(caller_name) = &self.current_function_name
-            {
-                self.sink.emit(errors::pure_calls_impure(
-                    caller_name,
-                    callee_name,
-                    step.span,
-                ));
-            }
-            if self.in_verify_block
-                && let Some(verify_name) = &self.current_verify_name
-            {
-                self.sink.emit(errors::verify_calls_impure(
-                    verify_name,
-                    callee_name,
-                    step.span,
-                ));
-            }
-            if self.comptime_expr_depth > 0 {
-                self.sink
-                    .emit(errors::comptime_calls_impure(callee_name, step.span));
-            }
+            self.check_call_purity(callee_name, step.span);
         }
 
         if let Some(builtin_name) = callee_name.as_deref()
@@ -10099,6 +10122,14 @@ impl<'a> TypeChecker<'a> {
                     view_params,
                     return_type,
                 } => {
+                    let signature_is_pure = self.function_parameters_are_pure(&params);
+                    if !signature_is_pure && (callee_is_pure || callee_name.is_none()) {
+                        self.check_call_purity(
+                            callee_name.as_deref().unwrap_or("<function value>"),
+                            step.span,
+                        );
+                    }
+                    callee_is_pure = signature_is_pure;
                     function_view_modes = Some(view_params);
                     (params, return_type)
                 }
@@ -10119,15 +10150,17 @@ impl<'a> TypeChecker<'a> {
         let func_name = callee_name
             .clone()
             .unwrap_or_else(|| "<pipeline step>".to_string());
-        let parameter_names = user_parameter_names.or_else(|| {
-            method_metadata.as_ref().map(|(_, signature)| {
-                signature
-                    .params
-                    .iter()
-                    .map(|(name, _, _)| name.clone())
-                    .collect()
+        let parameter_names = user_parameter_names
+            .or_else(|| {
+                method_metadata.as_ref().map(|(_, signature)| {
+                    signature
+                        .params
+                        .iter()
+                        .map(|(name, _, _)| name.clone())
+                        .collect()
+                })
             })
-        });
+            .or_else(|| self.enum_constructor_parameter_names(function));
         let argument_order = if let Some(parameter_names) = parameter_names {
             let Some(order) =
                 self.bind_pipeline_arguments(&func_name, &parameter_names, extra_args, step.span)
@@ -10139,6 +10172,13 @@ impl<'a> TypeChecker<'a> {
             };
             self.record_call_argument_order(step.span, order.clone());
             order
+        } else if function_view_modes.is_some()
+            && self.reject_unbound_argument_names(&func_name, extra_args)
+        {
+            for arg in extra_args {
+                self.check_expr(&arg.value);
+            }
+            return return_type;
         } else if arg_count != param_types.len() {
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
@@ -10231,10 +10271,7 @@ impl<'a> TypeChecker<'a> {
             self.check_source_facade_instantiation(name, current_ty, step.span);
         }
 
-        if let Some(callee_name) = callee_name.as_deref()
-            && tainted_return
-            && Self::is_secret_liftable_call(callee_name, callee_is_pure)
-        {
+        if tainted_return {
             return self.maybe_wrap_secret(return_type, true);
         }
 
@@ -11583,8 +11620,9 @@ impl<'a> TypeChecker<'a> {
         span: Span,
         expected_return_type: Option<TypeId>,
     ) -> TypeId {
+        let callee = Self::unparenthesized(callee);
         let callee_name = self.resolved_expr_name(callee);
-        let callee_is_pure = callee_name
+        let mut callee_is_pure = callee_name
             .as_deref()
             .map(|name| self.named_call_is_pure(name))
             .unwrap_or(false);
@@ -11662,30 +11700,7 @@ impl<'a> TypeChecker<'a> {
         // Extract the callee name so we can look it up in the purity map.
         if let Some(callee_name) = callee_name.as_deref() {
             if !callee_is_pure {
-                // E0500: pure function calls impure function
-                if self.current_function_pure {
-                    if let Some(caller_name) = &self.current_function_name {
-                        self.sink
-                            .emit(errors::pure_calls_impure(caller_name, &callee_name, span));
-                    }
-                }
-                // Verify blocks are the current value-level comptime entrypoint.
-                // Eligibility is exactly purity: do not add a second allowlist
-                // for user, dependency, or stdlib functions here.
-                // E0501: verify block calls impure function
-                if self.in_verify_block {
-                    if let Some(verify_name) = &self.current_verify_name {
-                        self.sink.emit(errors::verify_calls_impure(
-                            verify_name,
-                            &callee_name,
-                            span,
-                        ));
-                    }
-                }
-                if self.comptime_expr_depth > 0 {
-                    self.sink
-                        .emit(errors::comptime_calls_impure(callee_name, span));
-                }
+                self.check_call_purity(callee_name, span);
             }
         }
 
@@ -12015,6 +12030,14 @@ impl<'a> TypeChecker<'a> {
                     view_params,
                     return_type,
                 } => {
+                    let signature_is_pure = self.function_parameters_are_pure(&params);
+                    if !signature_is_pure && (callee_is_pure || callee_name.is_none()) {
+                        self.check_call_purity(
+                            callee_name.as_deref().unwrap_or("<function value>"),
+                            span,
+                        );
+                    }
+                    callee_is_pure = signature_is_pure;
                     function_view_modes = Some(view_params);
                     (params, return_type)
                 }
@@ -12041,15 +12064,17 @@ impl<'a> TypeChecker<'a> {
         let func_name = callee_name
             .clone()
             .unwrap_or_else(|| "<anonymous>".to_string());
-        let parameter_names = user_parameter_names.or_else(|| {
-            method_metadata.as_ref().map(|(_, signature)| {
-                signature
-                    .params
-                    .iter()
-                    .map(|(name, _, _)| name.clone())
-                    .collect()
+        let parameter_names = user_parameter_names
+            .or_else(|| {
+                method_metadata.as_ref().map(|(_, signature)| {
+                    signature
+                        .params
+                        .iter()
+                        .map(|(name, _, _)| name.clone())
+                        .collect()
+                })
             })
-        });
+            .or_else(|| self.enum_constructor_parameter_names(callee));
         let argument_order = if let Some(parameter_names) = parameter_names {
             let Some(order) = self.bind_call_arguments(&func_name, &parameter_names, args, span)
             else {
@@ -12060,6 +12085,13 @@ impl<'a> TypeChecker<'a> {
             };
             self.record_call_argument_order(span, order.clone());
             order
+        } else if function_view_modes.is_some()
+            && self.reject_unbound_argument_names(&func_name, args)
+        {
+            for arg in args {
+                self.check_expr(&arg.value);
+            }
+            return return_type;
         } else if args.len() != param_types.len() {
             self.sink.emit(errors::argument_count_mismatch(
                 &func_name,
@@ -12288,10 +12320,8 @@ impl<'a> TypeChecker<'a> {
             self.check_source_facade_instantiation(name, *value_ty, span);
         }
 
-        if let Some(callee_name) = callee_name.as_deref() {
-            if tainted_return && Self::is_secret_liftable_call(callee_name, callee_is_pure) {
-                return self.maybe_wrap_secret(return_type, true);
-            }
+        if tainted_return {
+            return self.maybe_wrap_secret(return_type, true);
         }
 
         return_type
@@ -12596,6 +12626,66 @@ impl<'a> TypeChecker<'a> {
                 Type::Function { view_params, .. } => Some(view_params.clone()),
                 _ => None,
             })
+    }
+
+    fn unparenthesized(mut expression: &Expr) -> &Expr {
+        while let Expr::Paren(inner, _) = expression {
+            expression = inner;
+        }
+        expression
+    }
+
+    fn enum_constructor_parameter_names(&self, callee: &Expr) -> Option<Vec<String>> {
+        let (type_name, variant) = match Self::unparenthesized(callee) {
+            Expr::EnumVariant(owner, variant, _) => {
+                (self.resolved_symbol_name(&owner.name, owner.span), variant)
+            }
+            Expr::FieldAccess(owner, variant, span) => {
+                let name = if let Expr::Ident(owner) = owner.as_ref() {
+                    self.resolved_symbol_name(&owner.name, owner.span)
+                } else {
+                    let name = Self::extract_dotted_name(owner)?;
+                    self.resolved_or_expanded_name(&name, *span)
+                };
+                (name, variant)
+            }
+            _ => return None,
+        };
+        let enum_type = self.named_types.get(&type_name)?;
+        let Type::Enum(enum_id) = self.interner.resolve(*enum_type) else {
+            return None;
+        };
+        self.interner
+            .resolve_enum(*enum_id)
+            .variants
+            .iter()
+            .find(|candidate| candidate.name == variant.name)
+            .map(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+    }
+
+    fn reject_unbound_argument_names(
+        &mut self,
+        function_name: &str,
+        args: &[ast::CallArg],
+    ) -> bool {
+        let mut rejected = false;
+        for argument in args {
+            if let Some(name) = &argument.name {
+                self.sink.emit(errors::unknown_named_argument(
+                    function_name,
+                    &name.name,
+                    name.span,
+                ));
+                rejected = true;
+            }
+        }
+        rejected
     }
 
     fn is_explicit_view(expression: &Expr) -> bool {
@@ -15093,6 +15183,336 @@ mod tests {
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    #[test]
+    fn generic_body_checks_do_not_capture_the_callers_closure_scope() {
+        let source = r#"namespace test
+function duplicate[T](view value: T) returns T:
+    return clone value
+function make() returns function(view list[int64]) returns list[int64]:
+    return function(view items: list[int64]) returns list[int64]: return duplicate[list[int64]](view items)
+"#;
+        assert!(check_source_errors(source).is_empty());
+        let captured = r#"namespace test
+function duplicate[T](view value: T) returns T:
+    return clone value
+function make() returns function(view list[int64]) returns list[int64]:
+    list[int64] outer = list(1)
+    return function(view items: list[int64]) returns list[int64]:
+        list[int64] copied = duplicate[list[int64]](view items)
+        return clone outer
+"#;
+        let errors = check_source_errors(captured);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 402);
+        assert!(errors[0].message.contains("outer"));
+    }
+
+    #[test]
+    fn function_expression_calls_enforce_capability_purity() {
+        for call in [
+            "(effect)(view authority.stdout)",
+            "(callback)(view authority.stdout)",
+            "factory()(view authority.stdout)",
+            "holder.callback(view authority.stdout)",
+            "(holder.callback)(view authority.stdout)",
+            "authority.stdout into view callback",
+        ] {
+            let source = format!(
+                r#"namespace test
+struct Authority:
+    stdout: Stdout
+struct Holder:
+    callback: function(view Stdout) returns int64
+function effect(view stdout: Stdout) returns int64:
+    return 1
+function factory() returns function(view Stdout) returns int64:
+    return effect
+function invoke(view authority: Authority, callback: function(view Stdout) returns int64, view holder: Holder) returns int64:
+    return {call}
+"#
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 500, "{call}: {errors:?}");
+            let authorized = source.replace(
+                "function invoke(view authority: Authority,",
+                "function invoke(view stdout: Stdout, view authority: Authority,",
+            );
+            assert!(check_source_errors(&authorized).is_empty(), "{call}");
+            let comptime = authorized.replace(
+                &format!("return {call}"),
+                &format!("return comptime ({call})"),
+            );
+            let errors = check_source_errors(&comptime);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 504),
+                "{call}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn function_expression_calls_preserve_lifted_secret_return_types() {
+        for call in [
+            "factory()(value)",
+            "holder.callback(value)",
+            "(holder.callback)(value)",
+            "make_holder().callback(value)",
+            "value into (factory())",
+            "(function(input: int64) returns int64: return input + 1)(value)",
+        ] {
+            let source = format!(
+                r#"namespace test
+struct Holder:
+    callback: function(int64) returns int64
+function increment(input: int64) returns int64:
+    return input + 1
+function factory() returns function(int64) returns int64:
+    return increment
+function make_holder() returns Holder:
+    return Holder(callback: increment)
+function main() returns nothing:
+    secret[int64] value = 4
+    Holder holder = make_holder()
+    secret[int64] transformed = {call}
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{call}: {errors:?}");
+            let start = source.rfind(call).unwrap() as u32;
+            let span = Span::new(FileId::new(0), start, start + call.len() as u32);
+            assert!(
+                matches!(result.interner.resolve(result.type_map[&span]), Type::Secret(inner) if *inner == TypeInterner::INT64),
+                "{call}"
+            );
+            let public = source.replace("secret[int64] transformed", "int64 transformed");
+            let errors = check_source_errors(&public);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 311),
+                "{call}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_function_bodies_obey_their_own_capability_signature() {
+        let prefix = r#"namespace test
+struct Authority:
+    stdout: Stdout
+function effect(view stdout: Stdout) returns int64:
+    return 1
+"#;
+        for body in [
+            "return effect(view argument.stdout)",
+            "return (effect)(view argument.stdout)",
+        ] {
+            let source = format!(
+                "{prefix}function make() returns function(view Authority) returns int64:\n    return function(view argument: Authority) returns int64: {body}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 500);
+            assert!(errors[0].message.contains("<inline function>"));
+        }
+
+        for comptime in ["", "comptime "] {
+            let closure = format!(
+                "{comptime}function(view stdout: Stdout) returns int64: return effect(view stdout)"
+            );
+            for declaration in [
+                format!(
+                    "function make() returns function(view Stdout) returns int64:\n    return {closure}\n"
+                ),
+                format!(
+                    "verify creation:\n    function(view Stdout) returns int64 callback = {closure}\n    assert true\n"
+                ),
+            ] {
+                let source = format!("{prefix}{declaration}");
+                let errors = check_source_errors(&source);
+                assert!(errors.is_empty(), "{source}: {errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn inline_function_invocation_restores_the_surrounding_effect_context() {
+        let source = r#"namespace test
+struct Authority:
+    stdout: Stdout
+function effect(view stdout: Stdout) returns int64:
+    return 1
+function invoke(view authority: Authority) returns int64:
+    return (function(view stdout: Stdout) returns int64: return effect(view stdout))(view authority.stdout)
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 500);
+        assert!(errors[0].message.contains("invoke"), "{errors:?}");
+        assert!(!errors[0].message.contains("<inline function>"));
+        let authorized = source.replace(
+            "function invoke(view authority",
+            "function invoke(view permission: Stdout, view authority",
+        );
+        assert!(check_source_errors(&authorized).is_empty());
+        let comptime = authorized.replace("return (function", "return comptime (function");
+        let errors = check_source_errors(&comptime);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 504);
+        let verify = r#"namespace test
+function effect(view stdout: Stdout) returns int64:
+    return 1
+verify invocation:
+    function(view Stdout) returns int64 callback = function(view stdout: Stdout) returns int64: return effect(view stdout)
+    callback()
+"#;
+        let errors = check_source_errors(verify);
+        assert!(
+            errors.iter().any(|error| error.code.code() == 501),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn callback_binding_names_do_not_inherit_namespace_declaration_policy() {
+        for call in ["effect(4)", "(effect)(4)", "4 into effect"] {
+            let source = format!(
+                "namespace test\nfunction effect(view stdout: Stdout) returns int64:\n    return 1\nfunction invoke(effect: function(int64) returns int64) returns int64:\n    return {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn parenthesized_declarations_preserve_named_argument_bindings() {
+        let source = r#"namespace test
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function main() returns int64:
+    return (subtract)(right: 3, left: 10)
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let call_offset = source.find("(subtract)(right:").unwrap() as u32;
+        let order = result
+            .call_argument_orders
+            .iter()
+            .find_map(|(span, order)| (span.start == call_offset).then_some(&order.source_indices));
+        assert_eq!(order, Some(&vec![1, 0]));
+    }
+
+    #[test]
+    fn function_expression_calls_reject_unbound_named_arguments() {
+        for call in [
+            "callback(right: 3, left: 10)",
+            "(callback)(right: 3, left: 10)",
+            "factory()(right: 3, left: 10)",
+            "holder.callback(unknown: 3, unknown: 10)",
+            "(function(left: int64, right: int64) returns int64: return left - right)(right: 3, left: 10)",
+        ] {
+            let source = format!(
+                r#"namespace test
+struct Holder:
+    callback: function(int64, int64) returns int64
+function subtract(left: int64, right: int64) returns int64:
+    return left - right
+function factory() returns function(int64, int64) returns int64:
+    return subtract
+function invoke(callback: function(int64, int64) returns int64, view holder: Holder) returns int64:
+    return {call}
+"#
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 2, "{call}: {errors:?}");
+            assert!(
+                errors.iter().all(|error| error.code.code() == 368),
+                "{call}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn enum_constructor_arguments_preserve_declared_payload_names() {
+        for (prefix, owner, setup, imports) in [
+            ("", "Choice", "", ""),
+            ("namespace test\n", "Choice", "", ""),
+            (
+                "namespace models\n",
+                "models.Choice",
+                "namespace app\n",
+                "    use models\n",
+            ),
+            (
+                "namespace models\n",
+                "m.Choice",
+                "namespace app\n",
+                "    use models as m\n",
+            ),
+        ] {
+            for parenthesized in [false, true] {
+                let callee = format!("{owner}.item");
+                let callee = if parenthesized {
+                    format!("({callee})")
+                } else {
+                    callee
+                };
+                let source = format!(
+                    "{prefix}export enum Choice:\n    item(first: int64, second: string, third: bool)\n{setup}function make() returns nothing:\n{imports}    {owner} value = {callee}(third: true, first: 4, second: \"ok\")\n    return nothing\n"
+                );
+                let result = check_source_result(&source);
+                assert!(
+                    result
+                        .diagnostics
+                        .iter()
+                        .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+                    "{source}: {:?}",
+                    result.diagnostics
+                );
+                assert!(
+                    result
+                        .call_argument_orders
+                        .values()
+                        .any(|order| order.source_indices == vec![1, 2, 0]),
+                    "{source}: {:?}",
+                    result.call_argument_orders
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enum_constructor_arguments_reject_unknown_and_duplicate_payload_names() {
+        for callee in ["Choice.item", "(Choice.item)"] {
+            for (arguments, expected_code) in
+                [("first: 4, other: 5", 368), ("first: 4, first: 5", 369)]
+            {
+                let source = format!(
+                    "namespace test\nenum Choice:\n    item(first: int64, second: int64)\nfunction make() returns Choice:\n    return {callee}({arguments})\n"
+                );
+                let errors = check_source_errors(&source);
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.code.code() == expected_code),
+                    "{source}: {errors:?}"
+                );
+            }
+        }
     }
 
     #[test]

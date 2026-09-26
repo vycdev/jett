@@ -1,6 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
-assertion_line: 5375
+assertion_line: 5908
 expression: program
 ---
 Program {
@@ -105,6 +105,9 @@ Program {
                                                             end: 150,
                                                         },
                                                     },
+                                                ],
+                                                evaluation_order: [
+                                                    0,
                                                 ],
                                             },
                                             ty: TypeId(
@@ -306,6 +309,7 @@ Program {
                                                                 1,
                                                             ),
                                                             payloads: [],
+                                                            evaluation_order: [],
                                                         },
                                                         ty: TypeId(
                                                             47,

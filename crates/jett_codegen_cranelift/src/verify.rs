@@ -1213,25 +1213,28 @@ impl Verifier<'_> {
                         "direct call argument count does not match its signature",
                     ));
                 }
+                let pure = callee.params.iter().all(|parameter| {
+                    !matches!(self.types.resolve(parameter.ty), Type::Capability(_))
+                });
+                let mut lifted_secret = false;
                 for (argument, parameter) in args.iter().zip(&callee.params) {
                     self.expression(function, argument)?;
-                    self.require_same_type(
-                        function,
-                        argument.span,
-                        parameter.ty,
-                        argument.ty,
-                        "direct call argument type does not match its parameter",
-                    )?;
+                    lifted_secret |= self
+                        .call_argument_taints_result(parameter.ty, argument.ty, pure)
+                        .ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                argument.span,
+                                "direct call argument type does not match its parameter",
+                            )
+                        })?;
                 }
-                if matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == callee.return_type)
-                {
-                    return Ok(());
-                }
-                self.require_same_type(
+                self.require_call_result_type(
                     function,
                     expression.span,
                     callee.return_type,
                     expression.ty,
+                    lifted_secret,
                     "direct call result type does not match its signature",
                 )
             }
@@ -1810,6 +1813,10 @@ impl Verifier<'_> {
                         "indirect call argument count does not match function type",
                     ));
                 }
+                let pure = params
+                    .iter()
+                    .all(|param| !matches!(self.types.resolve(*param), Type::Capability(_)));
+                let mut lifted_secret = false;
                 for ((argument, expected), view) in args.iter().zip(params).zip(view_params) {
                     self.expression(function, argument)?;
                     if !view && matches!(argument.kind, ExpressionKind::View(_)) {
@@ -1819,19 +1826,22 @@ impl Verifier<'_> {
                             "owned indirect call parameter cannot accept a view",
                         ));
                     }
-                    self.require_same_type(
-                        function,
-                        argument.span,
-                        *expected,
-                        argument.ty,
-                        "indirect call argument type mismatch",
-                    )?;
+                    lifted_secret |= self
+                        .call_argument_taints_result(*expected, argument.ty, pure)
+                        .ok_or_else(|| {
+                            self.contract_error(
+                                function,
+                                argument.span,
+                                "indirect call argument type mismatch",
+                            )
+                        })?;
                 }
-                self.require_same_type(
+                self.require_call_result_type(
                     function,
                     expression.span,
                     *return_type,
                     expression.ty,
+                    lifted_secret,
                     "indirect call result type mismatch",
                 )
             }
@@ -2200,6 +2210,7 @@ impl Verifier<'_> {
                 enum_type,
                 variant,
                 payloads,
+                ..
             } => {
                 self.require_same_type(
                     function,
@@ -2698,6 +2709,108 @@ impl Verifier<'_> {
         } else {
             Err(self.expression_kind_error(function, expression, "binary operation"))
         }
+    }
+
+    /// Match the checker's directional secret argument compatibility without
+    /// treating equal native representations as interchangeable source types.
+    fn call_argument_types_compatible(&self, expected: TypeId, actual: TypeId) -> bool {
+        if expected == actual {
+            return true;
+        }
+        match (self.types.resolve(expected), self.types.resolve(actual)) {
+            (Type::Secret(expected), Type::Secret(actual))
+            | (Type::List(expected), Type::List(actual))
+            | (Type::Optional(expected), Type::Optional(actual))
+            | (Type::Set(expected), Type::Set(actual)) => {
+                self.call_argument_types_compatible(*expected, *actual)
+            }
+            (Type::Secret(expected), _) => self.call_argument_types_compatible(*expected, actual),
+            (Type::Map(expected_key, expected_value), Type::Map(actual_key, actual_value))
+            | (
+                Type::Result(expected_key, expected_value),
+                Type::Result(actual_key, actual_value),
+            ) => {
+                self.call_argument_types_compatible(*expected_key, *actual_key)
+                    && self.call_argument_types_compatible(*expected_value, *actual_value)
+            }
+            (
+                Type::Function {
+                    params: expected_params,
+                    view_params: expected_views,
+                    return_type: expected_return,
+                },
+                Type::Function {
+                    params: actual_params,
+                    view_params: actual_views,
+                    return_type: actual_return,
+                },
+            ) => {
+                expected_params.len() == actual_params.len()
+                    && expected_views == actual_views
+                    && expected_params
+                        .iter()
+                        .zip(actual_params)
+                        .all(|(expected, actual)| {
+                            self.call_argument_types_compatible(*expected, *actual)
+                        })
+                    && self.call_argument_types_compatible(*expected_return, *actual_return)
+            }
+            (
+                Type::Machine(expected),
+                Type::MachineState {
+                    machine: actual, ..
+                },
+            ) => expected == actual,
+            _ => false,
+        }
+    }
+
+    fn secret_inner_type(&self, ty: TypeId) -> Option<TypeId> {
+        match self.types.resolve(ty) {
+            Type::Secret(inner) => Some(*inner),
+            Type::Refinement { base, .. } => self.secret_inner_type(*base),
+            _ => None,
+        }
+    }
+
+    fn call_argument_taints_result(
+        &self,
+        expected: TypeId,
+        actual: TypeId,
+        pure: bool,
+    ) -> Option<bool> {
+        if self.call_argument_types_compatible(expected, actual) {
+            return Some(false);
+        }
+        if pure
+            && let Some(inner) = self.secret_inner_type(actual)
+            && self.call_argument_types_compatible(expected, inner)
+        {
+            return Some(true);
+        }
+        None
+    }
+
+    fn require_call_result_type(
+        &self,
+        function: &Function,
+        span: Span,
+        expected: TypeId,
+        actual: TypeId,
+        lifted_secret: bool,
+        message: &str,
+    ) -> Result<(), CodegenError> {
+        // A surrounding secret context may add secrecy independently of a call.
+        if matches!(self.types.resolve(actual), Type::Secret(inner) if *inner == expected) {
+            return Ok(());
+        }
+        if lifted_secret
+            && expected != TypeInterner::NOTHING
+            && self.secret_inner_type(expected).is_none()
+        {
+            return Err(self.contract_error(function, span, message));
+        }
+        self.require_same_type(function, span, expected, actual, message)
     }
 
     fn require_same_type(

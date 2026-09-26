@@ -560,14 +560,14 @@ impl Flow<'_> {
                 fields,
                 evaluation_order,
                 ..
+            }
+            | ExpressionKind::EnumConstruct {
+                payloads: fields,
+                evaluation_order,
+                ..
             } => {
                 for &index in evaluation_order {
                     self.expr(&fields[index], false)?;
-                }
-            }
-            ExpressionKind::EnumConstruct { payloads, .. } => {
-                for payload in payloads {
-                    self.expr(payload, false)?;
                 }
             }
             ExpressionKind::MachineConstruct { payloads, .. } => {

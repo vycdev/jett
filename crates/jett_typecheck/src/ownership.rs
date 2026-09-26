@@ -678,8 +678,8 @@ impl<'a> OwnershipChecker<'a> {
 
                 for step in steps {
                     let (callee, extra_args, _) = Self::pipeline_step_call_parts(step);
-                    self.check_expr_ownership(callee);
                     self.check_call_arguments_ownership(callee, extra_args, 1);
+                    self.check_expr_ownership(callee);
                     if let Some(handle) = &step.handle {
                         let success_state = self.states.clone();
                         let handler_state =
@@ -799,7 +799,9 @@ impl<'a> OwnershipChecker<'a> {
             _ => (&step.function, false),
         };
         match function {
-            Expr::GenericCall(callee, _, args, _) => (callee, args, piped_as_view),
+            Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
+                (callee, args, piped_as_view)
+            }
             _ => (function, &step.extra_args, piped_as_view),
         }
     }
@@ -810,9 +812,10 @@ impl<'a> OwnershipChecker<'a> {
     /// the inner value. Arguments passed without `view` consume the value if it
     /// is a non-copyable variable.
     fn check_call_ownership(&mut self, callee: &Expr, args: &[CallArg], _span: Span) {
-        // Check the callee itself (e.g., reading a function variable).
-        self.check_expr_ownership(callee);
+        // Source evaluates arguments before selecting a function value. An
+        // argument may consume an owner that the callee expression then reads.
         self.check_call_arguments_ownership(callee, args, 0);
+        self.check_expr_ownership(callee);
     }
 
     fn check_call_arguments_ownership(
@@ -858,6 +861,7 @@ impl<'a> OwnershipChecker<'a> {
     fn dotted_name_str(expr: &Expr) -> Option<String> {
         match expr {
             Expr::Ident(ident) => Some(ident.name.clone()),
+            Expr::Paren(inner, _) => Self::dotted_name_str(inner),
             Expr::FieldAccess(inner, field, _) => {
                 let prefix = Self::dotted_name_str(inner)?;
                 Some(format!("{prefix}.{}", field.name))
@@ -874,6 +878,7 @@ impl<'a> OwnershipChecker<'a> {
             Expr::Ident(ident) => {
                 self.consume_variable(&ident.name, ident.span, span);
             }
+            Expr::Paren(inner, _) => self.consume_expr(inner, span),
             Expr::View(inner, _) => {
                 // `view x` at the expression level — does not consume.
                 self.check_expr_ownership(inner);

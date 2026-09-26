@@ -1,0 +1,10 @@
+namespace test
+function count(items: list[string]) returns int64:
+    return list.length[string](view items)
+function failing_factory() returns function(list[string]) returns int64:
+    list[int64] invalid = list.remove_at[int64](list(1), -1)
+    println(list.length[int64](view invalid))
+    return count
+function main() returns nothing:
+    println(failing_factory()(list("owned", "before", "callee")))
+    return nothing
