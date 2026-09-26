@@ -880,6 +880,8 @@ scrutinees before selecting an arm.
 Handlers in `for` iterables are extracted before the loop header. Sequence lowering
 then materializes the iterable once on the resulting preheader path, so a loop
 backedge never re-evaluates the source expression.
+Assertion and breakpoint conditions also extract handlers before their MIR
+statements execute. Assertion messages remain on the failure-only path.
 Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
 carry typed operands and message identity. Actor receive
 handlers are deterministic HIR functions whose locals preserve checked

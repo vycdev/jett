@@ -1744,6 +1744,31 @@ fn native_for_iterable_nested_handle_matches_interpreter() {
 }
 
 #[test]
+fn native_debug_conditions_nested_handle_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_debug_condition_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "after\n");
+    assert_eq!(expected.debug_output, ["breakpoint hit"]);
+    let directory = tempfile::tempdir().expect("isolated debug condition directory");
+    let binary = directory.path().join("nested_debug_condition_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile breakpoint condition with nested handlers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(String::from_utf8_lossy(&actual.stderr), "breakpoint hit\n");
+
+    let verify_binary = directory.path().join("nested_debug_condition_verify.exe");
+    let artifact = build_host_verify_suite_executable(&fixture, launcher(), &verify_binary)
+        .expect("compile assertion condition with nested handler");
+    let verified = run_bounded(&artifact.path, directory.path());
+    assert!(verified.status.success(), "{verified:?}");
+    assert!(verified.stdout.is_empty(), "{verified:?}");
+    assert!(verified.stderr.is_empty(), "{verified:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");

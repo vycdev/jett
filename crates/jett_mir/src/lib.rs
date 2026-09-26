@@ -1039,26 +1039,32 @@ impl<'a> Builder<'a> {
             hir::StatementKind::Match { scrutinee, arms } => {
                 self.lower_match(scrutinee, arms, statement.span)
             }
-            hir::StatementKind::Assert { condition, message } => self.push(
-                StatementKind::Assert {
-                    condition: condition.clone(),
-                    message: message.clone(),
-                },
-                statement.span,
-            ),
+            hir::StatementKind::Assert { condition, message } => {
+                let condition = self.lower_value(condition);
+                self.push(
+                    StatementKind::Assert {
+                        condition,
+                        message: message.clone(),
+                    },
+                    statement.span,
+                );
+            }
             hir::StatementKind::Trace(local) => {
                 self.push(StatementKind::Trace(*local), statement.span)
             }
             hir::StatementKind::Breakpoint {
                 condition,
                 bindings,
-            } => self.push(
-                StatementKind::Breakpoint {
-                    condition: condition.clone(),
-                    bindings: bindings.clone(),
-                },
-                statement.span,
-            ),
+            } => {
+                let condition = condition.as_ref().map(|value| self.lower_value(value));
+                self.push(
+                    StatementKind::Breakpoint {
+                        condition,
+                        bindings: bindings.clone(),
+                    },
+                    statement.span,
+                );
+            }
             hir::StatementKind::Respond(value) => {
                 self.terminate(TerminatorKind::Respond(value.clone()), statement.span)
             }
