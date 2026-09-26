@@ -51,6 +51,9 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         | ExpressionKind::MachineConstruct { payloads, .. } => {
             payloads.iter().any(has_extractable_handle)
         }
+        ExpressionKind::MachineTransition {
+            source, payloads, ..
+        } => has_extractable_handle(source) || payloads.iter().any(has_extractable_handle),
         ExpressionKind::ResultOk(value)
         | ExpressionKind::ResultFail(value)
         | ExpressionKind::OptionalSome(value) => has_extractable_handle(value),
@@ -557,6 +560,29 @@ impl Builder<'_> {
                 payloads,
             };
             return lowered;
+        }
+        if let ExpressionKind::MachineTransition {
+            source,
+            state_type,
+            target,
+            payloads,
+        } = &expression.kind
+            && (has_extractable_handle(source) || payloads.iter().any(has_extractable_handle))
+        {
+            let values = std::iter::once(source.as_ref().clone())
+                .chain(payloads.iter().cloned())
+                .collect::<Vec<_>>();
+            let order = (0..values.len()).collect::<Vec<_>>();
+            if let Some(mut values) = self.lower_ordered_owned_values(&values, &order) {
+                let mut lowered = expression.clone();
+                lowered.kind = ExpressionKind::MachineTransition {
+                    source: Box::new(values.remove(0)),
+                    state_type: *state_type,
+                    target: *target,
+                    payloads: values,
+                };
+                return lowered;
+            }
         }
         if let ExpressionKind::ResultOk(value) = &expression.kind
             && has_extractable_handle(value)
