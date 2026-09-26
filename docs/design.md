@@ -7101,6 +7101,13 @@ function(int64) returns int64 add5 = make_adder(5)
 int64 result = add5(10)    # result == 15
 ```
 
+Concrete source methods also form function values with the existing
+`Type.method` spelling, including methods supplied by an interface
+implementation. The receiver remains the explicit first parameter; storing a
+method does not bind an instance. Parameter types and `view` modes remain part
+of the callback's type. Method bodies use their declaring namespace when
+invoked through a callback, including callbacks produced by `comptime`.
+
 A call through a function-valued expression evaluates arguments in lexical
 source order, then evaluates the callee to select the function. This includes
 parenthesized callbacks, returned functions, and function-valued fields. If an

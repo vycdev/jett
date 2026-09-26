@@ -849,6 +849,13 @@ type is cloneable; resource-bearing values are never cloned by this extraction.
 Interpreter function and closure invocations expose their own lexical scopes
 and the initial global environment, excluding unrelated caller locals and
 namespace aliases. Closures retain the namespace aliases visible at creation.
+Concrete source method values carry a separate checker-selected source-body
+identity through ordinary, generic, and reflected comptime body facts. HIR
+resolves that identity to the registered method function instead of treating
+the type namespace as a runtime field. The receiver stays an explicit callback
+parameter, with its checked ownership mode. Interpreter registration retains
+the declaration namespace separately from the qualified method name, so method
+bodies resolve their lexical helpers consistently for direct and indirect calls.
 Generic body checking similarly saves and restores the triggering closure's capture
 scope so a generic callee's parameters cannot be mistaken for captures.
 Generic annotations on an inline function use ordinary type substitution;

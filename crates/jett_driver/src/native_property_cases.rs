@@ -5,12 +5,13 @@ use jett_common::{FileId, Span};
 use jett_comptime::value::Value;
 use jett_comptime::verify::{PROPERTY_DEFAULT_ITERATIONS, PropertyCase};
 use jett_hir::{
-    Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,
-    FunctionIdentity, HandleKind, IntrinsicId, Local, LocalId, MapEntry, ParamMode, StateId,
-    Statement, StatementKind, VariantId,
+    Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionDebugKind,
+    FunctionId, FunctionIdentity, HandleKind, IntrinsicId, Local, LocalId, MapEntry, ParamMode,
+    StateId, Statement, StatementKind, VariantId,
 };
 use jett_parser::ast::{Item, Module};
 use jett_types::{Type, TypeId, TypeInterner};
+use std::collections::HashSet;
 
 pub(super) fn append_property_suite(
     hir: &mut jett_hir::Program,
@@ -18,8 +19,9 @@ pub(super) fn append_property_suite(
     entry_file: FileId,
     cases: &[PropertyCase],
     types: &TypeInterner,
+    method_value_definitions: &HashSet<Span>,
 ) -> Result<Option<FunctionId>, Vec<jett_hir::LowerError>> {
-    let function_values = function_value_candidates(&hir.functions);
+    let function_values = function_value_candidates(&hir.functions, method_value_definitions);
     let mut statements = Vec::new();
     let mut locals = Vec::new();
     let mut first_identity = None;
@@ -140,7 +142,7 @@ fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {
 }
 
 pub(super) struct FunctionValueCandidate {
-    name: String,
+    source_name: Option<String>,
     kind: DeclarationKind,
     body_span: Span,
     params: Vec<TypeId>,
@@ -150,24 +152,30 @@ pub(super) struct FunctionValueCandidate {
     id: FunctionId,
 }
 
-pub(super) fn function_value_candidates(functions: &[Function]) -> Vec<FunctionValueCandidate> {
+pub(super) fn function_value_candidates(
+    functions: &[Function],
+    method_value_definitions: &HashSet<Span>,
+) -> Vec<FunctionValueCandidate> {
     functions
         .iter()
         .filter(|function| {
             matches!(
                 function.identity.declaration.kind,
-                DeclarationKind::Function | DeclarationKind::Verify | DeclarationKind::Property
-            )
+                DeclarationKind::Function
+                    | DeclarationKind::Method
+                    | DeclarationKind::Verify
+                    | DeclarationKind::Property
+            ) && (function.identity.declaration.kind != DeclarationKind::Method
+                || method_value_definitions.contains(&function.span))
         })
         .map(|function| {
             let declaration = &function.identity.declaration;
-            let name = if declaration.namespace.is_empty() {
-                declaration.name.clone()
-            } else {
-                format!("{}.{}", declaration.namespace, declaration.name)
+            let source_name = match &function.debug_kind {
+                FunctionDebugKind::Named(name) => Some(name.clone()),
+                FunctionDebugKind::Inline => None,
             };
             FunctionValueCandidate {
-                name,
+                source_name,
                 kind: declaration.kind,
                 body_span: function.body.span,
                 params: function
@@ -241,8 +249,10 @@ pub(super) fn value_expression(
             Value::NamedFunction(name),
         ) => {
             let mut matches = context.functions.iter().filter(|function| {
-                function.kind == DeclarationKind::Function
-                    && function.name == *name
+                matches!(
+                    function.kind,
+                    DeclarationKind::Function | DeclarationKind::Method
+                ) && function.source_name.as_ref() == Some(name)
                     && function.params == *params
                     && function.view_params == *view_params
                     && function.return_type == *return_type
@@ -265,7 +275,8 @@ pub(super) fn value_expression(
             Value::Function { body, captures, .. },
         ) => {
             let mut matches = context.functions.iter().filter(|function| {
-                function.body_span == body.span
+                function.source_name.is_none()
+                    && function.body_span == body.span
                     && function.params == *params
                     && function.view_params == *view_params
                     && function.return_type == *return_type

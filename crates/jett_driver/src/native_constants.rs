@@ -11,6 +11,7 @@ use jett_hir::{
 };
 use jett_types::TypeInterner;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::native_property_cases::{
     FunctionValueCandidate, ValueContext, function_value_candidates, value_expression,
@@ -20,8 +21,9 @@ pub(crate) fn bake_values(
     program: &mut Program,
     values: &HashMap<Span, Value>,
     types: &TypeInterner,
+    method_value_definitions: &HashSet<Span>,
 ) -> Result<(), Vec<LowerError>> {
-    let function_values = function_value_candidates(&program.functions);
+    let function_values = function_value_candidates(&program.functions, method_value_definitions);
     let mut errors = Vec::new();
     for function in &mut program.functions {
         let mut baker = Baker {

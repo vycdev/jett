@@ -581,6 +581,13 @@ struct ReflectionMachineTransition {
     target: String,
 }
 
+#[derive(Clone)]
+struct RegisteredFunction {
+    definition: Arc<FunctionDef>,
+    namespace: Option<String>,
+    trusted_stdlib: bool,
+}
+
 pub struct Interpreter {
     /// Stack of lexical scopes. The last element is the innermost scope.
     scopes: Vec<Environment>,
@@ -589,9 +596,7 @@ pub struct Interpreter {
     /// Stack of block-scoped namespace aliases introduced by `use`.
     namespace_alias_scopes: Vec<HashMap<String, String>>,
     /// User-defined functions available for calling.
-    functions: HashMap<String, Arc<FunctionDef>>,
-    /// Function registry entries that came from compiler-shipped stdlib files.
-    trusted_stdlib_functions: HashSet<String>,
+    functions: HashMap<String, RegisteredFunction>,
     /// Registered user-defined structs available for construction and field access.
     structs: HashMap<String, StructDef>,
     /// Registered user-defined bitfields available for construction and field access.
@@ -677,7 +682,6 @@ impl Interpreter {
             variable_type_scopes: vec![HashMap::new()],
             namespace_alias_scopes: vec![HashMap::new()],
             functions: HashMap::new(),
-            trusted_stdlib_functions: HashSet::new(),
             structs: HashMap::new(),
             bitfields: HashMap::new(),
             enums: HashMap::new(),
@@ -931,15 +935,7 @@ impl Interpreter {
             .unwrap_or_else(|| format!("{name} = {value}"))
     }
 
-    fn function_namespace(name: &str) -> Option<String> {
-        name.rsplit_once('.')
-            .map(|(namespace, _)| namespace.to_string())
-    }
-
     fn current_qualified_name(&self, name: &str) -> Option<String> {
-        if name.contains('.') {
-            return None;
-        }
         self.current_namespace
             .as_ref()
             .map(|namespace| format!("{namespace}.{name}"))
@@ -1057,17 +1053,24 @@ impl Interpreter {
 
     /// Register a function definition so it can be called later.
     pub fn register_function(&mut self, func: &FunctionDef) {
-        self.register_function_named(&func.name.name, func, func.span.file.is_stdlib());
+        self.register_function_in_namespace(None, func);
     }
 
-    fn register_function_named(&mut self, name: &str, func: &FunctionDef, trusted_stdlib: bool) {
-        self.functions
-            .insert(name.to_string(), Arc::new(func.clone()));
-        if trusted_stdlib {
-            self.trusted_stdlib_functions.insert(name.to_string());
-        } else {
-            self.trusted_stdlib_functions.remove(name);
-        }
+    fn register_function_named(
+        &mut self,
+        name: &str,
+        namespace: Option<&str>,
+        func: &FunctionDef,
+        trusted_stdlib: bool,
+    ) {
+        self.functions.insert(
+            name.to_string(),
+            RegisteredFunction {
+                definition: Arc::new(func.clone()),
+                namespace: namespace.map(str::to_string),
+                trusted_stdlib,
+            },
+        );
     }
 
     /// Register a function under its canonical runtime name.
@@ -1076,10 +1079,11 @@ impl Interpreter {
         match namespace {
             Some(namespace) => self.register_function_named(
                 &format!("{namespace}.{}", func.name.name),
+                Some(namespace),
                 func,
                 trusted_stdlib,
             ),
-            None => self.register_function_named(&func.name.name, func, trusted_stdlib),
+            None => self.register_function_named(&func.name.name, None, func, trusted_stdlib),
         }
     }
 
@@ -1159,24 +1163,23 @@ impl Interpreter {
     /// Register a user-defined struct so it can be constructed and its methods
     /// called with dotted syntax like `Point.total(view p)`.
     pub fn register_struct(&mut self, strukt: &StructDef) {
-        self.structs
-            .insert(strukt.name.name.clone(), strukt.clone());
-
-        for method in &strukt.methods {
-            self.functions.insert(
-                format!("{}.{}", strukt.name.name, method.name.name),
-                Arc::new(method.clone()),
-            );
-        }
+        self.register_struct_in_namespace(None, strukt);
     }
 
     pub fn register_struct_in_namespace(&mut self, namespace: Option<&str>, strukt: &StructDef) {
-        if let Some(namespace) = namespace {
-            let mut qualified = strukt.clone();
-            qualified.name.name = format!("{namespace}.{}", strukt.name.name);
-            self.register_struct(&qualified);
-        } else {
-            self.register_struct(strukt);
+        let owner_name = namespace
+            .map(|namespace| format!("{namespace}.{}", strukt.name.name))
+            .unwrap_or_else(|| strukt.name.name.clone());
+        let mut qualified = strukt.clone();
+        qualified.name.name = owner_name.clone();
+        self.structs.insert(owner_name.clone(), qualified);
+        for method in &strukt.methods {
+            self.register_function_named(
+                &format!("{owner_name}.{}", method.name.name),
+                namespace,
+                method,
+                method.span.file.is_stdlib(),
+            );
         }
     }
 
@@ -1258,14 +1261,36 @@ impl Interpreter {
 
         for method in &block.methods {
             let concrete_name = format!("{}.{}", owner_name, method.name.name);
-            let interface_method_name = format!("{}.{}", interface_name, method.name.name);
-
-            self.functions
-                .insert(concrete_name.clone(), Arc::new(method.clone()));
+            let qualified_interface = namespace
+                .filter(|_| !interface_name.contains('.'))
+                .map(|namespace| format!("{namespace}.{interface_name}"))
+                .unwrap_or_else(|| interface_name.clone());
+            let interface_method_name = format!("{}.{}", qualified_interface, method.name.name);
+            let implementation_name = format!("{owner_name} as {interface_method_name}");
+            self.register_function_named(
+                &implementation_name,
+                namespace,
+                method,
+                method.span.file.is_stdlib(),
+            );
+            let has_inherent = self.structs.get(&owner_name).is_some_and(|owner| {
+                owner
+                    .methods
+                    .iter()
+                    .any(|candidate| candidate.name.name == method.name.name)
+            });
+            if !has_inherent {
+                self.register_function_named(
+                    &concrete_name,
+                    namespace,
+                    method,
+                    method.span.file.is_stdlib(),
+                );
+            }
             self.interface_methods
                 .entry(interface_method_name)
                 .or_default()
-                .insert(owner_name.clone(), concrete_name);
+                .insert(owner_name.clone(), implementation_name);
         }
     }
 
@@ -2154,6 +2179,7 @@ impl Interpreter {
                 return Some((
                     format!("function '{name}'"),
                     function
+                        .definition
                         .params
                         .iter()
                         .map(|param| param.name.name.as_str())
@@ -2238,7 +2264,7 @@ impl Interpreter {
             _ => None,
         }?;
         let function_name = self.runtime_name(&source_name);
-        let function = self.functions.get(&function_name)?;
+        let function = &self.functions.get(&function_name)?.definition;
         (!function.type_params.is_empty()).then_some(function.as_ref())
     }
 
@@ -2299,20 +2325,21 @@ impl Interpreter {
         }
         let source_name = Self::dotted_expr_name(expression)?;
         let name = self.registry_name(&self.functions, &source_name)?;
-        let function = self.functions.get(&name)?;
+        let registered = self.functions.get(&name)?;
+        let function = &registered.definition;
         if !function.type_params.is_empty() {
             return None;
         }
-        let namespace = Self::function_namespace(&name);
+        let namespace = registered.namespace.as_deref();
         let params = function
             .params
             .iter()
-            .map(|param| self.substitute_type_expr_in_namespace(&param.ty, namespace.as_deref()))
+            .map(|param| self.substitute_type_expr_in_namespace(&param.ty, namespace))
             .collect();
         let return_type = function
             .return_type
             .as_ref()
-            .map(|ty| self.substitute_type_expr_in_namespace(ty, namespace.as_deref()))
+            .map(|ty| self.substitute_type_expr_in_namespace(ty, namespace))
             .unwrap_or_else(|| {
                 TypeExpr::Named(Ident {
                     name: "nothing".to_string(),
@@ -10276,7 +10303,9 @@ impl Interpreter {
     }
 
     fn has_trusted_stdlib_function(&self, name: &str) -> bool {
-        self.trusted_stdlib_functions.contains(name) && self.functions.contains_key(name)
+        self.functions
+            .get(name)
+            .is_some_and(|function| function.trusted_stdlib)
     }
 
     fn call_user_function_with_type_args(
@@ -10306,11 +10335,12 @@ impl Interpreter {
             .unwrap_or_else(|| name.to_string());
 
         // Look up the function definition.
-        let func = self
+        let registered = self
             .functions
             .get(&resolved_name)
             .ok_or_else(|| format!("undefined function '{name}'"))?
             .clone();
+        let func = registered.definition;
 
         if args.len() != func.params.len() {
             return Err(format!(
@@ -10326,9 +10356,8 @@ impl Interpreter {
 
         let saved_namespace = self.current_namespace.clone();
         let saved_trusted_stdlib = self.current_function_trusted_stdlib;
-        self.current_namespace = Self::function_namespace(&resolved_name);
-        self.current_function_trusted_stdlib =
-            self.trusted_stdlib_functions.contains(&resolved_name);
+        self.current_namespace = registered.namespace;
+        self.current_function_trusted_stdlib = registered.trusted_stdlib;
 
         let scope_depth = self.scopes.len();
         let saved_scope_floor = self.lexical_scope_floor;
@@ -10596,6 +10625,10 @@ impl Interpreter {
         let receiver_type = runtime_type_name(args.first()?)?;
         self.interface_methods
             .get(name)
+            .or_else(|| {
+                self.current_qualified_name(name)
+                    .and_then(|qualified| self.interface_methods.get(&qualified))
+            })
             .and_then(|methods| methods.get(&receiver_type))
             .cloned()
     }
@@ -15060,7 +15093,12 @@ mod tests {
             "json_parse_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15171,7 +15209,7 @@ mod tests {
             interp.register_function_in_namespace(Some("json"), &trusted_hook);
             let fake_wrapper =
                 generic_json_hook(wrapper_name, block(vec![return_stmt(string("fake"))]));
-            interp.register_function_named(public_name, &fake_wrapper, false);
+            interp.register_function_named(public_name, Some("json"), &fake_wrapper, false);
 
             let err = interp
                 .call_function_with_type_args(
@@ -15224,7 +15262,7 @@ mod tests {
         interp.register_function_in_namespace(Some("json"), &trusted_hook);
 
         let fake_wrapper = generic_json_hook("parse", block(vec![return_stmt(string("fake"))]));
-        interp.register_function_named("json.parse", &fake_wrapper, false);
+        interp.register_function_named("json.parse", Some("json"), &fake_wrapper, false);
 
         let err = interp
             .call_function_with_type_args(
@@ -15247,7 +15285,12 @@ mod tests {
             "json_parse_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
         let mut public_wrapper =
             generic_json_hook("parse", block(vec![return_stmt(string("public wrapper"))]));
         public_wrapper.span = stdlib_sp();
@@ -15274,7 +15317,12 @@ mod tests {
             "json_parse_exact_reflected",
             block(vec![return_stmt(string("fake exact"))]),
         );
-        interp.register_function_named("json.json_parse_exact_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_exact_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15324,7 +15372,12 @@ mod tests {
             "json_serialize_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15374,7 +15427,12 @@ mod tests {
             "json_serialize_public_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_public_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_public_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15565,7 +15623,7 @@ mod tests {
             vec![("value", "JsonTree")],
             block(vec![return_stmt(string("ordinary wrapper"))]),
         );
-        interp.register_function_named("json.kind", &wrapper, false);
+        interp.register_function_named("json.kind", Some("json"), &wrapper, false);
 
         let value = interp
             .call_function("json.kind", vec![json_tree_null()])
@@ -15588,7 +15646,12 @@ mod tests {
             "json_parse_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_parse_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15618,7 +15681,12 @@ mod tests {
             "json_parse_exact_reflected",
             block(vec![return_stmt(string("fake exact"))]),
         );
-        interp.register_function_named("json.json_parse_exact_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_parse_exact_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15648,7 +15716,12 @@ mod tests {
             "json_serialize_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -15678,7 +15751,12 @@ mod tests {
             "json_serialize_public_reflected",
             block(vec![return_stmt(string("fake"))]),
         );
-        interp.register_function_named("json.json_serialize_public_reflected", &fake_hook, false);
+        interp.register_function_named(
+            "json.json_serialize_public_reflected",
+            Some("json"),
+            &fake_hook,
+            false,
+        );
 
         let err = interp
             .call_function_with_type_args(
@@ -16678,6 +16756,106 @@ function main() returns int64:
             assert_eq!(interp.namespace_alias_scopes.len(), 1);
             assert!(interp.visible_namespace_aliases().is_empty());
         }
+    }
+
+    #[test]
+    fn source_methods_preserve_their_declaration_namespace() {
+        for declaration in [
+            "export struct Counter:\n    value: int64\n    function read(view self: Counter) returns int64:\n        Payload computed = Payload(value: helper() + self.value)\n        return computed.value + models.helper()",
+            "export interface Reader:\n    function read(view self: Reader) returns int64\nexport struct Counter:\n    value: int64\nimplement Reader for Counter:\n    function read(view self: Counter) returns int64:\n        Payload computed = Payload(value: helper() + self.value)\n        return computed.value + models.helper()",
+        ] {
+            for invocation in [
+                "return original.Counter.read(view counter)",
+                "return (original.Counter.read)(view counter)",
+                "function(view original.Counter) returns int64 callback = original.Counter.read\n    return callback(view counter)",
+                "return original.make_reader()(view counter)",
+                "return original.local_read(view counter)",
+            ] {
+                let source = format!(
+                    r#"namespace beta
+export function helper() returns int64:
+    return 99
+namespace models
+function helper() returns int64:
+    return 5
+struct Payload:
+    value: int64
+{declaration}
+export function make_reader() returns function(view Counter) returns int64:
+    return models.Counter.read
+export function local_read(view counter: Counter) returns int64:
+    return Counter.read(view counter)
+namespace app
+function main() returns int64:
+    use models as original
+    use beta as models
+    original.Counter counter = original.Counter(value: 2)
+    {invocation}
+"#
+                );
+                let parsed = jett_parser::parse(&source, FileId::new(0));
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                let mut interp = Interpreter::new();
+                interp.register_module(&parsed.module);
+                assert_eq!(
+                    interp.call_function("app.main", vec![]),
+                    Ok(Value::Int64(12)),
+                    "{declaration}\n{invocation}"
+                );
+                assert_eq!(interp.lexical_scope_floor, 0);
+                assert_eq!(interp.namespace_alias_scopes.len(), 1);
+                assert_eq!(interp.current_namespace, None);
+                assert!(interp.visible_namespace_aliases().is_empty());
+
+                let method = field_access(field_access(var("models"), "Counter"), "read");
+                let value = interp.eval_expr(&method).expect("method value");
+                assert_eq!(value.to_string(), "function(models.Counter.read)");
+                let TypeExpr::Function(params, return_type, _) = interp
+                    .named_function_argument_type(&method)
+                    .expect("method signature")
+                else {
+                    panic!("expected function signature");
+                };
+                assert_eq!(type_expr_name(&params[0]), "models.Counter");
+                assert_eq!(type_expr_name(&return_type), "int64");
+            }
+        }
+    }
+
+    #[test]
+    fn comptime_method_values_preserve_names_and_declaration_namespace() {
+        let source = r#"namespace models
+function helper() returns int64:
+    return 5
+struct Counter:
+    value: int64
+    function read(view self: Counter) returns int64:
+        return helper() + self.value
+function make_reader() returns function(view Counter) returns int64:
+    return models.Counter.read
+function main() returns nothing:
+    function(view Counter) returns int64 direct = comptime models.Counter.read
+    function(view Counter) returns int64 returned = comptime make_reader()
+    int64 answer = comptime models.Counter.read(view Counter(value: 2))
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let (values, diagnostics) = crate::evaluate_explicit_comptime_expressions(
+            &parsed.module,
+            Arc::new(ReflectionMetadata::new()),
+            Arc::new(HashMap::new()),
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(values.len(), 3);
+        assert_eq!(
+            values
+                .values()
+                .filter(|value| matches!(value, Value::NamedFunction(name) if name == "models.Counter.read"))
+                .count(),
+            2
+        );
+        assert!(values.values().any(|value| *value == Value::Int64(7)));
     }
 
     #[test]

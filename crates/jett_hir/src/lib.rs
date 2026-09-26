@@ -13,7 +13,7 @@ use jett_resolve::{DefId, DefKind, ResolveResult};
 use jett_typecheck::{
     CheckResult, CheckedBodyFacts, CheckedCallArgumentOrder, CheckedComptimeTypeBinding,
     CheckedComptimeTypeSelection, CheckedGenericCall, CheckedGenericFunctionInstantiation,
-    CheckedGenericSpecialization, CheckedMethodCall, CheckedMethodDefinition,
+    CheckedGenericSpecialization, CheckedMethodCall, CheckedMethodDefinition, CheckedMethodValue,
     CheckedStaticSelection, CheckedStructConstruction,
 };
 use jett_types::{
@@ -1395,6 +1395,7 @@ impl<'a> Lowerer<'a> {
             self.check.intrinsic_reflection_arguments.clone(),
             self.check.call_argument_orders.clone(),
             self.check.method_calls.clone(),
+            self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
             HashMap::new(),
@@ -1476,6 +1477,7 @@ impl<'a> Lowerer<'a> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            method_values,
             struct_constructions,
             pipeline_step_call_types,
             static_selections,
@@ -1493,6 +1495,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.intrinsic_reflection_arguments.clone(),
                 instantiation.call_argument_orders.clone(),
                 instantiation.method_calls.clone(),
+                instantiation.method_values.clone(),
                 instantiation.struct_constructions.clone(),
                 instantiation.pipeline_step_call_types.clone(),
                 instantiation.static_selections.clone(),
@@ -1511,6 +1514,7 @@ impl<'a> Lowerer<'a> {
                 self.check.intrinsic_reflection_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
+                self.check.method_values.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
                 HashMap::new(),
@@ -1557,6 +1561,7 @@ impl<'a> Lowerer<'a> {
                 self.check.intrinsic_reflection_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
+                self.check.method_values.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
                 HashMap::new(),
@@ -1584,6 +1589,7 @@ impl<'a> Lowerer<'a> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            method_values,
             struct_constructions,
             pipeline_step_call_types,
             static_selections,
@@ -1738,6 +1744,7 @@ impl<'a> Lowerer<'a> {
             self.check.intrinsic_reflection_arguments.clone(),
             self.check.call_argument_orders.clone(),
             self.check.method_calls.clone(),
+            self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
             HashMap::new(),
@@ -1920,6 +1927,7 @@ impl<'a> Lowerer<'a> {
         let intrinsic_reflection_arguments = self.check.intrinsic_reflection_arguments.clone();
         let call_argument_orders = self.check.call_argument_orders.clone();
         let method_calls = self.check.method_calls.clone();
+        let method_values = self.check.method_values.clone();
         let struct_constructions = self.check.struct_constructions.clone();
         let pipeline_step_call_types = self.check.pipeline_step_call_types.clone();
         let static_selections = HashMap::new();
@@ -1935,6 +1943,7 @@ impl<'a> Lowerer<'a> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            method_values,
             struct_constructions,
             pipeline_step_call_types,
             static_selections,
@@ -2111,6 +2120,7 @@ impl<'a> Lowerer<'a> {
             self.check.intrinsic_reflection_arguments.clone(),
             self.check.call_argument_orders.clone(),
             self.check.method_calls.clone(),
+            self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
             HashMap::new(),
@@ -2200,6 +2210,7 @@ struct BodyLowerer<'lowerer, 'program> {
     intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
+    method_values: HashMap<Span, CheckedMethodValue>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
     static_selections: HashMap<Span, CheckedStaticSelection>,
@@ -2222,6 +2233,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
         call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
         method_calls: HashMap<Span, CheckedMethodCall>,
+        method_values: HashMap<Span, CheckedMethodValue>,
         struct_constructions: HashMap<Span, CheckedStructConstruction>,
         pipeline_step_call_types: HashMap<Span, TypeId>,
         static_selections: HashMap<Span, CheckedStaticSelection>,
@@ -2237,6 +2249,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            method_values,
             struct_constructions,
             pipeline_step_call_types,
             static_selections,
@@ -2679,6 +2692,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            method_values,
             struct_constructions,
             pipeline_step_call_types,
             static_selections,
@@ -2697,6 +2711,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let saved_call_argument_orders =
             std::mem::replace(&mut self.call_argument_orders, call_argument_orders);
         let saved_method_calls = std::mem::replace(&mut self.method_calls, method_calls);
+        let saved_method_values = std::mem::replace(&mut self.method_values, method_values);
         let saved_struct_constructions =
             std::mem::replace(&mut self.struct_constructions, struct_constructions);
         let saved_pipeline_step_call_types =
@@ -2721,6 +2736,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.intrinsic_reflection_arguments = saved_intrinsic_reflection_arguments;
         self.call_argument_orders = saved_call_argument_orders;
         self.method_calls = saved_method_calls;
+        self.method_values = saved_method_values;
         self.struct_constructions = saved_struct_constructions;
         self.pipeline_step_call_types = saved_pipeline_step_call_types;
         self.static_selections = saved_static_selections;
@@ -2849,7 +2865,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 value: Box::new(self.lower_expression(value)?),
             },
             Expr::FieldAccess(base, field, _) => {
-                if self.resolved_expression_kind(expression) == Some(DefKind::Function) {
+                if self.method_values.contains_key(&span)
+                    || self.resolved_expression_kind(expression) == Some(DefKind::Function)
+                {
                     ExpressionKind::FunctionRef(self.resolve_function_value_target(expression)?)
                 } else if self.enum_variant_index(ty, field).is_some() {
                     self.lower_enum_construct(ty, field, &[], span)?
@@ -5359,6 +5377,21 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     }
 
     fn resolve_function_value_target(&mut self, expression: &Expr) -> Option<FunctionId> {
+        if let Some(method) = self.method_values.get(&expression.span()) {
+            return self
+                .function_ids
+                .get(&FunctionKey::Method {
+                    source_span: method.source_span,
+                })
+                .copied()
+                .or_else(|| {
+                    self.parent.error(
+                        expression.span(),
+                        "method value target has no checked concrete HIR function",
+                    );
+                    None
+                });
+        }
         let Some(definition) = self.resolved_definition(expression) else {
             self.parent.error(
                 expression.span(),
@@ -6640,6 +6673,191 @@ function main() returns int64:
         assert_eq!(evaluation_order, &[1, 0]);
         assert!(matches!(args[0].kind, ExpressionKind::View(_)));
         assert!(matches!(args[1].kind, ExpressionKind::Int(5)));
+    }
+
+    #[test]
+    fn lowers_aliased_concrete_method_values_to_source_targets() {
+        let program = lower_source(
+            r#"namespace models
+export interface Reader:
+    function read(view self: Reader) returns int64
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+implement Reader for Point:
+    function read(view self: Point) returns int64:
+        return self.value
+namespace app
+struct Callbacks:
+    amount: function(view models.Point) returns int64
+    read: function(view models.Point) returns int64
+function reader() returns function(view models.Point) returns int64:
+    use models as m
+    return (m.Point.read)
+function main() returns int64:
+    use models as m
+    function(view m.Point) returns int64 callback = (m.Point.amount)
+    Callbacks callbacks = Callbacks(amount: m.Point.amount, read: m.Point.read)
+    m.Point point = m.Point(value: 7)
+    return (callback)(view point)
+"#,
+        );
+        let method = |name: &str| {
+            program
+                .functions
+                .iter()
+                .find(|function| function.debug_kind == FunctionDebugKind::Named(name.into()))
+                .expect("concrete source method")
+        };
+        let amount = method("models.Point.amount");
+        let read = method("models.Point.read");
+        assert_eq!(amount.identity.declaration.kind, DeclarationKind::Method);
+        assert_eq!(read.identity.declaration.kind, DeclarationKind::Method);
+        assert_eq!(amount.params[0].mode, ParamMode::View);
+        assert_eq!(read.params[0].mode, ParamMode::View);
+        assert_ne!(amount.id, read.id);
+        assert_eq!(
+            read.identity.declaration.name,
+            "models.Point as models.Reader.read"
+        );
+
+        let reader = method("app.reader");
+        let StatementKind::Return(Some(value)) = &reader.body.statements[0].kind else {
+            panic!("expected returned method value");
+        };
+        assert_eq!(value.kind, ExpressionKind::FunctionRef(read.id));
+
+        let main = method("app.main");
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected method local");
+        };
+        assert_eq!(value.kind, ExpressionKind::FunctionRef(amount.id));
+        let StatementKind::Let {
+            value:
+                Expression {
+                    kind: ExpressionKind::StructConstruct { fields, .. },
+                    ..
+                },
+            ..
+        } = &main.body.statements[1].kind
+        else {
+            panic!("expected aggregate containing method values");
+        };
+        assert_eq!(fields[0].kind, ExpressionKind::FunctionRef(amount.id));
+        assert_eq!(fields[1].kind, ExpressionKind::FunctionRef(read.id));
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::IndirectCall { args, .. },
+            ..
+        })) = &main.body.statements[3].kind
+        else {
+            panic!("expected indirect method call");
+        };
+        assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+    }
+
+    #[test]
+    fn keeps_concrete_method_values_in_generic_and_inline_fact_contexts() {
+        let program = lower_source(
+            r#"namespace app
+struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+function factory[T](seed: T) returns function(view Point) returns int64:
+    return Point.amount
+function inline_factory() returns function() returns function(view Point) returns int64:
+    return function() returns function(view Point) returns int64: return Point.amount
+function main() returns int64:
+    function(view Point) returns int64 first = factory[int64](1)
+    function(view Point) returns int64 second = factory[string]("two")
+    Point point = Point(value: 7)
+    return first(view point)
+"#,
+        );
+        let method = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.debug_kind == FunctionDebugKind::Named("app.Point.amount".into())
+            })
+            .expect("concrete method target");
+        let mut factory_count = 0;
+        let mut inline_count = 0;
+        for function in &program.functions {
+            if function.identity.declaration.name != "factory"
+                && function.debug_kind != FunctionDebugKind::Inline
+            {
+                continue;
+            }
+            let StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
+                panic!("expected returned concrete method value");
+            };
+            assert_eq!(value.kind, ExpressionKind::FunctionRef(method.id));
+            if function.debug_kind == FunctionDebugKind::Inline {
+                inline_count += 1;
+            } else {
+                factory_count += 1;
+            }
+        }
+        assert_eq!(factory_count, 2);
+        assert_eq!(inline_count, 1);
+    }
+
+    #[test]
+    fn keeps_method_values_when_switching_reflected_body_facts() {
+        let program = lower_source(
+            r#"namespace app
+struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+struct Mixed:
+    label: string
+    count: int64
+function reflected[T](view value: T, view point: Point) returns int64:
+    mutable int64 output = 0
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            function(view Point) returns int64 callback = Point.amount
+            output = callback(view point)
+    function(view Point) returns int64 after = Point.amount
+    return after(view point) + output
+function main() returns int64:
+    Mixed value = Mixed(label: "one", count: 1)
+    Point point = Point(value: 7)
+    return reflected[Mixed](view value, view point)
+"#,
+        );
+        let method = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.debug_kind == FunctionDebugKind::Named("app.Point.amount".into())
+            })
+            .expect("concrete method target");
+        let reflected = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "reflected")
+            .expect("concrete reflected function");
+        let StatementKind::For { body, .. } = &reflected.body.statements[1].kind else {
+            panic!("expected reflected loop");
+        };
+        let StatementKind::ReflectedTypeDispatch { arms, .. } = &body.statements[0].kind else {
+            panic!("expected reflected type dispatch");
+        };
+        assert_eq!(arms.len(), 2);
+        for arm in arms {
+            let StatementKind::Let { value, .. } = &arm.body.statements[0].kind else {
+                panic!("expected method local inside specialized body");
+            };
+            assert_eq!(value.kind, ExpressionKind::FunctionRef(method.id));
+        }
+        let StatementKind::Let { value, .. } = &reflected.body.statements[2].kind else {
+            panic!("expected method local after specialized body");
+        };
+        assert_eq!(value.kind, ExpressionKind::FunctionRef(method.id));
     }
 
     #[test]

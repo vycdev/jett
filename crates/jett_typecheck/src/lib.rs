@@ -10,6 +10,6 @@ pub use checker::{
     CheckOptions, CheckResult, CheckedBodyFacts, CheckedCallArgumentOrder,
     CheckedComptimeTypeBinding, CheckedComptimeTypeSelection, CheckedGenericCall,
     CheckedGenericFunctionInstantiation, CheckedGenericSpecialization, CheckedMethodCall,
-    CheckedMethodDefinition, CheckedStaticSelection, CheckedStructConstruction, check,
-    check_with_options,
+    CheckedMethodDefinition, CheckedMethodValue, CheckedStaticSelection, CheckedStructConstruction,
+    check, check_with_options,
 };

@@ -59,6 +59,8 @@ pub struct CheckedGenericFunctionInstantiation {
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Concrete source-defined method targets selected in this body.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    /// Concrete source-defined methods selected as function values in this body.
+    pub method_values: HashMap<Span, CheckedMethodValue>,
     /// Concrete struct construction targets selected in this body.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Raw call-result types for pipeline steps before any step-local handle.
@@ -112,6 +114,7 @@ pub struct CheckedBodyFacts {
     pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub method_values: HashMap<Span, CheckedMethodValue>,
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
     pub static_selections: HashMap<Span, CheckedStaticSelection>,
@@ -174,6 +177,12 @@ pub struct CheckedMethodCall {
     pub source_span: Span,
 }
 
+/// The concrete source-defined method selected for a function-value expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedMethodValue {
+    pub source_span: Span,
+}
+
 /// The concrete struct type selected for a checked construction call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedStructConstruction {
@@ -208,6 +217,11 @@ pub struct CheckResult {
     pub method_definitions: Vec<CheckedMethodDefinition>,
     /// Concrete source-defined method targets, keyed by call span.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    /// Concrete source-defined method values, keyed by expression span.
+    pub method_values: HashMap<Span, CheckedMethodValue>,
+    /// Source method bodies selected by concrete owner/member lookup. This
+    /// excludes implementation bodies shadowed by an inherent method.
+    pub method_value_definitions: HashSet<Span>,
     /// Checked struct construction targets, keyed by call span.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Raw call-result types for pipeline steps before any step-local handle.
@@ -255,6 +269,12 @@ pub fn check_with_options(
     diagnostics.extend(complexity_diagnostics);
     diagnostics.extend(ownership_diagnostics);
 
+    let method_value_definitions = checker
+        .method_definitions_by_owner
+        .values()
+        .map(|&index| checker.method_definitions[index].source_span)
+        .collect();
+
     CheckResult {
         diagnostics,
         type_map: checker.type_map,
@@ -266,6 +286,8 @@ pub fn check_with_options(
         call_argument_orders: checker.call_argument_orders,
         method_definitions: checker.method_definitions,
         method_calls: checker.method_calls,
+        method_values: checker.method_values,
+        method_value_definitions,
         struct_constructions: checker.struct_constructions,
         pipeline_step_call_types: checker.pipeline_step_call_types,
         generic_function_instantiations: checker.generic_function_instantiations,
@@ -357,6 +379,7 @@ struct ActiveGenericInstantiation {
     intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
+    method_values: HashMap<Span, CheckedMethodValue>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
     static_selections: HashMap<Span, CheckedStaticSelection>,
@@ -527,6 +550,8 @@ struct TypeChecker<'a> {
     interface_method_definitions: HashMap<(TypeId, TypeId, String), usize>,
     /// Checked method calls outside generic bodies.
     method_calls: HashMap<Span, CheckedMethodCall>,
+    /// Checked source method values outside generic bodies.
+    method_values: HashMap<Span, CheckedMethodValue>,
     /// Checked struct constructions outside generic bodies.
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Raw pipeline call-result types outside generic bodies.
@@ -624,6 +649,7 @@ impl<'a> TypeChecker<'a> {
             method_definitions_by_owner: HashMap::new(),
             interface_method_definitions: HashMap::new(),
             method_calls: HashMap::new(),
+            method_values: HashMap::new(),
             struct_constructions: HashMap::new(),
             pipeline_step_call_types: HashMap::new(),
             comptime_type_bindings: HashMap::new(),
@@ -3328,6 +3354,11 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn resolved_expr_name(&self, expr: &Expr) -> Option<String> {
+        if let Expr::FieldAccess(_, field, _) = expr {
+            if let Some((owner, _)) = self.method_signature_for_callee(expr) {
+                return Some(format!("{}.{}", self.type_name(owner), field.name));
+            }
+        }
         match expr {
             Expr::Ident(ident) => Some(self.resolved_symbol_name(&ident.name, ident.span)),
             Expr::FieldAccess(base, field, _)
@@ -6270,6 +6301,7 @@ impl<'a> TypeChecker<'a> {
                         intrinsic_reflection_arguments: HashMap::new(),
                         call_argument_orders: HashMap::new(),
                         method_calls: HashMap::new(),
+                        method_values: HashMap::new(),
                         struct_constructions: HashMap::new(),
                         pipeline_step_call_types: HashMap::new(),
                         static_selections: HashMap::new(),
@@ -6312,6 +6344,7 @@ impl<'a> TypeChecker<'a> {
                     intrinsic_reflection_arguments: HashMap::new(),
                     call_argument_orders: HashMap::new(),
                     method_calls: HashMap::new(),
+                    method_values: HashMap::new(),
                     struct_constructions: HashMap::new(),
                     pipeline_step_call_types: HashMap::new(),
                     static_selections: HashMap::new(),
@@ -6343,6 +6376,7 @@ impl<'a> TypeChecker<'a> {
                     .call_argument_orders
                     .extend(active.call_argument_orders);
                 entry.method_calls.extend(active.method_calls);
+                entry.method_values.extend(active.method_values);
                 entry
                     .struct_constructions
                     .extend(active.struct_constructions);
@@ -6400,8 +6434,17 @@ impl<'a> TypeChecker<'a> {
             parameter_types: signature.params.iter().map(|(_, ty, _)| *ty).collect(),
             return_type: signature.return_type,
         });
-        self.method_definitions_by_owner
-            .insert((owner_type, method.name.name.clone()), index);
+        let owner_key = (owner_type, method.name.name.clone());
+        // Concrete type lookup prefers an inherent method over an interface
+        // implementation. Preserve that same choice for executable targets;
+        // interface-qualified dispatch has its own exact implementation map.
+        let existing_inherent = self
+            .method_definitions_by_owner
+            .get(&owner_key)
+            .is_some_and(|&existing| self.method_definitions[existing].interface_name.is_none());
+        if interface_type.is_none() || !existing_inherent {
+            self.method_definitions_by_owner.insert(owner_key, index);
+        }
         if let Some(interface_type) = interface_type {
             self.interface_method_definitions.insert(
                 (interface_type, owner_type, method.name.name.clone()),
@@ -6495,6 +6538,23 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_source_method_value(&mut self, owner_type: TypeId, name: &str, span: Span) {
+        let Some(&index) = self
+            .method_definitions_by_owner
+            .get(&(owner_type, name.to_string()))
+        else {
+            return;
+        };
+        let value = CheckedMethodValue {
+            source_span: self.method_definitions[index].source_span,
+        };
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.method_values.insert(span, value);
+        } else {
+            self.method_values.insert(span, value);
+        }
+    }
+
     fn record_struct_construction(
         &mut self,
         span: Span,
@@ -6548,6 +6608,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.intrinsic_reflection_arguments, owner);
             Self::clear_facts_in_span(&mut active.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut active.method_calls, owner);
+            Self::clear_facts_in_span(&mut active.method_values, owner);
             Self::clear_facts_in_span(&mut active.struct_constructions, owner);
             Self::clear_facts_in_span(&mut active.pipeline_step_call_types, owner);
             Self::clear_facts_in_span(&mut active.static_selections, owner);
@@ -6559,6 +6620,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut self.intrinsic_reflection_arguments, owner);
             Self::clear_facts_in_span(&mut self.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut self.method_calls, owner);
+            Self::clear_facts_in_span(&mut self.method_values, owner);
             Self::clear_facts_in_span(&mut self.struct_constructions, owner);
             Self::clear_facts_in_span(&mut self.pipeline_step_call_types, owner);
             Self::clear_facts_in_span(&mut self.comptime_type_bindings, owner);
@@ -6581,6 +6643,7 @@ impl<'a> TypeChecker<'a> {
                 ),
                 call_argument_orders: Self::facts_in_span(&active.call_argument_orders, owner),
                 method_calls: Self::facts_in_span(&active.method_calls, owner),
+                method_values: Self::facts_in_span(&active.method_values, owner),
                 struct_constructions: Self::facts_in_span(&active.struct_constructions, owner),
                 pipeline_step_call_types: Self::facts_in_span(
                     &active.pipeline_step_call_types,
@@ -6601,6 +6664,7 @@ impl<'a> TypeChecker<'a> {
             ),
             call_argument_orders: Self::facts_in_span(&self.call_argument_orders, owner),
             method_calls: Self::facts_in_span(&self.method_calls, owner),
+            method_values: Self::facts_in_span(&self.method_values, owner),
             struct_constructions: Self::facts_in_span(&self.struct_constructions, owner),
             pipeline_step_call_types: Self::facts_in_span(&self.pipeline_step_call_types, owner),
             static_selections: HashMap::new(),
@@ -13382,6 +13446,7 @@ impl<'a> TypeChecker<'a> {
                 .find(|m| m.name == field.name)
                 .cloned()
             {
+                self.record_source_method_value(type_id, &field.name, span);
                 let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
                 let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
                 return Some(self.interner.intern(Type::Function {
@@ -13421,6 +13486,7 @@ impl<'a> TypeChecker<'a> {
             .and_then(|methods| methods.get(&field.name))
             .cloned()
         {
+            self.record_source_method_value(type_id, &field.name, span);
             let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
             let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
             return Some(self.interner.intern(Type::Function {
@@ -17983,6 +18049,246 @@ function describe() returns string:
             1,
             "the alias-qualified interface call must retain its concrete implementation target"
         );
+    }
+
+    #[test]
+    fn concrete_method_values_export_source_targets_and_view_signatures() {
+        let source = r#"namespace models
+export interface Reader:
+    function read(view self: Reader) returns int64
+export struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+implement Reader for Point:
+    function read(view self: Point) returns int64:
+        return self.value
+namespace app
+function reader() returns function(view models.Point) returns int64:
+    use models as m
+    return (m.Point.read)
+function invoke() returns int64:
+    use models as m
+    function(view m.Point) returns int64 callback = m.Point.amount
+    m.Point point = m.Point(value: 7)
+    return callback(view point)
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.method_values.len(), 2);
+        for (expression_span, target) in &result.method_values {
+            let expression = &source[expression_span.start as usize..expression_span.end as usize];
+            let definition = result
+                .method_definitions
+                .iter()
+                .find(|method| method.source_span == target.source_span)
+                .expect("method value must identify its checked source definition");
+            assert_eq!(definition.owner_name, "models.Point");
+            assert_eq!(
+                definition.interface_name.as_deref(),
+                match expression {
+                    "m.Point.read" => Some("models.Reader"),
+                    "m.Point.amount" => None,
+                    other => panic!("unexpected method expression: {other}"),
+                }
+            );
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(result.type_map[expression_span])
+            else {
+                panic!("method value must have a function type");
+            };
+            assert_eq!(params, &vec![definition.owner_type]);
+            assert_eq!(view_params, &vec![true]);
+            assert_eq!(*return_type, TypeInterner::INT64);
+        }
+    }
+
+    #[test]
+    fn concrete_method_values_survive_generic_body_instantiation() {
+        let result = check_source_result(
+            r#"namespace sample
+struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+function reader[T](value: T) returns function(view Point) returns int64:
+    return Point.amount
+function main() returns int64:
+    function(view Point) returns int64 first = reader[int64](1)
+    function(view Point) returns int64 second = reader[string]("two")
+    Point point = Point(value: 7)
+    return first(view point) + second(view point)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.generic_function_instantiations.len(), 2);
+        let method = &result.method_definitions[0];
+        for instance in &result.generic_function_instantiations {
+            assert_eq!(instance.method_values.len(), 1);
+            let (expression_span, target) = instance.method_values.iter().next().unwrap();
+            assert_eq!(target.source_span, method.source_span);
+            assert!(instance.type_map.contains_key(expression_span));
+        }
+    }
+
+    #[test]
+    fn concrete_method_returning_a_function_is_not_a_struct_constructor() {
+        for (prefix, call) in [
+            ("", "Point.offsetter"),
+            ("namespace app\n", "models.Point.offsetter"),
+            ("namespace app\n", "alias.Point.offsetter"),
+        ] {
+            let source = format!(
+                r#"namespace models
+export struct Point:
+    value: int64
+    function offsetter(view self: Point) returns function(int64) returns int64:
+        int64 base = self.value
+        return function(input: int64) returns int64: return input + base
+{prefix}function invoke() returns int64:
+    use models
+    use models as alias
+    models.Point point = models.Point(value: 7)
+    function(int64) returns int64 callback = {call}(view point)
+    return callback(3)
+"#
+            );
+            let result = check_source_result(&source);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+            assert_eq!(result.struct_constructions.len(), 1);
+            assert_eq!(result.method_calls.len(), 1);
+        }
+    }
+
+    #[test]
+    fn concrete_method_values_select_the_same_inherent_body_as_the_signature() {
+        let result = check_source_result(
+            r#"namespace sample
+interface Reader:
+    function read(view self: Reader) returns int64
+struct Point:
+    value: int64
+    function read(view self: Point) returns int64:
+        return self.value
+implement Reader for Point:
+    function read(view self: Point) returns int64:
+        return self.value + 10
+function main() returns int64:
+    function(view Point) returns int64 callback = Point.read
+    Point point = Point(value: 7)
+    return callback(view point) + Point.read(view point) + Reader.read(view point)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let target = result.method_values.values().next().unwrap();
+        let definition = result
+            .method_definitions
+            .iter()
+            .find(|method| method.source_span == target.source_span)
+            .unwrap();
+        assert!(definition.interface_name.is_none());
+        assert!(
+            result
+                .method_value_definitions
+                .contains(&definition.source_span)
+        );
+        assert!(!result.method_definitions.iter().any(|method| {
+            method.interface_name.is_some()
+                && result
+                    .method_value_definitions
+                    .contains(&method.source_span)
+        }));
+        let mut targets = result
+            .method_calls
+            .values()
+            .map(|target| {
+                result
+                    .method_definitions
+                    .iter()
+                    .find(|method| method.source_span == target.source_span)
+                    .unwrap()
+                    .interface_name
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        targets.sort_unstable();
+        assert_eq!(targets, vec![false, true]);
+    }
+
+    #[test]
+    fn concrete_method_values_survive_comptime_body_fact_snapshots() {
+        let result = check_source_result(
+            r#"namespace sample
+struct Point:
+    value: int64
+    function amount(view self: Point) returns int64:
+        return self.value
+struct Pair:
+    name: string
+    count: int64
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            function(view Point) returns int64 callback = Point.amount
+            string reflected_name = type.name[Field]()
+    return nothing
+function main() returns nothing:
+    Pair pair = Pair(name: "Ada", count: 42)
+    inspect[Pair](view pair)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let inspect = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instance| !instance.comptime_type_bindings.is_empty())
+            .unwrap();
+        let bindings = inspect.comptime_type_bindings.values().next().unwrap();
+        assert_eq!(bindings.len(), 2);
+        for binding in bindings {
+            assert_eq!(binding.body.method_values.len(), 1);
+            let (expression_span, target) = binding.body.method_values.iter().next().unwrap();
+            assert_eq!(target.source_span, result.method_definitions[0].source_span);
+            assert!(binding.body.type_map.contains_key(expression_span));
+        }
     }
 
     #[test]

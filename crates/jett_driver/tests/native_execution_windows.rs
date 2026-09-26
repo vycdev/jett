@@ -1384,6 +1384,46 @@ fn native_function_debug_values_match_interpreter() {
 }
 
 #[test]
+fn native_method_function_values_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/method_function_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "10 24 105\n10 10 10 10\n10 10 10\n10 24 10 10\n10 10 12 13\n1010\n"
+    );
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert!(debug.contains("function(method_library.Point.amount)"));
+    assert!(debug.contains("function(method_library.Counter.amount)"));
+    assert!(debug.contains("function(alternate_library.Point.amount)"));
+    assert!(debug.contains("function(input)"));
+    let directory = tempfile::tempdir().expect("isolated method callback directory");
+    let binary = directory.path().join("method_function_values.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile source method values and baked method callbacks");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(String::from_utf8_lossy(&actual.stderr), debug);
+
+    let verify_binary = directory.path().join("method_function_values_verify.exe");
+    build_host_verify_suite_executable(&fixture, launcher(), &verify_binary)
+        .expect("compile method callbacks in native verify bodies");
+    let verified = run_bounded(&verify_binary, directory.path());
+    assert!(verified.status.success(), "{verified:?}");
+    assert!(verified.stdout.is_empty(), "{verified:?}");
+    assert!(verified.stderr.is_empty(), "{verified:?}");
+
+    let property_binary = directory.path().join("method_function_values_property.exe");
+    build_host_property_suite_executable(&fixture, launcher(), &property_binary)
+        .expect("compile method callbacks across native property trials");
+    let property = run_bounded(&property_binary, directory.path());
+    assert!(property.status.success(), "{property:?}");
+    assert!(property.stdout.is_empty(), "{property:?}");
+    assert!(property.stderr.is_empty(), "{property:?}");
+}
+
+#[test]
 fn native_function_debug_values_clean_up_after_failure() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/debug_functions_failure.jett");

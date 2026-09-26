@@ -411,13 +411,18 @@ tests, 26 MIR tests, 54 backend tests, 90 runtime tests, and 61 driver unit test
 Generic factories still reject move-only captures with E0402. Overall coverage
 remains at the coarse 80% estimate while the matrix's remaining gaps are open.
 
-First-class source method values remain a confirmed native gap. Both a method
-declared with its struct and an interface implementation method can be stored
-as a function value and invoked by the interpreter; native lowering attempts
-to read the type namespace as a runtime field and fails with "expression has
-no checked type". The checker exports the signature but must also hand off the
-concrete method-value identity to HIR. This is separate from supported direct
-method calls and does not require a new source spelling.
+Concrete source method values now pass through checker-selected body identities
+into HIR and native function descriptors. This covers struct methods and
+interface implementations stored, returned, cloned, projected from aggregates,
+invoked through generic factories, baked with explicit `comptime`, and traced.
+Receivers remain explicit first parameters with their checked `view` modes.
+Where an inherent method and interface implementation share a name, concrete
+method values use the inherent body, while interface-qualified calls use the
+implementation. Interpreter method calls now retain their declaration namespace
+so lexical helper references agree with native execution. The differential
+`tests/native/method_function_values.jett` fixture exercises these paths in
+`main`, `verify`, and 100 property trials. The broad native percentage remains
+the coarse 80% estimate pending further coverage-matrix closure.
 Separately, explicit `comptime` extraction still omits function-local namespace
 aliases from the expression's evaluation context. A canonical-name bake in the
 declaration namespace does preserve aliases captured inside the returned
