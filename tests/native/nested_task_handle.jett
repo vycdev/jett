@@ -1,0 +1,43 @@
+namespace app
+function identity(value: string) returns string:
+    return value
+function work() returns nothing:
+    return nothing
+function maybe_text(valid: bool) returns result[string, string]:
+    if valid:
+        return ok("Ada")
+    return fail("missing text")
+function maybe_pending(valid: bool) returns result[string, string]:
+    println("source")
+    if valid:
+        return ok(run identity("Lin"))
+    return fail("missing task")
+function maybe_unit(valid: bool) returns result[nothing, string]:
+    if valid:
+        return ok(run work())
+    return fail("missing unit task")
+function run_value(valid: bool) returns string:
+    string pending = run(maybe_text(valid) handle error:
+        default "Fallback"
+    )
+    return join pending handle error:
+        default error
+function join_value(valid: bool) returns string:
+    return join(maybe_pending(valid) handle error:
+        default run identity("Fallback")
+    ) handle error:
+        default error
+function join_unit(valid: bool) returns string:
+    nothing completed = join(maybe_unit(valid) handle error:
+        default run work()
+    ) handle error:
+        return error
+    return "joined"
+function main() returns nothing:
+    println(run_value(true))
+    println(run_value(false))
+    println(join_value(true))
+    println(join_value(false))
+    println(join_unit(true))
+    println(join_unit(false))
+    return nothing

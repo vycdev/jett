@@ -1788,6 +1788,25 @@ fn native_machine_transition_nested_handlers_match_interpreter() {
 }
 
 #[test]
+fn native_task_operands_nested_handlers_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_task_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "Ada\nFallback\nsource\nLin\nsource\nFallback\njoined\njoined\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated task operand directory");
+    let binary = directory.path().join("nested_task_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile run and join operands with nested handlers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");

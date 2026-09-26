@@ -885,6 +885,9 @@ statements execute. Assertion messages remain on the failure-only path.
 Handled machine transitions snapshot their source and payloads in lexical
 order before the new state is constructed. An earlier value cannot change when
 a later payload handler runs.
+`run` and `join` also extract handlers from their operands before the task
+operation, preserving the pending representation for `nothing` and other
+values.
 Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
 carry typed operands and message identity. Actor receive
 handlers are deterministic HIR functions whose locals preserve checked
