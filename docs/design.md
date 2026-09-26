@@ -7138,6 +7138,11 @@ the callback is nested in a collection or record.
 Actor handles appear in debug snapshots as `actor#N`, where `N` follows spawn
 order within the run. A trace or breakpoint does not expose actor state or
 consume the handle.
+An in-progress `TypeConstruction` builder appears with its owner, selected
+variant or machine state, and the fields successfully supplied so far. Fields
+appear in insertion order. Inspecting the builder does not finish or consume it.
+The treatment of secret-bearing fields in debug output remains unresolved; see
+`docs/open_design/secret_debug_output.md`.
 
 ### Explicit Typing
 

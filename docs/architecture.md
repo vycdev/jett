@@ -2867,6 +2867,11 @@ machines. The checked type arguments select a field layout, including source
 alias spellings for field metadata, while runtime leaves own partially filled
 records, validate `TypeField` metadata, and return handled duplicate/missing-field
 errors.
+Native debug layouts recognize `TypeConstruction` handles. Builder metadata
+also carries checked debug layouts for each field and records successful put
+order, so trace and breakpoint render partial struct, bitfield, enum, and
+machine builders in the same order as the interpreter without consuming them.
+Fields without a supported debug layout remain unavailable to native tracing.
 When a generic record helper is instantiated for a non-record reflection kind,
 native code creates an empty builder that preserves the interpreter's handled
 `type.construct_put` and `type.construct_finish` errors. It does not infer a

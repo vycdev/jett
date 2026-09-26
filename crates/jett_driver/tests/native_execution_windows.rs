@@ -1339,6 +1339,26 @@ fn native_debug_statements_match_interpreter_output() {
 }
 
 #[test]
+fn native_type_construction_debug_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/debug_type_construction.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "Ada:7\n4\n3:4\nlogged_in\n");
+    assert_eq!(expected.debug_output.len(), 9);
+    let directory = tempfile::tempdir().expect("isolated builder debug directory");
+    let binary = directory.path().join("debug_type_construction.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile partial reflected builders with trace");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_function_debug_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_functions.jett");

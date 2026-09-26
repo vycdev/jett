@@ -169,6 +169,7 @@ pub enum NativeDebugTag {
     Alias,
     Function,
     Actor,
+    TypeConstruction,
 }
 
 impl NativeDebugTag {
@@ -189,6 +190,7 @@ impl NativeDebugTag {
             12 => Self::Alias,
             13 => Self::Function,
             14 => Self::Actor,
+            15 => Self::TypeConstruction,
             _ => return Err(INVALID_TRACE_LABEL),
         })
     }
@@ -303,6 +305,8 @@ struct NativeBuilderInfo {
     field_names: Vec<String>,
     field_type_names: Vec<String>,
     field_types: Vec<String>,
+    field_debug_layouts: Vec<Vec<u8>>,
+    put_order: Vec<usize>,
     validation: Vec<BuilderFieldValidation>,
 }
 #[derive(Clone)]
@@ -376,6 +380,7 @@ enum NativeDebugNode {
     Alias(usize),
     Function,
     Actor,
+    TypeConstruction,
 }
 impl NativeDebugLayout {
     fn parse(bytes: &[u8]) -> LeafResult<Self> {
@@ -467,6 +472,7 @@ impl NativeDebugLayout {
                 NativeDebugTag::Alias => NativeDebugNode::Alias(index(&mut node)?),
                 NativeDebugTag::Function => NativeDebugNode::Function,
                 NativeDebugTag::Actor => NativeDebugNode::Actor,
+                NativeDebugTag::TypeConstruction => NativeDebugNode::TypeConstruction,
             };
             if node.position != node_bytes.len() {
                 return Err(INVALID_TRACE_LABEL);
@@ -500,6 +506,49 @@ impl NativeDebugLayout {
             NativeDebugNode::Actor => {
                 let ordinal = values.actors.get(&bits).ok_or(INVALID_ACTOR)?;
                 format!("actor#{ordinal}")
+            }
+            NativeDebugNode::TypeConstruction => {
+                let builder = values.builders.get(&bits).ok_or(INVALID_CONSTRUCTION)?;
+                let record = values.structs.get(&bits).ok_or(INVALID_CONSTRUCTION)?;
+                let mut result = format!("TypeConstruction[{}", builder.owner);
+                if let Some(variant) = &builder.variant {
+                    result.push('.');
+                    result.push_str(variant);
+                }
+                if let Some(state) = &builder.state {
+                    result.push('@');
+                    result.push_str(state);
+                }
+                result.push_str("](");
+                for (position, &field_index) in builder.put_order.iter().enumerate() {
+                    let field = record
+                        .fields
+                        .get(field_index + builder.field_offset)
+                        .and_then(Option::as_ref)
+                        .ok_or(INVALID_CONSTRUCTION)?;
+                    let name = builder
+                        .field_names
+                        .get(field_index)
+                        .ok_or(INVALID_CONSTRUCTION)?;
+                    let layout = builder
+                        .field_debug_layouts
+                        .get(field_index)
+                        .ok_or(INVALID_CONSTRUCTION)?;
+                    let field_layout = NativeDebugLayout::parse(layout)?;
+                    if position > 0 {
+                        result.push_str(", ");
+                    }
+                    result.push_str(name);
+                    result.push_str(": ");
+                    result.push_str(&field_layout.format_value(
+                        values,
+                        field.bits,
+                        field_layout.root,
+                        child,
+                    )?);
+                }
+                result.push(')');
+                result
             }
             NativeDebugNode::List(element) => {
                 let list = values.lists.get(&bits).ok_or(INVALID_LIST)?;
@@ -805,7 +854,10 @@ impl NativeDebugLayout {
                 }
                 true
             }
-            NativeDebugNode::Capability(_) | NativeDebugNode::Function | NativeDebugNode::Actor => {
+            NativeDebugNode::Capability(_)
+            | NativeDebugNode::Function
+            | NativeDebugNode::Actor
+            | NativeDebugNode::TypeConstruction => {
                 return Err(INVALID_STRUCT);
             }
         })
@@ -2440,12 +2492,14 @@ impl NativeValues {
                     field_names: Vec::new(),
                     field_type_names: Vec::new(),
                     field_types: Vec::new(),
+                    field_debug_layouts: Vec::new(),
+                    put_order: Vec::new(),
                     validation: Vec::new(),
                 },
             );
             return Ok(id);
         }
-        if !matches!(&version, b"JC\x02" | b"JC\x03") {
+        if !matches!(&version, b"JC\x02" | b"JC\x03" | b"JC\x06" | b"JC\x07") {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
         let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
@@ -2473,7 +2527,7 @@ impl NativeValues {
         }
         let mut validation = Vec::new();
         validation.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
-        if &version == b"JC\x03" {
+        if matches!(&version, b"JC\x03" | b"JC\x07") {
             for _ in 0..count {
                 let kind = cursor.byte().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
                 let rule = match kind {
@@ -2515,6 +2569,26 @@ impl NativeValues {
         } else {
             validation.resize(count, BuilderFieldValidation::None);
         }
+        let mut field_debug_layouts = Vec::new();
+        field_debug_layouts
+            .try_reserve_exact(count)
+            .map_err(|_| EXHAUSTED)?;
+        if matches!(&version, b"JC\x06" | b"JC\x07") {
+            for _ in 0..count {
+                let length =
+                    usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+                        .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let bytes = cursor
+                    .take(length)
+                    .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                if !bytes.is_empty() {
+                    NativeDebugLayout::parse(bytes).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                }
+                field_debug_layouts.push(bytes.to_vec());
+            }
+        } else {
+            field_debug_layouts.resize_with(count, Vec::new);
+        }
         if cursor.position != layout.len() {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
@@ -2532,6 +2606,8 @@ impl NativeValues {
                 field_names,
                 field_type_names,
                 field_types,
+                field_debug_layouts,
+                put_order: Vec::new(),
                 validation,
             },
         );
@@ -2558,7 +2634,8 @@ impl NativeValues {
             position: 0,
         };
         let version = cursor.take(3).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
-        if version != if machine { b"JC\x05" } else { b"JC\x04" } {
+        let rich_debug = version == if machine { b"JC\x09" } else { b"JC\x08" };
+        if !rich_debug && version != if machine { b"JC\x05" } else { b"JC\x04" } {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
         let owner = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
@@ -2614,24 +2691,47 @@ impl NativeValues {
             let mut names = Vec::new();
             let mut type_names = Vec::new();
             let mut types = Vec::new();
+            let mut debug_layouts = Vec::new();
             for _ in 0..field_count {
                 let field_name = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
                 let type_name = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
                 let canonical_type = cursor.name().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                let debug_layout = if rich_debug {
+                    let length =
+                        usize::try_from(cursor.u32().map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?)
+                            .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                    let bytes = cursor
+                        .take(length)
+                        .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                    if !bytes.is_empty() {
+                        NativeDebugLayout::parse(bytes).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+                    }
+                    bytes.to_vec()
+                } else {
+                    Vec::new()
+                };
                 if variant_index == index {
                     names.push(field_name);
                     type_names.push(type_name);
                     types.push(canonical_type);
+                    debug_layouts.push(debug_layout);
                 }
             }
             if variant_index == index {
-                selected = Some((name, discriminant, names, type_names, types));
+                selected = Some((name, discriminant, names, type_names, types, debug_layouts));
             }
         }
         if cursor.position != layout.len() {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
         }
-        let Some((name, discriminant, field_names, field_type_names, field_types)) = selected
+        let Some((
+            name,
+            discriminant,
+            field_names,
+            field_type_names,
+            field_types,
+            field_debug_layouts,
+        )) = selected
         else {
             return self.builder_start_failure(if machine {
                 format!("type.construct_machine_start: machine '{expected_metadata_owner}' has no state at index {index}")
@@ -2709,6 +2809,8 @@ impl NativeValues {
                 field_names,
                 field_type_names,
                 field_types,
+                field_debug_layouts,
+                put_order: Vec::new(),
             },
         );
         match self.sum(SUM_SUCCESS, builder, true) {
@@ -2864,11 +2966,22 @@ impl NativeValues {
         if let Some(error) = error {
             return self.builder_failure(error, builder, bits, owned);
         }
+        self.builders
+            .get_mut(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .put_order
+            .try_reserve(1)
+            .map_err(|_| EXHAUSTED)?;
         let result = self.sum(SUM_SUCCESS, builder, true)?;
         self.structs
             .get_mut(&builder)
             .ok_or(INVALID_CONSTRUCTION)?
             .fields[slot] = Some(NativeField { bits, owned });
+        self.builders
+            .get_mut(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .put_order
+            .push(index);
         Ok(result)
     }
     fn builder_finish(&mut self, builder: u64, expected_owner: &str) -> LeafResult<u64> {
@@ -4596,6 +4709,7 @@ mod tests {
             NativeDebugTag::Alias,
             NativeDebugTag::Function,
             NativeDebugTag::Actor,
+            NativeDebugTag::TypeConstruction,
         ]
         .into_iter()
         .enumerate()
@@ -4604,7 +4718,7 @@ mod tests {
             assert_eq!(tag as u8, expected);
             assert_eq!(NativeDebugTag::from_raw(expected), Ok(tag));
         }
-        assert_eq!(NativeDebugTag::from_raw(15), Err(INVALID_TRACE_LABEL));
+        assert_eq!(NativeDebugTag::from_raw(16), Err(INVALID_TRACE_LABEL));
         let bytes = function_debug_layout_bytes(&[vec![13]], 0);
         let layout = NativeDebugLayout::parse(&bytes).unwrap();
         assert!(matches!(

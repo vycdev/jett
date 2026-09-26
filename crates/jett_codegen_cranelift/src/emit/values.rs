@@ -3,6 +3,19 @@ use jett_hir::{IntrinsicId, MapEntry, StringSegment};
 use jett_types::BitfieldFieldKind;
 use std::collections::BTreeSet;
 
+fn append_builder_debug_layout(
+    layout: &mut Vec<u8>,
+    types: &TypeInterner,
+    ty: TypeId,
+) -> Result<(), CodegenError> {
+    let debug = super::debug::debug_layout(types, ty).unwrap_or_default();
+    let length = u32::try_from(debug.len())
+        .map_err(|_| CodegenError::Backend("reflected field debug layout is too long".into()))?;
+    layout.extend_from_slice(&length.to_le_bytes());
+    layout.extend_from_slice(&debug);
+    Ok(())
+}
+
 impl Translator<'_, '_> {
     pub(super) fn leaf(
         &mut self,
@@ -995,9 +1008,9 @@ impl Translator<'_, '_> {
         }
         let bitfield = matches!(self.types.resolve(owner), Type::Bitfield(_));
         let mut layout = if bitfield {
-            b"JC\x03".to_vec()
+            b"JC\x07".to_vec()
         } else {
-            b"JC\x02".to_vec()
+            b"JC\x06".to_vec()
         };
         encode_name(&mut layout, &reflection_arguments[0].type_name)?;
         let count = u32::try_from(fields.len())
@@ -1036,6 +1049,9 @@ impl Translator<'_, '_> {
                 }
             }
         }
+        for (_, field_ty) in &fields {
+            append_builder_debug_layout(&mut layout, self.types, *field_ty)?;
+        }
         let (pointer, length) = self.static_data(&layout)?;
         let builder = self.leaf(NativeLeaf::BuilderNew, &[pointer, length], true)?;
         self.own_linear(builder)
@@ -1065,7 +1081,7 @@ impl Translator<'_, '_> {
             layout.extend_from_slice(value.as_bytes());
             Ok(())
         }
-        let mut layout = b"JC\x04".to_vec();
+        let mut layout = b"JC\x08".to_vec();
         name(&mut layout, &reflection_arguments[0].type_name)?;
         let count = u32::try_from(variants.len())
             .map_err(|_| self.unsupported(span, "reflected variant count"))?;
@@ -1087,6 +1103,7 @@ impl Translator<'_, '_> {
                         .type_name,
                 )?;
                 name(&mut layout, &self.types.type_name(*field_ty))?;
+                append_builder_debug_layout(&mut layout, self.types, *field_ty)?;
             }
         }
         let (pointer, length) = self.static_data(&layout)?;
@@ -1126,7 +1143,7 @@ impl Translator<'_, '_> {
             layout.extend_from_slice(value.as_bytes());
             Ok(())
         }
-        let mut layout = b"JC\x05".to_vec();
+        let mut layout = b"JC\x09".to_vec();
         name(&mut layout, &reflection_arguments[0].type_name)?;
         name(&mut layout, &machine.name)?;
         let target_state = state_id
@@ -1153,6 +1170,7 @@ impl Translator<'_, '_> {
                         .type_name,
                 )?;
                 name(&mut layout, &self.types.type_name(*field_ty))?;
+                append_builder_debug_layout(&mut layout, self.types, *field_ty)?;
             }
         }
         let (pointer, length) = self.static_data(&layout)?;
