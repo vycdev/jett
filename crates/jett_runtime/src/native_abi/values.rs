@@ -115,6 +115,10 @@ const UNSUPPORTED_NOTHING_COMPARISON: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"unsupported binary operation on pending nothing",
 );
+const UNSUPPORTED_STRING_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending string",
+);
 
 fn format_nothing(depth: u64) -> LeafResult<String> {
     let depth = usize::try_from(depth).map_err(|_| EXHAUSTED)?;
@@ -137,6 +141,7 @@ fn format_nothing(depth: u64) -> LeafResult<String> {
 struct NativeString {
     text: String,
     references: u64,
+    pending_depth: u64,
 }
 /// Stable discriminants for optional and result storage (not terminal status).
 pub const SUM_FAILURE: u32 = 0;
@@ -707,7 +712,7 @@ impl NativeDebugLayout {
                         f32::from_bits(left as u32) == f32::from_bits(right as u32)
                     }
                     NativeSortKind::Float64 => f64::from_bits(left) == f64::from_bits(right),
-                    NativeSortKind::String => values.text(left)? == values.text(right)?,
+                    NativeSortKind::String => values.same_string_value(left, right)?,
                     _ => left == right,
                 }
             }
@@ -1154,6 +1159,9 @@ impl NativeValues {
             && self.graphics_session.is_none()
     }
     fn insert(&mut self, text: String) -> LeafResult<u64> {
+        self.insert_pending(text, 0)
+    }
+    fn insert_pending(&mut self, text: String, pending_depth: u64) -> LeafResult<u64> {
         #[cfg(test)]
         self.allocation_checkpoint()?;
         let id = next_identity()?;
@@ -1162,9 +1170,66 @@ impl NativeValues {
             NativeString {
                 text,
                 references: 1,
+                pending_depth,
             },
         );
         Ok(id)
+    }
+    fn run_string(&mut self, id: u64) -> LeafResult<u64> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        let depth = value.pending_depth.checked_add(1).ok_or(EXHAUSTED)?;
+        self.insert_pending(value.text.clone(), depth)
+    }
+    fn join_string(&mut self, id: u64) -> LeafResult<u64> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        self.insert_pending(value.text.clone(), value.pending_depth.saturating_sub(1))
+    }
+    fn equal_string(&mut self, left: u64, right: u64, not_equal: bool) -> LeafResult<u32> {
+        let left_value = self.strings.get(&left).ok_or(INVALID_HANDLE)?;
+        let right_value = self.strings.get(&right).ok_or(INVALID_HANDLE)?;
+        if left_value.pending_depth != 0 || right_value.pending_depth != 0 {
+            let left = self.format_string(left)?;
+            let right = self.format_string(right)?;
+            let operation = if not_equal { "NotEq" } else { "Eq" };
+            self.dynamic_failure_message = Some(
+                format!("unsupported binary operation: {left} {operation} {right}").into_bytes(),
+            );
+            return Err(UNSUPPORTED_STRING_COMPARISON);
+        }
+        let equal = self.same_string_value(left, right)?;
+        Ok(u32::from(if not_equal { !equal } else { equal }))
+    }
+    fn same_string_value(&self, left: u64, right: u64) -> LeafResult<bool> {
+        let left = self.strings.get(&left).ok_or(INVALID_HANDLE)?;
+        let right = self.strings.get(&right).ok_or(INVALID_HANDLE)?;
+        Ok(left.pending_depth == right.pending_depth && left.text == right.text)
+    }
+    fn format_string(&self, id: u64) -> LeafResult<String> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        let depth = usize::try_from(value.pending_depth).map_err(|_| EXHAUSTED)?;
+        let length = depth
+            .checked_mul("pending()".len())
+            .and_then(|length| length.checked_add(value.text.len()))
+            .ok_or(EXHAUSTED)?;
+        let mut text = String::new();
+        text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+        for _ in 0..depth {
+            text.push_str("pending(");
+        }
+        text.push_str(&value.text);
+        for _ in 0..depth {
+            text.push(')');
+        }
+        Ok(text)
+    }
+    fn display_string(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.strings.get(&id).ok_or(INVALID_HANDLE)?.pending_depth;
+        if depth == 0 {
+            self.retain(id)
+        } else {
+            let text = self.format_string(id)?;
+            self.insert(text)
+        }
     }
     fn debug_value(&self, bits: u64, kind: u32) -> LeafResult<String> {
         if kind == DEBUG_NOTHING_KIND {
@@ -1198,7 +1263,7 @@ impl NativeValues {
                 1 => "true".to_owned(),
                 _ => return Err(INVALID_TRACE_LABEL),
             },
-            NativeSortKind::String => self.text(bits)?.to_owned(),
+            NativeSortKind::String => self.format_string(bits)?,
         })
     }
     fn function_debug_label(&self, id: u64) -> LeafResult<&str> {
@@ -3181,7 +3246,7 @@ impl NativeValues {
                     b'i' => left_value == right_value,
                     b'f' => f32::from_bits(left_value as u32) == f32::from_bits(right_value as u32),
                     b'd' => f64::from_bits(left_value) == f64::from_bits(right_value),
-                    b's' => self.text(left_value)? == self.text(right_value)?,
+                    b's' => self.same_string_value(left_value, right_value)?,
                     _ => return Err(INVALID_STRUCT),
                 };
                 if !same {
@@ -4346,7 +4411,15 @@ leaves! {
             s.insert(result)
         };
     Equal, jett_rt_v1_string_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
-        |s| Ok(u32::from(s.text(left)? == s.text(right)?));
+        |s| s.equal_string(left, right, false);
+    StringNotEqual, jett_rt_v1_string_not_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
+        |s| s.equal_string(left, right, true);
+    StringRun, jett_rt_v1_string_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_string(value);
+    StringTaskJoin, jett_rt_v1_string_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_string(value);
+    StringTaskFormat, jett_rt_v1_string_task_format, false, (value: u64 => I64), u64 => I64,
+        |s| s.display_string(value);
     NothingRun, jett_rt_v1_nothing_run, false, (depth: u64 => I64), u64 => I64,
         |_s| depth.checked_add(1).ok_or(EXHAUSTED);
     NothingJoin, jett_rt_v1_nothing_join, false, (depth: u64 => I64), u64 => I64,
@@ -5127,6 +5200,39 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    #[test]
+    fn pending_string_depth_survives_aliases_and_join() {
+        let mut values = NativeValues::default();
+        let plain = values.insert("Ada".to_owned()).unwrap();
+        let alias = values.retain(plain).unwrap();
+        let pending = values.run_string(plain).unwrap();
+        let nested = values.run_string(pending).unwrap();
+        assert_eq!(values.format_string(alias).unwrap(), "Ada");
+        assert_eq!(values.format_string(pending).unwrap(), "pending(Ada)");
+        assert_eq!(
+            values.format_string(nested).unwrap(),
+            "pending(pending(Ada))"
+        );
+        let formatted = values.display_string(nested).unwrap();
+        assert_eq!(values.text(formatted), Ok("pending(pending(Ada))"));
+        let joined = values.join_string(nested).unwrap();
+        assert_eq!(values.format_string(joined).unwrap(), "pending(Ada)");
+        let plain_joined = values.join_string(joined).unwrap();
+        assert_eq!(values.format_string(plain_joined).unwrap(), "Ada");
+        for handle in [
+            alias,
+            plain,
+            pending,
+            nested,
+            formatted,
+            joined,
+            plain_joined,
+        ] {
+            values.release(handle).unwrap();
+        }
+        assert!(values.is_empty());
     }
 
     #[test]

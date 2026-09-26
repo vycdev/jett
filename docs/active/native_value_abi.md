@@ -74,6 +74,15 @@ interpreter: `cancel` yields plain `nothing` without changing the pending
 operand. They do not establish asynchronous scheduling or cancellation
 checkpoints.
 
+Owned native strings also carry a pending depth in the runtime registry.
+`StringRun` and `StringTaskJoin` create independent handles, so wrapping a
+cloned string does not change its aliases. Trace, aggregate debug output,
+`print`/`println`, and interpolation render nested `pending(...)` wrappers;
+direct string equality and inequality report the interpreter's runtime error
+while aggregate equality compares both text and pending depth. Other runtime
+operations on pending strings and other value kinds still need the general
+pending-task representation.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

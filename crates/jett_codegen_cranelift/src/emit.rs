@@ -1526,13 +1526,13 @@ impl Translator<'_, '_> {
                 let lowered_right = self.argument(right, enum_equality)?;
                 let right_value = self.scalar(lowered_right, right.span)?;
                 if operand_kind == ScalarKind::String {
-                    let value = self.leaf(NativeLeaf::Equal, &[left_value, right_value], true)?;
-                    let value = self.builder.ins().ireduce(ir::types::I8, value);
-                    let value = if *op == BinaryOp::NotEqual {
-                        self.builder.ins().bxor_imm(value, 1)
+                    let leaf = if *op == BinaryOp::NotEqual {
+                        NativeLeaf::StringNotEqual
                     } else {
-                        value
+                        NativeLeaf::Equal
                     };
+                    let value = self.leaf(leaf, &[left_value, right_value], true)?;
+                    let value = self.builder.ins().ireduce(ir::types::I8, value);
                     return Ok(LoweredValue::Scalar(value));
                 }
                 if operand_kind == ScalarKind::Enum {
@@ -1769,6 +1769,10 @@ impl Translator<'_, '_> {
                     let depth = self.scalar(lowered, value.span)?;
                     let depth = self.leaf(NativeLeaf::NothingRun, &[depth], true)?;
                     Ok(LoweredValue::Scalar(depth))
+                } else if matches!(self.types.resolve(value.ty), Type::String) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::StringRun, &[source], true)?;
+                    self.own(pending)
                 } else {
                     Ok(lowered)
                 }
@@ -1779,6 +1783,11 @@ impl Translator<'_, '_> {
                     let depth = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::NothingJoin, &[depth], true)?;
                     self.own_linear(joined)
+                } else if matches!(self.types.resolve(value.ty), Type::String) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::StringTaskJoin, &[source], true)?;
+                    let joined = self.own(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
                 } else if value.ty == expression.ty {
                     Ok(result)
                 } else {

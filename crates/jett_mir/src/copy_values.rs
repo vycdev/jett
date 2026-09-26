@@ -400,10 +400,7 @@ fn visit(
                 // (literal + concat), and the optional newline (literal + concat).
                 *temporaries += 1 + args.len() + 2 * args.len().saturating_sub(1);
                 *temporaries += usize::from(*id == IntrinsicId::Println) * 2;
-                *temporaries += args
-                    .iter()
-                    .filter(|a| !crate::move_values::is_string(types, a.ty))
-                    .count();
+                *temporaries += args.len();
             } else if crate::move_values::is_copy_owned(types, value.ty) {
                 // Copy-owned leaves and scalar conversion each own once.
                 *temporaries += 1;
@@ -412,6 +409,14 @@ fn visit(
         ExpressionKind::StringInterpolation(segments) => {
             // Initial empty literal plus one concatenation per segment.
             *temporaries += 1 + segments.len();
+        }
+        ExpressionKind::Run(value) if matches!(types.resolve(value.ty), Type::String) => {
+            *temporaries += 1;
+        }
+        ExpressionKind::Join(value) if matches!(types.resolve(value.ty), Type::String) => {
+            // Joining a pending string owns its extracted string before the
+            // result sum takes it.
+            *temporaries += 1;
         }
         ExpressionKind::FunctionRef(_) => {
             // The descriptor and its source display label are owned temporaries.
@@ -645,9 +650,9 @@ fn visit(
                 match s {
                     StringSegment::Value(v) => {
                         visit(v, reads, temporaries, types, program, false)?;
-                        // Scalar formatting owns a new string; string formatting
-                        // passes through the ownership already counted in v.
-                        *temporaries += usize::from(!crate::move_values::is_string(types, v.ty));
+                        // Formatting owns a string even when it retains an
+                        // ordinary string or renders a pending one.
+                        *temporaries += 1;
                     }
                     StringSegment::Text(_) => *temporaries += 1,
                 }

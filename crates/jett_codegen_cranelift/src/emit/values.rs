@@ -1214,7 +1214,9 @@ impl Translator<'_, '_> {
             return self.own(text);
         }
         if kind == ScalarKind::String {
-            return Ok(value);
+            let source = self.scalar(value, span)?;
+            let text = self.leaf(NativeLeaf::StringTaskFormat, &[source], true)?;
+            return self.own(text);
         }
         let value = self.scalar(value, span)?;
         let (leaf, value) = match kind {

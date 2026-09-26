@@ -1,0 +1,31 @@
+namespace app
+enum TaskLabel:
+    named(value: string)
+    empty
+function identity(value: string) returns string:
+    return value
+function make_pending() returns string:
+    return run identity("Lin")
+function main() returns nothing:
+    string plain = "Ada"
+    string pending = run clone plain
+    string nested = run make_pending()
+    list[string] tasks = list(clone pending, clone nested)
+    trace plain
+    trace pending
+    trace nested
+    trace tasks
+    println(TaskLabel.named(clone pending) == TaskLabel.named(clone pending))
+    println(TaskLabel.named(clone pending) == TaskLabel.named(clone plain))
+    println(plain, pending, nested)
+    println("{pending}:{nested}")
+    string first = join pending handle error:
+        default error
+    string inner = join nested handle error:
+        default error
+    trace first
+    trace inner
+    string last = join inner handle error:
+        default error
+    println(first, last)
+    return nothing
