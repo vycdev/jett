@@ -359,6 +359,11 @@ the 86-test Windows native suite includes it.
 bitfield decoding and serialization inside a struct. It covers an enum-backed
 field, byte payload, and nested field-path errors for invalid enum and byte
 values. The 87-test Windows native suite includes this case.
+`tests/native/projected_string_iteration.jett` covers repeated Unicode-scalar
+iteration through a string field of a borrowed struct. The linked
+`tests/native/generic_map_aggregates.jett` specializes generic empty maps and
+lookups for struct, enum, and nested-list values. The 89-test Windows native
+suite includes both collection cases.
 
 As of 2026-09-26, the working estimate for overall native language coverage is
 **about 80%**. This is a deliberately coarse progress marker, reviewed in

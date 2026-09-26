@@ -1926,6 +1926,22 @@ fn native_projected_machine_sequences_match_interpreter() {
 }
 
 #[test]
+fn native_projected_string_iteration_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/projected_string_iteration.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "4 4\n");
+    let directory = tempfile::tempdir().expect("isolated projected string directory");
+    let binary = directory.path().join("projected_string_iteration.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile projected string iteration");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_empty_collections_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_empty_collections.jett");
@@ -1935,6 +1951,22 @@ fn native_generic_empty_collections_match_interpreter() {
     let binary = directory.path().join("generic_empty_collections.exe");
     build_host_executable(&fixture, launcher(), &binary)
         .expect("compile generic empty collections");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_generic_map_aggregates_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/generic_map_aggregates.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "0 0\nAda true 2\n");
+    let directory = tempfile::tempdir().expect("isolated generic map directory");
+    let binary = directory.path().join("generic_map_aggregates.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile generic maps of aggregates");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());

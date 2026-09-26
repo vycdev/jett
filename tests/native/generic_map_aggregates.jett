@@ -1,0 +1,23 @@
+namespace app
+struct Record:
+    label: string
+enum Choice:
+    named(value: string)
+    empty
+function empty[T]() returns map[string, T]:
+    return map.new[string, T]()
+function first[T](entries: map[string, T]) returns optional[T]:
+    return map.get[string, T](entries, "one")
+function main() returns nothing:
+    println(map.length[string, Record](empty[Record]()), map.length[string, Choice](empty[Choice]()))
+    map[string, Record] records = map("one": Record(label: "Ada"))
+    map[string, Choice] choices = map("one": Choice.named("Lin"))
+    map[string, list[string]] lists = map("one": list("a", "b"))
+    Record record = first[Record](records) handle:
+        default Record(label: "missing")
+    Choice choice = first[Choice](choices) handle:
+        default Choice.empty
+    list[string] values = first[list[string]](lists) handle:
+        default list()
+    println(record.label, choice == Choice.named("Lin"), list.length[string](values))
+    return nothing

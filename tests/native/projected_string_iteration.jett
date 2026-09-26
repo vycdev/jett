@@ -1,0 +1,12 @@
+namespace app
+struct Holder:
+    text: string
+function count(view holder: Holder) returns int64:
+    mutable int64 total = 0
+    for ch in holder.text:
+        total = total + 1
+    return total
+function main() returns nothing:
+    Holder holder = Holder(text: "A🚀é")
+    println(count(view holder), count(view holder))
+    return nothing
