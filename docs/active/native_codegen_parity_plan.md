@@ -598,6 +598,11 @@ their equality requires an exact `Equatable.equals` implementation, and the
 current enum comparison path does not dispatch that method. The intended
 language rule for this nested case is recorded in
 `docs/open_design/enum_payload_struct_equality.md`.
+Actor handles expose a separate equality mismatch: direct actor `==` is
+accepted by the checker but fails in the interpreter, while recursive enum
+equality compares actor IDs and native aggregate equality rejects the actor
+payload. `docs/open_design/actor_equality.md` records the policy choices;
+native actor-payload equality remains conservative until one rule is selected.
 Active `type.variant_value` selection matches native/interpreter output for
 payload and empty variants. Reflected `type.field_value` and
 `type.variant_field_value` now read checked struct, bitfield, and enum payload
