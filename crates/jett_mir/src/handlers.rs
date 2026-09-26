@@ -38,6 +38,9 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             has_extractable_handle(callee) || args.iter().any(has_extractable_handle)
         }
         ExpressionKind::ListConstruct { elements } => elements.iter().any(has_extractable_handle),
+        ExpressionKind::StringInterpolation(segments) => segments.iter().any(|segment| {
+            matches!(segment, hir::StringSegment::Value(value) if has_extractable_handle(value))
+        }),
         ExpressionKind::MapConstruct { entries } => entries.iter().any(|entry| {
             has_extractable_handle(&entry.key) || has_extractable_handle(&entry.value)
         }),
@@ -482,6 +485,36 @@ impl Builder<'_> {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::ListConstruct { elements };
             return lowered;
+        }
+        if let ExpressionKind::StringInterpolation(segments) = &expression.kind
+            && segments.iter().any(|segment| {
+                matches!(segment, hir::StringSegment::Value(value) if has_extractable_handle(value))
+            })
+        {
+            let values = segments
+                .iter()
+                .filter_map(|segment| match segment {
+                    hir::StringSegment::Text(_) => None,
+                    hir::StringSegment::Value(value) => Some(value.clone()),
+                })
+                .collect::<Vec<_>>();
+            if let Some(values) =
+                self.lower_ordered_owned_values(&values, &(0..values.len()).collect::<Vec<_>>())
+            {
+                let mut values = values.into_iter();
+                let segments = segments
+                    .iter()
+                    .map(|segment| match segment {
+                        hir::StringSegment::Text(text) => hir::StringSegment::Text(text.clone()),
+                        hir::StringSegment::Value(_) => {
+                            hir::StringSegment::Value(values.next().expect("interpolation value"))
+                        }
+                    })
+                    .collect();
+                let mut lowered = expression.clone();
+                lowered.kind = ExpressionKind::StringInterpolation(segments);
+                return lowered;
+            }
         }
         if let ExpressionKind::MapConstruct { entries } = &expression.kind
             && entries.iter().any(|entry| {

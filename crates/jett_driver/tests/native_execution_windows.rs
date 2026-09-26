@@ -1940,6 +1940,24 @@ fn native_displayable_interpolation_matches_interpreter() {
 }
 
 #[test]
+fn native_handled_interpolation_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/handled_interpolation.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "value 3\nfirst\nfallback\nlast\nordered first 7 last\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated handled interpolation directory");
+    let binary = directory.path().join("handled_interpolation.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile handled interpolation");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
