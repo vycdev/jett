@@ -1892,6 +1892,22 @@ fn native_nested_json_enums_match_interpreter() {
 }
 
 #[test]
+fn native_projected_machine_sequences_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/projected_machine_sequences.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "a 5\nb 7\n30 2 2 2\n30 30\n");
+    let directory = tempfile::tempdir().expect("isolated machine projection directory");
+    let binary = directory.path().join("projected_machine_sequences.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile iteration through machine fields");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
