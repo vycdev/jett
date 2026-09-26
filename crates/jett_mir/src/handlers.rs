@@ -22,6 +22,10 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             has_extractable_handle(left) || has_extractable_handle(right)
         }
         ExpressionKind::Call { args, .. } => args.iter().any(has_extractable_handle),
+        ExpressionKind::ActorSpawn { args, .. } => args.iter().any(has_extractable_handle),
+        ExpressionKind::ActorMessage { actor, args, .. } => {
+            has_extractable_handle(actor) || args.iter().any(has_extractable_handle)
+        }
         ExpressionKind::Intrinsic {
             args,
             refinement_predicates,
@@ -664,6 +668,62 @@ impl Builder<'_> {
                 };
                 return lowered;
             }
+        }
+        if let ExpressionKind::ActorSpawn {
+            actor_type,
+            args,
+            evaluation_order,
+            constructor,
+        } = &expression.kind
+            && args.iter().any(has_extractable_handle)
+            && let Some(args) = self.lower_ordered_owned_values(args, evaluation_order)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::ActorSpawn {
+                actor_type: actor_type.clone(),
+                args,
+                evaluation_order: evaluation_order.clone(),
+                constructor: *constructor,
+            };
+            return lowered;
+        }
+        if let ExpressionKind::ActorMessage {
+            actor,
+            message,
+            handler,
+            args,
+            evaluation_order,
+            kind,
+        } = &expression.kind
+            && (has_extractable_handle(actor) || args.iter().any(has_extractable_handle))
+            && valid_ordered_owned_values(self.types, args, evaluation_order)
+        {
+            let actor_value = self.lower_value(actor);
+            let actor_local = self.temporary(actor.ty, actor.span);
+            self.push(
+                StatementKind::Let {
+                    local: actor_local,
+                    value: actor_value,
+                },
+                actor.span,
+            );
+            let args = self
+                .lower_ordered_owned_values(args, evaluation_order)
+                .expect("validated actor message argument order");
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::ActorMessage {
+                actor: Box::new(Expression {
+                    kind: ExpressionKind::Local(actor_local),
+                    ty: actor.ty,
+                    span: actor.span,
+                }),
+                message: message.clone(),
+                handler: *handler,
+                args,
+                evaluation_order: evaluation_order.clone(),
+                kind: *kind,
+            };
+            return lowered;
         }
         if let ExpressionKind::IndirectCall {
             callee,

@@ -888,6 +888,9 @@ a later payload handler runs.
 `run` and `join` also extract handlers from their operands before the task
 operation, preserving the pending representation for `nothing` and other
 values.
+Actor spawn arguments use their checked lexical evaluation order when handlers
+are extracted. Actor messages capture the target first and then their ordered
+arguments, so a later handler cannot change an earlier message value.
 Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
 carry typed operands and message identity. Actor receive
 handlers are deterministic HIR functions whose locals preserve checked

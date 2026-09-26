@@ -1,0 +1,42 @@
+namespace app
+actor Holder(seed: string):
+    mutable string label = seed
+    receive rename(text: string):
+        label = text
+    receive read responds string:
+        respond label
+    receive combine(first: string, second: string) responds string:
+        respond "{first}:{second}:{label}"
+function maybe_text(valid: bool) returns result[string, string]:
+    println("text")
+    if valid:
+        return ok("Ada")
+    return fail("missing")
+function maybe_holder(valid: bool) returns result[Holder, string]:
+    if valid:
+        return ok(spawn Holder(seed: "Ada"))
+    return fail("missing holder")
+function target_value(valid: bool) returns string:
+    return ask(maybe_holder(valid) handle error:
+        default spawn Holder(seed: "Fallback")
+    ).read
+function messages(valid: bool) returns nothing:
+    Holder holder = spawn Holder(seed: "initial")
+    send holder.rename(maybe_text(valid) handle error:
+        default "Fallback"
+    )
+    mutable string first = "Before"
+    string combined = ask holder.combine(first, maybe_text(valid) handle error:
+        first = "Changed"
+        default "Fallback"
+    )
+    println(first)
+    println(combined)
+    println(ask holder.read)
+    return nothing
+function main() returns nothing:
+    messages(true)
+    messages(false)
+    println(target_value(true))
+    println(target_value(false))
+    return nothing

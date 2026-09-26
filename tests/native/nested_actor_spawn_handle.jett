@@ -1,0 +1,31 @@
+namespace app
+actor Holder(seed: string, start: int64):
+    mutable string label = seed
+    mutable int64 count = start
+    receive read responds string:
+        respond "{label}:{count}"
+function maybe_seed(valid: bool) returns result[string, string]:
+    println("seed")
+    if valid:
+        return ok("Ada")
+    return fail("missing seed")
+function maybe_count(valid: bool) returns result[int64, string]:
+    println("count")
+    if valid:
+        return ok(3)
+    return fail("missing count")
+function build(valid: bool) returns nothing:
+    mutable int64 fallback_count = 7
+    Holder holder = spawn Holder(start: maybe_count(valid) handle error:
+        default fallback_count
+    , seed: maybe_seed(valid) handle error:
+        fallback_count = 9
+        default "Fallback"
+    )
+    println(fallback_count)
+    println(ask holder.read)
+    return nothing
+function main() returns nothing:
+    build(true)
+    build(false)
+    return nothing

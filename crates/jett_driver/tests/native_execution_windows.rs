@@ -1807,6 +1807,44 @@ fn native_task_operands_nested_handlers_match_interpreter() {
 }
 
 #[test]
+fn native_actor_spawn_arguments_nested_handlers_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_actor_spawn_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "count\nseed\n7\nAda:3\ncount\nseed\n9\nFallback:7\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated actor spawn directory");
+    let binary = directory.path().join("nested_actor_spawn_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile actor spawn arguments with nested handlers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_actor_message_arguments_nested_handlers_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_actor_message_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "text\ntext\nBefore\nBefore:Ada:Ada\nAda\ntext\ntext\nChanged\nBefore:Fallback:Fallback\nFallback\nAda\nFallback\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated actor message directory");
+    let binary = directory.path().join("nested_actor_message_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile actor message arguments with nested handlers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
