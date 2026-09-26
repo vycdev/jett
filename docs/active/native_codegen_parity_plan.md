@@ -355,6 +355,10 @@ interpolated expression. MIR now extracts those handlers and saves interpolated
 values in source order before a later fallback can run. The linked fixture
 checks successful and fallback paths plus observable segment evaluation order;
 the 86-test Windows native suite includes it.
+`tests/native/json_nested_bitfield.jett` adds a linked differential case for
+bitfield decoding and serialization inside a struct. It covers an enum-backed
+field, byte payload, and nested field-path errors for invalid enum and byte
+values. The 87-test Windows native suite includes this case.
 
 As of 2026-09-26, the working estimate for overall native language coverage is
 **about 80%**. This is a deliberately coarse progress marker, reviewed in

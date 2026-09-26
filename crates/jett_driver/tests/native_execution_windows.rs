@@ -1892,6 +1892,24 @@ fn native_nested_json_enums_match_interpreter() {
 }
 
 #[test]
+fn native_nested_json_bitfields_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_nested_bitfield.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "{\"title\":\"packet\",\"header\":{\"version\":4,\"flags\":2,\"protocol\":\"tcp\",\"payload\":[1,255]}}\nheader: protocol: expected enum string or object, got number\nheader: payload: 0: expected uint8 in range 0..255\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated nested bitfield directory");
+    let binary = directory.path().join("json_nested_bitfield.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile nested bitfield JSON");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_projected_machine_sequences_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_machine_sequences.jett");
