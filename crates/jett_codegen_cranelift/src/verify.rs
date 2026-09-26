@@ -2343,16 +2343,6 @@ impl Verifier<'_> {
             }
             ExpressionKind::Join(value) => {
                 self.expression(function, value)?;
-                // A bare `nothing` means cancellation to the interpreter,
-                // while `run` of a nothing-returning call is still pending.
-                // MIR has no pending marker on a nothing-typed local yet.
-                if value.ty == TypeInterner::NOTHING {
-                    return Err(self.unsupported(
-                        function,
-                        expression.span,
-                        "join of nothing-typed task",
-                    ));
-                }
                 let Type::Result(ok, error) = self.types.resolve(expression.ty) else {
                     return Err(self.expression_kind_error(function, expression, "task join"));
                 };
@@ -2680,8 +2670,7 @@ impl Verifier<'_> {
             BinaryOp::Equal | BinaryOp::NotEqual => {
                 !matches!(
                     operand,
-                    ScalarKind::Nothing
-                        | ScalarKind::Stdout
+                    ScalarKind::Stdout
                         | ScalarKind::Clock
                         | ScalarKind::Random
                         | ScalarKind::Environment

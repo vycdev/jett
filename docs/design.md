@@ -7534,8 +7534,16 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 
+The current native sequential task implementation preserves nested pending
+`nothing` values through calls, captures, aggregates, and explicit `comptime`.
+Joining unwraps one pending level; joining plain `nothing` returns
+`fail("task was cancelled")`, matching the interpreter. Output and direct
+comparison failures also match. This implementation parity does not establish
+the concurrent scheduling and cancellation checkpoints described in Rule Set 10;
+the current sequential `cancel` leaves its pending operand unchanged.
+
 The full native parity gate is still incomplete: the current object count is
-recorded in `active/native_codegen_parity_plan.md`, alongside 26/30 main
+recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,

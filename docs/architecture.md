@@ -2731,8 +2731,16 @@ against a known unit variant checks only the variant tag, including when other
 variants carry aggregate payloads; comparison between two unknown aggregate
 payload values remains outside that path.
 
+Internal native `nothing` parameters, returns, locals, and aggregate payloads
+carry an unowned u64 pending depth. Sequential `run` increments that depth and
+`join` unwraps one level or returns a cancellation error for plain `nothing`.
+Closure captures, explicit `comptime`, debug formatting, and equality preserve
+the interpreter's current behavior. The public entry ABI still returns runtime
+status. Sequential cancellation leaves the operand unchanged; asynchronous
+scheduling and capability cancellation checkpoints remain unimplemented.
+
 The full native parity gate is still incomplete: the current object count is
-recorded in `active/native_codegen_parity_plan.md`, alongside 26/30 main
+recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
 `active/native_value_abi.md` for ABI ownership and failure contracts and
 `active/native_codegen_parity_plan.md` for the remaining gates. In particular,

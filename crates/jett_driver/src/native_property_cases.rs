@@ -224,6 +224,10 @@ pub(super) fn value_expression(
         (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
         (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
         (Type::Nothing, Value::Nothing) => ExpressionKind::Nothing,
+        (Type::Nothing, Value::Pending(inner)) => {
+            // Materialize the evaluated wrapper without re-running its source call.
+            ExpressionKind::Run(Box::new(value_expression(inner, ty, span, context)?))
+        }
         (
             Type::Function {
                 params,

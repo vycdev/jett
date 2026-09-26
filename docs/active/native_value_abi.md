@@ -59,6 +59,23 @@ and early exits. Zero slots permit conditional initialization without releasing
 an uninitialized value. The initial string slice did not establish move-only ownership. Later sections
 describe bytes, sums, lists and user structs; resource ownership remains unproven.
 
+Internal native `nothing` values use an unowned u64 pending depth: zero is plain
+`nothing`, and each sequential `run` adds one. Depth is preserved through native
+parameters, returns, locals, closure captures, aggregate payloads, and explicit
+`comptime` materialization. `NothingRun` checks depth overflow; `NothingJoin`
+returns one owned result handle, unwrapping one level or returning the owned
+error string `task was cancelled` for depth zero. `NothingFormat` returns one
+owned string matching the interpreter's nested `pending(...)` rendering.
+`NothingEqual` matches direct unit equality and reports the interpreter's
+terminal error if either operand is pending; aggregate payload equality compares
+depth instead. Trace and breakpoint formatting preserve the same depth.
+Ordinary unit literals and effect results remain depth zero. The exported
+`jett_aot_v1_entry(context) -> u32` status ABI is unchanged; its internal call to
+`main` discards the unit scalar. These leaves model the current sequential
+interpreter: `cancel` yields plain `nothing` without changing the pending
+operand. They do not establish asynchronous scheduling or cancellation
+checkpoints.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

@@ -510,7 +510,9 @@ fn clif_type(
         ScalarKind::SignedInteger(64) | ScalarKind::UnsignedInteger(64) => Some(ir::types::I64),
         ScalarKind::Float(32) => Some(ir::types::F32),
         ScalarKind::Float(64) => Some(ir::types::F64),
-        ScalarKind::Nothing => None,
+        // Unit values carry the current sequential task's Pending nesting.
+        // Zero is ordinary nothing; each enclosing Pending adds one.
+        ScalarKind::Nothing => Some(ir::types::I64),
         ScalarKind::String
         | ScalarKind::Bytes
         | ScalarKind::Sum
@@ -878,7 +880,6 @@ fn translate_function(
 enum LoweredValue {
     Scalar(Value),
     Owned(Value, ir::StackSlot),
-    Nothing,
 }
 
 struct Translator<'a, 'builder> {
@@ -1134,9 +1135,7 @@ impl Translator<'_, '_> {
                 local.name,
                 type_name
             );
-            let value = if local.ty == TypeInterner::NOTHING {
-                self.builder.ins().iconst(ir::types::I64, 0)
-            } else if let Some(slot) = self.local_slots[binding.index() as usize] {
+            let value = if let Some(slot) = self.local_slots[binding.index() as usize] {
                 self.builder.ins().stack_load(ir::types::I64, slot, 0)
             } else {
                 let variable = variable_for(self.variables, binding.index(), span, self.symbol)?
@@ -1224,7 +1223,7 @@ impl Translator<'_, '_> {
     fn return_value(&mut self, value: Option<&Expression>, span: Span) -> Result<(), CodegenError> {
         let mut result = match value {
             Some(value) => self.expression(value)?,
-            None => LoweredValue::Nothing,
+            None => self.nothing(),
         };
         if value.is_some_and(|value| is_copy_owned(self.types, value.ty)) {
             let v = self.scalar(result, span)?;
@@ -1244,9 +1243,6 @@ impl Translator<'_, '_> {
         match result {
             LoweredValue::Scalar(v) | LoweredValue::Owned(v, _) => {
                 self.builder.ins().return_(&[v]);
-            }
-            LoweredValue::Nothing => {
-                self.builder.ins().return_(&[]);
             }
         }
         Ok(())
@@ -1414,13 +1410,13 @@ impl Translator<'_, '_> {
             ExpressionKind::Bool(value) => Ok(LoweredValue::Scalar(
                 self.builder.ins().iconst(ir::types::I8, i64::from(*value)),
             )),
-            ExpressionKind::Nothing => Ok(LoweredValue::Nothing),
+            ExpressionKind::Nothing => Ok(self.nothing()),
             ExpressionKind::Local(local) => {
                 let variable =
                     variable_for(self.variables, local.index(), expression.span, self.symbol)?;
-                let Some(variable) = variable else {
-                    return Ok(LoweredValue::Nothing);
-                };
+                let variable = variable.ok_or_else(|| {
+                    contract_error(self.symbol, expression.span, "local has no native variable")
+                })?;
                 if let Some(slot) = self.local_slots[local.index() as usize] {
                     let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
                     self.expect_machine_state(local.index() as usize, expression.ty, v)?;
@@ -1817,12 +1813,25 @@ impl Translator<'_, '_> {
                     expected,
                 )))
             }
-            // The checked task model currently evaluates `run` immediately.
-            // `join` wraps a plain value as success and passes through results.
-            ExpressionKind::Run(value) => self.expression(value),
+            // Tasks currently execute immediately. Unit values retain Pending
+            // nesting because joining bare nothing reports cancellation.
+            ExpressionKind::Run(value) => {
+                let lowered = self.expression(value)?;
+                if scalar_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
+                    let depth = self.scalar(lowered, value.span)?;
+                    let depth = self.leaf(NativeLeaf::NothingRun, &[depth], true)?;
+                    Ok(LoweredValue::Scalar(depth))
+                } else {
+                    Ok(lowered)
+                }
+            }
             ExpressionKind::Join(value) => {
                 let result = self.expression(value)?;
-                if value.ty == expression.ty {
+                if scalar_kind(self.types, value.ty, "task value")? == ScalarKind::Nothing {
+                    let depth = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::NothingJoin, &[depth], true)?;
+                    self.own_linear(joined)
+                } else if value.ty == expression.ty {
                     Ok(result)
                 } else {
                     self.construct_sum_value(true, result, expression.span)
@@ -1830,7 +1839,7 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::Cancel(value) => {
                 self.expression(value)?;
-                Ok(LoweredValue::Nothing)
+                Ok(self.nothing())
             }
             ExpressionKind::InlineFunction { .. } => {
                 Err(self.unsupported(expression.span, "inline function"))
@@ -1892,7 +1901,7 @@ impl Translator<'_, '_> {
                     responds,
                 )?;
                 if *kind == jett_hir::ActorMessageKind::Send {
-                    Ok(LoweredValue::Nothing)
+                    Ok(self.nothing())
                 } else {
                     Ok(result)
                 }
@@ -1994,17 +2003,6 @@ impl Translator<'_, '_> {
                     }
                     native_args.push(value);
                 }
-                LoweredValue::Nothing => {
-                    if scalar_kind(self.types, argument.ty, "nothing argument")?
-                        != ScalarKind::Nothing
-                    {
-                        return Err(contract_error(
-                            self.symbol,
-                            argument.span,
-                            "non-nothing argument produced no native value",
-                        ));
-                    }
-                }
             }
         }
         let function_id = self
@@ -2024,31 +2022,19 @@ impl Translator<'_, '_> {
         let call = self.builder.ins().call(reference, &native_args);
         let results = self.builder.func.dfg.inst_results(call).to_vec();
         self.check_failure()?;
-        if scalar_kind(self.types, result_type, "call result")? == ScalarKind::Nothing {
-            if results.is_empty() {
-                Ok(LoweredValue::Nothing)
-            } else {
-                Err(contract_error(
-                    self.symbol,
-                    expression.span,
-                    "nothing call unexpectedly produced a native value",
-                ))
-            }
+        let value = results.first().copied().ok_or_else(|| {
+            contract_error(
+                self.symbol,
+                expression.span,
+                "value-returning call produced no native value",
+            )
+        })?;
+        if is_linear(self.types, result_type) {
+            self.own_linear(value)
+        } else if is_copy_owned(self.types, result_type) {
+            self.own(value)
         } else {
-            let value = results.first().copied().ok_or_else(|| {
-                contract_error(
-                    self.symbol,
-                    expression.span,
-                    "value-returning call produced no native value",
-                )
-            })?;
-            if is_linear(self.types, result_type) {
-                self.own_linear(value)
-            } else if is_copy_owned(self.types, result_type) {
-                self.own(value)
-            } else {
-                Ok(LoweredValue::Scalar(value))
-            }
+            Ok(LoweredValue::Scalar(value))
         }
     }
 
@@ -2129,17 +2115,6 @@ impl Translator<'_, '_> {
                     }
                     native_args.push(value);
                 }
-                LoweredValue::Nothing => {
-                    if scalar_kind(self.types, argument.ty, "nothing argument")?
-                        != ScalarKind::Nothing
-                    {
-                        return Err(contract_error(
-                            self.symbol,
-                            argument.span,
-                            "non-nothing indirect argument produced no value",
-                        ));
-                    }
-                }
             }
         }
         let mut signature = self.module.make_signature();
@@ -2162,17 +2137,6 @@ impl Translator<'_, '_> {
             .call_indirect(signature, address, &native_args);
         let results = self.builder.func.dfg.inst_results(call).to_vec();
         self.check_failure()?;
-        if scalar_kind(self.types, expression.ty, "indirect call result")? == ScalarKind::Nothing {
-            return if results.is_empty() {
-                Ok(LoweredValue::Nothing)
-            } else {
-                Err(contract_error(
-                    self.symbol,
-                    expression.span,
-                    "nothing indirect call produced a value",
-                ))
-            };
-        }
         let value = results.first().copied().ok_or_else(|| {
             contract_error(
                 self.symbol,
@@ -2309,6 +2273,14 @@ impl Translator<'_, '_> {
                     ));
                 }
             },
+            ScalarKind::Nothing if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) => {
+                let not_equal = self
+                    .builder
+                    .ins()
+                    .iconst(ir::types::I32, i64::from(op == BinaryOp::NotEqual));
+                let value = self.leaf(NativeLeaf::NothingEqual, &[left, right, not_equal], true)?;
+                self.builder.ins().ireduce(ir::types::I8, value)
+            }
             ScalarKind::Nothing
             | ScalarKind::String
             | ScalarKind::Bytes
@@ -2487,7 +2459,6 @@ impl Translator<'_, '_> {
                     )
                 })
             }
-            (None, LoweredValue::Nothing) => Ok(()),
             _ => Err(contract_error(
                 self.symbol,
                 span,
@@ -2501,19 +2472,18 @@ impl Translator<'_, '_> {
             contract_error(
                 self.symbol,
                 span,
-                "nothing expression requires a native scalar value",
+                "expression requires a native scalar value",
             )
         })
     }
 
-    fn scalar(&self, value: LoweredValue, span: Span) -> Result<Value, CodegenError> {
+    fn nothing(&mut self) -> LoweredValue {
+        LoweredValue::Scalar(self.builder.ins().iconst(ir::types::I64, 0))
+    }
+
+    fn scalar(&self, value: LoweredValue, _span: Span) -> Result<Value, CodegenError> {
         match value {
             LoweredValue::Scalar(value) | LoweredValue::Owned(value, _) => Ok(value),
-            LoweredValue::Nothing => Err(contract_error(
-                self.symbol,
-                span,
-                "nothing value used as a native scalar",
-            )),
         }
     }
 

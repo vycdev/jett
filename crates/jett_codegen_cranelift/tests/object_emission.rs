@@ -523,6 +523,52 @@ function call_nothing() returns nothing:
 }
 
 #[test]
+fn emits_pending_nothing_through_parameters_returns_and_the_entry_wrapper() {
+    let (program, types) = lower_source(
+        r#"namespace app
+function empty() returns nothing:
+    return nothing
+function forward(value: nothing) returns nothing:
+    return value
+function main() returns nothing:
+    nothing pending = run forward(empty())
+    nothing forwarded = forward(pending)
+    nothing joined = join forwarded handle error:
+        return nothing
+    bool equal = joined == nothing
+    bool different = joined != nothing
+    trace pending
+    println(joined)
+"#,
+    );
+    let entry = program.functions.last().expect("main function").id;
+    let artifact = emit_host_program_object(&program, &types, entry)
+        .expect("pending nothing must retain its runtime depth through calls");
+    let object = object::File::parse(artifact.bytes.as_slice()).expect("parse task object");
+    let undefined = object
+        .symbols()
+        .filter(|symbol| symbol.is_undefined())
+        .filter_map(|symbol| symbol.name().ok())
+        .collect::<Vec<_>>();
+    for leaf in [
+        jett_runtime::native_abi::values::NativeLeaf::NothingRun,
+        jett_runtime::native_abi::values::NativeLeaf::NothingJoin,
+        jett_runtime::native_abi::values::NativeLeaf::NothingFormat,
+        jett_runtime::native_abi::values::NativeLeaf::NothingEqual,
+    ] {
+        assert!(
+            undefined.contains(&leaf.symbol()),
+            "missing typed task leaf {}",
+            leaf.symbol()
+        );
+    }
+    assert_eq!(
+        artifact.symbols.last().map(String::as_str),
+        Some(JETT_AOT_ENTRY_SYMBOL_V1)
+    );
+}
+
+#[test]
 fn emits_direct_signed_minimum_literals_at_every_width() {
     let (program, types) = lower_source(
         r#"namespace app

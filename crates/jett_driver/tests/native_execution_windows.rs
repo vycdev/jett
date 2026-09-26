@@ -881,6 +881,48 @@ fn native_structured_concurrency_matches_interpreter() {
 }
 
 #[test]
+fn native_pending_nothing_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/structured_concurrency_nothing.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending nothing directory");
+    let binary = directory.path().join("program.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending nothing");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_nothing_comparisons_match_interpreter_errors() {
+    for name in [
+        "pending_nothing_equality_failure",
+        "pending_nothing_inequality_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject direct pending nothing comparison");
+        let directory = tempfile::tempdir().expect("isolated pending comparison directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending nothing comparison");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_captured_closures_match_interpreter() {
     for (fixture, main) in [
         (

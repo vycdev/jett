@@ -60,18 +60,6 @@ impl Translator<'_, '_> {
             .call_indirect(signature, address, &native_args);
         let results = self.builder.func.dfg.inst_results(call).to_vec();
         self.check_failure()?;
-        if scalar_kind(self.types, result_type, "Graphics callback result")? == ScalarKind::Nothing
-        {
-            return if results.is_empty() {
-                Ok(LoweredValue::Nothing)
-            } else {
-                Err(contract_error(
-                    self.symbol,
-                    span,
-                    "nothing Graphics callback returned a value",
-                ))
-            };
-        }
         let value = results.first().copied().ok_or_else(|| {
             contract_error(self.symbol, span, "Graphics callback produced no value")
         })?;

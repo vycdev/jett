@@ -1,0 +1,102 @@
+namespace test
+struct TaskBundle:
+    value: nothing
+enum TaskValue:
+    wrapped(value: nothing)
+    empty
+machine TaskState:
+    states:
+        ready(value: nothing)
+        complete
+    transitions:
+        ready to complete
+function work() returns nothing:
+    return nothing
+function make_pending() returns nothing:
+    return run work()
+function forward(value: nothing) returns nothing:
+    return value
+function capture(value: nothing) returns function() returns nothing:
+    return function() returns nothing: return value
+function choose_pending(enabled: bool) returns nothing:
+    mutable nothing chosen = nothing
+    if enabled:
+        chosen = run work()
+    return chosen
+function pending_depth(value: nothing) returns int64:
+    mutable nothing current = value
+    mutable int64 depth = 0
+    while depth < 8:
+        nothing inner = join current handle error:
+            return depth
+        current = inner
+        depth = depth + 1
+    return -1
+function check_collections(pending: nothing, nested: nothing) returns nothing:
+    list[nothing] tasks = list(nothing, pending, nested)
+    nothing listed = list.get[nothing](view tasks, 2) handle:
+        default nothing
+    map[string, nothing] entries = map("work": pending)
+    nothing mapped = map.get[string, nothing](clone entries, "work") handle:
+        default nothing
+    optional[nothing] maybe = some(pending)
+    nothing optional_value = maybe handle:
+        default nothing
+    result[nothing, string] outcome = ok(nested)
+    trace outcome
+    nothing result_value = outcome handle error:
+        default nothing
+    println(pending_depth(listed), pending_depth(mapped), pending_depth(optional_value), pending_depth(result_value))
+    trace tasks
+    trace entries
+    optional[nothing] debug_optional = some(pending)
+    trace debug_optional
+    return nothing
+function check_records(pending: nothing, nested: nothing) returns nothing:
+    TaskBundle bundle = TaskBundle(value: nested)
+    TaskValue wrapped = TaskValue.wrapped(pending)
+    TaskState state = TaskState(ready, nested)
+    println(pending_depth(bundle.value))
+    match wrapped:
+        wrapped(value):
+            println(pending_depth(value))
+        empty:
+            println(-1)
+    if state at ready:
+        println(pending_depth(state.value))
+    trace bundle
+    TaskValue debug_wrapped = TaskValue.wrapped(nested)
+    trace debug_wrapped
+    trace state
+    println(TaskValue.wrapped(pending) == TaskValue.wrapped(pending))
+    println(TaskValue.wrapped(pending) == TaskValue.wrapped(nothing))
+    println(TaskValue.wrapped(pending) == TaskValue.wrapped(nested))
+    println(TaskValue.wrapped(pending) != TaskValue.wrapped(nested))
+    return nothing
+function main() returns nothing:
+    nothing plain = nothing
+    nothing pending = run work()
+    nothing nested = run make_pending()
+    nothing baked = comptime run make_pending()
+    function() returns nothing baked_capture = comptime capture(run make_pending())
+    list[nothing] baked_tasks = comptime list(nothing, run make_pending())
+    nothing baked_listed = list.get[nothing](view baked_tasks, 1) handle:
+        default nothing
+    println(pending_depth(plain), pending_depth(pending), pending_depth(nested))
+    println(pending_depth(baked))
+    println(pending_depth(baked_capture()), pending_depth(baked_listed))
+    println(pending_depth(forward(nested)))
+    function(nothing) returns nothing callback = forward
+    println(pending_depth(callback(pending)))
+    function() returns nothing captured = capture(nested)
+    println(pending_depth(captured()))
+    println(pending_depth(choose_pending(false)), pending_depth(choose_pending(true)))
+    cancel pending
+    println(pending_depth(pending))
+    println(plain == nothing, plain != nothing)
+    println(plain, pending, nested)
+    trace pending
+    trace nested
+    check_collections(pending, nested)
+    check_records(pending, nested)
+    return nothing

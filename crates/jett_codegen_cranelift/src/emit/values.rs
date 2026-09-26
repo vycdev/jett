@@ -401,7 +401,7 @@ impl Translator<'_, '_> {
         let value = if let Some(payload) = payload {
             self.expression(payload)?
         } else {
-            LoweredValue::Nothing
+            self.nothing()
         };
         self.construct_sum_value(success, value, span)
     }
@@ -426,7 +426,6 @@ impl Translator<'_, '_> {
     }
     pub(super) fn payload_bits(&mut self, value: LoweredValue) -> (Value, bool) {
         match value {
-            LoweredValue::Nothing => (self.builder.ins().iconst(ir::types::I64, 0), false),
             LoweredValue::Owned(v, _) => (v, true),
             LoweredValue::Scalar(v) => {
                 let ty = self.builder.func.dfg.value_type(v);
@@ -458,9 +457,7 @@ impl Translator<'_, '_> {
         if is_copy_owned(self.types, ty) || is_linear(self.types, ty) {
             return self.own(bits);
         }
-        let Some(native) = clif_type(self.types, ty, "sum payload")? else {
-            return Ok(LoweredValue::Nothing);
-        };
+        let native = self.required_clif_type(ty, span)?;
         let value = if native == ir::types::F64 {
             self.builder
                 .ins()
@@ -1179,7 +1176,9 @@ impl Translator<'_, '_> {
     ) -> Result<LoweredValue, CodegenError> {
         let kind = scalar_kind(self.types, ty, "format")?;
         if kind == ScalarKind::Nothing {
-            return self.literal("nothing");
+            let depth = self.scalar(value, span)?;
+            let text = self.leaf(NativeLeaf::NothingFormat, &[depth], true)?;
+            return self.own(text);
         }
         if kind == ScalarKind::String {
             return Ok(value);
@@ -1258,13 +1257,21 @@ impl Translator<'_, '_> {
         result_type: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
-        let mut evaluated = vec![LoweredValue::Nothing; args.len()];
+        let mut evaluated = vec![None; args.len()];
         for &index in order {
-            evaluated[index] = self.argument(
+            evaluated[index] = Some(self.argument(
                 &args[index],
                 jett_mir::move_values::intrinsic_borrows(id, index),
-            )?;
+            )?);
         }
+        let evaluated = evaluated
+            .into_iter()
+            .map(|argument| {
+                argument.ok_or_else(|| {
+                    contract_error(self.symbol, span, "intrinsic argument was not evaluated")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         if id == IntrinsicId::GraphicsRun {
             return self.graphics_run(type_arguments, args, &evaluated, span);
         }
@@ -1705,7 +1712,7 @@ impl Translator<'_, '_> {
                 let authority = self.scalar(evaluated[0], span)?;
                 let text = self.scalar(evaluated[1], span)?;
                 self.leaf(NativeLeaf::Stdout, &[authority, text], true)?;
-                Ok(LoweredValue::Nothing)
+                Ok(self.nothing())
             }
             IntrinsicId::Print | IntrinsicId::Println => {
                 // Evaluate every argument before the first output effect.
@@ -1724,7 +1731,7 @@ impl Translator<'_, '_> {
                 }
                 let output = self.scalar(output, span)?;
                 self.leaf(NativeLeaf::DebugPrint, &[output], true)?;
-                Ok(LoweredValue::Nothing)
+                Ok(self.nothing())
             }
             _ => Err(self.unsupported(span, "runtime intrinsic")),
         }

@@ -103,6 +103,32 @@ const EXHAUSTED: Failure = (
     JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
     b"native value capacity exhausted",
 );
+const INVALID_NOTHING_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native nothing comparison",
+);
+const UNSUPPORTED_NOTHING_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending nothing",
+);
+
+fn format_nothing(depth: u64) -> LeafResult<String> {
+    let depth = usize::try_from(depth).map_err(|_| EXHAUSTED)?;
+    let length = depth
+        .checked_mul("pending()".len())
+        .and_then(|length| length.checked_add("nothing".len()))
+        .ok_or(EXHAUSTED)?;
+    let mut text = String::new();
+    text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
+    for _ in 0..depth {
+        text.push_str("pending(");
+    }
+    text.push_str("nothing");
+    for _ in 0..depth {
+        text.push(')');
+    }
+    Ok(text)
+}
 
 struct NativeString {
     text: String,
@@ -447,7 +473,7 @@ impl NativeDebugLayout {
         let child = depth + 1;
         Ok(match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
             NativeDebugNode::Primitive(kind) => values.debug_value(bits, *kind)?,
-            NativeDebugNode::Nothing => "nothing".to_owned(),
+            NativeDebugNode::Nothing => format_nothing(bits)?,
             NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
             NativeDebugNode::Alias(base) => return self.format_value(values, bits, *base, child),
             NativeDebugNode::Capability(name) => format!("<{name} capability>"),
@@ -612,7 +638,7 @@ impl NativeDebugLayout {
                     _ => left == right,
                 }
             }
-            NativeDebugNode::Nothing => true,
+            NativeDebugNode::Nothing => left == right,
             NativeDebugNode::Bytes => values.bytes(left)? == values.bytes(right)?,
             NativeDebugNode::Alias(base) => {
                 return self.equal_value(values, left, right, *base, child);
@@ -1028,7 +1054,7 @@ impl NativeValues {
     }
     fn debug_value(&self, bits: u64, kind: u32) -> LeafResult<String> {
         if kind == DEBUG_NOTHING_KIND {
-            return Ok("nothing".to_owned());
+            return format_nothing(bits);
         }
         if kind == DEBUG_BYTES_KIND {
             let mut text = "bytes(".to_owned();
@@ -1250,6 +1276,27 @@ impl NativeValues {
                 }
             }
         }
+    }
+    fn join_nothing(&mut self, depth: u64) -> LeafResult<u64> {
+        self.parsed_sum(
+            depth
+                .checked_sub(1)
+                .ok_or_else(|| "task was cancelled".to_owned()),
+        )
+    }
+    fn equal_nothing(&mut self, left: u64, right: u64, not_equal: u32) -> LeafResult<u32> {
+        if not_equal > 1 {
+            return Err(INVALID_NOTHING_COMPARISON);
+        }
+        if left == 0 && right == 0 {
+            return Ok(u32::from(not_equal == 0));
+        }
+        let left = format_nothing(left)?;
+        let right = format_nothing(right)?;
+        let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
+        self.dynamic_failure_message =
+            Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
+        Err(UNSUPPORTED_NOTHING_COMPARISON)
     }
     fn byte_result(&mut self, decoded: Result<Vec<u8>, String>) -> LeafResult<u64> {
         let (tag, payload) = match decoded {
@@ -4076,6 +4123,14 @@ leaves! {
         };
     Equal, jett_rt_v1_string_equal, false, (left: u64 => I64, right: u64 => I64), u32 => I32,
         |s| Ok(u32::from(s.text(left)? == s.text(right)?));
+    NothingRun, jett_rt_v1_nothing_run, false, (depth: u64 => I64), u64 => I64,
+        |_s| depth.checked_add(1).ok_or(EXHAUSTED);
+    NothingJoin, jett_rt_v1_nothing_join, false, (depth: u64 => I64), u64 => I64,
+        |s| s.join_nothing(depth);
+    NothingFormat, jett_rt_v1_nothing_format, false, (depth: u64 => I64), u64 => I64,
+        |s| s.insert(format_nothing(depth)?);
+    NothingEqual, jett_rt_v1_nothing_equal, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32), u32 => I32,
+        |s| s.equal_nothing(left, right, not_equal);
     EnumEqual, jett_rt_v1_enum_equal, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
         |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
             let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
@@ -4413,6 +4468,237 @@ mod tests {
             assert_eq!(
                 unsafe { jett_rt_v1_context_destroy(&mut *self.0, result.as_mut_ptr()) },
                 JettRuntimeStatusV1::OK
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_nesting_join_format_and_cleanup() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        unsafe {
+            let once = jett_rt_v1_nothing_run(pointer, 0);
+            let twice = jett_rt_v1_nothing_run(pointer, once);
+            assert_eq!((once, twice), (1, 2));
+            for (depth, expected) in [
+                (0, "nothing"),
+                (once, "pending(nothing)"),
+                (twice, "pending(pending(nothing))"),
+            ] {
+                let formatted = jett_rt_v1_nothing_format(pointer, depth);
+                let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    assert_eq!(state.as_ref().unwrap().values.text(formatted), Ok(expected));
+                }
+                assert_eq!(jett_rt_v1_value_drop(pointer, formatted), 0);
+            }
+            let joined = jett_rt_v1_nothing_join(pointer, twice);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, joined), SUM_SUCCESS);
+            let remaining = jett_rt_v1_sum_take(pointer, joined, SUM_SUCCESS);
+            assert_eq!(remaining, 1);
+            let joined = jett_rt_v1_nothing_join(pointer, remaining);
+            assert_eq!(jett_rt_v1_sum_take(pointer, joined, SUM_SUCCESS), 0);
+            let cancelled = jett_rt_v1_nothing_join(pointer, 0);
+            assert_eq!(jett_rt_v1_sum_tag(pointer, cancelled), SUM_FAILURE);
+            let error = jett_rt_v1_sum_take(pointer, cancelled, SUM_FAILURE);
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            {
+                let state = lock_unpoisoned(&lease.entry.state);
+                assert_eq!(
+                    state.as_ref().unwrap().values.text(error),
+                    Ok("task was cancelled")
+                );
+            }
+            assert_eq!(jett_rt_v1_value_drop(pointer, error), 0);
+            assert_eq!(jett_rt_v1_value_status(pointer), 0);
+            assert!(
+                lock_unpoisoned(&lease.entry.state)
+                    .as_ref()
+                    .unwrap()
+                    .values
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_debug_and_aggregate_equality_preserve_pending_depth() {
+        let mut values = NativeValues::default();
+        let layout = NativeDebugLayout {
+            root: 1,
+            nodes: vec![NativeDebugNode::Nothing, NativeDebugNode::List(0)],
+        };
+        for (depth, expected) in [(0, "nothing"), (2, "pending(pending(nothing))")] {
+            assert_eq!(
+                values.debug_value(depth, DEBUG_NOTHING_KIND),
+                Ok(expected.into())
+            );
+            assert_eq!(
+                layout.format_value(&values, depth, 0, 0),
+                Ok(expected.into())
+            );
+        }
+        let left = values.new_list(false).unwrap();
+        let right = values.new_list(false).unwrap();
+        values.lists.get_mut(&left).unwrap().elements = vec![Some(0), Some(2)];
+        values.lists.get_mut(&right).unwrap().elements = vec![Some(0), Some(2)];
+        assert_eq!(
+            layout.format_value(&values, left, layout.root, 0),
+            Ok("list(nothing, pending(pending(nothing)))".into())
+        );
+        assert_eq!(
+            layout.equal_value(&values, left, right, layout.root, 0),
+            Ok(true)
+        );
+        values.lists.get_mut(&right).unwrap().elements[1] = Some(1);
+        assert_eq!(
+            layout.equal_value(&values, left, right, layout.root, 0),
+            Ok(false)
+        );
+        values.drop_value(left).unwrap();
+        values.drop_value(right).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn nothing_equality_matches_interpreter_failure_text() {
+        let plain = Context::new();
+        unsafe {
+            assert_eq!(jett_rt_v1_nothing_equal(plain.pointer(), 0, 0, 0), 1);
+            assert_eq!(jett_rt_v1_nothing_equal(plain.pointer(), 0, 0, 1), 0);
+            assert_eq!(jett_rt_v1_value_status(plain.pointer()), 0);
+        }
+        for (left, right, not_equal, expected) in [
+            (
+                1,
+                0,
+                0,
+                "unsupported binary operation: pending(nothing) Eq nothing",
+            ),
+            (
+                0,
+                2,
+                1,
+                "unsupported binary operation: nothing NotEq pending(pending(nothing))",
+            ),
+            (
+                1,
+                1,
+                0,
+                "unsupported binary operation: pending(nothing) Eq pending(nothing)",
+            ),
+            (
+                2,
+                1,
+                1,
+                "unsupported binary operation: pending(pending(nothing)) NotEq pending(nothing)",
+            ),
+        ] {
+            let context = Context::new();
+            let pointer = context.pointer();
+            unsafe {
+                assert_eq!(
+                    jett_rt_v1_nothing_equal(pointer, left, right, not_equal),
+                    JettRuntimeStatusV1::INVALID_CONTEXT.code()
+                );
+                assert_eq!(
+                    jett_rt_v1_value_status(pointer),
+                    JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                );
+                let mut message = vec![0; expected.len()];
+                let mut length = 0;
+                let mut result = MaybeUninit::uninit();
+                assert_eq!(
+                    jett_rt_v1_value_failure_copy(
+                        pointer,
+                        message.as_mut_ptr(),
+                        message.len() as u64,
+                        &mut length,
+                        result.as_mut_ptr()
+                    ),
+                    JettRuntimeStatusV1::OK
+                );
+                assert_eq!(length, expected.len() as u64);
+                assert_eq!(message, expected.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_depth_overflow_and_invalid_comparison_fail_cleanly() {
+        let overflow = Context::new();
+        let formatting = Context::new();
+        let invalid = Context::new();
+        unsafe {
+            assert_eq!(jett_rt_v1_nothing_run(overflow.pointer(), u64::MAX), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(overflow.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            assert_eq!(jett_rt_v1_nothing_format(formatting.pointer(), u64::MAX), 0);
+            assert_eq!(
+                jett_rt_v1_value_status(formatting.pointer()),
+                JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+            );
+            assert_eq!(
+                jett_rt_v1_nothing_equal(invalid.pointer(), 0, 0, 2),
+                JettRuntimeStatusV1::INVALID_CONTEXT.code()
+            );
+            assert_eq!(
+                jett_rt_v1_value_status(invalid.pointer()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_join_and_format_roll_back_each_allocation_boundary() {
+        for (depth, allocations) in [(0, 2), (2, 1)] {
+            for budget in 0..=allocations {
+                let mut values = NativeValues::default();
+                values.allocation_budget = Some(budget);
+                match values.join_nothing(depth) {
+                    Ok(sum) => {
+                        assert_eq!(budget, allocations);
+                        values.drop_value(sum).unwrap();
+                    }
+                    Err(error) => assert_eq!(error, EXHAUSTED),
+                }
+                assert!(
+                    values.is_empty(),
+                    "nothing join leaked with budget {budget}"
+                );
+            }
+        }
+        for budget in 0..=1 {
+            let context = Context::new();
+            let pointer = context.pointer();
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            lock_unpoisoned(&lease.entry.state)
+                .as_mut()
+                .unwrap()
+                .values
+                .allocation_budget = Some(budget);
+            unsafe {
+                let formatted = jett_rt_v1_nothing_format(pointer, 2);
+                if budget == 0 {
+                    assert_eq!(formatted, 0);
+                    assert_eq!(
+                        jett_rt_v1_value_status(pointer),
+                        JettRuntimeStatusV1::RESOURCE_EXHAUSTED.code()
+                    );
+                } else {
+                    assert_ne!(formatted, 0);
+                    assert_eq!(jett_rt_v1_value_drop(pointer, formatted), 0);
+                }
+            }
+            assert!(
+                lock_unpoisoned(&lease.entry.state)
+                    .as_ref()
+                    .unwrap()
+                    .values
+                    .is_empty()
             );
         }
     }
