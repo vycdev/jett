@@ -2872,9 +2872,9 @@ Checked concrete struct layouts now reach native fixed field-slot records with
 explicit initialization and recursive ownership. MIR plans moves, call-bounded
 projected views, clone temporaries and drop slots; codegen emits construction,
 projection and all user control flow. Typed runtime leaves only manage storage.
-Native sequence loops can borrow a checked struct-field collection directly:
+Native sequence loops can borrow a checked struct-field collection or string directly:
 MIR records the root owner and field path, keeps the root loan active through
-the loop, and clones each loop binding without owning the projected collection.
+the loop, and clones each loop binding without owning the projected value.
 An owned field read clones the selected value, including nested move-only
 payloads, while a field view borrows the parent through the call boundary.
 The checker exports exact Equatable method identities for comparison expressions;

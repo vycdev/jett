@@ -2003,6 +2003,22 @@ fn native_projected_string_iteration_matches_interpreter() {
 }
 
 #[test]
+fn native_nested_borrowed_collections_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_borrowed_collections.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert!(expected.stdout.ends_with("11 11\n2 2\n"), "{expected:?}");
+    let directory = tempfile::tempdir().expect("isolated nested collection directory");
+    let binary = directory.path().join("nested_borrowed_collections.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile nested borrowed collection iteration");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_empty_collections_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_empty_collections.jett");

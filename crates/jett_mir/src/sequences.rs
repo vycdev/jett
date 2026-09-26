@@ -129,7 +129,7 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             };
             let projected = if matches!(
                 types.resolve(iterable.ty),
-                Type::List(_) | Type::Set(_) | Type::Map(..)
+                Type::List(_) | Type::Set(_) | Type::Map(..) | Type::String
             ) {
                 projected_source(&value, function, types)
             } else {

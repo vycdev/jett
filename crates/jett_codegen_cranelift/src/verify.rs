@@ -504,7 +504,7 @@ impl Verifier<'_> {
                         source,
                         statement.span
                     )?),
-                    Type::List(_) | Type::Set(_) | Type::Map(..)
+                    Type::List(_) | Type::Set(_) | Type::Map(..) | Type::String
                 ) || function.local(*token).unwrap().ty != TypeInterner::INT64
                 {
                     return Err(self.contract_error(
