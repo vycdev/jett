@@ -7120,6 +7120,13 @@ function types contain parameter types and ownership modes but no names; calls
 through such values require positional arguments. Unknown or duplicate labels
 are rejected rather than silently treated as positional arguments.
 
+Debug snapshots render a named function value as `function(namespace.name)`
+and an inline function as `function(parameter, names)`, using its source
+parameters. This is value metadata, independent of the function's type and
+argument-label rules. Captured values and native addresses are not rendered.
+Tracing or inspecting a callback does not invoke or consume it, including when
+the callback is nested in a collection or record.
+
 ### Explicit Typing
 
 Every variable declaration requires a type annotation. There is no type inference for variable declarations.

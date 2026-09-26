@@ -1,0 +1,105 @@
+namespace callback_library
+export function increment(value: int64) returns int64:
+    return value + 1
+namespace test
+struct CallbackHolder:
+    callback: function(int64) returns int64
+enum CallbackTree:
+    empty
+    leaf(callback: function(int64) returns int64)
+    branch(left: CallbackTree, right: CallbackTree)
+machine CallbackState:
+    states:
+        idle
+        active(callback: function(int64) returns int64)
+    transitions:
+        idle to active
+function double(value: int64) returns int64:
+    return value * 2
+function make_offset(offset: int64) returns function(int64) returns int64:
+    return function(input: int64) returns int64: return input + offset
+function make_label(prefix: string) returns function(int64) returns string:
+    return function(number: int64) returns string: return "{prefix}:{number}"
+function make_constant[T](value: T) returns function() returns T:
+    return function() returns T: return value
+function make_replacer[T](value: T) returns function(T) returns T:
+    return function(replacement: T) returns T: return value
+function count(view items: list[int64]) returns int64:
+    return list.length[int64](view items)
+function uninvoked(value: int64) returns int64:
+    println("unexpected callback invocation")
+    return value
+verify function_debug_values:
+    function(int64) returns int64 verify_named = double
+    function(int64) returns int64 verify_captured = comptime make_offset(11)
+    trace verify_named
+    trace verify_captured
+    assert verify_named(2) == 4
+    assert verify_captured(2) == 13
+property function_debug_trials:
+    given input: int64
+    function(int64) returns int64 property_callback = double
+    trace property_callback
+    assert property_callback(input) == input * 2
+function main() returns nothing:
+    use callback_library as callbacks
+    function(int64) returns int64 named = callbacks.increment
+    function(int64) returns int64 inline = function(argument: int64) returns int64: return argument + 3
+    function(int64) returns int64 captured = make_offset(7)
+    function(int64) returns string label = make_label("DO_NOT_RENDER_CAPTURE")
+    function() returns int64 zero = function() returns int64: return 5
+    function(int64, int64) returns int64 pair = function(left: int64, right: int64) returns int64: return left + right
+    function(view list[int64]) returns int64 observer = count
+    function() returns int64 generic = make_constant[int64](9)
+    function(int64) returns int64 generic_int = make_replacer[int64](12)
+    function(string) returns string generic_string = make_replacer[string]("kept")
+    function(int64) returns int64 baked_named = comptime double
+    function(int64) returns int64 baked_inline = comptime function(source: int64) returns int64: return source + 4
+    function(int64) returns int64 baked_captured = comptime make_offset(8)
+    function(int64) returns int64 untouched = uninvoked
+    function(int64) returns int64 copied = clone captured
+    CallbackHolder holder = CallbackHolder(callback: clone captured)
+    list[function(int64) returns int64] many = list(clone named, clone inline, clone captured)
+    list[list[function(int64) returns int64]] nested = list(clone many)
+    map[string, function(int64) returns int64] indexed = map("named": clone named, "captured": clone captured)
+    optional[function(int64) returns int64] present = some(clone captured)
+    optional[function(int64) returns int64] absent = none
+    result[function(int64) returns int64, string] success = ok(clone named)
+    result[int64, function(int64) returns int64] failure = fail(clone inline)
+    CallbackTree tree = CallbackTree.branch(CallbackTree.leaf(clone captured), CallbackTree.empty)
+    CallbackState state = CallbackState(active, clone inline)
+    trace named
+    trace named
+    trace inline
+    trace captured
+    trace label
+    trace zero
+    trace pair
+    trace observer
+    trace generic
+    trace generic_int
+    trace generic_string
+    trace baked_named
+    trace baked_inline
+    trace baked_captured
+    trace untouched
+    trace copied
+    trace holder
+    trace many
+    trace nested
+    trace indexed
+    trace present
+    trace absent
+    trace success
+    trace failure
+    trace tree
+    trace state
+    breakpoint false
+    breakpoint true
+    function(int64) returns int64 selected = list.get[function(int64) returns int64](view many, 2) handle:
+        default named
+    println(named(2), inline(2), captured(2), zero(), pair(2, 3), generic())
+    println(observer(list(1, 2, 3)), copied(2), holder.callback(2), selected(2))
+    println(baked_named(2), baked_inline(2), baked_captured(2))
+    println(generic_int(0), generic_string("unused"))
+    return nothing

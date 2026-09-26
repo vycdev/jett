@@ -1339,6 +1339,71 @@ fn native_debug_statements_match_interpreter_output() {
 }
 
 #[test]
+fn native_function_debug_values_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_functions.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "3 5 9 5 5 9\n3 9 9 9\n4 6 10\n12 kept\n");
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert!(debug.contains("function(callback_library.increment)"));
+    assert!(debug.contains("function(left, right)"));
+    assert!(debug.contains("trace baked_inline: function(int64) returns int64 = function(source)"));
+    assert!(!debug.contains("DO_NOT_RENDER_CAPTURE"));
+    assert_eq!(debug.matches("breakpoint hit:").count(), 1);
+    let directory = tempfile::tempdir().expect("isolated function debug directory");
+    let binary = directory.path().join("debug_functions.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile function values and nested callback debug layouts");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(String::from_utf8_lossy(&actual.stderr), debug);
+
+    let verify_binary = directory.path().join("debug_functions_verify.exe");
+    build_host_verify_suite_executable(&fixture, launcher(), &verify_binary)
+        .expect("compile callback traces in a native verify suite");
+    let verified = run_bounded(&verify_binary, directory.path());
+    assert!(verified.status.success(), "{verified:?}");
+    assert!(verified.stdout.is_empty(), "{verified:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&verified.stderr),
+        "trace verify_named: function(int64) returns int64 = function(test.double)\ntrace verify_captured: function(int64) returns int64 = function(input)\n"
+    );
+
+    let property_binary = directory.path().join("debug_functions_property.exe");
+    build_host_property_suite_executable(&fixture, launcher(), &property_binary)
+        .expect("compile callback traces across generated native property trials");
+    let property = run_bounded(&property_binary, directory.path());
+    assert!(property.status.success(), "{property:?}");
+    assert!(property.stdout.is_empty(), "{property:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&property.stderr),
+        "trace property_callback: function(int64) returns int64 = function(test.double)\n"
+            .repeat(100)
+    );
+}
+
+#[test]
+fn native_function_debug_values_clean_up_after_failure() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/debug_functions_failure.jett");
+    let expected = jett_driver::run_file_capture_outcome(&fixture)
+        .expect_err("failure after tracing owned function descriptors");
+    let debug = format!("{}\n", expected.output.debug_output.join("\n"));
+    let directory = tempfile::tempdir().expect("isolated function debug failure directory");
+    let binary = directory.path().join("debug_functions_failure.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile a terminal failure with live function debug metadata");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{debug}{}\n", expected.message)
+    );
+}
+
+#[test]
 fn native_assertion_compiles_interpolated_failure_message() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/assert_messages.jett");

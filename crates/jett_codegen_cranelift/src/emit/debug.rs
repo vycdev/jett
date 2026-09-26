@@ -18,6 +18,7 @@ enum DebugNode {
     Enum(String, Vec<(String, Vec<u32>)>),
     Machine(String, Vec<(String, Vec<u32>)>),
     Capability(String),
+    Function,
     Alias(u32),
 }
 
@@ -87,6 +88,7 @@ impl DebugGraph<'_> {
                     DebugNode::Machine(definition.name, states)
                 }
                 Type::Capability(_) => DebugNode::Capability(self.types.type_name(ty)),
+                Type::Function { .. } => DebugNode::Function,
                 Type::Refinement { base, .. } => DebugNode::Alias(self.node(base)?),
                 Type::Secret(_)
                 | Type::TypeConstruction
@@ -94,7 +96,6 @@ impl DebugGraph<'_> {
                 | Type::Interface(_)
                 | Type::Actor(_)
                 | Type::Resource(_)
-                | Type::Function { .. }
                 | Type::Error => return None,
                 Type::Int8
                 | Type::Int16
@@ -134,6 +135,7 @@ fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
         }
         DebugNode::Nothing => bytes.push(NativeDebugTag::Nothing as u8),
         DebugNode::Bytes => bytes.push(NativeDebugTag::Bytes as u8),
+        DebugNode::Function => bytes.push(NativeDebugTag::Function as u8),
         DebugNode::List(child) => child_node(bytes, NativeDebugTag::List, child),
         DebugNode::Set(child) => child_node(bytes, NativeDebugTag::Set, child),
         DebugNode::Optional(child) => child_node(bytes, NativeDebugTag::Optional, child),
@@ -161,6 +163,34 @@ fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
         }
     }
     Some(())
+}
+
+pub(crate) fn function_label(function: &jett_mir::Function) -> Result<String, &'static str> {
+    let parameters = function
+        .params
+        .get(function.capture_count..)
+        .ok_or("function debug capture count exceeds its parameter metadata")?;
+    let identity = match &function.debug_kind {
+        jett_hir::FunctionDebugKind::Named(name) => {
+            if name.is_empty() || name.chars().any(char::is_control) {
+                return Err("named function debug identity has invalid source name metadata");
+            }
+            name.clone()
+        }
+        jett_hir::FunctionDebugKind::Inline => {
+            if parameters.iter().any(|parameter| {
+                parameter.name.is_empty() || parameter.name.chars().any(char::is_control)
+            }) {
+                return Err("inline function debug parameter has invalid source name metadata");
+            }
+            parameters
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    Ok(format!("function({identity})"))
 }
 
 fn child_node(bytes: &mut Vec<u8>, tag: NativeDebugTag, child: u32) {
@@ -276,5 +306,34 @@ pub(crate) fn equality_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8
         debug_layout(types, ty)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn function_debug_layout_is_opaque_and_does_not_enable_equality_or_secret_debugging() {
+        let mut types = TypeInterner::new();
+        let function = types.intern(Type::Function {
+            params: vec![TypeInterner::INT64],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        let mut expected = b"JD\x01".to_vec();
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&0u32.to_le_bytes());
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.push(NativeDebugTag::Function as u8);
+        assert_eq!(debug_layout(&types, function), Some(expected));
+        let optional = types.intern(Type::Optional(function));
+        let list = types.intern(Type::List(optional));
+        for ty in [function, optional, list] {
+            assert!(debug_layout(&types, ty).is_some());
+            assert!(equality_layout(&types, ty).is_none());
+        }
+        let secret = types.intern(Type::Secret(function));
+        assert!(debug_layout(&types, secret).is_none());
     }
 }

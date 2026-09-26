@@ -4,7 +4,11 @@ mod values;
 use jett_mir::move_values::{
     MoveValuePlan, is_copy_owned, is_function, is_linear, is_string, representation_type,
 };
-use jett_runtime::native_abi::values::{DEBUG_BYTES_KIND, DEBUG_NOTHING_KIND, NativeLeaf};
+use jett_runtime::native_abi::values::{
+    DEBUG_BYTES_KIND, DEBUG_NOTHING_KIND, NATIVE_FUNCTION_CODE_FIELD,
+    NATIVE_FUNCTION_ENVIRONMENT_FIELD, NATIVE_FUNCTION_FIELD_COUNT, NATIVE_FUNCTION_LABEL_FIELD,
+    NativeLeaf,
+};
 use std::str::FromStr;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -48,6 +52,7 @@ struct DeclaredFunction {
     signature: ir::Signature,
     modes: Vec<jett_mir::ParamMode>,
     parameter_types: Vec<TypeId>,
+    debug_label: String,
 }
 
 /// Sparse original-MIR-index mapping. Only backend-reachable functions have a
@@ -287,6 +292,9 @@ fn declare_reachable_functions(
             signature,
             modes: function.params.iter().map(|p| p.mode).collect(),
             parameter_types: function.params.iter().map(|p| p.ty).collect(),
+            debug_label: debug::function_label(function).map_err(|message| {
+                contract_error(&verified_function.symbol, function.span, message)
+            })?,
         })?;
     }
     Ok(declarations)
@@ -1449,67 +1457,9 @@ impl Translator<'_, '_> {
                 Ok(LoweredValue::Scalar(value))
             }
             ExpressionKind::FunctionRef(function) => {
-                let native_id = self
-                    .declarations
-                    .get(*function)
-                    .ok_or_else(|| {
-                        contract_error(
-                            self.symbol,
-                            expression.span,
-                            "function value target is not reachable",
-                        )
-                    })?
-                    .native_id;
-                let reference = self
-                    .module
-                    .declare_func_in_func(native_id, self.builder.func);
-                let pointer_type = self.module.target_config().pointer_type();
-                let address = self.builder.ins().func_addr(pointer_type, reference);
-                let address = if pointer_type == ir::types::I64 {
-                    address
-                } else {
-                    self.builder.ins().uextend(ir::types::I64, address)
-                };
-                let two = self.builder.ins().iconst(ir::types::I64, 2);
-                let descriptor = self.leaf(NativeLeaf::StructNew, &[two], true)?;
-                let owned = self.own(descriptor)?;
-                let zero = self.builder.ins().iconst(ir::types::I64, 0);
-                let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
-                self.leaf(
-                    NativeLeaf::StructInit,
-                    &[descriptor, zero, address, borrowed],
-                    true,
-                )?;
-                let one = self.builder.ins().iconst(ir::types::I64, 1);
-                self.leaf(
-                    NativeLeaf::StructInit,
-                    &[descriptor, one, zero, borrowed],
-                    true,
-                )?;
-                Ok(owned)
+                self.function_descriptor(*function, None, expression.span)
             }
             ExpressionKind::ClosureRef { function, captures } => {
-                let native_id = self
-                    .declarations
-                    .get(*function)
-                    .ok_or_else(|| {
-                        contract_error(
-                            self.symbol,
-                            expression.span,
-                            "closure target is not reachable",
-                        )
-                    })?
-                    .native_id;
-                let reference = self
-                    .module
-                    .declare_func_in_func(native_id, self.builder.func);
-                let pointer_type = self.module.target_config().pointer_type();
-                let address = self.builder.ins().func_addr(pointer_type, reference);
-                let address = if pointer_type == ir::types::I64 {
-                    address
-                } else {
-                    self.builder.ins().uextend(ir::types::I64, address)
-                };
                 let count = self
                     .builder
                     .ins()
@@ -1545,27 +1495,7 @@ impl Translator<'_, '_> {
                         self.clear_slot(slot);
                     }
                 }
-                let two = self.builder.ins().iconst(ir::types::I64, 2);
-                let descriptor = self.leaf(NativeLeaf::StructNew, &[two], true)?;
-                let descriptor_owned = self.own(descriptor)?;
-                let zero = self.builder.ins().iconst(ir::types::I64, 0);
-                let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
-                self.leaf(
-                    NativeLeaf::StructInit,
-                    &[descriptor, zero, address, borrowed],
-                    true,
-                )?;
-                let one = self.builder.ins().iconst(ir::types::I64, 1);
-                let owned_flag = self.builder.ins().iconst(ir::types::I32, 1);
-                self.leaf(
-                    NativeLeaf::StructInit,
-                    &[descriptor, one, environment, owned_flag],
-                    true,
-                )?;
-                if let LoweredValue::Owned(_, slot) = environment_owned {
-                    self.clear_slot(slot);
-                }
-                Ok(descriptor_owned)
+                self.function_descriptor(*function, Some(environment_owned), expression.span)
             }
             ExpressionKind::Unary { op, value } => {
                 let lowered_value = self.expression(value)?;
@@ -2056,6 +1986,80 @@ impl Translator<'_, '_> {
         }
     }
 
+    fn function_descriptor(
+        &mut self,
+        function: FunctionId,
+        environment: Option<LoweredValue>,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let declared = self.declarations.get(function).ok_or_else(|| {
+            contract_error(self.symbol, span, "function value target is not reachable")
+        })?;
+        let label = declared.debug_label.clone();
+        let reference = self
+            .module
+            .declare_func_in_func(declared.native_id, self.builder.func);
+        let pointer_type = self.module.target_config().pointer_type();
+        let address = self.builder.ins().func_addr(pointer_type, reference);
+        let address = if pointer_type == ir::types::I64 {
+            address
+        } else {
+            self.builder.ins().uextend(ir::types::I64, address)
+        };
+        let count = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_FIELD_COUNT as i64);
+        let descriptor = self.leaf(NativeLeaf::StructNew, &[count], true)?;
+        let descriptor_owned = self.own(descriptor)?;
+        let code_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_CODE_FIELD as i64);
+        let borrowed = self.builder.ins().iconst(ir::types::I32, 0);
+        self.leaf(
+            NativeLeaf::StructInit,
+            &[descriptor, code_index, address, borrowed],
+            true,
+        )?;
+        let environment_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_ENVIRONMENT_FIELD as i64);
+        let environment_value = match environment {
+            Some(value) => self.scalar(value, span)?,
+            None => self.builder.ins().iconst(ir::types::I64, 0),
+        };
+        let owned_flag = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(environment.is_some()));
+        self.leaf(
+            NativeLeaf::StructInit,
+            &[descriptor, environment_index, environment_value, owned_flag],
+            true,
+        )?;
+        if let Some(LoweredValue::Owned(_, slot)) = environment {
+            self.clear_slot(slot);
+        }
+        let label = self.literal(&label)?;
+        let label_value = self.scalar(label, span)?;
+        let label_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_LABEL_FIELD as i64);
+        let owned_flag = self.builder.ins().iconst(ir::types::I32, 1);
+        self.leaf(
+            NativeLeaf::StructInit,
+            &[descriptor, label_index, label_value, owned_flag],
+            true,
+        )?;
+        if let LoweredValue::Owned(_, slot) = label {
+            self.clear_slot(slot);
+        }
+        Ok(descriptor_owned)
+    }
+
     fn indirect_call(
         &mut self,
         callee: &Expression,
@@ -2103,10 +2107,20 @@ impl Translator<'_, '_> {
         // source arguments, which can rebind that local through a handler.
         let lowered_callee = self.expression(callee)?;
         let descriptor = self.scalar(lowered_callee, callee.span)?;
-        let zero = self.builder.ins().iconst(ir::types::I64, 0);
-        let address = self.leaf(NativeLeaf::StructField, &[descriptor, zero], true)?;
-        let one = self.builder.ins().iconst(ir::types::I64, 1);
-        let environment = self.leaf(NativeLeaf::StructField, &[descriptor, one], true)?;
+        let code_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_CODE_FIELD as i64);
+        let address = self.leaf(NativeLeaf::StructField, &[descriptor, code_index], true)?;
+        let environment_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_ENVIRONMENT_FIELD as i64);
+        let environment = self.leaf(
+            NativeLeaf::StructField,
+            &[descriptor, environment_index],
+            true,
+        )?;
         let pointer_type = self.module.target_config().pointer_type();
         let address = if pointer_type == ir::types::I64 {
             address

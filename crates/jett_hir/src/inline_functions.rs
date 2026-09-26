@@ -2,8 +2,8 @@
 //! locals become leading synthetic parameters supplied by a native environment.
 
 use crate::{
-    Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,
-    FunctionIdentity, Local, LocalId, Param, ParamMode, StatementKind, StringSegment,
+    Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionDebugKind,
+    FunctionId, FunctionIdentity, Local, LocalId, Param, ParamMode, StatementKind, StringSegment,
 };
 use jett_types::{Type, TypeInterner};
 
@@ -195,6 +195,7 @@ impl Extractor<'_> {
                     type_arguments: parent.identity.type_arguments.clone(),
                     specialization: parent.identity.specialization.clone(),
                 },
+                debug_kind: FunctionDebugKind::Inline,
                 source_definition: None,
                 params: capture_parameters,
                 capture_count,

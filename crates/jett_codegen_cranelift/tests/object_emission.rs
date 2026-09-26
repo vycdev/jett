@@ -42,6 +42,112 @@ fn lower_source(source: &str) -> (Program, TypeInterner) {
 }
 
 #[test]
+fn emits_function_debug_descriptors_with_source_labels() {
+    let (program, types) = lower_source(
+        r#"namespace display
+function named(first: int64, second: int64) returns int64:
+    return first + second
+function factory[T](value: T) returns function(T) returns T:
+    return function(input: T) returns T: return value
+struct Holder:
+    callback: function(int64, int64) returns int64
+function main() returns int64:
+    function(int64, int64) returns int64 declared = named
+    function(int64, int64) returns int64 plain = function(left: int64, right: int64) returns int64: return left + right
+    int64 delta = 3
+    function(int64) returns int64 captured = function(argument: int64) returns int64: return argument + delta
+    function(int64) returns int64 generic = factory[int64](9)
+    Holder holder = Holder(callback: clone declared)
+    list[optional[function(int64, int64) returns int64]] nested = list(some(clone plain))
+    trace declared
+    trace plain
+    trace captured
+    trace generic
+    trace holder
+    trace nested
+    breakpoint
+    return declared(1, 2) + plain(1, 2) + captured(4) + generic(8)
+"#,
+    );
+    let artifact = emit_host_object(&program, &types).expect("function debug object emission");
+    for label in [
+        "function(display.named)",
+        "function(left, right)",
+        "function(argument)",
+        "function(input)",
+    ] {
+        assert!(
+            artifact
+                .bytes
+                .windows(label.len())
+                .any(|bytes| bytes == label.as_bytes()),
+            "missing source label {label}"
+        );
+    }
+    for function in &program.functions {
+        let label_is_inline = matches!(function.debug_kind, jett_hir::FunctionDebugKind::Inline);
+        if function.capture_count > 0 {
+            assert!(
+                label_is_inline,
+                "captured source closure must retain inline identity"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_malformed_function_debug_metadata_before_emission() {
+    let (program, types) = lower_source(
+        "namespace app\nfunction identity(value: int64) returns int64:\n    return value\n",
+    );
+    for name in ["", "app.identity\n"] {
+        let mut malformed = program.clone();
+        malformed.functions[0].debug_kind = jett_hir::FunctionDebugKind::Named(name.into());
+        let error = emit_host_object(&malformed, &types).expect_err("invalid named metadata");
+        assert!(
+            error
+                .to_string()
+                .contains("debug identity has invalid source name metadata"),
+            "{error}"
+        );
+    }
+    let mut malformed = program.clone();
+    malformed.functions[0].debug_kind = jett_hir::FunctionDebugKind::Inline;
+    malformed.functions[0].params[0].name.clear();
+    malformed.functions[0].locals[0].name.clear();
+    let error = emit_host_object(&malformed, &types).expect_err("invalid inline metadata");
+    assert!(
+        error
+            .to_string()
+            .contains("debug parameter has invalid source name metadata"),
+        "{error}"
+    );
+
+    let mut malformed = program;
+    malformed.functions[0].capture_count = 2;
+    assert!(matches!(
+        emit_host_object(&malformed, &types),
+        Err(CodegenError::InvalidMir(_))
+    ));
+}
+
+#[test]
+fn rejects_function_references_that_omit_a_capture_environment() {
+    let (mut program, types) = lower_source(
+        "namespace app\nfunction identity(value: int64) returns int64:\n    return value\nfunction factory() returns function(int64) returns int64:\n    return identity\n",
+    );
+    program.functions[0].capture_count = 1;
+    let error =
+        emit_host_object(&program, &types).expect_err("function reference needs environment");
+    assert!(
+        error
+            .to_string()
+            .contains("function value signature does not match target"),
+        "{error}"
+    );
+}
+
+#[test]
 fn emits_checked_secret_arguments_for_direct_and_indirect_calls() {
     for callee in ["callback", "factory()"] {
         for (parameter, returned, body, argument, result) in [

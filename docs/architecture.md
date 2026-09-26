@@ -851,6 +851,14 @@ and the initial global environment, excluding unrelated caller locals and
 namespace aliases. Closures retain the namespace aliases visible at creation.
 Generic body checking similarly saves and restores the triggering closure's capture
 scope so a generic callee's parameters cannot be mistaken for captures.
+Generic annotations on an inline function use ordinary type substitution;
+they do not by themselves make its enclosing function reflection-dependent or
+remove its concrete instantiation from native lowering.
+HIR/MIR function debug metadata retains named source identities and inline
+origin separately from native symbol identity. Function descriptors retain an
+owned display label alongside the code address and capture environment, so
+trace and breakpoint rendering can borrow function values inside recursive
+aggregate debug layouts without invoking callbacks or inspecting captures.
 For a non-short-circuit binary expression with a nested handler, the left value
 is captured before lowering the right; owned cloneable operands are cloned so
 the handler cannot change the value compared by a later enum equality.
@@ -1420,7 +1428,7 @@ Uses the `inkwell` crate for safe Rust bindings to the LLVM C API.
 | `trace` | Conditional instrumentation code (compiled out in release) |
 | `breakpoint` | Conditional pause + IPC server (compiled out in release). Supports optional condition expression (`breakpoint expr`) — only pauses when condition is true |
 | Bitfields | Packed integer types with shift/mask accessors |
-| `function(T) returns U` | Owned function descriptor containing a code pointer and an environment handle. Captured inline functions copy enclosing values into the environment; native calls pass it as a hidden argument after the runtime context. |
+| `function(T) returns U` | Owned function descriptor containing a code pointer, an environment handle, and a source-derived debug label. Captured inline functions copy enclosing values into the environment; native calls pass it as a hidden argument after the runtime context. |
 | Capabilities | Regular struct parameters — no special runtime representation |
 
 #### Platform-Specific Capability Lowering

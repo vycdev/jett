@@ -382,7 +382,6 @@ fn visit(
         | ExpressionKind::Call { .. }
         | ExpressionKind::IndirectCall { .. }
         | ExpressionKind::Field { .. }
-        | ExpressionKind::FunctionRef(_)
             if crate::move_values::is_copy_owned(types, value.ty) =>
         {
             *temporaries += 1
@@ -414,9 +413,13 @@ fn visit(
             // Initial empty literal plus one concatenation per segment.
             *temporaries += 1 + segments.len();
         }
-        ExpressionKind::ClosureRef { function, captures } => {
-            // The descriptor and its environment are both owned temporaries.
+        ExpressionKind::FunctionRef(_) => {
+            // The descriptor and its source display label are owned temporaries.
             *temporaries += 2;
+        }
+        ExpressionKind::ClosureRef { function, captures } => {
+            // The descriptor, environment, and source label are owned temporaries.
+            *temporaries += 3;
             let closure = program
                 .and_then(|program| program.functions.get(function.index() as usize))
                 .ok_or("closure capture needs its checked function")?;

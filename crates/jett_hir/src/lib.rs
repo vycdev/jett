@@ -134,6 +134,7 @@ pub struct Program {
 pub struct Function {
     pub id: FunctionId,
     pub identity: FunctionIdentity,
+    pub debug_kind: FunctionDebugKind,
     pub source_definition: Option<DefId>,
     pub params: Vec<Param>,
     /// Leading parameters supplied by a closure environment or actor state snapshot.
@@ -142,6 +143,24 @@ pub struct Function {
     pub locals: Vec<Local>,
     pub body: Block,
     pub span: Span,
+}
+
+/// Source identity used when formatting a function value. Extraction can turn
+/// either source form into a FunctionRef, so its origin must remain explicit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionDebugKind {
+    Named(String),
+    Inline,
+}
+
+impl FunctionDebugKind {
+    pub fn named(namespace: &str, name: &str) -> Self {
+        Self::Named(if namespace.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{namespace}.{name}")
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1425,6 +1444,7 @@ impl<'a> Lowerer<'a> {
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
+            debug_kind: FunctionDebugKind::named(namespace, &name.name),
             source_definition: None,
             params,
             capture_count: 0,
@@ -1639,6 +1659,12 @@ impl<'a> Lowerer<'a> {
             )
         };
 
+        let debug_kind = match &source.method {
+            Some(method) => {
+                FunctionDebugKind::named(&method.owner_name, &source.function.name.name)
+            }
+            None => FunctionDebugKind::named(&namespace, &source.function.name.name),
+        };
         Some(Function {
             id: source.id,
             identity: FunctionIdentity {
@@ -1651,6 +1677,7 @@ impl<'a> Lowerer<'a> {
                 type_arguments: concrete_args,
                 specialization,
             },
+            debug_kind,
             source_definition: source.definition,
             params,
             capture_count: 0,
@@ -1809,6 +1836,7 @@ impl<'a> Lowerer<'a> {
             })),
             span: source.actor.span,
         });
+        let debug_kind = FunctionDebugKind::named(&namespace, &source.actor.name.name);
         Some(Function {
             id: source.id,
             identity: FunctionIdentity {
@@ -1821,6 +1849,7 @@ impl<'a> Lowerer<'a> {
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
+            debug_kind,
             source_definition: None,
             params,
             capture_count: 0,
@@ -2036,6 +2065,7 @@ impl<'a> Lowerer<'a> {
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
+            debug_kind: FunctionDebugKind::named(&actor_def.name, &source.handler.name.name),
             source_definition: None,
             params,
             capture_count,
@@ -2109,6 +2139,10 @@ impl<'a> Lowerer<'a> {
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
+            debug_kind: FunctionDebugKind::named(
+                declared.namespace.as_deref().unwrap_or_default(),
+                &source.alias.name.name,
+            ),
             source_definition: Some(source.definition),
             params: vec![Param {
                 local,
@@ -2921,11 +2955,34 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ExpressionKind::Cancel(Box::new(self.lower_expression(value)?))
             }
             Expr::InlineFn(params, _, body, _) => {
+                let Type::Function {
+                    params: parameter_types,
+                    view_params: parameter_views,
+                    ..
+                } = self.parent.check.interner.resolve(ty).clone()
+                else {
+                    self.parent
+                        .error(span, "closure has no checked function signature");
+                    return None;
+                };
+                if params.len() != parameter_types.len()
+                    || params.len() != parameter_views.len()
+                    || params
+                        .iter()
+                        .zip(&parameter_views)
+                        .any(|(param, view)| param.view != *view)
+                {
+                    self.parent.error(
+                        span,
+                        "closure parameters disagree with its checked signature",
+                    );
+                    return None;
+                }
                 let local_floor = self.locals.len() as u32;
                 self.visible_bindings.push(HashMap::new());
                 let mut lowered_params = Vec::with_capacity(params.len());
                 let mut view_params = Vec::new();
-                for param in params {
+                for (param, param_type) in params.iter().zip(parameter_types) {
                     let Some(definition) =
                         self.parent.definition_at(param.name.span, DefKind::Param)
                     else {
@@ -2933,13 +2990,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                             .error(param.name.span, "closure parameter is unresolved");
                         return None;
                     };
-                    let Some(param_type) =
-                        self.parent.check.definition_types.get(&definition).copied()
-                    else {
-                        self.parent
-                            .error(param.name.span, "closure parameter has no checked type");
-                        return None;
-                    };
+                    // A generic instantiation's expression signature contains
+                    // its concrete parameter types; global definition metadata
+                    // shares source DefIds across specializations.
                     let local = self.allocate_local(
                         definition,
                         &param.name.name,
@@ -6566,6 +6619,10 @@ function main() returns int64:
             method.identity.declaration.name,
             "app.User as app.Scored.score"
         );
+        assert_eq!(
+            method.debug_kind,
+            FunctionDebugKind::Named("app.User.score".into())
+        );
 
         let StatementKind::Return(Some(Expression {
             kind:
@@ -7317,6 +7374,9 @@ function main() returns int64:
             ExpressionKind::FunctionRef(FunctionId(1))
         ));
         assert_eq!(program.functions[1].params.len(), 1);
+        assert_eq!(main.debug_kind, FunctionDebugKind::Named("app.main".into()));
+        assert_eq!(program.functions[1].debug_kind, FunctionDebugKind::Inline);
+        assert_eq!(program.functions[1].params[0].name, "value");
         assert!(matches!(
             main.body.statements[1].kind,
             StatementKind::Return(Some(Expression {
@@ -7579,6 +7639,40 @@ function make(seed: int64) returns function(int64) returns int64:
         ));
         assert_eq!(program.functions[1].capture_count, 1);
         assert_eq!(program.functions[1].params.len(), 2);
+        assert_eq!(program.functions[1].debug_kind, FunctionDebugKind::Inline);
+        assert_eq!(program.functions[1].params[0].name, "seed");
+        assert_eq!(program.functions[1].params[1].name, "value");
+    }
+
+    #[test]
+    fn generic_inline_parameters_retain_each_concrete_signature_and_source_identity() {
+        let program = lower_source(
+            r#"namespace app
+function factory[T](seed: T) returns function(view T) returns T:
+    return function(view input: T) returns T: return seed
+function main() returns int64:
+    function(view int64) returns int64 integer = factory[int64](1)
+    function(view string) returns string text = factory[string]("value")
+    return integer(view 2)
+"#,
+        );
+        let mut types = Vec::new();
+        for function in &program.functions {
+            if function.debug_kind != FunctionDebugKind::Inline {
+                continue;
+            }
+            let concrete = function.identity.type_arguments[0];
+            types.push(concrete);
+            assert_eq!(function.capture_count, 1);
+            assert_eq!(function.params[0].name, "seed");
+            assert_eq!(function.params[0].ty, concrete);
+            assert_eq!(function.params[1].name, "input");
+            assert_eq!(function.params[1].ty, concrete);
+            assert_eq!(function.params[1].mode, ParamMode::View);
+            assert_eq!(function.return_type, concrete);
+        }
+        types.sort_by_key(|ty| ty.index());
+        assert_eq!(types, vec![TypeInterner::INT64, TypeInterner::STRING]);
     }
 
     #[test]

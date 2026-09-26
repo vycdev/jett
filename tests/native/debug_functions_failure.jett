@@ -1,0 +1,16 @@
+namespace test
+function increment(value: int64) returns int64:
+    return value + 1
+function make_label(prefix: string) returns function(int64) returns string:
+    return function(number: int64) returns string: return "{prefix}:{number}"
+function main() returns nothing:
+    function(int64) returns int64 named = increment
+    function(int64) returns string captured = make_label("hidden")
+    list[function(int64) returns string] callbacks = list(clone captured)
+    trace named
+    trace captured
+    trace callbacks
+    breakpoint true
+    list[int64] invalid = list.remove_at[int64](list(1), 5)
+    println(list.length[int64](view invalid))
+    return nothing

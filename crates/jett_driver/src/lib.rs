@@ -3267,6 +3267,10 @@ fn append_native_verify_suite(
         .collect();
     hir.functions.push(jett_hir::Function {
         id,
+        debug_kind: jett_hir::FunctionDebugKind::named(
+            suite_namespace.as_deref().unwrap_or_default(),
+            &format!("__native_verify_suite:{}", span.start),
+        ),
         identity: jett_hir::FunctionIdentity {
             declaration: jett_hir::DeclarationId {
                 origin: SourceOrigin::Project,

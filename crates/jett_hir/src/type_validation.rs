@@ -649,6 +649,7 @@ mod tests {
                     specialization: Default::default(),
                 },
                 source_definition: None,
+                debug_kind: crate::FunctionDebugKind::named("test", "main"),
                 params: Vec::new(),
                 capture_count: 0,
                 return_type,

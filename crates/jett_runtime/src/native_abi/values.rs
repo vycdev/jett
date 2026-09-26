@@ -31,6 +31,10 @@ const INVALID_STRUCT: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native struct handle or field",
 );
+const INVALID_FUNCTION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native function descriptor or label",
+);
 const INVALID_ACTOR: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native actor handle or field",
@@ -140,6 +144,13 @@ pub const SUM_SUCCESS: u32 = 1;
 pub const DEBUG_NOTHING_KIND: u32 = 12;
 pub const DEBUG_BYTES_KIND: u32 = 13;
 
+/// Native function records own their environment (when present) and display
+/// label. Code addresses are borrowed and are never inspected by debug output.
+pub const NATIVE_FUNCTION_FIELD_COUNT: u64 = 3;
+pub const NATIVE_FUNCTION_CODE_FIELD: u64 = 0;
+pub const NATIVE_FUNCTION_ENVIRONMENT_FIELD: u64 = 1;
+pub const NATIVE_FUNCTION_LABEL_FIELD: u64 = 2;
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeDebugTag {
@@ -156,6 +167,7 @@ pub enum NativeDebugTag {
     Machine,
     Capability,
     Alias,
+    Function,
 }
 
 impl NativeDebugTag {
@@ -174,6 +186,7 @@ impl NativeDebugTag {
             10 => Self::Machine,
             11 => Self::Capability,
             12 => Self::Alias,
+            13 => Self::Function,
             _ => return Err(INVALID_TRACE_LABEL),
         })
     }
@@ -359,6 +372,7 @@ enum NativeDebugNode {
     Machine(String, Vec<(String, Vec<usize>)>),
     Capability(String),
     Alias(usize),
+    Function,
 }
 impl NativeDebugLayout {
     fn parse(bytes: &[u8]) -> LeafResult<Self> {
@@ -448,6 +462,7 @@ impl NativeDebugLayout {
                 }
                 NativeDebugTag::Capability => NativeDebugNode::Capability(name(&mut node)?),
                 NativeDebugTag::Alias => NativeDebugNode::Alias(index(&mut node)?),
+                NativeDebugTag::Function => NativeDebugNode::Function,
             };
             if node.position != node_bytes.len() {
                 return Err(INVALID_TRACE_LABEL);
@@ -477,6 +492,7 @@ impl NativeDebugLayout {
             NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
             NativeDebugNode::Alias(base) => return self.format_value(values, bits, *base, child),
             NativeDebugNode::Capability(name) => format!("<{name} capability>"),
+            NativeDebugNode::Function => values.function_debug_label(bits)?.to_owned(),
             NativeDebugNode::List(element) => {
                 let list = values.lists.get(&bits).ok_or(INVALID_LIST)?;
                 let mut result = String::from("list(");
@@ -781,7 +797,9 @@ impl NativeDebugLayout {
                 }
                 true
             }
-            NativeDebugNode::Capability(_) => return Err(INVALID_STRUCT),
+            NativeDebugNode::Capability(_) | NativeDebugNode::Function => {
+                return Err(INVALID_STRUCT);
+            }
         })
     }
 }
@@ -1086,6 +1104,39 @@ impl NativeValues {
             },
             NativeSortKind::String => self.text(bits)?.to_owned(),
         })
+    }
+    fn function_debug_label(&self, id: u64) -> LeafResult<&str> {
+        let descriptor = self.structs.get(&id).ok_or(INVALID_FUNCTION)?;
+        let field_count =
+            usize::try_from(NATIVE_FUNCTION_FIELD_COUNT).map_err(|_| INVALID_FUNCTION)?;
+        if descriptor.fields.len() != field_count {
+            return Err(INVALID_FUNCTION);
+        }
+        let code = self
+            .struct_field(id, NATIVE_FUNCTION_CODE_FIELD)
+            .map_err(|_| INVALID_FUNCTION)?;
+        let environment = self
+            .struct_field(id, NATIVE_FUNCTION_ENVIRONMENT_FIELD)
+            .map_err(|_| INVALID_FUNCTION)?;
+        let label = self
+            .struct_field(id, NATIVE_FUNCTION_LABEL_FIELD)
+            .map_err(|_| INVALID_FUNCTION)?;
+        if code.owned
+            || code.bits == 0
+            || environment.owned != (environment.bits != 0)
+            || (environment.bits != 0 && !self.structs.contains_key(&environment.bits))
+            || !label.owned
+        {
+            return Err(INVALID_FUNCTION);
+        }
+        let text = self.text(label.bits).map_err(|_| INVALID_FUNCTION)?;
+        if !text.starts_with("function(")
+            || !text.ends_with(')')
+            || text.chars().any(char::is_control)
+        {
+            return Err(INVALID_FUNCTION);
+        }
+        Ok(text)
     }
     fn debug_append(&mut self, builder: u64, label: &str, bits: u64, kind: u32) -> LeafResult<u32> {
         let value = self.debug_value(bits, kind)?;
@@ -4470,6 +4521,359 @@ mod tests {
                 JettRuntimeStatusV1::OK
             );
         }
+    }
+
+    fn function_debug_layout_bytes(nodes: &[Vec<u8>], root: u32) -> Vec<u8> {
+        let mut bytes = b"JD\x01".to_vec();
+        bytes.extend_from_slice(&u32::try_from(nodes.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&root.to_le_bytes());
+        for node in nodes {
+            bytes.extend_from_slice(&u32::try_from(node.len()).unwrap().to_le_bytes());
+            bytes.extend_from_slice(node);
+        }
+        bytes
+    }
+
+    fn debug_function_descriptor(values: &mut NativeValues, label: &str, captured: bool) -> u64 {
+        let environment = if captured {
+            let secret = values.insert("private capture".into()).unwrap();
+            let environment = values.new_struct(1).unwrap();
+            values.structs.get_mut(&environment).unwrap().fields[0] = Some(NativeField {
+                bits: secret,
+                owned: true,
+            });
+            environment
+        } else {
+            0
+        };
+        let label = values.insert(label.into()).unwrap();
+        let descriptor = values.new_struct(NATIVE_FUNCTION_FIELD_COUNT).unwrap();
+        values.structs.get_mut(&descriptor).unwrap().fields = vec![
+            Some(NativeField {
+                // Deliberately not a callable address: debug must never invoke it.
+                bits: u64::MAX,
+                owned: false,
+            }),
+            Some(NativeField {
+                bits: environment,
+                owned: captured,
+            }),
+            Some(NativeField {
+                bits: label,
+                owned: true,
+            }),
+        ];
+        descriptor
+    }
+
+    #[test]
+    fn function_debug_tag_is_additive_and_has_no_payload() {
+        for (expected, tag) in [
+            NativeDebugTag::Primitive,
+            NativeDebugTag::Nothing,
+            NativeDebugTag::Bytes,
+            NativeDebugTag::List,
+            NativeDebugTag::Set,
+            NativeDebugTag::Map,
+            NativeDebugTag::Optional,
+            NativeDebugTag::Result,
+            NativeDebugTag::Record,
+            NativeDebugTag::Enum,
+            NativeDebugTag::Machine,
+            NativeDebugTag::Capability,
+            NativeDebugTag::Alias,
+            NativeDebugTag::Function,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let expected = u8::try_from(expected).unwrap();
+            assert_eq!(tag as u8, expected);
+            assert_eq!(NativeDebugTag::from_raw(expected), Ok(tag));
+        }
+        assert_eq!(NativeDebugTag::from_raw(14), Err(INVALID_TRACE_LABEL));
+        let bytes = function_debug_layout_bytes(&[vec![13]], 0);
+        let layout = NativeDebugLayout::parse(&bytes).unwrap();
+        assert!(matches!(
+            layout.nodes.as_slice(),
+            [NativeDebugNode::Function]
+        ));
+        let malformed = function_debug_layout_bytes(&[vec![13, 0]], 0);
+        assert!(matches!(
+            NativeDebugLayout::parse(&malformed),
+            Err(INVALID_TRACE_LABEL)
+        ));
+        assert_eq!(
+            (
+                NATIVE_FUNCTION_FIELD_COUNT,
+                NATIVE_FUNCTION_CODE_FIELD,
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                NATIVE_FUNCTION_LABEL_FIELD,
+            ),
+            (3, 0, 1, 2)
+        );
+    }
+
+    #[test]
+    fn function_debug_formats_labels_without_consuming_or_exposing_captures() {
+        for (label, captured) in [
+            ("function(app.increment)", false),
+            ("function(first, second)", true),
+            ("function()", false),
+        ] {
+            let mut values = NativeValues::default();
+            let descriptor = debug_function_descriptor(&mut values, label, captured);
+            let clone = values.clone_value(descriptor).unwrap();
+            let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Function as u8]], 0);
+            let builder = values.insert("trace ".into()).unwrap();
+            let strings_before = values.strings.len();
+            assert_eq!(
+                values.debug_append_aggregate(builder, "callback = ", descriptor, &layout),
+                Ok(0)
+            );
+            assert_eq!(
+                values.text(builder),
+                Ok(format!("trace callback = {label}").as_str())
+            );
+            assert_eq!(values.strings.len(), strings_before);
+            assert_eq!(values.function_debug_label(descriptor), Ok(label));
+            values.drop_value(descriptor).unwrap();
+            assert_eq!(values.function_debug_label(clone), Ok(label));
+            values.drop_value(clone).unwrap();
+            values.drop_value(builder).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn function_debug_formats_nested_owned_values_and_rejects_equality() {
+        let mut values = NativeValues::default();
+        let descriptor = debug_function_descriptor(&mut values, "function(value)", true);
+        let optional = values.sum(SUM_SUCCESS, descriptor, true).unwrap();
+        let list = values.new_list(true).unwrap();
+        values.lists.get_mut(&list).unwrap().elements = vec![Some(optional)];
+        let mut optional_node = vec![NativeDebugTag::Optional as u8];
+        optional_node.extend_from_slice(&0_u32.to_le_bytes());
+        let mut list_node = vec![NativeDebugTag::List as u8];
+        list_node.extend_from_slice(&1_u32.to_le_bytes());
+        let bytes = function_debug_layout_bytes(
+            &[
+                vec![NativeDebugTag::Function as u8],
+                optional_node,
+                list_node,
+            ],
+            2,
+        );
+        let layout = NativeDebugLayout::parse(&bytes).unwrap();
+        assert_eq!(
+            layout.format_value(&values, list, layout.root, 0),
+            Ok("list(some(function(value)))".into())
+        );
+        assert_eq!(
+            layout.equal_value(&values, descriptor, descriptor, 0, 0),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            layout.equal_value(&values, list, list, layout.root, 0),
+            Err(INVALID_STRUCT)
+        );
+        values.drop_value(list).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_debug_rejects_invalid_descriptors_without_consuming_fields() {
+        let mut values = NativeValues::default();
+        let descriptor = debug_function_descriptor(&mut values, "function(value)", true);
+        let original = values.structs[&descriptor].fields.clone();
+        let environment = values
+            .struct_field(descriptor, NATIVE_FUNCTION_ENVIRONMENT_FIELD)
+            .unwrap()
+            .bits;
+        let label = values
+            .struct_field(descriptor, NATIVE_FUNCTION_LABEL_FIELD)
+            .unwrap()
+            .bits;
+        let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Function as u8]], 0);
+        let builder = values.insert("unchanged".into()).unwrap();
+        let strings_before = values.strings.len();
+        assert_eq!(values.function_debug_label(0), Err(INVALID_FUNCTION));
+        assert_eq!(values.function_debug_label(label), Err(INVALID_FUNCTION));
+        for (slot, replacement) in [
+            (NATIVE_FUNCTION_CODE_FIELD, None),
+            (NATIVE_FUNCTION_ENVIRONMENT_FIELD, None),
+            (NATIVE_FUNCTION_LABEL_FIELD, None),
+            (
+                NATIVE_FUNCTION_CODE_FIELD,
+                Some(NativeField {
+                    bits: 0,
+                    owned: false,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_CODE_FIELD,
+                Some(NativeField {
+                    bits: u64::MAX,
+                    owned: true,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                Some(NativeField {
+                    bits: 0,
+                    owned: true,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                Some(NativeField {
+                    bits: environment,
+                    owned: false,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_ENVIRONMENT_FIELD,
+                Some(NativeField {
+                    bits: label,
+                    owned: true,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_LABEL_FIELD,
+                Some(NativeField {
+                    bits: label,
+                    owned: false,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_LABEL_FIELD,
+                Some(NativeField {
+                    bits: environment,
+                    owned: true,
+                }),
+            ),
+            (
+                NATIVE_FUNCTION_LABEL_FIELD,
+                Some(NativeField {
+                    bits: 0,
+                    owned: true,
+                }),
+            ),
+        ] {
+            values.structs.get_mut(&descriptor).unwrap().fields[usize::try_from(slot).unwrap()] =
+                replacement;
+            assert_eq!(
+                values.debug_append_aggregate(builder, "callback = ", descriptor, &layout),
+                Err(INVALID_FUNCTION),
+                "invalid field {slot}"
+            );
+            assert_eq!(values.text(builder), Ok("unchanged"));
+            assert_eq!(values.text(label), Ok("function(value)"));
+            assert_eq!(values.strings.len(), strings_before);
+            values
+                .structs
+                .get_mut(&descriptor)
+                .unwrap()
+                .fields
+                .clone_from(&original);
+        }
+        for count in [2, 4] {
+            values
+                .structs
+                .get_mut(&descriptor)
+                .unwrap()
+                .fields
+                .resize(count, None);
+            assert_eq!(
+                values.function_debug_label(descriptor),
+                Err(INVALID_FUNCTION)
+            );
+            values
+                .structs
+                .get_mut(&descriptor)
+                .unwrap()
+                .fields
+                .clone_from(&original);
+        }
+        values.drop_value(descriptor).unwrap();
+        values.drop_value(builder).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_debug_rejects_invalid_label_text_and_preserves_cleanup() {
+        for label in [
+            "",
+            "function",
+            "callback()",
+            "function(first\nsecond)",
+            "function(value)\0",
+        ] {
+            let mut values = NativeValues::default();
+            let descriptor = debug_function_descriptor(&mut values, label, true);
+            assert_eq!(
+                values.function_debug_label(descriptor),
+                Err(INVALID_FUNCTION)
+            );
+            values.drop_value(descriptor).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn function_debug_failure_keeps_owned_values_available_for_terminal_cleanup() {
+        let context = Context::new();
+        let pointer = context.pointer();
+        let (descriptor, builder) = {
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            let mut state = lock_unpoisoned(&lease.entry.state);
+            let values = &mut state.as_mut().unwrap().values;
+            (
+                debug_function_descriptor(values, "invalid label", true),
+                values.insert("unchanged".into()).unwrap(),
+            )
+        };
+        let prefix = b"callback = ";
+        let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Function as u8]], 0);
+        unsafe {
+            assert_ne!(
+                jett_rt_v1_debug_append_aggregate(
+                    pointer,
+                    builder,
+                    prefix.as_ptr() as u64,
+                    u64::try_from(prefix.len()).unwrap(),
+                    descriptor,
+                    layout.as_ptr() as u64,
+                    u64::try_from(layout.len()).unwrap(),
+                ),
+                0
+            );
+            assert_eq!(
+                jett_rt_v1_value_status(pointer),
+                JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+            );
+        }
+        {
+            let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            let values = &state.as_ref().unwrap().values;
+            assert_eq!(values.failure, Some(INVALID_FUNCTION));
+            assert_eq!(values.text(builder), Ok("unchanged"));
+            assert_eq!(values.structs.len(), 2);
+            assert_eq!(values.strings.len(), 3);
+        }
+        unsafe {
+            assert_eq!(jett_rt_v1_value_drop(pointer, descriptor), 0);
+            assert_eq!(jett_rt_v1_value_drop(pointer, builder), 0);
+        }
+        let lease = acquire_context(context_key(pointer).unwrap()).unwrap();
+        assert!(
+            lock_unpoisoned(&lease.entry.state)
+                .as_ref()
+                .unwrap()
+                .values
+                .is_empty()
+        );
     }
 
     #[test]

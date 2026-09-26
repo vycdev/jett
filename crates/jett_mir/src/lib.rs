@@ -32,6 +32,7 @@ pub struct Program {
 pub struct Function {
     pub id: FunctionId,
     pub identity: FunctionIdentity,
+    pub debug_kind: hir::FunctionDebugKind,
     pub params: Vec<Param>,
     pub capture_count: usize,
     pub return_type: TypeId,
@@ -887,6 +888,7 @@ fn lower_function(function: &hir::Function, types: &TypeInterner) -> Function {
     Function {
         id: function.id,
         identity: function.identity.clone(),
+        debug_kind: function.debug_kind.clone(),
         params: function.params.clone(),
         capture_count: function.capture_count,
         return_type: function.return_type,

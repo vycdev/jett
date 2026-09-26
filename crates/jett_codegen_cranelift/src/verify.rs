@@ -398,6 +398,8 @@ struct Verifier<'a> {
 impl Verifier<'_> {
     fn function(&self, function: &Function) -> Result<(), CodegenError> {
         self.reject_entry_predecessors(function)?;
+        super::emit::debug::function_label(function)
+            .map_err(|message| self.contract_error(function, function.span, message))?;
 
         let name = self.function_name(function);
         for param in &function.params {
@@ -1060,7 +1062,8 @@ impl Verifier<'_> {
                 else {
                     return Err(self.expression_kind_error(function, expression, "function value"));
                 };
-                if params.len() != callee.params.len()
+                if callee.capture_count != 0
+                    || params.len() != callee.params.len()
                     || view_params.len() != params.len()
                     || params.iter().zip(view_params).zip(&callee.params).any(
                         |((expected, view), actual)| {

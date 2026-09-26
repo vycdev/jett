@@ -17,10 +17,20 @@ impl Translator<'_, '_> {
                 "Graphics callback arity changed",
             ));
         }
-        let zero = self.builder.ins().iconst(ir::types::I64, 0);
-        let address = self.leaf(NativeLeaf::StructField, &[descriptor, zero], true)?;
-        let one = self.builder.ins().iconst(ir::types::I64, 1);
-        let environment = self.leaf(NativeLeaf::StructField, &[descriptor, one], true)?;
+        let code_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_CODE_FIELD as i64);
+        let address = self.leaf(NativeLeaf::StructField, &[descriptor, code_index], true)?;
+        let environment_index = self
+            .builder
+            .ins()
+            .iconst(ir::types::I64, NATIVE_FUNCTION_ENVIRONMENT_FIELD as i64);
+        let environment = self.leaf(
+            NativeLeaf::StructField,
+            &[descriptor, environment_index],
+            true,
+        )?;
         let pointer_type = self.module.target_config().pointer_type();
         let address = if pointer_type == ir::types::I64 {
             address

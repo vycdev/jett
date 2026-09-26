@@ -219,6 +219,20 @@ cleans them up before any transfer to the selected function. Native differential
 fixtures cover successful calls and terminal callee failure with owned list
 arguments.
 
+Function descriptors use three initialized fields: a borrowed code address at
+index 0, an owned capture-environment handle (or borrowed zero) at index 1, and
+an owned debug-label string at index 2. The label is derived from checked source
+metadata: `function(namespace.name)` for a named function and
+`function(parameter, names)` for an inline function, excluding synthetic capture
+parameters. HIR and MIR preserve this distinction explicitly even when a
+capture-free inline function uses the same call representation as a named one.
+The runtime debug-layout format appends the zero-payload `Function` tag (13)
+without changing earlier tag values. Its reader borrows the descriptor and
+label; it never calls the code address or exposes the capture environment.
+Ordinary clone/drop and failure cleanup own the label through the descriptor.
+The current host representation retains this label on every function value;
+eliding unused debug metadata is a later optimization.
+
 Bytes new/from_string/slice/concat, explicit clone, length and to_hex execute
 natively. Concat creates real checked-capacity byte storage. No byte mutation
 syntax is added. Byte temporaries add one structural slot per allocating call,

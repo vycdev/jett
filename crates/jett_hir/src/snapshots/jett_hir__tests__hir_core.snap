@@ -1,6 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
-assertion_line: 5353
+assertion_line: 5958
 expression: program
 ---
 Program {
@@ -26,6 +26,9 @@ Program {
                     type_primitive_values: [],
                 },
             },
+            debug_kind: Named(
+                "app.add",
+            ),
             source_definition: Some(
                 DefId(
                     51,
@@ -211,6 +214,9 @@ Program {
                     type_primitive_values: [],
                 },
             },
+            debug_kind: Named(
+                "app.main",
+            ),
             source_definition: Some(
                 DefId(
                     52,

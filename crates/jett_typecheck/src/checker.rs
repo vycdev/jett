@@ -7787,11 +7787,10 @@ impl<'a> TypeChecker<'a> {
                             })
                     })
             }
-            Expr::InlineFn(_, return_ty, body, _) => {
-                return_ty
-                    .as_ref()
-                    .is_some_and(|ty| Self::type_expr_mentions_type_param(ty, type_params))
-                    || self.block_uses_type_param_reflection(body, type_params)
+            // Generic signature annotations require ordinary substitution;
+            // only operations inside the closure body can use reflection.
+            Expr::InlineFn(_, _, body, _) => {
+                self.block_uses_type_param_reflection(body, type_params)
             }
             Expr::IntLiteral(_, _)
             | Expr::FloatLiteral(_, _)
@@ -19124,6 +19123,110 @@ function main() returns nothing:
         assert_eq!(nested_call.definition, inner.definition);
         assert_eq!(nested_call.concrete_args, vec![TypeInterner::INT64]);
         assert_eq!(result.generic_calls.len(), 2);
+    }
+
+    #[test]
+    fn generic_closure_factories_export_concrete_instantiations() {
+        let result = check_source_result(
+            r#"function make_constant[T](value: T) returns function() returns T:
+    return function() returns T: return value
+function make_identity[T]() returns function(T) returns T:
+    return function(value: T) returns T: return value
+function make_optional[T]() returns function(T) returns optional[T]:
+    return function(value: T) returns optional[T]: return some(value)
+function main() returns int64:
+    function() returns int64 constant = make_constant[int64](9)
+    function(int64) returns int64 identity = make_identity[int64]()
+    function(int64) returns optional[int64] wrap = make_optional[int64]()
+    optional[int64] wrapped = wrap(3)
+    return constant() + identity(4)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "unexpected diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.generic_calls.len(), 3);
+        assert_eq!(result.generic_function_instantiations.len(), 3);
+        for call in result.generic_calls.values() {
+            let instance = result
+                .generic_function_instantiations
+                .iter()
+                .find(|instance| {
+                    instance.definition == call.definition
+                        && instance.concrete_args == call.concrete_args
+                        && instance.specialization == call.specialization
+                })
+                .expect("every factory call needs a checked concrete body");
+            assert_eq!(instance.concrete_args, [TypeInterner::INT64]);
+            let Type::Function {
+                params,
+                return_type,
+                ..
+            } = result.interner.resolve(instance.return_type)
+            else {
+                panic!("factory must return a concrete function type");
+            };
+            assert!(params.iter().all(|param| *param == TypeInterner::INT64));
+            assert!(
+                *return_type == TypeInterner::INT64
+                    || matches!(
+                        result.interner.resolve(*return_type),
+                        Type::Optional(inner) if *inner == TypeInterner::INT64
+                    )
+            );
+            assert!(
+                instance
+                    .type_map
+                    .values()
+                    .any(|ty| *ty == instance.return_type)
+            );
+        }
+    }
+
+    #[test]
+    fn generic_closure_reflection_detection_uses_the_body() {
+        let source = r#"function make_identity[T]() returns function(T) returns T:
+    return function(value: T) returns T: return value
+function make_name[T]() returns function() returns string:
+    return function() returns string: return type.name[T]()
+function make_nested_name[T]() returns function() returns function() returns string:
+    return function() returns function() returns string: return function() returns string: return type.name[list[T]]()
+"#;
+        let parsed = parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolve = jett_resolve::resolve(&parsed.module);
+        let checker = TypeChecker::new(&resolve, CheckOptions::default());
+        let reflection = parsed
+            .module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Function(function) => {
+                    Some(checker.generic_function_uses_type_param_reflection(function))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reflection, [false, true, true]);
+    }
+
+    #[test]
+    fn generic_closure_factory_rejects_move_only_capture() {
+        let errors = check_source_errors(
+            r#"function make_constant[T](value: T) returns function() returns T:
+    return function() returns T: return value
+function main() returns nothing:
+    function() returns list[int64] callback = make_constant[list[int64]](list(1))
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 402);
+        assert!(errors[0].message.contains("value"));
     }
 
     #[test]

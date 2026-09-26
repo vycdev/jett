@@ -107,6 +107,10 @@ pub(super) fn append_property_suite(
     let id = FunctionId::new(hir.functions.len() as u32);
     hir.functions.push(Function {
         id,
+        debug_kind: jett_hir::FunctionDebugKind::named(
+            &declaration.namespace,
+            &format!("__native_property_suite:{}", span.start),
+        ),
         identity: FunctionIdentity {
             declaration: DeclarationId {
                 origin: declaration.origin,
