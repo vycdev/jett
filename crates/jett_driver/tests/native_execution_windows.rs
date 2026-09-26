@@ -1908,6 +1908,22 @@ fn native_projected_machine_sequences_match_interpreter() {
 }
 
 #[test]
+fn native_generic_empty_collections_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/generic_empty_collections.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "0 0 0\n0 0\n1 1\nAda true\n");
+    let directory = tempfile::tempdir().expect("isolated generic collection directory");
+    let binary = directory.path().join("generic_empty_collections.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile generic empty collections");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
