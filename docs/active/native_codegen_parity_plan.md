@@ -283,7 +283,7 @@ lowering alone never changes an execution row to complete.
 
 | Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
 | --- | --- | --- | --- |
-| Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | linked native/interpreter scalar, conversion, numeric aggregate, and debug-value fixtures cover representative widths and floating-point edges; a dedicated exhaustive arithmetic matrix remains pending |
+| Fixed-width integers, floats, booleans, and `nothing` | covered | scalar expressions, direct calls, branches, and loops covered | linked native/interpreter scalar, conversion, numeric aggregate, and debug-value fixtures cover representative widths and floating-point edges; a width-by-operation arithmetic edge matrix now covers all integer and float widths, while exhaustive operand combinations remain pending |
 | Strings and bytes | covered | all current string intrinsics, direct Unicode-scalar string iteration, separately owned bytes storage, and encoding leaves | string search/replace, Unicode case changes, scalar `for` loops, byte and encoding fixture functions, nested cleanup, moves/views/clones covered |
 | Structs, enums, bitfields, machines, and refinements | covered | concrete user structs and enums with typed payloads; bitfield construction and fields, including result-wrapped width validation; machine construction, transitions, state tests and state fields; transparent secret/refinement representation, `coarsen`, checked refinement predicates for base, intermediate-refined, and secret-backed inputs, and result-wrapped direct and reflected struct construction with validated fields | struct moves/views/clones, nested owners, explicit equality and failure cleanup; enum construction, payload transfer, clone, match and cleanup, plus scalar and supported aggregate payload-enum equality; bitfield field ownership, clone, byte roundtrip, and direct/reflected-builder width validation; machine state narrowing, transitions and owned payload cleanup; native/interpreter predicate success and false-result diagnostics for integer, owned-string, and secret-backed refinements, including base values inserted into reflected struct, enum, and machine builders; enum payloads containing user structs and broader refinement boundaries pending |
 | Lists, maps, and sets | covered | scalar/string/bytes/sum/nested lists, primitive and indexed-row list sorting, sortedness checks and sets, and primitive-backed refinement keys and set elements | compiled list access, insert/remove, reverse/repeat, scalar iteration and sort; `list.filter`, `map`, `flat_map`, `find`, `all`, `any`, `count`, `reduce`, `sort_by`, and `group_by` with named, inline, and captured callbacks; `map.filter`, `map_values`, and `for_each` callbacks; indexed-row sorting for interpreter-supported key types; set insert/remove/membership/clone and iteration; map literals, insert/remove/lookup/from_lists/clone and key-value iteration; representative `zip`, `chunk`, `enumerate`, `flatten`, set/list conversions, and map entries; borrowed iteration through nested struct-field collection paths; refinement string and integer keys and set elements; one contextual generic empty-list path covered; other projected views and unexercised generic collection shapes pending |
@@ -324,6 +324,14 @@ runtime semantics: fixtures differ in size, overlap, and coverage. The object
 gate is currently 182/182 (100%), a useful progress measure rather than a
 claim that the same fraction of the language has native support. Native
 property-body execution is measured separately from the object and verify gates.
+
+`tests/native/arithmetic_matrix.jett` adds linked differential checks across
+all eight fixed-width integer types and both floating-point widths. It checks
+integer wraparound, minimum divided and reduced by negative one, unsigned
+division/remainder, float arithmetic, signed zero, infinities, and NaN
+comparisons through runtime function calls. The 81-test Windows native suite
+includes this case; the matrix is an edge sample, not exhaustive over all
+operand values.
 
 As of 2026-09-26, the working estimate for overall native language coverage is
 **about 80%**. This is a deliberately coarse progress marker, reviewed in

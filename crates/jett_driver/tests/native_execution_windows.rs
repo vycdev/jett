@@ -1845,6 +1845,35 @@ fn native_actor_message_arguments_nested_handlers_match_interpreter() {
 }
 
 #[test]
+fn native_arithmetic_width_matrix_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/arithmetic_matrix.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "i8 -128 127 -2 -128 0 true\n",
+            "i16 -32768 32767 -2 -32768 0 true\n",
+            "i32 -2147483648 2147483647 -2 -2147483648 0 true\n",
+            "i64 -9223372036854775808 9223372036854775807 -2 -9223372036854775808 0 true\n",
+            "u8 0 255 254 127 1 true\n",
+            "u16 0 65535 65534 32767 1 true\n",
+            "u32 0 4294967295 4294967294 2147483647 1 true\n",
+            "u64 0 18446744073709551615 18446744073709551614 9223372036854775807 1 true\n",
+            "f32 -1.25 3.75 -3.125 -0.5 true true false true true\n",
+            "f64 -1.25 3.75 -3.125 -0.5 true true false true true\n",
+        )
+    );
+    let directory = tempfile::tempdir().expect("isolated arithmetic matrix directory");
+    let binary = directory.path().join("arithmetic_matrix.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile arithmetic matrix");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
