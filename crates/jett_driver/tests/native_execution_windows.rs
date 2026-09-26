@@ -1874,6 +1874,24 @@ fn native_arithmetic_width_matrix_matches_interpreter() {
 }
 
 #[test]
+fn native_nested_json_enums_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_nested_enum.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "[\"north\",\"south\"]\n[{\"point\":[1,2]},\"empty\"]\n{\"a\":\"north\",\"b\":\"south\"}\n[{\"recorded\":[{\"name\":\"Ada\"}]},\"idle\"]\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated nested JSON enum directory");
+    let binary = directory.path().join("json_nested_enum.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile nested JSON enums");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
