@@ -119,6 +119,10 @@ const UNSUPPORTED_STRING_COMPARISON: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"unsupported binary operation on pending string",
 );
+const UNSUPPORTED_ENUM_COMPARISON: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending enum",
+);
 
 fn format_nothing(depth: u64) -> LeafResult<String> {
     format_pending_value("nothing", depth)
@@ -301,6 +305,7 @@ struct NativeField {
 }
 struct NativeStruct {
     fields: Vec<Option<NativeField>>,
+    pending_depth: u64,
 }
 #[derive(Clone)]
 struct NativeBuilderInfo {
@@ -654,7 +659,7 @@ impl NativeDebugLayout {
                     result.push_str(&self.format_value(values, field.bits, *field_type, child)?);
                 }
                 result.push(')');
-                result
+                format_pending_value(&result, record.pending_depth)?
             }
             NativeDebugNode::Enum(name, variants) | NativeDebugNode::Machine(name, variants) => {
                 let record = values.structs.get(&bits).ok_or(INVALID_STRUCT)?;
@@ -695,7 +700,7 @@ impl NativeDebugLayout {
                     }
                     result.push(')');
                 }
-                result
+                format_pending_value(&result, record.pending_depth)?
             }
         })
     }
@@ -825,6 +830,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Record(_, fields) => {
                 let left = values.structs.get(&left).ok_or(INVALID_STRUCT)?;
                 let right = values.structs.get(&right).ok_or(INVALID_STRUCT)?;
+                if left.pending_depth != right.pending_depth {
+                    return Ok(false);
+                }
                 if left.fields.len() != fields.len() || right.fields.len() != fields.len() {
                     return Err(INVALID_STRUCT);
                 }
@@ -840,6 +848,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Enum(_, variants) | NativeDebugNode::Machine(_, variants) => {
                 let left = values.structs.get(&left).ok_or(INVALID_STRUCT)?;
                 let right = values.structs.get(&right).ok_or(INVALID_STRUCT)?;
+                if left.pending_depth != right.pending_depth {
+                    return Ok(false);
+                }
                 let left_tag = usize::try_from(
                     left.fields
                         .first()
@@ -1216,6 +1227,39 @@ impl NativeValues {
         }
         let equal = self.same_string_value(left, right)?;
         Ok(u32::from(if not_equal { !equal } else { equal }))
+    }
+    fn check_enum_comparison(
+        &mut self,
+        left: u64,
+        right: u64,
+        not_equal: u32,
+        layout: &[u8],
+    ) -> LeafResult<u32> {
+        if not_equal > 1 {
+            return Err(INVALID_STRUCT);
+        }
+        let left_depth = self.structs.get(&left).ok_or(INVALID_STRUCT)?.pending_depth;
+        let right_depth = self
+            .structs
+            .get(&right)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth;
+        if left_depth == 0 && right_depth == 0 {
+            return Ok(0);
+        }
+        let layout = NativeDebugLayout::parse(layout).map_err(|_| INVALID_STRUCT)?;
+        if !matches!(
+            layout.nodes.get(layout.root),
+            Some(NativeDebugNode::Enum(..))
+        ) {
+            return Err(INVALID_STRUCT);
+        }
+        let left = layout.format_value(self, left, layout.root, 0)?;
+        let right = layout.format_value(self, right, layout.root, 0)?;
+        let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
+        self.dynamic_failure_message =
+            Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
+        Err(UNSUPPORTED_ENUM_COMPARISON)
     }
     fn same_string_value(&self, left: u64, right: u64) -> LeafResult<bool> {
         let left = self.strings.get(&left).ok_or(INVALID_HANDLE)?;
@@ -2441,7 +2485,13 @@ impl NativeValues {
         fields.try_reserve_exact(count).map_err(|_| EXHAUSTED)?;
         fields.resize(count, None);
         let id = next_identity()?;
-        self.structs.insert(id, NativeStruct { fields });
+        self.structs.insert(
+            id,
+            NativeStruct {
+                fields,
+                pending_depth: 0,
+            },
+        );
         self.structs_created += 1;
         Ok(id)
     }
@@ -3491,7 +3541,8 @@ impl NativeValues {
             .ok_or(INVALID_STRUCT)
     }
     fn clone_struct(&mut self, id: u64) -> LeafResult<u64> {
-        let fields = self.structs.get(&id).ok_or(INVALID_STRUCT)?.fields.clone();
+        let source = self.structs.get(&id).ok_or(INVALID_STRUCT)?;
+        let (fields, pending_depth) = (source.fields.clone(), source.pending_depth);
         let builder = self.builders.get(&id).cloned();
         let output = self.new_struct(fields.len() as u64)?;
         for (index, field) in fields.into_iter().enumerate() {
@@ -3512,7 +3563,40 @@ impl NativeValues {
         if let Some(builder) = builder {
             self.builders.insert(output, builder);
         }
+        self.structs
+            .get_mut(&output)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = pending_depth;
         Ok(output)
+    }
+    fn run_record(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .structs
+            .get(&id)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_struct(id)?;
+        self.structs
+            .get_mut(&pending)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_record(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .structs
+            .get(&id)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_struct(id)?;
+        self.structs
+            .get_mut(&joined)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = depth;
+        Ok(joined)
     }
     fn clone_value(&mut self, id: u64) -> LeafResult<u64> {
         if self.structs.contains_key(&id) {
@@ -4116,6 +4200,10 @@ leaves! {
         |s| Ok(s.take_struct_field(value, index)?.bits);
     StructClone, jett_rt_v1_struct_clone, false, (value: u64 => I64), u64 => I64,
         |s| s.clone_struct(value);
+    RecordRun, jett_rt_v1_record_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_record(value);
+    RecordTaskJoin, jett_rt_v1_record_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_record(value);
     StringChars, jett_rt_v1_string_chars, false, (value: u64 => I64), u64 => I64,
         |s| { let parts = s.text(value)?.graphemes(true).map(str::to_owned).collect(); s.string_list(parts) };
     StringScalarCount, jett_rt_v1_string_scalar_count, false, (value: u64 => I64), i64 => I64,
@@ -4577,6 +4665,12 @@ leaves! {
             if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
             s.enum_equal(left, right, layout) };
+    EnumPendingComparisonCheck, jett_rt_v1_enum_pending_comparison_check, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.check_enum_comparison(left, right, not_equal, layout) };
     EnumEqualAggregate, jett_rt_v1_enum_equal_aggregate, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
         |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
             let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;

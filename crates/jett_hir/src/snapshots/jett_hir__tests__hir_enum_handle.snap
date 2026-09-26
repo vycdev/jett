@@ -1,6 +1,6 @@
 ---
 source: crates/jett_hir/src/lib.rs
-assertion_line: 5980
+assertion_line: 6195
 expression: program
 ---
 Program {
@@ -65,6 +65,9 @@ Program {
                     ),
                     name: "raw",
                     ty: TypeId(
+                        10,
+                    ),
+                    debug_ty: TypeId(
                         10,
                     ),
                     mutable: false,
@@ -206,6 +209,9 @@ Program {
                     ty: TypeId(
                         47,
                     ),
+                    debug_ty: TypeId(
+                        47,
+                    ),
                     mutable: false,
                     span: Span {
                         file: FileId(
@@ -223,6 +229,9 @@ Program {
                     ty: TypeId(
                         10,
                     ),
+                    debug_ty: TypeId(
+                        10,
+                    ),
                     mutable: false,
                     span: Span {
                         file: FileId(
@@ -238,6 +247,9 @@ Program {
                     ),
                     name: "number",
                     ty: TypeId(
+                        3,
+                    ),
+                    debug_ty: TypeId(
                         3,
                     ),
                     mutable: false,

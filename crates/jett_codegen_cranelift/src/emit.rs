@@ -1131,12 +1131,7 @@ impl Translator<'_, '_> {
                     Type::Bytes => Some(DEBUG_BYTES_KIND),
                     _ => None,
                 });
-            let type_name = match self.types.resolve(local.ty) {
-                Type::MachineState { machine, .. } => {
-                    self.types.resolve_machine(*machine).name.clone()
-                }
-                _ => self.types.type_name(local.ty),
-            };
+            let type_name = self.types.type_name(local.debug_ty);
             let label = format!(
                 "{}{}: {} = ",
                 if index == 0 { "" } else { ", " },
@@ -1536,6 +1531,24 @@ impl Translator<'_, '_> {
                     return Ok(LoweredValue::Scalar(value));
                 }
                 if operand_kind == ScalarKind::Enum {
+                    let debug_layout = debug::debug_layout(self.types, left.ty)
+                        .ok_or_else(|| self.unsupported(expression.span, "enum debug layout"))?;
+                    let (debug_pointer, debug_length) = self.static_data(&debug_layout)?;
+                    let not_equal = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I32, i64::from(*op == BinaryOp::NotEqual));
+                    self.leaf(
+                        NativeLeaf::EnumPendingComparisonCheck,
+                        &[
+                            left_value,
+                            right_value,
+                            not_equal,
+                            debug_pointer,
+                            debug_length,
+                        ],
+                        true,
+                    )?;
                     let Type::Enum(enum_id) = self.types.resolve(left.ty) else {
                         return Err(self.unsupported(expression.span, "enum equality type"));
                     };
@@ -1789,6 +1802,17 @@ impl Translator<'_, '_> {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::MapRun, &[source], true)?;
                     self.own_linear(pending)
+                } else if matches!(
+                    self.types.resolve(value.ty),
+                    Type::Struct(_)
+                        | Type::Enum(_)
+                        | Type::Bitfield(_)
+                        | Type::Machine(_)
+                        | Type::MachineState { .. }
+                ) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::RecordRun, &[source], true)?;
+                    self.own_linear(pending)
                 } else {
                     Ok(lowered)
                 }
@@ -1822,6 +1846,18 @@ impl Translator<'_, '_> {
                 } else if matches!(self.types.resolve(value.ty), Type::Map(..)) {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::MapTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(
+                    self.types.resolve(value.ty),
+                    Type::Struct(_)
+                        | Type::Enum(_)
+                        | Type::Bitfield(_)
+                        | Type::Machine(_)
+                        | Type::MachineState { .. }
+                ) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::RecordTaskJoin, &[source], true)?;
                     let joined = self.own_linear(joined)?;
                     self.construct_sum_value(true, joined, expression.span)
                 } else if value.ty == expression.ty {

@@ -817,8 +817,10 @@ arguments and explicit lexical evaluation order, core expressions, returns, bran
 loops, `for`, assertions/debug controls, string interpolation, comptime
 markers, explicit declassification/coarsening, state tests, and task-control
 markers are also covered. Bitfield and state-machine construction, transitions,
-and fields carry explicit checked types plus dense field/state IDs. Native
-`coarsen` verifies a checked refinement ancestor and transfers its base
+and fields carry explicit checked types plus dense field/state IDs. Each HIR
+local keeps its declared binding type separate from its checked runtime type,
+so state narrowing does not change the debug label. Native `coarsen` verifies
+a checked refinement ancestor and transfers its base
 representation, including ownership of aggregate payloads, without a wrapper.
 For refinement boundaries, HIR lowers each checked predicate to a
 compiler-owned pure function. MIR calls unvalidated ancestor predicates in

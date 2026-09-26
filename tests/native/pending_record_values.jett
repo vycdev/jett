@@ -1,0 +1,63 @@
+namespace app
+struct User:
+    name: string
+enum Message:
+    text(value: string)
+    empty
+machine Session:
+    states:
+        active(user: string)
+        closed
+    transitions:
+        active to closed
+bitfield Header:
+    code: 8 bits
+function pending_user() returns User:
+    return run User(name: "Lin")
+function check_user() returns nothing:
+    User plain = User(name: "Ada")
+    User pending = run clone plain
+    User nested = run pending_user()
+    trace plain
+    trace pending
+    trace nested
+    User first = join pending handle error:
+        default User(name: "unexpected")
+    User inner = join nested handle error:
+        default User(name: "unexpected")
+    trace first
+    trace inner
+    return nothing
+function check_enum() returns nothing:
+    Message plain = Message.text("Ada")
+    Message pending = run clone plain
+    trace plain
+    trace pending
+    Message joined = join pending handle error:
+        default Message.empty
+    trace joined
+    return nothing
+function check_machine() returns nothing:
+    Session at active plain = Session(active, "Ada")
+    Session at active pending = run clone plain
+    trace plain
+    trace pending
+    Session at active joined = join pending handle error:
+        default Session(active, "unexpected")
+    trace joined
+    return nothing
+function check_bitfield() returns nothing:
+    Header plain = Header(code: 7)
+    Header pending = run clone plain
+    trace plain
+    trace pending
+    Header joined = join pending handle error:
+        default Header(code: 0)
+    trace joined
+    return nothing
+function main() returns nothing:
+    check_user()
+    check_enum()
+    check_machine()
+    check_bitfield()
+    return nothing

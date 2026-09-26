@@ -89,6 +89,13 @@ aggregate equality observe the depth. Other runtime operations on pending
 values, along with other value kinds, still need the general pending-task
 representation.
 
+Native record handles preserve pending depth for structs, enums, bitfields,
+and machines. `RecordRun` and `RecordTaskJoin` deep-clone fields before changing
+the outer depth; tracing preserves nested wrappers and state-qualified machine
+binding labels. Direct enum equality rejects pending operands with the
+interpreter's runtime message, while aggregate payload comparison observes
+pending depth.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

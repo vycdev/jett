@@ -1028,6 +1028,48 @@ fn native_pending_set_map_values_match_interpreter() {
 }
 
 #[test]
+fn native_pending_record_values_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/pending_record_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending record directory");
+    let binary = directory.path().join("pending_record_values.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending record values");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_enum_comparisons_match_interpreter_errors() {
+    for name in [
+        "pending_enum_equality_failure",
+        "pending_enum_inequality_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject direct pending enum comparison");
+        let directory = tempfile::tempdir().expect("isolated pending enum comparison directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending enum comparison");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_string_comparisons_match_interpreter_errors() {
     for name in [
         "pending_string_equality_failure",

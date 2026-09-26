@@ -307,6 +307,7 @@ pub(super) fn value_expression(
                         id,
                         name: format!("__native_baked_capture_{}", id.index()),
                         ty: capture_type,
+                        debug_ty: capture_type,
                         mutable: false,
                         span,
                     });

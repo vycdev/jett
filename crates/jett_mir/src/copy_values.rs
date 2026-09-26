@@ -373,7 +373,15 @@ fn visit(
             ExpressionKind::Run(inner) => {
                 matches!(
                     types.resolve(inner.ty),
-                    Type::Bytes | Type::List(_) | Type::Set(_) | Type::Map(..)
+                    Type::Bytes
+                        | Type::List(_)
+                        | Type::Set(_)
+                        | Type::Map(..)
+                        | Type::Struct(_)
+                        | Type::Enum(_)
+                        | Type::Bitfield(_)
+                        | Type::Machine(_)
+                        | Type::MachineState { .. }
                 )
             }
             _ => false,
@@ -422,7 +430,16 @@ fn visit(
         ExpressionKind::Join(value)
             if matches!(
                 types.resolve(value.ty),
-                Type::String | Type::Bytes | Type::List(_) | Type::Set(_) | Type::Map(..)
+                Type::String
+                    | Type::Bytes
+                    | Type::List(_)
+                    | Type::Set(_)
+                    | Type::Map(..)
+                    | Type::Struct(_)
+                    | Type::Enum(_)
+                    | Type::Bitfield(_)
+                    | Type::Machine(_)
+                    | Type::MachineState { .. }
             ) =>
         {
             // Joining a pending owned value owns its extracted value before the

@@ -188,6 +188,7 @@ pub struct Local {
     pub id: LocalId,
     pub name: String,
     pub ty: TypeId,
+    pub debug_ty: TypeId,
     pub mutable: bool,
     pub span: Span,
 }
@@ -2325,6 +2326,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             id,
             name: name.to_string(),
             ty,
+            debug_ty: self
+                .parent
+                .check
+                .definition_types
+                .get(&definition)
+                .copied()
+                .unwrap_or(ty),
             mutable,
             span,
         });

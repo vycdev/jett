@@ -203,6 +203,7 @@ impl Builder<'_> {
             id,
             name: format!("$native{}", id.index()),
             ty,
+            debug_ty: ty,
             mutable: true,
             span,
         });
