@@ -1093,6 +1093,41 @@ pub(super) struct NativeValues {
     graphics_session: Option<u64>,
 }
 impl NativeValues {
+    fn validate_scripted_consumption(&mut self) -> LeafResult<u32> {
+        let remaining = [
+            (
+                "Random",
+                self.random_provider
+                    .as_ref()
+                    .and_then(RandomProvider::scripted_samples_remaining),
+            ),
+            (
+                "Clock",
+                self.clock_script.as_ref().map(|samples| samples.len()),
+            ),
+            (
+                "Graphics",
+                self.graphics_script.as_ref().map(|events| events.len()),
+            ),
+        ]
+        .into_iter()
+        .find_map(|(capability, remaining)| {
+            remaining
+                .filter(|count| *count != 0)
+                .map(|count| (capability, count))
+        });
+        let Some((capability, remaining)) = remaining else {
+            return Ok(0);
+        };
+        let suffix = if remaining == 1 { "sample" } else { "samples" };
+        self.dynamic_failure_message = Some(
+            format!("{capability}: test provider has {remaining} unconsumed {suffix}").into_bytes(),
+        );
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"test provider has unconsumed samples",
+        ))
+    }
     #[cfg(test)]
     fn allocation_checkpoint(&mut self) -> LeafResult<()> {
         if let Some(budget) = &mut self.allocation_budget {
@@ -3772,6 +3807,19 @@ pub unsafe extern "C" fn jett_rt_v1_graphics_configure_scripted(
     })
 }
 
+/// Complete a successful native entry by rejecting unconsumed deterministic
+/// provider samples. An entry that already failed must skip this check so its
+/// original runtime error remains the terminal failure.
+///
+/// # Safety
+/// `context` must identify a live, stationary runtime context.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn jett_rt_v1_validate_scripted_consumption(
+    context: *const JettRuntimeContextV1,
+) -> u32 {
+    leaf(context, false, NativeValues::validate_scripted_consumption)
+}
+
 /// Scalar signature schema consumed by Cranelift, never inferred from names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AbiScalar {
@@ -5627,6 +5675,62 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn successful_native_entry_rejects_unconsumed_scripts_in_interpreter_order() {
+        let context = Context::new();
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_validate_scripted_consumption(context.pointer()),
+                0
+            );
+            let random_script = random::encode_test_script(&[
+                random::RandomTestSample::Boolean(true),
+                random::RandomTestSample::Boolean(false),
+            ]);
+            assert_eq!(
+                jett_rt_v1_random_configure_scripted(
+                    context.pointer(),
+                    random_script.as_ptr(),
+                    random_script.len() as u64,
+                ),
+                0
+            );
+            let clock_script = clock::encode_test_script(&[clock::ClockTestSample::Unavailable]);
+            assert_eq!(
+                jett_rt_v1_clock_configure_scripted(
+                    context.pointer(),
+                    clock_script.as_ptr(),
+                    clock_script.len() as u64,
+                ),
+                0
+            );
+            let graphics_script = graphics::encode_test_script(&[graphics::TestEvent::Close]);
+            assert_eq!(
+                jett_rt_v1_graphics_configure_scripted(
+                    context.pointer(),
+                    graphics_script.as_ptr(),
+                    graphics_script.len() as u64,
+                ),
+                0
+            );
+            assert_ne!(
+                jett_rt_v1_validate_scripted_consumption(context.pointer()),
+                0
+            );
+            let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+            let state = lock_unpoisoned(&lease.entry.state);
+            assert_eq!(
+                state
+                    .as_ref()
+                    .unwrap()
+                    .values
+                    .dynamic_failure_message
+                    .as_deref(),
+                Some(b"Random: test provider has 2 unconsumed samples".as_slice())
+            );
+        }
+    }
+
     #[test]
     fn scripted_clock_samples_are_context_bound_and_exhaustion_is_terminal() {
         let first = Context::new();

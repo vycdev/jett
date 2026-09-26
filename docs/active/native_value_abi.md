@@ -26,14 +26,12 @@ a per-context scripted provider through `JETT_NATIVE_TEST_CLOCK_SCRIPT_V1` for
 deterministic parity runs. An empty script means an exhausted provider; absent
 configuration keeps the production wall clock. Native Clock reads match the
 interpreter's sample conversion, unavailability, and exhaustion failures.
-Checking for leftover scripted samples after a successful run remains pending.
 Random authority is a separate context-bound token. Its provider is seeded once
 from OS entropy when the native entry grants Random, or configured before entry
 from `JETT_NATIVE_TEST_RANDOM_SCRIPT_V1` for deterministic parity runs. The
 bounded-integer, unit-float, and boolean leaves share their provider logic with
 the interpreter, including rejection sampling and invalid/exhausted script
-failures. Collection algorithms remain in `stdlib/random.jett`. Exact
-consumption of a successful native test script remains pending.
+failures. Collection algorithms remain in `stdlib/random.jett`.
 `uuid.new` has a separate owned-string leaf matching the interpreter's current
 UUID v4 behavior. Both call a shared formatter after sampling OS entropy; the
 native leaf reports entropy failure through the runtime status and owns the
@@ -127,6 +125,11 @@ event queue from `JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1` before entry. The runtime
 and interpreter share the JSON event grammar (key, close, host error); no
 window is created by configuration or authority grant. Scripted sessions
 consume that queue and validate rendered scenes without opening a window.
+After a successful native entry, the launcher invokes a context-local check for
+unconsumed scripted Random, Clock, and Graphics inputs in that order. It records
+the interpreter's exact terminal message and fails the entry; an earlier runtime
+failure skips the check. Context destruction and owned-value cleanup still run
+once on either path.
 
 Runtime exports use fixed-width scalar parameters and typed leaf operations;
 no universal operation/name dispatcher. Panics are contained at each C boundary.

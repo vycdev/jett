@@ -361,7 +361,18 @@ fn run_native_launcher<W: Write>(stderr: &mut W) -> c_int {
             // SAFETY: the generated object implements the committed version 1
             // C entry ABI, and `context` remains live and stationary until the
             // entry call returns.
-            unsafe { jett_aot_v1_entry(context) }
+            let status = unsafe { jett_aot_v1_entry(context) };
+            if status != JETT_AOT_ENTRY_SUCCESS_V1 {
+                return status;
+            }
+            // A successful program must consume every scripted provider input.
+            // The check records a terminal runtime failure with the same
+            // provider priority and message as the interpreter runner.
+            unsafe {
+                jett_runtime::native_abi::values::jett_rt_v1_validate_scripted_consumption(
+                    context.cast(),
+                )
+            }
         },
         stderr,
     )

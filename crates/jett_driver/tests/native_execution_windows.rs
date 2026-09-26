@@ -424,6 +424,63 @@ fn assert_scripted_fixture(fixture: &Path, env: &str, script: &str, expected: &s
 }
 
 #[test]
+fn native_success_rejects_unconsumed_scripted_provider_inputs() {
+    let directory = tempfile::tempdir().expect("isolated scripted provider fixture");
+    let fixture = directory.path().join("unconsumed.jett");
+    fs::write(
+        &fixture,
+        "namespace app\nfunction main(rng: Random, clock: Clock, display: Graphics) returns nothing:\n    return nothing\n",
+    )
+    .expect("write scripted provider fixture");
+    let binary = directory.path().join("unconsumed.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile provider fixture");
+
+    let random_samples = vec![random::RandomTestSample::Boolean(true)];
+    let clock_samples = vec![clock::ClockTestSample::Unavailable];
+    let graphics_events = vec![graphics::TestEvent::Close];
+    let cases = [
+        (
+            random::TEST_SCRIPT_ENV,
+            random::encode_test_script(&random_samples),
+            jett_driver::run_file_capture_outcome_with_random_test_samples(
+                &fixture,
+                random_samples,
+            )
+            .expect_err("interpreter must reject unconsumed Random sample"),
+        ),
+        (
+            clock::TEST_SCRIPT_ENV,
+            clock::encode_test_script(&clock_samples),
+            jett_driver::run_file_capture_outcome_with_clock_test_samples(&fixture, clock_samples)
+                .expect_err("interpreter must reject unconsumed Clock sample"),
+        ),
+        (
+            graphics::TEST_SCRIPT_ENV,
+            graphics::encode_test_script(&graphics_events),
+            jett_driver::run_file_capture_outcome_with_graphics_test_events(
+                &fixture,
+                graphics_events,
+            )
+            .expect_err("interpreter must reject unconsumed Graphics event"),
+        ),
+    ];
+    for (environment, script, expected) in cases {
+        let actual = run_bounded_with_env(&binary, directory.path(), Some((environment, &script)));
+        assert_eq!(actual.status.code(), Some(71), "{environment}: {actual:?}");
+        assert_eq!(
+            actual.stdout,
+            expected.output.stdout.as_bytes(),
+            "{environment}"
+        );
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{environment}"
+        );
+    }
+}
+
+#[test]
 fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
     for (name, relative_path) in [
         (
@@ -761,7 +818,11 @@ fn native_scripted_graphics_matches_interpreter() {
 fn native_graphics_callback_runtime_error_is_terminal() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/run_pass/graphics_callback_runtime_error.jett");
-    let events = vec![graphics::TestEvent::Key(graphics::Key::Right)];
+    // An unused event must not replace the callback's earlier runtime failure.
+    let events = vec![
+        graphics::TestEvent::Key(graphics::Key::Right),
+        graphics::TestEvent::Close,
+    ];
     let expected =
         jett_driver::run_file_capture_outcome_with_graphics_test_events(&fixture, events.clone())
             .expect_err("interpreter callback must fail");
