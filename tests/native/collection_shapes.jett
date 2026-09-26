@@ -1,0 +1,31 @@
+namespace app
+function list_shapes() returns string:
+    list[list.Pair[int64, string]] pairs = list.zip[int64, string](list(1, 2, 3), list("one", "two"))
+    list.Pair[int64, string] first = list.first[list.Pair[int64, string]](view pairs) handle:
+        return "missing pair"
+    list[list[int64]] chunks = list.chunk[int64](list(1, 2, 3, 4, 5), 2)
+    list[int64] tail = list.get[list[int64]](view chunks, 2) handle:
+        return "missing chunk"
+    list[list.Indexed[string]] indexed = list.enumerate[string](list("a", "b"))
+    list.Indexed[string] second = list.get[list.Indexed[string]](view indexed, 1) handle:
+        return "missing index"
+    list[int64] flattened = list.flatten[int64](list(list(1, 2), list(3)))
+    return "{list.length[list.Pair[int64, string]](view pairs)}:{first.first}:{first.second}:{list.length[int64](view tail)}:{second.index}:{second.value}:{list.length[int64](view flattened)}"
+function set_shapes() returns string:
+    mutable set[int64] values = set.new[int64]()
+    values = set.add[int64](values, 3)
+    values = set.add[int64](values, 1)
+    list[int64] ordered = list.from_set[int64](clone values)
+    list[int64] alternate = set.to_list[int64](values)
+    return "{list.length[int64](view ordered)}:{list.length[int64](view alternate)}"
+function map_shapes() returns string:
+    map[string, int64] values = map("a": 1, "b": 2)
+    list[map.Entry[string, int64]] entries = map.entries[string, int64](values)
+    map.Entry[string, int64] first = list.first[map.Entry[string, int64]](view entries) handle:
+        return "missing entry"
+    return "{list.length[map.Entry[string, int64]](view entries)}:{first.key}:{first.value}"
+function main() returns nothing:
+    println(list_shapes())
+    println(set_shapes())
+    println(map_shapes())
+    return nothing

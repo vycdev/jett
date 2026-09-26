@@ -1359,6 +1359,42 @@ fn native_type_construction_debug_matches_interpreter() {
 }
 
 #[test]
+fn native_collection_callbacks_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/collection_callbacks.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "44:14:true:true:2\nscore-2:score-4\n1:2\n");
+    assert_eq!(expected.debug_output, ["trace value: int64 = 2"]);
+    let directory = tempfile::tempdir().expect("isolated collection callback directory");
+    let binary = directory.path().join("collection_callbacks.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile higher-order collection helpers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        "trace value: int64 = 2\n"
+    );
+}
+
+#[test]
+fn native_collection_shapes_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/collection_shapes.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "2:1:one:1:1:b:3\n2:2\n2:a:1\n");
+    let directory = tempfile::tempdir().expect("isolated collection shape directory");
+    let binary = directory.path().join("collection_shapes.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile collection shape conversions");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_function_debug_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_functions.jett");

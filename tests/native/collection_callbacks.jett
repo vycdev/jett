@@ -1,0 +1,49 @@
+namespace app
+function double(value: int64) returns int64:
+    return value * 2
+function expand(value: int64) returns list[int64]:
+    return list(value, value + 10)
+function add(total: int64, value: int64) returns int64:
+    return total + value
+function parity(value: int64) returns string:
+    return string.from_int64(value modulo 2)
+function observe(key: string, value: int64) returns int64:
+    trace value
+    return value
+function list_callbacks() returns string:
+    list[int64] kept = list.filter[int64](list(1, 2, 3, 4), function(value: int64) returns bool: return value modulo 2 == 0)
+    list[int64] doubled = list.map[int64, int64](kept, double)
+    list[int64] expanded = list.flat_map[int64, int64](doubled, expand)
+    int64 total = list.reduce[int64, int64](clone expanded, 0, add)
+    optional[int64] found = list.find[int64](view expanded, function(value: int64) returns bool: return value > 10)
+    int64 first_big = found handle:
+        default 0
+    bool all_positive = list.all[int64](view expanded, function(value: int64) returns bool: return value > 0)
+    bool any_large = list.any[int64](view expanded, function(value: int64) returns bool: return value > 15)
+    int64 count = list.count[int64](view expanded, function(value: int64) returns bool: return value < 10)
+    return "{total}:{first_big}:{all_positive}:{any_large}:{count}"
+function map_callbacks() returns string:
+    map[string, int64] scores = map("ada": 2, "lin": -1, "sam": 4)
+    map[string, int64] positive = map.filter[string, int64](scores, function(key: string, value: int64) returns bool: return value > 0)
+    map[string, string] labels = map.map_values[string, int64, string](positive, function(value: int64) returns string: return "score-{value}")
+    string ada = map.get_or[string, string](clone labels, "ada", "missing")
+    string sam = map.get_or[string, string](labels, "sam", "missing")
+    return "{ada}:{sam}"
+function ordering_callbacks() returns string:
+    int64 offset = 5
+    list[int64] ordered = list.sort_by[int64](list(3, 1, 2), function(value: int64) returns int64: return value + offset)
+    int64 first = list.get[int64](view ordered, 0) handle:
+        default 0
+    map[string, list[int64]] groups = list.group_by[int64](list(1, 2, 3, 4), parity)
+    list[int64] odd = map.get_or[string, list[int64]](groups, "1", list.new[int64]())
+    return "{first}:{list.length[int64](view odd)}"
+function for_each_callback() returns nothing:
+    map[string, int64] scores = map("ada": 2)
+    map.for_each[string, int64, int64](scores, observe)
+    return nothing
+function main() returns nothing:
+    println(list_callbacks())
+    println(map_callbacks())
+    println(ordering_callbacks())
+    for_each_callback()
+    return nothing
