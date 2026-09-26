@@ -453,6 +453,22 @@ Both compare exact output with the interpreter. These checks replace the broad
 "callback helpers and collection shape conversions pending" label with the
 remaining unexercised generic shapes and projected views; the overall coarse
 80% estimate is unchanged.
+Reflected enum and machine builders now accept already validated exact
+refinement field values. The native JSON source selector uses this for enum
+payloads and machine states, including a machine with a refined field beside
+an ordinary field. `tests/native/json_refined_aggregates.jett` checks
+primitive-backed and struct-backed refinements, valid parsing, predicate
+failures, and direct reflected construction against the
+interpreter. Trusted JSON decoders bind each inserted `Field` from checked
+reflection metadata; ordinary builders still cannot insert a base value into
+a refined field because native finish does not yet invoke its predicate. A
+direct put of that base type is also conservatively rejected when the owner
+has both refined and ordinary fields of the same base type; the trusted
+decoder remains precise through its checked `Field` binding. These are
+remaining refinement parity gaps, so the overall estimate stays 80%.
+After this change, the 65-test Windows native suite, 182/182 native object
+gate, 182/182 typed-lowering gate, 578 frontend fixture tests, and focused
+typechecker/Cranelift suites pass.
 
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a

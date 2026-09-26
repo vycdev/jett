@@ -2867,6 +2867,12 @@ machines. The checked type arguments select a field layout, including source
 alias spellings for field metadata, while runtime leaves own partially filled
 records, validate `TypeField` metadata, and return handled duplicate/missing-field
 errors.
+Native enum and machine builders accept exact refinement field values that
+were validated at their creation boundary. Trusted JSON decoders bind each
+field's exact reflected type before insertion, including mixed refined and
+ordinary fields. Builder completion still needs native predicate invocation
+to accept an unvalidated base value for a refined field; that path remains
+outside native parity.
 Native debug layouts recognize `TypeConstruction` handles. Builder metadata
 also carries checked debug layouts for each field and records successful put
 order, so trace and breakpoint render partial struct, bitfield, enum, and

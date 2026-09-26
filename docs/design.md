@@ -7143,6 +7143,10 @@ variant or machine state, and the fields successfully supplied so far. Fields
 appear in insertion order. Inspecting the builder does not finish or consume it.
 The treatment of secret-bearing fields in debug output remains unresolved; see
 `docs/open_design/secret_debug_output.md`.
+Reflected construction accepts a field value with its exact refinement type
+after that value has passed the refinement predicate. A supplied base value
+still requires the predicate at builder completion; the exact refined type
+does not remove that requirement for base values.
 
 ### Explicit Typing
 

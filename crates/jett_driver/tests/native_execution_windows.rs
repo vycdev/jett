@@ -1395,6 +1395,25 @@ fn native_collection_shapes_match_interpreter() {
 }
 
 #[test]
+fn native_json_refined_aggregates_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/json_refined_aggregates.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "Ada\nactive.name: refinement type constraint failed for 'app.NonEmpty'\nLin\nnamed.name: refinement type constraint failed for 'app.NonEmpty'\nAda:ready\nLin:ready\nTao\nactive.profile: refinement type constraint failed for 'app.NamedProfile'\nMira\nNia\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated refined aggregate directory");
+    let binary = directory.path().join("json_refined_aggregates.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile reflected enum and machine construction with validated fields");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_function_debug_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_functions.jett");

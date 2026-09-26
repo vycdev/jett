@@ -1,0 +1,114 @@
+namespace app
+type NonEmpty = string where value != ""
+struct Profile:
+    name: string
+type NamedProfile = Profile where value.name != ""
+enum Event:
+    idle
+    named(name: app.NonEmpty)
+enum MixedEvent:
+    idle
+    named(name: app.NonEmpty, note: string)
+machine Session:
+    states:
+        guest
+        active(name: app.NonEmpty)
+    transitions:
+        guest to active
+machine MixedSession:
+    states:
+        guest
+        active(name: app.NonEmpty, note: string)
+    transitions:
+        guest to active
+machine ProfileSession:
+    states:
+        guest
+        active(profile: app.NamedProfile)
+    transitions:
+        guest to active
+function parse_valid() returns string:
+    Session at active session = json.parse[Session at active]("{{\"state\":\"active\",\"payload\":{{\"name\":\"Ada\"}}}}") handle error:
+        return error
+    return coarsen session.name
+function parse_invalid() returns string:
+    Session session = json.parse[Session]("{{\"state\":\"active\",\"payload\":{{\"name\":\"\"}}}}") handle error:
+        return error
+    return "unexpected success"
+function parse_enum_valid() returns string:
+    Event event = json.parse[Event]("{{\"named\":[\"Lin\"]}}") handle error:
+        return error
+    match event:
+        idle:
+            return "idle"
+        named(name):
+            return coarsen name
+function parse_enum_invalid() returns string:
+    Event event = json.parse[Event]("{{\"named\":[\"\"]}}") handle error:
+        return error
+    return "unexpected success"
+function parse_mixed_machine() returns string:
+    MixedSession at active session = json.parse[MixedSession at active]("{{\"state\":\"active\",\"payload\":{{\"name\":\"Ada\",\"note\":\"ready\"}}}}") handle error:
+        return error
+    return "{coarsen session.name}:{session.note}"
+function parse_mixed_enum() returns string:
+    MixedEvent event = json.parse[MixedEvent]("{{\"named\":[\"Lin\",\"ready\"]}}") handle error:
+        return error
+    match event:
+        idle:
+            return "idle"
+        named(name, note):
+            return "{coarsen name}:{note}"
+function parse_profile_machine() returns string:
+    ProfileSession at active session = json.parse[ProfileSession at active]("{{\"state\":\"active\",\"payload\":{{\"profile\":{{\"name\":\"Tao\"}}}}}}") handle error:
+        return error
+    Profile profile = coarsen session.profile
+    return profile.name
+function reject_profile_machine() returns string:
+    ProfileSession session = json.parse[ProfileSession]("{{\"state\":\"active\",\"payload\":{{\"profile\":{{\"name\":\"\"}}}}}}") handle error:
+        return error
+    return "unexpected success"
+function construct_machine_exact() returns string:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 1) handle:
+        return "missing state"
+    mutable TypeConstruction builder = type.construct_machine_start[Session at active](view state) handle error:
+        return error
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return "missing field"
+    NonEmpty name = "Mira" handle error:
+        return error
+    builder = type.construct_put[Session at active, NonEmpty](builder, view field, name) handle error:
+        return error
+    Session at active session = type.construct_finish[Session at active](builder) handle error:
+        return error
+    return coarsen session.name
+function construct_enum_exact() returns string:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Event](), 1) handle:
+        return "missing variant"
+    mutable TypeConstruction builder = type.construct_variant_start[Event](view variant) handle error:
+        return error
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return "missing field"
+    NonEmpty name = "Nia" handle error:
+        return error
+    builder = type.construct_put[Event, NonEmpty](builder, view field, name) handle error:
+        return error
+    Event event = type.construct_finish[Event](builder) handle error:
+        return error
+    match event:
+        idle:
+            return "idle"
+        named(value):
+            return coarsen value
+function main() returns nothing:
+    println(parse_valid())
+    println(parse_invalid())
+    println(parse_enum_valid())
+    println(parse_enum_invalid())
+    println(parse_mixed_machine())
+    println(parse_mixed_enum())
+    println(parse_profile_machine())
+    println(reject_profile_machine())
+    println(construct_machine_exact())
+    println(construct_enum_exact())
+    return nothing

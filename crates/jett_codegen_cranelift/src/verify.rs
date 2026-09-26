@@ -91,20 +91,43 @@ fn native_constructible_record(types: &TypeInterner, ty: TypeId) -> bool {
 }
 
 fn native_builder_value_type_supported(types: &TypeInterner, owner: TypeId, value: TypeId) -> bool {
-    let Type::Struct(id) = types.resolve(owner) else {
-        return true;
+    let fields: Vec<TypeId> = match types.resolve(owner) {
+        Type::Struct(id) => types
+            .resolve_struct(*id)
+            .fields
+            .iter()
+            .map(|(_, ty)| *ty)
+            .collect(),
+        Type::Bitfield(id) => types
+            .resolve_bitfield(*id)
+            .fields
+            .iter()
+            .map(|field| field.ty)
+            .collect(),
+        Type::Enum(id) => types
+            .resolve_enum(*id)
+            .variants
+            .iter()
+            .flat_map(|variant| variant.fields.iter().map(|(_, ty)| *ty))
+            .collect(),
+        Type::Machine(id) | Type::MachineState { machine: id, .. } => types
+            .resolve_machine(*id)
+            .states
+            .iter()
+            .flat_map(|state| state.fields.iter().map(|(_, ty)| *ty))
+            .collect(),
+        _ => return true,
     };
-    let fields = &types.resolve_struct(*id).fields;
     if fields
         .iter()
-        .any(|(_, field_ty)| matches!(types.resolve(*field_ty), Type::Refinement { .. }))
-        && !fields.iter().any(|(_, field_ty)| *field_ty == value)
+        .any(|field_ty| matches!(types.resolve(*field_ty), Type::Refinement { .. }))
+        && !fields.contains(&value)
     {
         return false;
     }
     // The native builder receives already validated refinement values. A base
     // value can only be accepted once finish can invoke the refinement predicate.
-    fields.iter().all(|(_, field_ty)| {
+    fields.iter().all(|field_ty| {
         let mut current = *field_ty;
         while let Type::Refinement { base, .. } = types.resolve(current) {
             if *base == value {
@@ -117,28 +140,14 @@ fn native_builder_value_type_supported(types: &TypeInterner, owner: TypeId, valu
 }
 
 fn native_constructible_enum(types: &TypeInterner, ty: TypeId) -> bool {
-    let Type::Enum(id) = types.resolve(ty) else {
-        return false;
-    };
-    types.resolve_enum(*id).variants.iter().all(|variant| {
-        variant
-            .fields
-            .iter()
-            .all(|(_, field_ty)| !matches!(types.resolve(*field_ty), Type::Refinement { .. }))
-    })
+    matches!(types.resolve(ty), Type::Enum(_))
 }
 
 fn native_constructible_machine(types: &TypeInterner, ty: TypeId) -> bool {
-    let id = match types.resolve(ty) {
-        Type::Machine(id) | Type::MachineState { machine: id, .. } => *id,
-        _ => return false,
-    };
-    types.resolve_machine(id).states.iter().all(|state| {
-        state
-            .fields
-            .iter()
-            .all(|(_, field_ty)| !matches!(types.resolve(*field_ty), Type::Refinement { .. }))
-    })
+    matches!(
+        types.resolve(ty),
+        Type::Machine(_) | Type::MachineState { .. }
+    )
 }
 
 fn native_constructible_builder_kind(types: &TypeInterner, ty: TypeId) -> Option<&'static str> {
@@ -1389,16 +1398,19 @@ impl Verifier<'_> {
                     };
                 }
                 if *intrinsic == jett_hir::IntrinsicId::TypeConstructPut {
-                    // The trusted decoder binds its value type from each
-                    // reflected field. Runtime BuilderPut still checks the
-                    // field index, name, and exact canonical type, so an
-                    // unrelated refinement field sharing this value's base
-                    // must not reject the whole record specialization.
-                    let checked_json_record_decoder = function.identity.declaration.origin
+                    // Trusted decoders bind Field from each reflected field.
+                    // Runtime BuilderPut checks the field index, name, and
+                    // exact canonical type, so an unrelated refinement field
+                    // sharing a base type cannot reject this specialization.
+                    let checked_json_reflected_decoder = function.identity.declaration.origin
                         == SourceOrigin::Stdlib
                         && function.identity.declaration.namespace == "json"
-                        && function.identity.declaration.name
-                            == "json_decode_tree_record_reflected";
+                        && matches!(
+                            function.identity.declaration.name.as_str(),
+                            "json_decode_tree_record_reflected"
+                                | "json_decode_tree_enum_payload_reflected"
+                                | "json_decode_tree_machine_reflected"
+                        );
                     let unsupported_kind = reflection_arguments.first().is_some_and(|info| {
                         !matches!(
                             info.kind.as_str(),
@@ -1412,7 +1424,7 @@ impl Verifier<'_> {
                             || native_constructible_builder_kind(self.types, type_arguments[0])
                                 == Some(reflection_arguments[0].kind.as_str()))
                         && (unsupported_kind
-                            || checked_json_record_decoder
+                            || checked_json_reflected_decoder
                             || native_builder_value_type_supported(
                                 self.types,
                                 type_arguments[0],
