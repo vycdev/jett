@@ -311,9 +311,17 @@ impl TypeInterner {
             Type::Refinement { name, .. } => name.clone(),
             Type::Function {
                 params,
+                view_params,
                 return_type,
             } => {
-                let params: Vec<String> = params.iter().map(|p| self.type_name(*p)).collect();
+                let params: Vec<String> = params
+                    .iter()
+                    .zip(view_params)
+                    .map(|(param, view)| {
+                        let name = self.type_name(*param);
+                        if *view { format!("view {name}") } else { name }
+                    })
+                    .collect();
                 format!(
                     "function({}) returns {}",
                     params.join(", "),
@@ -488,10 +496,12 @@ mod tests {
         let mut interner = TypeInterner::new();
         let fn_type = interner.intern(Type::Function {
             params: vec![TypeInterner::INT64, TypeInterner::STRING],
+            view_params: vec![false, false],
             return_type: TypeInterner::BOOL,
         });
         let fn_type_again = interner.intern(Type::Function {
             params: vec![TypeInterner::INT64, TypeInterner::STRING],
+            view_params: vec![false, false],
             return_type: TypeInterner::BOOL,
         });
         assert_eq!(fn_type, fn_type_again);
@@ -499,9 +509,21 @@ mod tests {
         // Different param order -> different type
         let fn_different = interner.intern(Type::Function {
             params: vec![TypeInterner::STRING, TypeInterner::INT64],
+            view_params: vec![false, false],
             return_type: TypeInterner::BOOL,
         });
         assert_ne!(fn_type, fn_different);
+
+        let fn_view = interner.intern(Type::Function {
+            params: vec![TypeInterner::INT64, TypeInterner::STRING],
+            view_params: vec![false, true],
+            return_type: TypeInterner::BOOL,
+        });
+        assert_ne!(fn_type, fn_view);
+        assert_eq!(
+            interner.type_name(fn_view),
+            "function(int64, view string) returns bool"
+        );
     }
 
     // -- Struct and enum definitions ------------------------------------------

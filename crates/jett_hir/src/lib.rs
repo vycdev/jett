@@ -1509,6 +1509,7 @@ impl<'a> Lowerer<'a> {
                 Type::Function {
                     params,
                     return_type,
+                    ..
                 } => (params.clone(), *return_type),
                 _ => {
                     self.error(
@@ -5385,7 +5386,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         };
         let (args, evaluation_order) =
             self.lower_pipeline_arguments(piped, extra_args, step.span)?;
-        let kind = if self.is_source_call(callee, step.span) {
+        let kind = if matches!(
+            self.resolved_expression_kind(callee),
+            Some(DefKind::Variable | DefKind::Param)
+        ) {
+            ExpressionKind::IndirectCall {
+                callee: Box::new(self.lower_expression(callee)?),
+                args,
+                evaluation_order,
+            }
+        } else if self.is_source_call(callee, step.span) {
             ExpressionKind::Call {
                 function: self.resolve_user_call_target(callee, step.span)?,
                 args,
@@ -7368,6 +7378,43 @@ function main() returns int64:
         assert_eq!(*function, method.id);
         assert_eq!(evaluation_order, &[0, 1]);
         assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+    }
+
+    #[test]
+    fn lowers_function_value_pipeline_steps_with_checked_views_and_arguments() {
+        let source = r#"namespace app
+function choose(view first: int64, second: int64) returns int64:
+    return first + second
+function apply(callback: function(view int64, int64) returns int64) returns int64:
+    return 1 into view callback(2)
+function main() returns int64:
+    function(view int64, int64) returns int64 callback = choose
+    return 3 into view callback(4)
+"#;
+        let program = lower_source(source);
+        let choose = &program.functions[0];
+        assert_eq!(choose.params[0].mode, ParamMode::View);
+        for (function_index, statement_index, first, second) in [(1, 0, 1, 2), (2, 1, 3, 4)] {
+            let StatementKind::Return(Some(Expression {
+                kind:
+                    ExpressionKind::IndirectCall {
+                        callee,
+                        args,
+                        evaluation_order,
+                    },
+                ..
+            })) = &program.functions[function_index].body.statements[statement_index].kind
+            else {
+                panic!("expected function-value pipeline call");
+            };
+            assert!(matches!(callee.kind, ExpressionKind::Local(LocalId(0))));
+            assert_eq!(evaluation_order, &[0, 1]);
+            let ExpressionKind::View(input) = &args[0].kind else {
+                panic!("expected viewed pipeline input");
+            };
+            assert!(matches!(input.kind, ExpressionKind::Int(value) if value == first));
+            assert!(matches!(args[1].kind, ExpressionKind::Int(value) if value == second));
+        }
     }
 
     #[test]

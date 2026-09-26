@@ -147,9 +147,11 @@ pub enum Type {
     },
 
     // -- Function type -------------------------------------------------------
-    /// `function(T, U) returns V`
+    /// `function(T, view U) returns V`. Parameter ownership modes are part
+    /// of the function value's checked signature.
     Function {
         params: Vec<TypeId>,
+        view_params: Vec<bool>,
         return_type: TypeId,
     },
 

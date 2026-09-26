@@ -116,12 +116,19 @@ impl Extractor<'_> {
                 .collect::<Vec<_>>();
             let Type::Function {
                 params: expected,
+                view_params: expected_views,
                 return_type,
             } = self.types.resolve(expression.ty)
             else {
                 return;
             };
-            if params.len() != expected.len() {
+            if params.len() != expected.len()
+                || params.len() != expected_views.len()
+                || params
+                    .iter()
+                    .zip(expected_views)
+                    .any(|(id, view)| view_params.contains(id) != *view)
+            {
                 return;
             }
             let parameters = params

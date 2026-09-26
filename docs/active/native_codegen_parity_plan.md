@@ -292,7 +292,7 @@ lowering alone never changes an execution row to complete.
 | Crypto | covered | private SHA-256, SHA-512, MD5, and HMAC-SHA-256 byte kernels | native differential fixture covers public text digests, binary HMAC, long keys, secret comparison, and explicit declassification |
 | Secret values | covered | transparent scalar and owned representations; redaction and string/bytes comparison | native differential fixture covers equal, unequal, length-mismatched and Unicode strings, bytes, redaction, and aggregate ownership |
 | Results, optionals, and `handle` control flow | explicit CFG for statement-root, direct-call, indirect-call, supported intrinsic-argument, unary, cloneable binary, short-circuit boolean, collection, and value-constructor handlers | genuine tags, owned payloads and selected extraction | nested sums, defaults, early returns, loop exits, terminal bypass, ordered call arguments and constructor fields, scalar, string, and enum evaluation order, and short-circuit fallback skipping covered; other nested-expression and refinement handlers pending |
-| Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context; view-parameter function values pending | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls; explicit `comptime` materializes named, capture-free, and captured inline function values from closed pure expressions, including returned and list-contained closures |
+| Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters and ownership modes | owned descriptors carry code addresses and copied capture environments; indirect calls pass the environment after the runtime context and borrow view parameters | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls, including named and captured callbacks with view parameters; explicit `comptime` materializes named, capture-free, and captured inline function values from closed pure expressions, including returned and list-contained closures |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Explicit `comptime` values | checked closed pure expressions and contextual expected types covered | evaluated scalar and supported composite values materialize as typed HIR; captured closure values gain typed caller-local bindings; original source bodies are not emitted | linked native/interpreter fixtures cover nested collections, sums, structs, bitfields, enums, machines, bytes, contextual `ok`/`fail`/`none`, named functions, capture-free inline functions, and captured closures; runtime authority remains unsupported |
 | Capabilities and runtime resources | nominal checked types covered | explicit Stdout, Clock, Random, and Environment entry grants; others pending | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; exact-consumption checks and other providers/resources pending |
@@ -325,13 +325,27 @@ gate is currently 182/182 (100%), a useful progress measure rather than a
 claim that the same fraction of the language has native support. Native
 property-body execution is measured separately from the object and verify gates.
 
-As of 2026-09-25, the working estimate for overall native language coverage is
+As of 2026-09-26, the working estimate for overall native language coverage is
 **about 80%**. This is a deliberately coarse progress marker, reviewed in
 five-percentage-point steps against the coverage matrix above, not a computed
 ratio or a release gate. The fixture counts remain the reproducible measures.
-The estimate stays below full parity while known semantic gaps remain in
+View-parameter function values gained native execution, closing one known gap
+without yet supporting the next five-point step of the estimate. The estimate
+stays below full parity while known semantic gaps remain in
 ownership and nested handlers, capability/resource providers, asynchronous
 task behavior, JSON shapes, reflection, and special-value diagnostics.
+
+Function parameter ownership now remains part of checked function type
+identity through native emission. Differential coverage includes borrowed and
+consumed inputs, mixed borrowed/owned arguments, captured closures, explicit
+comptime function values, generic forwarding, pipelines, and views evaluated
+before handlers. Generic calls and pipelines reject a view passed to an owned
+parameter at the frontend; affected JSON map observers explicitly clone their
+owned-input API arguments instead of relying on an implicit native clone.
+General function-expression callees remain open: parenthesized callbacks,
+immediately invoked returned functions, and function-valued struct fields pass
+frontend checking but currently fail in both the interpreter and HIR lowering.
+Their frontend acceptance is not evidence of execution coverage.
 
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a

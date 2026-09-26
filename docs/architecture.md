@@ -491,7 +491,8 @@ Walk all type declarations and build the type registry:
   trusted cleanup obligation, and expose only name plus `resource_type` in
   type-level reflection. See the
   [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
-- **Function types:** `function(T) returns U`.
+- **Function types:** `function(T) returns U`, with each parameter's owned or
+  `view` mode included in type identity and checked for function values.
 - **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`, `Log`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). `Log` authorizes the independent structured application-log channel defined by the [structured logging contract](completed/structured_logging_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.
 - **Secret wrapper:** `secret[T]`.
 - **State-qualified types:** `Machine at state`.
@@ -834,7 +835,9 @@ exhaustive matches rather than rediscovering policy from names. Inline
 functions and indirect calls retain explicit parameter/local identity. An
 indirect call evaluates arguments in lexical source order before resolving its
 function-valued local, matching interpreter behavior when an argument handler
-rebinds that local. MIR lowering receives the checked type interner so a view
+rebinds that local. Function types carry parameter `view` modes through HIR and
+MIR; native indirect calls borrow view arguments through the call and transfer
+only owned arguments. MIR lowering receives the checked type interner so a view
 used before a later handler can be snapshotted only when its recursive value
 type is cloneable; resource-bearing values are never cloned by this extraction.
 For a non-short-circuit binary expression with a nested handler, the left value
@@ -2671,7 +2674,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0374 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
+| E0300–E0375 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |

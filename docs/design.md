@@ -7074,6 +7074,14 @@ function serve(view net: Network, handler: Handler) returns nothing:
 int64 doubled = apply(5, function(x: int64) returns int64: return x * 2)
 ```
 
+Parameter ownership is part of a function signature: `function(view list[int64]) returns int64`
+and `function(list[int64]) returns int64` are different types.
+A named or inline function value must match each parameter's `view` mode as
+well as its type and return type. Calls through a function value follow the
+same call-site rule as direct calls: an explicit `view` keeps the caller's
+value, and passing a `view` to an owned parameter is rejected. This check also
+applies to generic calls and pipeline inputs or additional arguments.
+
 Anonymous functions may capture only implicitly copyable values from the
 enclosing scope. Each capture is copied into the closure. Move-only values must
 be passed explicitly as parameters instead of being captured.

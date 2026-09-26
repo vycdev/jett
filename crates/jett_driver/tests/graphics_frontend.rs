@@ -242,22 +242,33 @@ fn graphics_generic_method_isolation_rejects_reachable_effects() {
 #[test]
 fn graphics_callback_signature_and_policy_are_independent_obligations() {
     let source = include_str!("../../../tests/compile_fail/graphics_callback_policy.jett");
-    assert_graphics_codes(source, &[300, 372, 372, 372]);
-    // A pure but wrong Key type owes E0300, not the impure-update E0372.
-    let wrong_key = source.replace(
-        "impure_update(state: int64, view display: Graphics)",
-        "impure_update(state: int64, key: string)",
+    let pipeline = source.replace(
+        "graphics.run[int64](view display, ",
+        "display into view graphics.run[int64](",
     );
-    assert_ne!(wrong_key, source);
-    assert_graphics_codes(&wrong_key, &[300, 372, 372]);
-    // Correct types with a borrowed Key owe only the parameter-mode E0372.
-    let borrowed_key = source.replace(
-        "impure_update(state: int64, view display: Graphics)",
-        "impure_update(state: int64, view key: graphics.Key)",
-    );
-    assert_graphics_codes(&borrowed_key, &[372, 372, 372]);
-    let valid_update = borrowed_key.replace("view key: graphics.Key", "key: graphics.Key");
-    assert_graphics_codes(&valid_update, &[372, 372]);
+    for source in [
+        source.to_owned(),
+        source.replace("graphics.run[int64]", "graphics.run"),
+        pipeline.clone(),
+        pipeline.replace("graphics.run[int64]", "graphics.run"),
+    ] {
+        assert_graphics_codes(&source, &[300, 372, 372, 372]);
+        // A pure but wrong Key type owes E0300, not the impure-update E0372.
+        let wrong_key = source.replace(
+            "impure_update(state: int64, view display: Graphics)",
+            "impure_update(state: int64, key: string)",
+        );
+        assert_ne!(wrong_key, source);
+        assert_graphics_codes(&wrong_key, &[300, 372, 372]);
+        // Correct types with a borrowed Key owe only the parameter-mode E0372.
+        let borrowed_key = source.replace(
+            "impure_update(state: int64, view display: Graphics)",
+            "impure_update(state: int64, view key: graphics.Key)",
+        );
+        assert_graphics_codes(&borrowed_key, &[372, 372, 372]);
+        let valid_update = borrowed_key.replace("view key: graphics.Key", "key: graphics.Key");
+        assert_graphics_codes(&valid_update, &[372, 372]);
+    }
 }
 
 #[test]

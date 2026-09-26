@@ -601,9 +601,18 @@ fn visit(
         }
         ExpressionKind::IndirectCall { callee, args, .. } => {
             visit(callee, reads, temporaries, types, program, false)?;
-            for argument in args {
-                visit(argument, reads, temporaries, types, program, false)?;
-                if matches!(argument.kind, ExpressionKind::View(_))
+            let view_params = match types
+                .resolve(crate::move_values::representation_type(types, callee.ty))
+            {
+                Type::Function { view_params, .. } if view_params.len() == args.len() => {
+                    view_params
+                }
+                _ => return Err("indirect call has no matching function parameter modes".into()),
+            };
+            for (argument, borrowed) in args.iter().zip(view_params) {
+                visit(argument, reads, temporaries, types, program, *borrowed)?;
+                if !*borrowed
+                    && matches!(argument.kind, ExpressionKind::View(_))
                     && crate::move_values::is_linear(types, argument.ty)
                 {
                     *temporaries += 1;
@@ -652,6 +661,7 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
     if let Type::Function {
         params,
         return_type,
+        ..
     } = types.resolve(ty)
     {
         for param in params {
@@ -716,6 +726,7 @@ fn plan_type_inner(
             Type::Function {
                 params,
                 return_type,
+                ..
             } => {
                 for param in params {
                     plan_type_inner(types, *param, program, seen)?;

@@ -6,8 +6,8 @@ use jett_comptime::value::Value;
 use jett_comptime::verify::{PROPERTY_DEFAULT_ITERATIONS, PropertyCase};
 use jett_hir::{
     Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionId,
-    FunctionIdentity, HandleKind, IntrinsicId, Local, LocalId, MapEntry, StateId, Statement,
-    StatementKind, VariantId,
+    FunctionIdentity, HandleKind, IntrinsicId, Local, LocalId, MapEntry, ParamMode, StateId,
+    Statement, StatementKind, VariantId,
 };
 use jett_parser::ast::{Item, Module};
 use jett_types::{Type, TypeId, TypeInterner};
@@ -140,6 +140,7 @@ pub(super) struct FunctionValueCandidate {
     kind: DeclarationKind,
     body_span: Span,
     params: Vec<TypeId>,
+    view_params: Vec<bool>,
     captures: Vec<(String, TypeId)>,
     return_type: TypeId,
     id: FunctionId,
@@ -170,6 +171,12 @@ pub(super) fn function_value_candidates(functions: &[Function]) -> Vec<FunctionV
                     .iter()
                     .skip(function.capture_count)
                     .map(|param| param.ty)
+                    .collect(),
+                view_params: function
+                    .params
+                    .iter()
+                    .skip(function.capture_count)
+                    .map(|param| param.mode == ParamMode::View)
                     .collect(),
                 captures: function
                     .params
@@ -220,6 +227,7 @@ pub(super) fn value_expression(
         (
             Type::Function {
                 params,
+                view_params,
                 return_type,
             },
             Value::NamedFunction(name),
@@ -228,6 +236,7 @@ pub(super) fn value_expression(
                 function.kind == DeclarationKind::Function
                     && function.name == *name
                     && function.params == *params
+                    && function.view_params == *view_params
                     && function.return_type == *return_type
                     && function.captures.is_empty()
             });
@@ -242,6 +251,7 @@ pub(super) fn value_expression(
         (
             Type::Function {
                 params,
+                view_params,
                 return_type,
             },
             Value::Function { body, captures, .. },
@@ -249,6 +259,7 @@ pub(super) fn value_expression(
             let mut matches = context.functions.iter().filter(|function| {
                 function.body_span == body.span
                     && function.params == *params
+                    && function.view_params == *view_params
                     && function.return_type == *return_type
                     && function
                         .captures

@@ -191,6 +191,11 @@ parameters and never destroy view parameters. Owned returns detach their slot
 before frame cleanup. Leaf byte kernels borrow their inputs for the call;
 compiled stdlib bodies implement language-level consumption and control flow.
 
+Function types retain the checked view mode of every parameter. Native
+indirect calls borrow view arguments until the call returns and transfer only
+owned arguments; the borrowed callee parameter never destroys the caller's
+value. A call-site `view` to an owned parameter is rejected before codegen.
+
 Bytes new/from_string/slice/concat, explicit clone, length and to_hex execute
 natively. Concat creates real checked-capacity byte storage. No byte mutation
 syntax is added. Byte temporaries add one structural slot per allocating call,

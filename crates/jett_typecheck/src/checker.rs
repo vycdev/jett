@@ -898,9 +898,17 @@ impl<'a> TypeChecker<'a> {
             }
             Type::Function {
                 params,
+                view_params,
                 return_type,
             } => {
-                let params: Vec<String> = params.iter().map(|p| self.type_name(*p)).collect();
+                let params: Vec<String> = params
+                    .iter()
+                    .zip(view_params)
+                    .map(|(param, view)| {
+                        let name = self.type_name(*param);
+                        if *view { format!("view {name}") } else { name }
+                    })
+                    .collect();
                 format!(
                     "function({}) returns {}",
                     params.join(", "),
@@ -3151,14 +3159,17 @@ impl<'a> TypeChecker<'a> {
             (
                 Type::Function {
                     params: expected_params,
+                    view_params: expected_views,
                     return_type: expected_return,
                 },
                 Type::Function {
                     params: got_params,
+                    view_params: got_views,
                     return_type: got_return,
                 },
             ) => {
                 expected_params.len() == got_params.len()
+                    && expected_views == got_views
                     && expected_params
                         .iter()
                         .zip(got_params.iter())
@@ -3246,8 +3257,19 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn function_type(&mut self, params: Vec<TypeId>, return_type: TypeId) -> TypeId {
+        let view_params = vec![false; params.len()];
+        self.function_type_with_modes(params, view_params, return_type)
+    }
+
+    fn function_type_with_modes(
+        &mut self,
+        params: Vec<TypeId>,
+        view_params: Vec<bool>,
+        return_type: TypeId,
+    ) -> TypeId {
         self.interner.intern(Type::Function {
             params,
+            view_params,
             return_type,
         })
     }
@@ -4405,7 +4427,7 @@ impl<'a> TypeChecker<'a> {
                 let key = *self.named_types.get("graphics.Key")?;
                 let scene = *self.named_types.get("graphics.Scene")?;
                 let update = self.function_type(vec![state, key], state);
-                let render = self.function_type(vec![state], scene);
+                let render = self.function_type_with_modes(vec![state], vec![true], scene);
                 let result = self
                     .interner
                     .intern(Type::Result(TypeInterner::NOTHING, TypeInterner::STRING));
@@ -5735,6 +5757,7 @@ impl<'a> TypeChecker<'a> {
         let (param_types, return_type) = self.function_decl_signature(decl);
         let fn_type = self.interner.intern(Type::Function {
             params: param_types,
+            view_params: decl.params.iter().map(|param| param.view).collect(),
             return_type,
         });
 
@@ -5758,6 +5781,7 @@ impl<'a> TypeChecker<'a> {
 
         let fn_type = self.interner.intern(Type::Function {
             params: param_types,
+            view_params: func.params.iter().map(|param| param.view).collect(),
             return_type,
         });
 
@@ -8404,6 +8428,7 @@ impl<'a> TypeChecker<'a> {
             Type::Function {
                 params,
                 return_type,
+                ..
             } => params
                 .iter()
                 .copied()
@@ -9859,6 +9884,7 @@ impl<'a> TypeChecker<'a> {
 
                 self.interner.intern(Type::Function {
                     params: param_types,
+                    view_params: params.iter().map(|param| param.view).collect(),
                     return_type: ret,
                 })
             }
@@ -9922,7 +9948,7 @@ impl<'a> TypeChecker<'a> {
             args.extend_from_slice(extra_args);
             self.check_call(function, type_args, &args, step.span, None)
         } else {
-            self.check_pipeline_step_call(current_ty, step)
+            self.check_pipeline_step_call(current_ty, step, initial)
         };
         self.record_pipeline_step_call_type(step.span, step_ty);
         if let Some(handle) = &step.handle {
@@ -9936,8 +9962,14 @@ impl<'a> TypeChecker<'a> {
         step_ty
     }
 
-    fn check_pipeline_step_call(&mut self, current_ty: TypeId, step: &ast::PipelineStep) -> TypeId {
+    fn check_pipeline_step_call(
+        &mut self,
+        current_ty: TypeId,
+        step: &ast::PipelineStep,
+        initial: Option<&Expr>,
+    ) -> TypeId {
         let (function, type_args, extra_args, piped_as_view) = Self::pipeline_step_call_parts(step);
+        let piped_as_view = piped_as_view || initial.is_some_and(Self::is_explicit_view);
         let callee_name = self.resolved_expr_name(function);
         self.check_test_mock_constructor_call(callee_name.as_deref(), step.span);
         let callee_is_pure = callee_name
@@ -10014,6 +10046,7 @@ impl<'a> TypeChecker<'a> {
                 callee_name.as_deref(),
                 current_ty,
                 extra_args,
+                piped_as_view,
                 step.span,
             ) {
                 return return_type;
@@ -10025,6 +10058,7 @@ impl<'a> TypeChecker<'a> {
                 type_args,
                 current_ty,
                 extra_args,
+                piped_as_view,
                 step.span,
             ) {
                 return return_type;
@@ -10051,17 +10085,23 @@ impl<'a> TypeChecker<'a> {
             None
         };
 
+        let mut function_view_modes = None;
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
         } else if let Some(signature) = user_function_signature {
+            function_view_modes = self.function_value_view_modes(function);
             signature
         } else {
             let callee_ty = self.check_expr(function);
             match self.interner.resolve(callee_ty).clone() {
                 Type::Function {
                     params,
+                    view_params,
                     return_type,
-                } => (params, return_type),
+                } => {
+                    function_view_modes = Some(view_params);
+                    (params, return_type)
+                }
                 _ => {
                     for arg in extra_args {
                         self.check_expr(&arg.value);
@@ -10118,6 +10158,18 @@ impl<'a> TypeChecker<'a> {
         let mut checked_arg_types = Vec::with_capacity(arg_count);
         for (parameter_index, &source_index) in argument_order.iter().enumerate() {
             let param_ty = param_types[parameter_index];
+            if let Some(view_parameter) = function_view_modes
+                .as_ref()
+                .and_then(|modes| modes.get(parameter_index))
+            {
+                self.check_pipeline_argument_view(
+                    *view_parameter,
+                    source_index,
+                    piped_as_view,
+                    extra_args,
+                    step.span,
+                );
+            }
             let (arg_ty, arg_span) = if source_index == 0 {
                 (current_ty, step.span)
             } else {
@@ -10194,6 +10246,7 @@ impl<'a> TypeChecker<'a> {
         callee_name: Option<&str>,
         current_ty: TypeId,
         extra_args: &[ast::CallArg],
+        piped_as_view: bool,
         span: Span,
     ) -> Option<TypeId> {
         let function_name = callee_name?;
@@ -10229,7 +10282,16 @@ impl<'a> TypeChecker<'a> {
         };
 
         let mut arguments_match = true;
-        for (&source_index, &expected) in argument_order.iter().zip(&inferred.param_types) {
+        for (parameter_index, (&source_index, &expected)) in
+            argument_order.iter().zip(&inferred.param_types).enumerate()
+        {
+            self.check_pipeline_argument_view(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                extra_args,
+                span,
+            );
             let (got, arg_span) = if source_index == 0 {
                 (current_ty, span)
             } else {
@@ -10239,7 +10301,13 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
-            if !self.types_compatible(expected, got) {
+            if !self.graphics_callback_mode_only_mismatch(
+                function_name,
+                parameter_index,
+                expected,
+                got,
+            ) && !self.types_compatible(expected, got)
+            {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
@@ -10280,6 +10348,7 @@ impl<'a> TypeChecker<'a> {
         type_args: &[TypeExpr],
         current_ty: TypeId,
         extra_args: &[ast::CallArg],
+        piped_as_view: bool,
         span: Span,
     ) -> Option<TypeId> {
         let function_name = callee_name?;
@@ -10368,7 +10437,16 @@ impl<'a> TypeChecker<'a> {
         self.record_call_argument_order(span, argument_order.clone());
 
         let mut arguments_match = true;
-        for (&source_index, &expected) in argument_order.iter().zip(&param_types) {
+        for (parameter_index, (&source_index, &expected)) in
+            argument_order.iter().zip(&param_types).enumerate()
+        {
+            self.check_pipeline_argument_view(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                extra_args,
+                span,
+            );
             let (got, arg_span) = if source_index == 0 {
                 (current_ty, span)
             } else {
@@ -10378,7 +10456,13 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
-            if !self.types_compatible(expected, got) {
+            if !self.graphics_callback_mode_only_mismatch(
+                function_name,
+                parameter_index,
+                expected,
+                got,
+            ) && !self.types_compatible(expected, got)
+            {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
@@ -11735,12 +11819,24 @@ impl<'a> TypeChecker<'a> {
                     self.record_call_argument_order(span, argument_order.clone());
                     self.check_graphics_run_policy(function_name, args, &argument_order);
                     let mut arguments_match = true;
-                    for (&source_index, &expected) in argument_order.iter().zip(param_types.iter())
+                    for (parameter_index, (&source_index, &expected)) in
+                        argument_order.iter().zip(param_types.iter()).enumerate()
                     {
                         let arg = &args[source_index];
+                        self.check_argument_view(
+                            template.params[parameter_index].view,
+                            Self::is_explicit_view(&arg.value),
+                            arg.value.span(),
+                        );
                         let got = self.check_expr_for_expected(&arg.value, expected, false);
                         self.check_graphics_opaque_argument(function_name, expected, got, arg);
-                        if !self.types_compatible(expected, got) {
+                        if !self.graphics_callback_mode_only_mismatch(
+                            function_name,
+                            parameter_index,
+                            expected,
+                            got,
+                        ) && !self.types_compatible(expected, got)
+                        {
                             arguments_match = false;
                             self.sink.emit(errors::type_mismatch(
                                 &self.type_name(expected),
@@ -11876,9 +11972,11 @@ impl<'a> TypeChecker<'a> {
             None
         };
 
+        let mut function_view_modes = None;
         let (param_types, return_type) = if let Some(signature) = builtin_signature {
             signature
         } else if let Some(signature) = user_function_signature {
+            function_view_modes = self.function_value_view_modes(callee);
             signature
         } else {
             if let Some(function_name) = callee_name.as_deref()
@@ -11914,8 +12012,12 @@ impl<'a> TypeChecker<'a> {
             match self.interner.resolve(callee_ty).clone() {
                 Type::Function {
                     params,
+                    view_params,
                     return_type,
-                } => (params, return_type),
+                } => {
+                    function_view_modes = Some(view_params);
+                    (params, return_type)
+                }
                 Type::Struct(sid) if self.is_struct_type_name_expr(callee) => {
                     return self.check_struct_constructor(sid, args, span);
                 }
@@ -11980,6 +12082,16 @@ impl<'a> TypeChecker<'a> {
         for (i, &source_index) in argument_order.iter().enumerate() {
             let arg = &args[source_index];
             let param_ty = param_types[i];
+            if let Some(view_parameter) = function_view_modes
+                .as_ref()
+                .and_then(|modes: &Vec<bool>| modes.get(i))
+            {
+                self.check_argument_view(
+                    *view_parameter,
+                    Self::is_explicit_view(&arg.value),
+                    arg.value.span(),
+                );
+            }
             let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
             checked_arg_types.push(arg_ty);
 
@@ -12038,7 +12150,10 @@ impl<'a> TypeChecker<'a> {
                 continue;
             }
 
-            if !self.types_compatible(param_ty, arg_ty) {
+            let graphics_mode_only_mismatch = callee_name.as_deref().is_some_and(|name| {
+                self.graphics_callback_mode_only_mismatch(name, i, param_ty, arg_ty)
+            });
+            if !graphics_mode_only_mismatch && !self.types_compatible(param_ty, arg_ty) {
                 let param_name = format!("#{}", i + 1);
                 self.sink.emit(errors::argument_type_mismatch(
                     &param_name,
@@ -12443,6 +12558,78 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn graphics_callback_mode_only_mismatch(
+        &self,
+        function_name: &str,
+        parameter_index: usize,
+        expected: TypeId,
+        actual: TypeId,
+    ) -> bool {
+        // The graphics callback audit reports E0372 for ownership modes. Keep
+        // E0300 for an actual parameter or return-type mismatch.
+        if function_name != "graphics.run" || !matches!(parameter_index, 3 | 4) {
+            return false;
+        }
+        matches!(
+            (self.interner.resolve(expected), self.interner.resolve(actual)),
+            (
+                Type::Function {
+                    params: expected_params,
+                    return_type: expected_return,
+                    ..
+                },
+                Type::Function {
+                    params: actual_params,
+                    return_type: actual_return,
+                    ..
+                }
+            ) if expected_params == actual_params && expected_return == actual_return
+        )
+    }
+
+    fn function_value_view_modes(&self, callee: &Expr) -> Option<Vec<bool>> {
+        self.resolve
+            .resolutions
+            .get(&callee.span())
+            .and_then(|definition| self.type_env.get(definition))
+            .and_then(|callee_type| match self.interner.resolve(*callee_type) {
+                Type::Function { view_params, .. } => Some(view_params.clone()),
+                _ => None,
+            })
+    }
+
+    fn is_explicit_view(expression: &Expr) -> bool {
+        match expression {
+            Expr::Paren(inner, _) => Self::is_explicit_view(inner),
+            Expr::View(_, _) => true,
+            _ => false,
+        }
+    }
+
+    fn check_argument_view(&mut self, view_parameter: bool, explicit_view: bool, span: Span) {
+        if explicit_view && !view_parameter {
+            self.sink
+                .emit(errors::view_argument_requires_view_parameter(span));
+        }
+    }
+
+    fn check_pipeline_argument_view(
+        &mut self,
+        view_parameter: bool,
+        source_index: usize,
+        piped_as_view: bool,
+        extra_args: &[ast::CallArg],
+        span: Span,
+    ) {
+        let (explicit_view, argument_span) = if source_index == 0 {
+            (piped_as_view, span)
+        } else {
+            let argument = &extra_args[source_index - 1].value;
+            (Self::is_explicit_view(argument), argument.span())
+        };
+        self.check_argument_view(view_parameter, explicit_view, argument_span);
+    }
+
     fn check_graphics_callback(&mut self, callback: &Expr, label: &str, views: &[bool]) {
         self.graphics_pending_callbacks.push((
             callback.clone(),
@@ -12599,11 +12786,24 @@ impl<'a> TypeChecker<'a> {
         }
 
         let mut arguments_match = true;
-        for (&source_index, &expected) in argument_order.iter().zip(&inferred.param_types) {
+        for (parameter_index, (&source_index, &expected)) in
+            argument_order.iter().zip(&inferred.param_types).enumerate()
+        {
             let arg = &args[source_index];
+            self.check_argument_view(
+                template.params[parameter_index].view,
+                Self::is_explicit_view(&arg.value),
+                arg.value.span(),
+            );
             let got = self.check_expr_for_expected(&arg.value, expected, false);
             self.check_graphics_opaque_argument(function_name, expected, got, arg);
-            if !self.types_compatible(expected, got) {
+            if !self.graphics_callback_mode_only_mismatch(
+                function_name,
+                parameter_index,
+                expected,
+                got,
+            ) && !self.types_compatible(expected, got)
+            {
                 arguments_match = false;
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected),
@@ -12760,6 +12960,7 @@ impl<'a> TypeChecker<'a> {
                 if let Type::Function {
                     params: actual_params,
                     return_type: actual_return,
+                    ..
                 } = self.interner.resolve(actual)
                 {
                     for (expected, &actual) in params.iter().zip(actual_params) {
@@ -13062,8 +13263,10 @@ impl<'a> TypeChecker<'a> {
 
         if let Some(method) = method {
             let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+            let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
             return Some(self.interner.intern(Type::Function {
                 params,
+                view_params,
                 return_type: method.return_type,
             }));
         }
@@ -13091,8 +13294,10 @@ impl<'a> TypeChecker<'a> {
                 .cloned()
             {
                 let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+                let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
                 return Some(self.interner.intern(Type::Function {
                     params,
+                    view_params,
                     return_type: method.return_type,
                 }));
             }
@@ -13103,6 +13308,7 @@ impl<'a> TypeChecker<'a> {
                 "to_bytes" => {
                     return Some(self.interner.intern(Type::Function {
                         params: vec![type_id],
+                        view_params: vec![false],
                         return_type: TypeInterner::BYTES,
                     }));
                 }
@@ -13112,6 +13318,7 @@ impl<'a> TypeChecker<'a> {
                         .intern(Type::Result(type_id, TypeInterner::STRING));
                     return Some(self.interner.intern(Type::Function {
                         params: vec![TypeInterner::BYTES],
+                        view_params: vec![false],
                         return_type: result_ty,
                     }));
                 }
@@ -13126,8 +13333,10 @@ impl<'a> TypeChecker<'a> {
             .cloned()
         {
             let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
+            let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
             return Some(self.interner.intern(Type::Function {
                 params,
+                view_params,
                 return_type: method.return_type,
             }));
         }
@@ -13190,8 +13399,9 @@ impl<'a> TypeChecker<'a> {
                 return enum_ty;
             }
 
-            let params = variant_def.fields.iter().map(|(_, ty)| *ty).collect();
+            let params: Vec<_> = variant_def.fields.iter().map(|(_, ty)| *ty).collect();
             return self.interner.intern(Type::Function {
+                view_params: vec![false; params.len()],
                 params,
                 return_type: enum_ty,
             });
@@ -14012,9 +14222,14 @@ impl<'a> TypeChecker<'a> {
                     .iter()
                     .map(|t| self.resolve_type_expr(t))
                     .collect();
+                let view_params = param_types
+                    .iter()
+                    .map(|parameter| matches!(parameter, TypeExpr::View(_, _)))
+                    .collect();
                 let ret = self.resolve_type_expr(return_type);
                 self.interner.intern(Type::Function {
                     params,
+                    view_params,
                     return_type: ret,
                 })
             }

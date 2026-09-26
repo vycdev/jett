@@ -1,5 +1,5 @@
 namespace test
-function first_or_zero(items: list[int64]) returns int64:
+function first_or_zero(view items: list[int64]) returns int64:
     return list.get[int64](view items, 0) handle:
         default 0
 function main() returns nothing:

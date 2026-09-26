@@ -314,6 +314,7 @@ fn scalar_kind_inner(
         Type::Function {
             params,
             return_type,
+            ..
         } => {
             if seen.insert(ty) {
                 for param in params {
@@ -966,15 +967,6 @@ impl Verifier<'_> {
     }
 
     fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
-        self.expression_with_view_callback(function, expression, false)
-    }
-
-    fn expression_with_view_callback(
-        &self,
-        function: &Function,
-        expression: &Expression,
-        allow_view_callback: bool,
-    ) -> Result<(), CodegenError> {
         let kind = scalar_kind(
             self.types,
             expression.ty,
@@ -1062,34 +1054,26 @@ impl Verifier<'_> {
                 };
                 let Type::Function {
                     params,
+                    view_params,
                     return_type,
                 } = self.types.resolve(expression.ty)
                 else {
                     return Err(self.expression_kind_error(function, expression, "function value"));
                 };
                 if params.len() != callee.params.len()
-                    || params
-                        .iter()
-                        .zip(&callee.params)
-                        .any(|(expected, actual)| *expected != actual.ty)
+                    || view_params.len() != params.len()
+                    || params.iter().zip(view_params).zip(&callee.params).any(
+                        |((expected, view), actual)| {
+                            *expected != actual.ty
+                                || *view != (actual.mode == jett_mir::ParamMode::View)
+                        },
+                    )
                     || *return_type != callee.return_type
                 {
                     return Err(self.contract_error(
                         function,
                         expression.span,
                         "function value signature does not match target",
-                    ));
-                }
-                if !allow_view_callback
-                    && callee
-                        .params
-                        .iter()
-                        .any(|param| param.mode == jett_mir::ParamMode::View)
-                {
-                    return Err(self.unsupported(
-                        function,
-                        expression.span,
-                        "function value with view parameter",
                     ));
                 }
                 Ok(())
@@ -1112,6 +1096,7 @@ impl Verifier<'_> {
                 };
                 let Type::Function {
                     params,
+                    view_params,
                     return_type,
                 } = self.types.resolve(expression.ty)
                 else {
@@ -1120,13 +1105,17 @@ impl Verifier<'_> {
                 if callee.capture_count == 0
                     || callee.capture_count != captures.len()
                     || callee.params.len() != captures.len() + params.len()
+                    || view_params.len() != params.len()
                     || *return_type != callee.return_type
                     || callee
                         .params
                         .iter()
                         .skip(callee.capture_count)
-                        .zip(params)
-                        .any(|(actual, expected)| actual.ty != *expected)
+                        .zip(params.iter().zip(view_params))
+                        .any(|(actual, (expected, view))| {
+                            actual.ty != *expected
+                                || (actual.mode == jett_mir::ParamMode::View) != *view
+                        })
                 {
                     return Err(self.contract_error(
                         function,
@@ -1171,19 +1160,6 @@ impl Verifier<'_> {
                             "closure capture is not an implicitly copyable source value",
                         ));
                     }
-                }
-                if !allow_view_callback
-                    && callee
-                        .params
-                        .iter()
-                        .skip(callee.capture_count)
-                        .any(|param| param.mode == jett_mir::ParamMode::View)
-                {
-                    return Err(self.unsupported(
-                        function,
-                        expression.span,
-                        "closure value with view parameter",
-                    ));
                 }
                 Ok(())
             }
@@ -1237,24 +1213,8 @@ impl Verifier<'_> {
                         "direct call argument count does not match its signature",
                     ));
                 }
-                let forwards_graphics_run = callee.blocks.iter().any(|block| {
-                    matches!(
-                        &block.terminator.kind,
-                        TerminatorKind::Return(Some(Expression {
-                            kind: ExpressionKind::Intrinsic {
-                                intrinsic: jett_hir::IntrinsicId::GraphicsRun,
-                                ..
-                            },
-                            ..
-                        }))
-                    )
-                });
-                for (index, (argument, parameter)) in args.iter().zip(&callee.params).enumerate() {
-                    self.expression_with_view_callback(
-                        function,
-                        argument,
-                        forwards_graphics_run && index == 4,
-                    )?;
+                for (argument, parameter) in args.iter().zip(&callee.params) {
+                    self.expression(function, argument)?;
                     self.require_same_type(
                         function,
                         argument.span,
@@ -1299,12 +1259,8 @@ impl Verifier<'_> {
                 reflection_arguments,
                 ..
             } => {
-                for (index, arg) in args.iter().enumerate() {
-                    self.expression_with_view_callback(
-                        function,
-                        arg,
-                        *intrinsic == jett_hir::IntrinsicId::GraphicsRun && index == 4,
-                    )?;
+                for arg in args {
+                    self.expression(function, arg)?;
                 }
                 if matches!(
                     intrinsic,
@@ -1841,20 +1797,28 @@ impl Verifier<'_> {
                 self.expression(function, callee)?;
                 let Type::Function {
                     params,
+                    view_params,
                     return_type,
                 } = self.types.resolve(callee.ty)
                 else {
                     return Err(self.expression_kind_error(function, expression, "indirect call"));
                 };
-                if params.len() != args.len() {
+                if params.len() != args.len() || view_params.len() != params.len() {
                     return Err(self.contract_error(
                         function,
                         expression.span,
                         "indirect call argument count does not match function type",
                     ));
                 }
-                for (argument, expected) in args.iter().zip(params) {
+                for ((argument, expected), view) in args.iter().zip(params).zip(view_params) {
                     self.expression(function, argument)?;
+                    if !view && matches!(argument.kind, ExpressionKind::View(_)) {
+                        return Err(self.contract_error(
+                            function,
+                            argument.span,
+                            "owned indirect call parameter cannot accept a view",
+                        ));
+                    }
                     self.require_same_type(
                         function,
                         argument.span,

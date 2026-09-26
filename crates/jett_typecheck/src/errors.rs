@@ -956,6 +956,15 @@ pub fn conflicting_generic_static_selection(span: Span) -> Diagnostic {
     )
 }
 
+/// E0375: A borrowed argument cannot satisfy an owning function parameter.
+pub fn view_argument_requires_view_parameter(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        375,
+        "`view` argument requires a `view` function parameter".to_string(),
+        span,
+    )
+}
+
 /// E0800: Function body exceeds the statement count limit.
 pub fn function_statement_limit(
     function_name: &str,

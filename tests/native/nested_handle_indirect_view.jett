@@ -1,9 +1,9 @@
 namespace test
-function combine(label: string, value: int64) returns string:
+function combine(view label: string, value: int64) returns string:
     return "{label}:{value}"
 function main() returns nothing:
     mutable string label = "old"
-    function(string, int64) returns string callback = combine
+    function(view string, int64) returns string callback = combine
     optional[int64] maybe = none
     string answer = callback(view label, maybe handle:
         label = "new"
@@ -12,7 +12,7 @@ function main() returns nothing:
     println(answer)
     println(label)
     mutable string nested_label = "before"
-    function(string, int64) returns string nested_callback = combine
+    function(view string, int64) returns string nested_callback = combine
     optional[int64] nested_maybe = none
     println(nested_callback(view nested_label, nested_maybe handle:
         nested_label = "after"

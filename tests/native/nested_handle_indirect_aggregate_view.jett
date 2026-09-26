@@ -1,14 +1,14 @@
 namespace test
-function add_first(items: list[int64], extra: int64) returns int64:
+function add_first(view items: list[int64], extra: int64) returns int64:
     int64 first = list.get[int64](view items, 0) handle:
         default 0
     return first + extra
-function first_or_zero(items: list[int64]) returns int64:
+function first_or_zero(view items: list[int64]) returns int64:
     return list.get[int64](view items, 0) handle:
         default 0
 function main() returns nothing:
     mutable list[int64] items = list(3)
-    function(list[int64], int64) returns int64 callback = add_first
+    function(view list[int64], int64) returns int64 callback = add_first
     optional[int64] maybe = none
     int64 answer = callback(view items, maybe handle:
         items = list(8)

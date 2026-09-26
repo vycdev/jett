@@ -1436,6 +1436,21 @@ fn native_comptime_function_values_execute_in_verify_suite() {
 }
 
 #[test]
+fn native_view_function_values_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/view_function_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated view callback directory");
+    let binary = directory.path().join("view_function_values.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile an indirect call through a view-parameter function value");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_constructor_nested_handles_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_constructors.jett");

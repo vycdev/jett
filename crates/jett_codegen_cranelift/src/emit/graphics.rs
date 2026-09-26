@@ -180,6 +180,7 @@ impl Translator<'_, '_> {
         let Type::Function {
             params: update_params,
             return_type: update_result,
+            ..
         } = self.types.resolve(update_arg.ty)
         else {
             return Err(contract_error(
@@ -193,6 +194,7 @@ impl Translator<'_, '_> {
         let Type::Function {
             params: render_params,
             return_type: scene_type,
+            ..
         } = self.types.resolve(render_arg.ty)
         else {
             return Err(contract_error(

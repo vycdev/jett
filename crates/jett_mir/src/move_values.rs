@@ -504,11 +504,20 @@ impl Flow<'_> {
                 evaluation_order,
             } => {
                 self.expr(callee, false)?;
+                let Type::Function { view_params, .. } = self
+                    .types
+                    .resolve(representation_type(self.types, callee.ty))
+                else {
+                    return Err("indirect call has no function parameter modes".into());
+                };
+                if view_params.len() != args.len() {
+                    return Err("indirect call argument and parameter counts differ".into());
+                }
                 let saved = self.loans.clone();
                 for &index in evaluation_order {
                     let explicit_view = matches!(args[index].kind, ExpressionKind::View(_))
                         && is_linear(self.types, args[index].ty);
-                    self.expr(&args[index], explicit_view)?;
+                    self.expr(&args[index], view_params[index] || explicit_view)?;
                 }
                 self.loans = saved;
             }

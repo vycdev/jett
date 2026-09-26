@@ -2061,6 +2061,7 @@ impl Translator<'_, '_> {
     ) -> Result<LoweredValue, CodegenError> {
         let Type::Function {
             params,
+            view_params,
             return_type,
         } = self.types.resolve(callee.ty)
         else {
@@ -2071,7 +2072,15 @@ impl Translator<'_, '_> {
             ));
         };
         let params = params.clone();
+        let view_params = view_params.clone();
         let return_type = *return_type;
+        if params.len() != args.len() || view_params.len() != args.len() {
+            return Err(contract_error(
+                self.symbol,
+                expression.span,
+                "indirect call arguments disagree with checked parameter modes",
+            ));
+        }
         let invalid_order = || {
             contract_error(
                 self.symbol,
@@ -2083,20 +2092,7 @@ impl Translator<'_, '_> {
         let evaluated = reordered_map(
             &indexed,
             evaluation_order,
-            |(_, argument)| {
-                if is_linear(self.types, argument.ty)
-                    && matches!(argument.kind, ExpressionKind::View(_))
-                {
-                    let cloned = Expression {
-                        kind: ExpressionKind::Clone(Box::new((*argument).clone())),
-                        ty: argument.ty,
-                        span: argument.span,
-                    };
-                    self.expression(&cloned)
-                } else {
-                    self.argument(argument, false)
-                }
-            },
+            |(index, argument)| self.argument(argument, view_params[*index]),
             invalid_order,
         )?;
         // The interpreter resolves a function-valued local after evaluating
@@ -2124,11 +2120,11 @@ impl Translator<'_, '_> {
                 )
             })?;
         let mut native_args = vec![context, environment];
-        for (argument, value) in args.iter().zip(evaluated) {
+        for ((argument, value), view) in args.iter().zip(evaluated).zip(&view_params) {
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
                 LoweredValue::Owned(value, slot) => {
-                    if is_linear(self.types, argument.ty) {
+                    if !view && is_linear(self.types, argument.ty) {
                         self.clear_slot(slot);
                     }
                     native_args.push(value);

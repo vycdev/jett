@@ -71,12 +71,16 @@ pub(crate) fn verify_intrinsic(
             display.ty == T::GRAPHICS
                 && config_is_checked
                 && key.is_some_and(|key| {
-                    matches!(types.resolve(update.ty), Type::Function { params, return_type }
-                    if params.as_slice() == [state_type, key] && *return_type == state_type)
+                    matches!(types.resolve(update.ty), Type::Function { params, view_params, return_type }
+                    if params.as_slice() == [state_type, key]
+                        && view_params.as_slice() == [false, false]
+                        && *return_type == state_type)
                 })
                 && scene.is_some_and(|scene| {
-                    matches!(types.resolve(render.ty), Type::Function { params, return_type }
-                    if params.as_slice() == [state_type] && *return_type == scene)
+                    matches!(types.resolve(render.ty), Type::Function { params, view_params, return_type }
+                    if params.as_slice() == [state_type]
+                        && view_params.as_slice() == [true]
+                        && *return_type == scene)
                 })
                 && matches!(types.resolve(result), Type::Result(ok, error)
                     if *ok == T::NOTHING && *error == T::STRING)

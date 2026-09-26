@@ -201,10 +201,12 @@ fn canonical_type(id: TypeId, types: &TypeInterner) -> Result<String, CodegenErr
         }
         Type::Function {
             params,
+            view_params,
             return_type,
         } => {
             let mut result = String::from("function(");
-            for param in params {
+            for (param, view) in params.iter().zip(view_params) {
+                result.push(if *view { 'v' } else { 'o' });
                 push_component(&mut result, &canonical_type(*param, types)?);
             }
             result.push_str("returns-");

@@ -406,8 +406,15 @@ impl BackendTypeValidator<'_> {
             }
             Type::Function {
                 params,
+                view_params,
                 return_type,
             } => {
+                if params.len() != view_params.len() {
+                    self.error(
+                        span,
+                        format!("{context} function view parameter count mismatch"),
+                    );
+                }
                 for (index, parameter) in params.into_iter().enumerate() {
                     self.type_id(
                         parameter,

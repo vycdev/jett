@@ -14,14 +14,14 @@ function constructed_list_uint64_dispatch() returns string:
     ))
 function appended_list_uint64_dispatch() returns string:
     mutable list[uint64] values = list.new[uint64]()
-    values = list.append[uint64](view values, 7)
+    values = list.append[uint64](values, 7)
     uint64 fallback = 0
     return Show.show(view(list.get[uint64](view values, 0) handle:
         default fallback
     ))
 function map_value_uint64_dispatch() returns string:
     map[string, uint64] values = map("count": 9)
-    optional[uint64] maybe_value = map.get[string, uint64](view values, "count")
+    optional[uint64] maybe_value = map.get[string, uint64](values, "count")
     uint64 fallback = 0
     return Show.show(view(maybe_value handle:
         default fallback
@@ -29,7 +29,7 @@ function map_value_uint64_dispatch() returns string:
 function set_to_list_uint64_dispatch() returns string:
     mutable set[uint64] values = set.new[uint64]()
     values = set.add[uint64](values, 17)
-    list[uint64] items = set.to_list[uint64](view values)
+    list[uint64] items = set.to_list[uint64](values)
     uint64 fallback = 0
     return Show.show(view(list.get[uint64](view items, 0) handle:
         default fallback
