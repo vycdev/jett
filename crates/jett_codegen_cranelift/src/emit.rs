@@ -1773,6 +1773,10 @@ impl Translator<'_, '_> {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::StringRun, &[source], true)?;
                     self.own(pending)
+                } else if matches!(self.types.resolve(value.ty), Type::Bytes) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::BytesRun, &[source], true)?;
+                    self.own_linear(pending)
                 } else {
                     Ok(lowered)
                 }
@@ -1787,6 +1791,11 @@ impl Translator<'_, '_> {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::StringTaskJoin, &[source], true)?;
                     let joined = self.own(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(value.ty), Type::Bytes) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::BytesTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
                     self.construct_sum_value(true, joined, expression.span)
                 } else if value.ty == expression.ty {
                     Ok(result)

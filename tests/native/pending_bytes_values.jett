@@ -1,0 +1,29 @@
+namespace app
+enum Packet:
+    payload(value: bytes)
+    empty
+function identity(value: bytes) returns bytes:
+    return value
+function make_pending() returns bytes:
+    return run identity(bytes.from_string("B"))
+function main() returns nothing:
+    bytes plain = bytes.from_string("A")
+    bytes pending = run clone plain
+    bytes nested = run make_pending()
+    list[bytes] tasks = list(clone pending, clone nested)
+    trace plain
+    trace pending
+    trace nested
+    trace tasks
+    println(Packet.payload(clone pending) == Packet.payload(clone pending))
+    println(Packet.payload(clone pending) == Packet.payload(clone plain))
+    bytes first = join pending handle error:
+        default bytes.from_string("unexpected")
+    bytes inner = join nested handle error:
+        default bytes.from_string("unexpected")
+    trace first
+    trace inner
+    bytes last = join inner handle error:
+        default bytes.from_string("unexpected")
+    trace last
+    return nothing

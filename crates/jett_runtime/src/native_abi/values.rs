@@ -121,17 +121,21 @@ const UNSUPPORTED_STRING_COMPARISON: Failure = (
 );
 
 fn format_nothing(depth: u64) -> LeafResult<String> {
+    format_pending_value("nothing", depth)
+}
+
+fn format_pending_value(inner: &str, depth: u64) -> LeafResult<String> {
     let depth = usize::try_from(depth).map_err(|_| EXHAUSTED)?;
     let length = depth
         .checked_mul("pending()".len())
-        .and_then(|length| length.checked_add("nothing".len()))
+        .and_then(|length| length.checked_add(inner.len()))
         .ok_or(EXHAUSTED)?;
     let mut text = String::new();
     text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
     for _ in 0..depth {
         text.push_str("pending(");
     }
-    text.push_str("nothing");
+    text.push_str(inner);
     for _ in 0..depth {
         text.push(')');
     }
@@ -717,7 +721,7 @@ impl NativeDebugLayout {
                 }
             }
             NativeDebugNode::Nothing => left == right,
-            NativeDebugNode::Bytes => values.bytes(left)? == values.bytes(right)?,
+            NativeDebugNode::Bytes => values.same_bytes_value(left, right)?,
             NativeDebugNode::Alias(base) => {
                 return self.equal_value(values, left, right, *base, child);
             }
@@ -1063,6 +1067,7 @@ pub(super) struct NativeValues {
     allocation_budget: Option<usize>,
     strings: HashMap<NativeHandle, NativeString>,
     bytes: HashMap<NativeHandle, Vec<u8>>,
+    bytes_pending: HashMap<NativeHandle, u64>,
     sums: HashMap<NativeHandle, NativeSum>,
     lists: HashMap<NativeHandle, NativeList>,
     sets: HashMap<NativeHandle, NativeSet>,
@@ -1147,6 +1152,7 @@ impl NativeValues {
             && self.structs_created == self.structs_destroyed
             && self.strings.is_empty()
             && self.bytes.is_empty()
+            && self.bytes_pending.is_empty()
             && self.bytes_created == self.bytes_destroyed
             && self.sums.is_empty()
             && self.sums_created == self.sums_destroyed
@@ -1206,21 +1212,7 @@ impl NativeValues {
     }
     fn format_string(&self, id: u64) -> LeafResult<String> {
         let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
-        let depth = usize::try_from(value.pending_depth).map_err(|_| EXHAUSTED)?;
-        let length = depth
-            .checked_mul("pending()".len())
-            .and_then(|length| length.checked_add(value.text.len()))
-            .ok_or(EXHAUSTED)?;
-        let mut text = String::new();
-        text.try_reserve_exact(length).map_err(|_| EXHAUSTED)?;
-        for _ in 0..depth {
-            text.push_str("pending(");
-        }
-        text.push_str(&value.text);
-        for _ in 0..depth {
-            text.push(')');
-        }
-        Ok(text)
+        format_pending_value(&value.text, value.pending_depth)
     }
     fn display_string(&mut self, id: u64) -> LeafResult<u64> {
         let depth = self.strings.get(&id).ok_or(INVALID_HANDLE)?.pending_depth;
@@ -1244,7 +1236,7 @@ impl NativeValues {
                 text.push_str(&byte.to_string());
             }
             text.push(')');
-            return Ok(text);
+            return format_pending_value(&text, self.bytes_depth(bits)?);
         }
         let kind = NativeSortKind::from_raw(kind).map_err(|_| INVALID_TRACE_LABEL)?;
         Ok(match kind {
@@ -1338,6 +1330,34 @@ impl NativeValues {
     }
     fn bytes(&self, id: u64) -> LeafResult<&[u8]> {
         self.bytes.get(&id).map(Vec::as_slice).ok_or(INVALID_BYTES)
+    }
+    fn bytes_depth(&self, id: u64) -> LeafResult<u64> {
+        self.bytes(id)?;
+        Ok(self.bytes_pending.get(&id).copied().unwrap_or(0))
+    }
+    fn copy_bytes_with_depth(&mut self, id: u64, depth: u64) -> LeafResult<u64> {
+        let data = self.bytes(id)?.to_vec();
+        let copy = self.insert_bytes(data)?;
+        if depth != 0 {
+            self.bytes_pending.insert(copy, depth);
+        }
+        Ok(copy)
+    }
+    fn clone_bytes(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.bytes_depth(id)?;
+        self.copy_bytes_with_depth(id, depth)
+    }
+    fn run_bytes(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.bytes_depth(id)?.checked_add(1).ok_or(EXHAUSTED)?;
+        self.copy_bytes_with_depth(id, depth)
+    }
+    fn join_bytes(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self.bytes_depth(id)?.saturating_sub(1);
+        self.copy_bytes_with_depth(id, depth)
+    }
+    fn same_bytes_value(&self, left: u64, right: u64) -> LeafResult<bool> {
+        Ok(self.bytes_depth(left)? == self.bytes_depth(right)?
+            && self.bytes(left)? == self.bytes(right)?)
     }
     fn write_bitfield_bits(
         &mut self,
@@ -3414,8 +3434,8 @@ impl NativeValues {
                 }
             };
         }
-        if let Some(bytes) = self.bytes.get(&id) {
-            return self.insert_bytes(bytes.clone());
+        if self.bytes.contains_key(&id) {
+            return self.clone_bytes(id);
         }
         self.retain(id)
     }
@@ -3471,6 +3491,7 @@ impl NativeValues {
             return Ok(0);
         }
         if self.bytes.remove(&id).is_some() {
+            self.bytes_pending.remove(&id);
             self.bytes_destroyed += 1;
             return Ok(0);
         }
@@ -4235,7 +4256,11 @@ leaves! {
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
             s.decode_bitfield(value, layout) };
     BytesClone, jett_rt_v1_bytes_clone, false, (value: u64 => I64), u64 => I64,
-        |s| { let data = s.bytes(value)?.to_vec(); s.insert_bytes(data) };
+        |s| s.clone_bytes(value);
+    BytesRun, jett_rt_v1_bytes_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_bytes(value);
+    BytesTaskJoin, jett_rt_v1_bytes_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_bytes(value);
     BytesLength, jett_rt_v1_bytes_length, false, (value: u64 => I64), i64 => I64,
         |s| Ok(s.bytes(value)?.len() as i64);
     BytesFromString, jett_rt_v1_bytes_from_string, false, (value: u64 => I64), u64 => I64,
@@ -5231,6 +5256,33 @@ mod tests {
             plain_joined,
         ] {
             values.release(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn pending_bytes_depth_survives_clone_and_join() {
+        let mut values = NativeValues::default();
+        let plain = values.insert_bytes(vec![65]).unwrap();
+        let pending = values.run_bytes(plain).unwrap();
+        let nested = values.run_bytes(pending).unwrap();
+        let cloned = values.clone_bytes(nested).unwrap();
+        assert_eq!(values.bytes_depth(plain), Ok(0));
+        assert_eq!(values.bytes_depth(pending), Ok(1));
+        assert_eq!(values.bytes_depth(nested), Ok(2));
+        assert_eq!(values.bytes_depth(cloned), Ok(2));
+        assert!(values.same_bytes_value(nested, cloned).unwrap());
+        assert!(!values.same_bytes_value(plain, pending).unwrap());
+        assert_eq!(
+            values.debug_value(cloned, DEBUG_BYTES_KIND).unwrap(),
+            "pending(pending(bytes(65)))"
+        );
+        let joined = values.join_bytes(cloned).unwrap();
+        assert_eq!(values.bytes_depth(joined), Ok(1));
+        let last = values.join_bytes(joined).unwrap();
+        assert_eq!(values.bytes_depth(last), Ok(0));
+        for handle in [plain, pending, nested, cloned, joined, last] {
+            values.drop_value(handle).unwrap();
         }
         assert!(values.is_empty());
     }

@@ -370,6 +370,7 @@ fn visit(
                 true
             }
             ExpressionKind::BitfieldConstruct { .. } => true,
+            ExpressionKind::Run(inner) => matches!(types.resolve(inner.ty), Type::Bytes),
             _ => false,
         });
     }
@@ -413,8 +414,10 @@ fn visit(
         ExpressionKind::Run(value) if matches!(types.resolve(value.ty), Type::String) => {
             *temporaries += 1;
         }
-        ExpressionKind::Join(value) if matches!(types.resolve(value.ty), Type::String) => {
-            // Joining a pending string owns its extracted string before the
+        ExpressionKind::Join(value)
+            if matches!(types.resolve(value.ty), Type::String | Type::Bytes) =>
+        {
+            // Joining a pending owned value owns its extracted value before the
             // result sum takes it.
             *temporaries += 1;
         }

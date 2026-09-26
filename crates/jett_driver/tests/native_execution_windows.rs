@@ -976,6 +976,23 @@ fn native_pending_string_values_match_interpreter() {
 }
 
 #[test]
+fn native_pending_bytes_values_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/pending_bytes_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending bytes directory");
+    let binary = directory.path().join("pending_bytes_values.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending bytes values");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
 fn native_pending_string_comparisons_match_interpreter_errors() {
     for name in [
         "pending_string_equality_failure",
