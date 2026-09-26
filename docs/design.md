@@ -7135,6 +7135,9 @@ parameters. This is value metadata, independent of the function's type and
 argument-label rules. Captured values and native addresses are not rendered.
 Tracing or inspecting a callback does not invoke or consume it, including when
 the callback is nested in a collection or record.
+Actor handles appear in debug snapshots as `actor#N`, where `N` follows spawn
+order within the run. A trace or breakpoint does not expose actor state or
+consume the handle.
 
 ### Explicit Typing
 

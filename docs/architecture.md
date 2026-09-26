@@ -866,6 +866,9 @@ origin separately from native symbol identity. Function descriptors retain an
 owned display label alongside the code address and capture environment, so
 trace and breakpoint rendering can borrow function values inside recursive
 aggregate debug layouts without invoking callbacks or inspecting captures.
+Native actor registration assigns a separate debug ordinal in spawn order.
+Recursive debug layouts read that ordinal from a validated live actor handle
+and render `actor#N` without exposing the native allocation identity or state.
 For a non-short-circuit binary expression with a nested handler, the left value
 is captured before lowering the right; owned cloneable operands are cloned so
 the handler cannot change the value compared by a later enum equality.

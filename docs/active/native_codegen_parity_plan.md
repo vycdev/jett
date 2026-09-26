@@ -429,6 +429,13 @@ evaluation isolates each expression so the outer binding is restored afterward.
 `tests/native/comptime_namespace_aliases.jett` compares baked named and returned
 callbacks through both scopes with the interpreter. This removes the previous
 local-alias frontend gap without admitting runtime locals to comptime.
+Actor handles now participate in native trace and breakpoint layouts, including
+handles nested in lists. Registration preserves the interpreter's `actor#N`
+spawn ordinal independently of native allocation IDs; debug validates each
+handle and never reads actor state. `tests/native/debug_actor_values.jett`
+compares both debug lines and subsequent message sends with the interpreter.
+Other special debug values and cross-function breakpoint scope remain open;
+overall language coverage stays at the coarse 80% estimate.
 
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a

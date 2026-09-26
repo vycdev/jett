@@ -1384,6 +1384,34 @@ fn native_function_debug_values_match_interpreter() {
 }
 
 #[test]
+fn native_actor_debug_values_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_actor_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert!(expected.stdout.is_empty());
+    assert_eq!(
+        expected.debug_output,
+        [
+            "trace first: test.Holder = actor#0",
+            "trace second: test.Holder = actor#1",
+            "trace active: list[test.Holder] = list(actor#2)",
+            "breakpoint hit: active: list[test.Holder] = list(actor#2), first: test.Holder = actor#0, second: test.Holder = actor#1, third: test.Holder = actor#2",
+        ]
+    );
+    let directory = tempfile::tempdir().expect("isolated actor debug directory");
+    let binary = directory.path().join("debug_actor_values.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile actor traces and breakpoint without consuming handles");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_comptime_namespace_aliases_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/comptime_namespace_aliases.jett");

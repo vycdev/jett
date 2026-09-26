@@ -168,6 +168,7 @@ pub enum NativeDebugTag {
     Capability,
     Alias,
     Function,
+    Actor,
 }
 
 impl NativeDebugTag {
@@ -187,6 +188,7 @@ impl NativeDebugTag {
             11 => Self::Capability,
             12 => Self::Alias,
             13 => Self::Function,
+            14 => Self::Actor,
             _ => return Err(INVALID_TRACE_LABEL),
         })
     }
@@ -373,6 +375,7 @@ enum NativeDebugNode {
     Capability(String),
     Alias(usize),
     Function,
+    Actor,
 }
 impl NativeDebugLayout {
     fn parse(bytes: &[u8]) -> LeafResult<Self> {
@@ -463,6 +466,7 @@ impl NativeDebugLayout {
                 NativeDebugTag::Capability => NativeDebugNode::Capability(name(&mut node)?),
                 NativeDebugTag::Alias => NativeDebugNode::Alias(index(&mut node)?),
                 NativeDebugTag::Function => NativeDebugNode::Function,
+                NativeDebugTag::Actor => NativeDebugNode::Actor,
             };
             if node.position != node_bytes.len() {
                 return Err(INVALID_TRACE_LABEL);
@@ -493,6 +497,10 @@ impl NativeDebugLayout {
             NativeDebugNode::Alias(base) => return self.format_value(values, bits, *base, child),
             NativeDebugNode::Capability(name) => format!("<{name} capability>"),
             NativeDebugNode::Function => values.function_debug_label(bits)?.to_owned(),
+            NativeDebugNode::Actor => {
+                let ordinal = values.actors.get(&bits).ok_or(INVALID_ACTOR)?;
+                format!("actor#{ordinal}")
+            }
             NativeDebugNode::List(element) => {
                 let list = values.lists.get(&bits).ok_or(INVALID_LIST)?;
                 let mut result = String::from("list(");
@@ -797,7 +805,7 @@ impl NativeDebugLayout {
                 }
                 true
             }
-            NativeDebugNode::Capability(_) | NativeDebugNode::Function => {
+            NativeDebugNode::Capability(_) | NativeDebugNode::Function | NativeDebugNode::Actor => {
                 return Err(INVALID_STRUCT);
             }
         })
@@ -1003,7 +1011,8 @@ pub(super) struct NativeValues {
     sets: HashMap<NativeHandle, NativeSet>,
     maps: HashMap<NativeHandle, NativeMap>,
     structs: HashMap<NativeHandle, NativeStruct>,
-    actors: std::collections::HashSet<NativeHandle>,
+    actors: HashMap<NativeHandle, u64>,
+    next_actor_ordinal: u64,
     builders: HashMap<NativeHandle, NativeBuilderInfo>,
     structs_created: u64,
     structs_destroyed: u64,
@@ -2162,9 +2171,12 @@ impl NativeValues {
         let Some(record) = self.structs.get(&id) else {
             return Err(INVALID_ACTOR);
         };
-        if record.fields.iter().any(Option::is_none) || !self.actors.insert(id) {
+        if record.fields.iter().any(Option::is_none) || self.actors.contains_key(&id) {
             return Err(INVALID_ACTOR);
         }
+        let next = self.next_actor_ordinal.checked_add(1).ok_or(EXHAUSTED)?;
+        self.actors.insert(id, self.next_actor_ordinal);
+        self.next_actor_ordinal = next;
         Ok(id)
     }
     fn replace_actor_field(
@@ -2174,7 +2186,7 @@ impl NativeValues {
         bits: u64,
         owned: bool,
     ) -> LeafResult<u32> {
-        if !self.actors.contains(&id) {
+        if !self.actors.contains_key(&id) {
             return Err(INVALID_ACTOR);
         }
         let slot = self
@@ -2195,7 +2207,7 @@ impl NativeValues {
         Ok(0)
     }
     pub(super) fn release_actors(&mut self) -> LeafResult<()> {
-        for id in std::mem::take(&mut self.actors) {
+        for (id, _) in std::mem::take(&mut self.actors) {
             self.drop_value(id)?;
         }
         Ok(())
@@ -3195,7 +3207,7 @@ impl NativeValues {
         self.retain(id)
     }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
-        if self.actors.contains(&id) {
+        if self.actors.contains_key(&id) {
             return Err(INVALID_ACTOR);
         }
         if let Some(value) = self.structs.remove(&id) {
@@ -4567,7 +4579,7 @@ mod tests {
     }
 
     #[test]
-    fn function_debug_tag_is_additive_and_has_no_payload() {
+    fn special_debug_tags_are_additive_and_have_no_payload() {
         for (expected, tag) in [
             NativeDebugTag::Primitive,
             NativeDebugTag::Nothing,
@@ -4583,6 +4595,7 @@ mod tests {
             NativeDebugTag::Capability,
             NativeDebugTag::Alias,
             NativeDebugTag::Function,
+            NativeDebugTag::Actor,
         ]
         .into_iter()
         .enumerate()
@@ -4591,7 +4604,7 @@ mod tests {
             assert_eq!(tag as u8, expected);
             assert_eq!(NativeDebugTag::from_raw(expected), Ok(tag));
         }
-        assert_eq!(NativeDebugTag::from_raw(14), Err(INVALID_TRACE_LABEL));
+        assert_eq!(NativeDebugTag::from_raw(15), Err(INVALID_TRACE_LABEL));
         let bytes = function_debug_layout_bytes(&[vec![13]], 0);
         let layout = NativeDebugLayout::parse(&bytes).unwrap();
         assert!(matches!(
@@ -4612,6 +4625,34 @@ mod tests {
             ),
             (3, 0, 1, 2)
         );
+    }
+
+    #[test]
+    fn actor_debug_uses_registration_order_without_exposing_state_or_handle() {
+        let mut values = NativeValues::default();
+        let first = values.new_struct(0).unwrap();
+        let second = values.new_struct(0).unwrap();
+        values.register_actor(first).unwrap();
+        values.register_actor(second).unwrap();
+        let layout = NativeDebugLayout::parse(&function_debug_layout_bytes(
+            &[vec![NativeDebugTag::Actor as u8]],
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            layout.format_value(&values, first, 0, 0).unwrap(),
+            "actor#0"
+        );
+        assert_eq!(
+            layout.format_value(&values, second, 0, 0).unwrap(),
+            "actor#1"
+        );
+        assert!(matches!(
+            layout.format_value(&values, u64::MAX, 0, 0),
+            Err(INVALID_ACTOR)
+        ));
+        values.release_actors().unwrap();
+        assert!(values.is_empty());
     }
 
     #[test]

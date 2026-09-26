@@ -19,6 +19,7 @@ enum DebugNode {
     Machine(String, Vec<(String, Vec<u32>)>),
     Capability(String),
     Function,
+    Actor,
     Alias(u32),
 }
 
@@ -89,12 +90,12 @@ impl DebugGraph<'_> {
                 }
                 Type::Capability(_) => DebugNode::Capability(self.types.type_name(ty)),
                 Type::Function { .. } => DebugNode::Function,
+                Type::Actor(_) => DebugNode::Actor,
                 Type::Refinement { base, .. } => DebugNode::Alias(self.node(base)?),
                 Type::Secret(_)
                 | Type::TypeConstruction
                 | Type::Never
                 | Type::Interface(_)
-                | Type::Actor(_)
                 | Type::Resource(_)
                 | Type::Error => return None,
                 Type::Int8
@@ -136,6 +137,7 @@ fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
         DebugNode::Nothing => bytes.push(NativeDebugTag::Nothing as u8),
         DebugNode::Bytes => bytes.push(NativeDebugTag::Bytes as u8),
         DebugNode::Function => bytes.push(NativeDebugTag::Function as u8),
+        DebugNode::Actor => bytes.push(NativeDebugTag::Actor as u8),
         DebugNode::List(child) => child_node(bytes, NativeDebugTag::List, child),
         DebugNode::Set(child) => child_node(bytes, NativeDebugTag::Set, child),
         DebugNode::Optional(child) => child_node(bytes, NativeDebugTag::Optional, child),
