@@ -814,6 +814,223 @@ impl Builder<'_> {
         }
     }
 
+    fn lower_refinement_enum_builder_finish(
+        &mut self,
+        expression: &Expression,
+        enum_type: TypeId,
+        refinement_predicates: &[Vec<hir::RefinementPredicate>],
+    ) -> Expression {
+        let Type::Enum(id) = self.types.resolve(enum_type) else {
+            return expression.clone();
+        };
+        let variants = self
+            .types
+            .resolve_enum(*id)
+            .variants
+            .iter()
+            .map(|variant| variant.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        if variants.iter().map(Vec::len).sum::<usize>() != refinement_predicates.len() {
+            return expression.clone();
+        }
+        let span = expression.span;
+        let mut raw = expression.clone();
+        if let ExpressionKind::Intrinsic {
+            refinement_predicates,
+            ..
+        } = &mut raw.kind
+        {
+            refinement_predicates.clear();
+        }
+        let raw = self.lower_value(&raw);
+        let source = self.temporary(expression.ty, span);
+        self.push(
+            StatementKind::Let {
+                local: source,
+                value: raw,
+            },
+            span,
+        );
+        let tag = self.temporary(TypeInterner::BOOL, span);
+        self.push(
+            StatementKind::SumTag {
+                source,
+                target: tag,
+            },
+            span,
+        );
+        let accepted = self.new_block(span);
+        let failed = self.new_block(span);
+        let validated = self.new_block(span);
+        let continuation = self.new_block(span);
+        let output = self.temporary(expression.ty, span);
+        self.terminate(
+            TerminatorKind::Branch {
+                condition: Expression {
+                    kind: ExpressionKind::Local(tag),
+                    ty: TypeInterner::BOOL,
+                    span,
+                },
+                then_block: accepted,
+                else_block: failed,
+            },
+            span,
+        );
+        self.current = failed;
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::Local(source),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
+        self.current = accepted;
+        let built = self.temporary(enum_type, span);
+        self.push(
+            StatementKind::SumTake {
+                source,
+                target: built,
+                success: true,
+            },
+            span,
+        );
+        let mut offset = 0;
+        let mut arms = Vec::with_capacity(variants.len());
+        for (index, fields) in variants.iter().enumerate() {
+            let block = self.new_block(span);
+            let has_predicates = refinement_predicates[offset..offset + fields.len()]
+                .iter()
+                .any(|chain| !chain.is_empty());
+            let bindings = if has_predicates {
+                fields
+                    .iter()
+                    .map(|ty| self.temporary(*ty, span))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            arms.push((
+                hir::VariantId::new(index as u32),
+                block,
+                bindings,
+                offset,
+                index,
+            ));
+            offset += fields.len();
+        }
+        self.terminate(
+            TerminatorKind::Switch {
+                scrutinee: Expression {
+                    kind: ExpressionKind::Clone(Box::new(Expression {
+                        kind: ExpressionKind::Local(built),
+                        ty: enum_type,
+                        span,
+                    })),
+                    ty: enum_type,
+                    span,
+                },
+                variants: arms
+                    .iter()
+                    .map(|(variant, block, bindings, _, _)| (*variant, *block, bindings.clone()))
+                    .collect(),
+                otherwise: None,
+            },
+            span,
+        );
+        for (_, block, bindings, offset, variant_index) in arms {
+            self.current = block;
+            for (index, binding) in bindings.iter().enumerate() {
+                for predicate in &refinement_predicates[offset + index] {
+                    let passed = self.temporary(TypeInterner::BOOL, span);
+                    self.push(
+                        StatementKind::Let {
+                            local: passed,
+                            value: Expression {
+                                kind: ExpressionKind::Call {
+                                    function: predicate.function,
+                                    args: vec![self.refinement_predicate_input(
+                                        *binding,
+                                        variants[variant_index][index],
+                                        predicate,
+                                        span,
+                                    )],
+                                    evaluation_order: vec![0],
+                                },
+                                ty: TypeInterner::BOOL,
+                                span,
+                            },
+                        },
+                        span,
+                    );
+                    let next = self.new_block(span);
+                    let rejected = self.new_block(span);
+                    self.terminate(
+                        TerminatorKind::Branch {
+                            condition: Expression {
+                                kind: ExpressionKind::Local(passed),
+                                ty: TypeInterner::BOOL,
+                                span,
+                            },
+                            then_block: next,
+                            else_block: rejected,
+                        },
+                        span,
+                    );
+                    self.current = rejected;
+                    self.push(
+                        StatementKind::Let {
+                            local: output,
+                            value: Expression {
+                                kind: ExpressionKind::ResultFail(Box::new(Expression {
+                                    kind: ExpressionKind::String(format!(
+                                        "refinement type constraint failed for '{}'",
+                                        predicate.type_name
+                                    )),
+                                    ty: TypeInterner::STRING,
+                                    span,
+                                })),
+                                ty: expression.ty,
+                                span,
+                            },
+                        },
+                        span,
+                    );
+                    self.close_to(continuation, span);
+                    self.current = next;
+                }
+            }
+            self.close_to(validated, span);
+        }
+        self.current = validated;
+        self.push(
+            StatementKind::Let {
+                local: output,
+                value: Expression {
+                    kind: ExpressionKind::ResultOk(Box::new(Expression {
+                        kind: ExpressionKind::Local(built),
+                        ty: enum_type,
+                        span,
+                    })),
+                    ty: expression.ty,
+                    span,
+                },
+            },
+            span,
+        );
+        self.close_to(continuation, span);
+        self.current = continuation;
+        Expression {
+            kind: ExpressionKind::Local(output),
+            ty: expression.ty,
+            span,
+        }
+    }
+
     fn lower_refinement_builder_finish(
         &mut self,
         expression: &Expression,
@@ -823,6 +1040,13 @@ impl Builder<'_> {
             return expression.clone();
         };
         let struct_type = *struct_type;
+        if matches!(self.types.resolve(struct_type), Type::Enum(_)) {
+            return self.lower_refinement_enum_builder_finish(
+                expression,
+                struct_type,
+                refinement_predicates,
+            );
+        }
         let Type::Struct(id) = self.types.resolve(struct_type) else {
             return expression.clone();
         };

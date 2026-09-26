@@ -2870,9 +2870,10 @@ errors.
 Native struct builders accept base values for refined fields and invoke the
 checked field predicates at completion, after ordinary builder errors. This
 also handles nested refinements and mixed refined and ordinary fields sharing
-the same base type. Enum and machine builders still require exact refinement
-payload values validated at their creation boundary. Trusted JSON decoders
-bind each payload's exact reflected type before insertion.
+the same base type. Enum builders now do the same for the selected variant's
+payloads, including nested refinements. Machine builders still require exact
+refinement payload values validated at their creation boundary. Trusted JSON
+decoders bind each payload's exact reflected type before insertion.
 Native debug layouts recognize `TypeConstruction` handles. Builder metadata
 also carries checked debug layouts for each field and records successful put
 order, so trace and breakpoint render partial struct, bitfield, enum, and

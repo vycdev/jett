@@ -463,11 +463,12 @@ interpreter. Trusted JSON decoders bind each inserted `Field` from checked
 reflection metadata. Ordinary struct builders now accept base values for
 refined fields and invoke checked predicates at finish, including nested
 refinements and mixed refined and ordinary fields of the same base type.
-Enum and machine builder payloads still require already validated exact
-refinement values. The overall coarse estimate stays 80%.
-After this change, the 65-test Windows native suite, 182/182 native object
-gate, 182/182 typed-lowering gate, 578 frontend fixture tests, and focused
-typechecker/Cranelift suites pass.
+Enum builders now also accept base payload values and validate the selected
+variant's checked predicates at finish. Machine builder payloads still require
+already validated exact refinement values. The overall coarse estimate stays
+80%.
+At this checkpoint, the 67-test Windows native suite, 182/182 native object
+gate, 182/182 typed-lowering gate, and focused HIR/MIR/Cranelift suites pass.
 
 Nested supported enum and bitfield fields now select checked JSON source hooks
 inside records and collections. Generic `type.name[T]()` equality with a
@@ -486,7 +487,8 @@ ownership planning reserves separate temporaries for validated records and
 their result wrappers. Linked native/interpreter fixtures cover the nested
 serializer and decoder, including error paths. Struct builder insertion of
 base values into refinement fields now runs checked predicates at finish;
-enum and machine builders still require exact validated payloads.
+the same holds for enum payloads, while machine builders still require exact
+validated payloads.
 The exhaustive audit gained `json_reflection_nested_decoder.jett` and
 `json_reflection_nested_serializer.jett`, without losing an earlier pass.
 Captured inline functions now extract to checked functions with explicit

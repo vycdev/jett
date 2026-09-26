@@ -321,8 +321,9 @@ pub enum ExpressionKind {
         /// aliases that share a canonical type ID. Construction start also
         /// carries the checked source type of each struct field in layout order.
         reflection_arguments: Vec<ReflectionTypeInfo>,
-        /// Field predicate chains for reflected struct completion. Empty for
-        /// other intrinsics and targets without refinement fields.
+        /// Field predicate chains for reflected struct fields or flattened
+        /// enum variant payloads. Empty for other intrinsics and targets
+        /// without refinement fields.
         refinement_predicates: Vec<Vec<RefinementPredicate>>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
@@ -3155,18 +3156,27 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         if intrinsic != IntrinsicId::TypeConstructFinish || type_arguments.len() != 1 {
             return Some(Vec::new());
         }
-        let Type::Struct(id) = self.parent.check.interner.resolve(type_arguments[0]) else {
-            return Some(Vec::new());
+        let field_types = match self.parent.check.interner.resolve(type_arguments[0]) {
+            Type::Struct(id) => self
+                .parent
+                .check
+                .interner
+                .resolve_struct(*id)
+                .fields
+                .iter()
+                .map(|(_, ty)| *ty)
+                .collect::<Vec<_>>(),
+            Type::Enum(id) => self
+                .parent
+                .check
+                .interner
+                .resolve_enum(*id)
+                .variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter().map(|(_, ty)| *ty))
+                .collect::<Vec<_>>(),
+            _ => return Some(Vec::new()),
         };
-        let field_types = self
-            .parent
-            .check
-            .interner
-            .resolve_struct(*id)
-            .fields
-            .iter()
-            .map(|(_, ty)| *ty)
-            .collect::<Vec<_>>();
         if !field_types.iter().any(|ty| {
             matches!(
                 self.parent.check.interner.resolve(*ty),

@@ -1108,7 +1108,11 @@ impl Translator<'_, '_> {
                         .ok_or_else(|| self.unsupported(span, "checked variant payload type"))?
                         .type_name,
                 )?;
-                name(&mut layout, &self.types.type_name(*field_ty))?;
+                let mut storage_type = *field_ty;
+                while let Type::Refinement { base, .. } = self.types.resolve(storage_type) {
+                    storage_type = *base;
+                }
+                name(&mut layout, &self.types.type_name(storage_type))?;
                 append_builder_debug_layout(&mut layout, self.types, *field_ty)?;
             }
         }
@@ -1350,7 +1354,10 @@ impl Translator<'_, '_> {
             let (owner_pointer, owner_length) = self.static_bytes(&owner.type_name)?;
             let (type_pointer, type_length) = self.static_bytes(&field_type.type_name)?;
             let mut value_type = type_arguments[1];
-            if matches!(self.types.resolve(type_arguments[0]), Type::Struct(_)) {
+            if matches!(
+                self.types.resolve(type_arguments[0]),
+                Type::Struct(_) | Type::Enum(_)
+            ) {
                 while let Type::Refinement { base, .. } = self.types.resolve(value_type) {
                     value_type = *base;
                 }
