@@ -877,6 +877,9 @@ and `clone`, `coarsen`, and `declassify` operands. It evaluates handled `if`
 and `while` conditions in their respective control-flow blocks, so a loop
 rechecks the condition on every iteration, and evaluates handled `match`
 scrutinees before selecting an arm.
+Handlers in `for` iterables are extracted before the loop header. Sequence lowering
+then materializes the iterable once on the resulting preheader path, so a loop
+backedge never re-evaluates the source expression.
 Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
 carry typed operands and message identity. Actor receive
 handlers are deterministic HIR functions whose locals preserve checked

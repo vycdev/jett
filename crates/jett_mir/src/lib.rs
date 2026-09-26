@@ -1141,6 +1141,7 @@ impl<'a> Builder<'a> {
         body: &hir::Block,
         statement_span: Span,
     ) {
+        let iterable = self.lower_value(iterable);
         let header = self.new_block(iterable.span);
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);

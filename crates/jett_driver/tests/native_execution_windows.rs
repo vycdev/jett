@@ -1725,6 +1725,25 @@ fn native_state_condition_nested_handle_matches_interpreter() {
 }
 
 #[test]
+fn native_for_iterable_nested_handle_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_for_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "source\nAda\nLin\nsource\nfallback\nsource\nmissing\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated for iterable directory");
+    let binary = directory.path().join("nested_for_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile for iterable with nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");

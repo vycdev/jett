@@ -1,0 +1,23 @@
+namespace app
+function maybe_items(valid: bool) returns result[list[string], string]:
+    println("source")
+    if valid:
+        return ok(list("Ada", "Lin"))
+    return fail("missing")
+function print_items(valid: bool) returns nothing:
+    for item in(maybe_items(valid) handle error:
+        default list("fallback")
+    ):
+        println(item)
+    return nothing
+function print_or_error(valid: bool) returns nothing:
+    for item in(maybe_items(valid) handle error:
+        return println(error)
+    ):
+        println(item)
+    return nothing
+function main() returns nothing:
+    print_items(true)
+    print_items(false)
+    print_or_error(false)
+    return nothing
