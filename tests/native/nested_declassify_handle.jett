@@ -1,0 +1,15 @@
+namespace app
+function maybe_secret(valid: bool) returns optional[secret[string]]:
+    secret[string] value = "Ada"
+    if valid:
+        return some(value)
+    return none
+function revealed(valid: bool) returns string:
+    secret[string] backup = "Fallback"
+    return declassify(maybe_secret(valid) handle:
+        default backup
+    )
+function main() returns nothing:
+    println(revealed(true))
+    println(revealed(false))
+    return nothing

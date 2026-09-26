@@ -1,0 +1,18 @@
+namespace app
+type NonEmpty = string where value != ""
+function maybe_name(valid: bool) returns optional[NonEmpty]:
+    NonEmpty name = "Ada" handle error:
+        return none
+    if valid:
+        return some(name)
+    return none
+function coarsened(valid: bool) returns string:
+    NonEmpty backup = "Fallback" handle error:
+        return error
+    return coarsen(maybe_name(valid) handle:
+        default backup
+    )
+function main() returns nothing:
+    println(coarsened(true))
+    println(coarsened(false))
+    return nothing

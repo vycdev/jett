@@ -872,6 +872,11 @@ and render `actor#N` without exposing the native allocation identity or state.
 For a non-short-circuit binary expression with a nested handler, the left value
 is captured before lowering the right; owned cloneable operands are cloned so
 the handler cannot change the value compared by a later enum equality.
+MIR also extracts handlers from field-access receivers, state-test operands,
+and `clone`, `coarsen`, and `declassify` operands. It evaluates handled `if`
+and `while` conditions in their respective control-flow blocks, so a loop
+rechecks the condition on every iteration, and evaluates handled `match`
+scrutinees before selecting an arm.
 Comptime type-bind scopes erase to checked HIR scopes; actor spawn/send/ask
 carry typed operands and message identity. Actor receive
 handlers are deterministic HIR functions whose locals preserve checked

@@ -1690,6 +1690,105 @@ fn native_binary_nested_handle_matches_interpreter() {
 }
 
 #[test]
+fn native_field_receiver_nested_handle_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_field_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(
+        expected.stdout,
+        "Ada\nfallback\nAda\nmissing\nLin\noptional fallback\nKai\nnested fallback\n"
+    );
+    let directory = tempfile::tempdir().expect("isolated field receiver directory");
+    let binary = directory.path().join("nested_field_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile field receiver with nested handlers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_state_condition_nested_handle_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_state_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "active\nguest\n2\n");
+    let directory = tempfile::tempdir().expect("isolated state condition directory");
+    let binary = directory.path().join("nested_state_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile state test with nested handlers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_match_scrutinee_nested_handle_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "hello\nempty\n");
+    let directory = tempfile::tempdir().expect("isolated match scrutinee directory");
+    let binary = directory.path().join("nested_match_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile match scrutinee with nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_clone_operand_nested_handle_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_clone_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "Ada\nfallback\n");
+    let directory = tempfile::tempdir().expect("isolated clone operand directory");
+    let binary = directory.path().join("nested_clone_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile clone operand with nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_coarsen_operand_nested_handle_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_coarsen_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "Ada\nFallback\n");
+    let directory = tempfile::tempdir().expect("isolated coarsen operand directory");
+    let binary = directory.path().join("nested_coarsen_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile coarsen operand with nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_declassify_operand_nested_handle_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_declassify_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "Ada\nFallback\n");
+    let directory = tempfile::tempdir().expect("isolated declassify operand directory");
+    let binary = directory.path().join("nested_declassify_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile declassify operand with nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_enum_binary_nested_handle_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_enum_binary.jett");

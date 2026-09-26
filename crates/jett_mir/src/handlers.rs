@@ -10,6 +10,12 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             ..
         } => true,
         ExpressionKind::View(value) => has_extractable_handle(value),
+        ExpressionKind::Clone(value) => has_extractable_handle(value),
+        ExpressionKind::Coarsen(value) | ExpressionKind::Declassify(value) => {
+            has_extractable_handle(value)
+        }
+        ExpressionKind::Field { base, .. } => has_extractable_handle(base),
+        ExpressionKind::StateIs { value, .. } => has_extractable_handle(value),
         ExpressionKind::Unary { value, .. } => has_extractable_handle(value),
         ExpressionKind::Binary { left, right, .. } => {
             has_extractable_handle(left) || has_extractable_handle(right)
@@ -227,6 +233,52 @@ impl Builder<'_> {
         if let ExpressionKind::View(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::View(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::Clone(value) = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::Clone(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::Coarsen(value) = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::Coarsen(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::Declassify(value) = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::Declassify(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::Field {
+            base,
+            owner_type,
+            field,
+        } = &expression.kind
+            && has_extractable_handle(base)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::Field {
+                base: Box::new(self.lower_value(base)),
+                owner_type: *owner_type,
+                field: *field,
+            };
+            return lowered;
+        }
+        if let ExpressionKind::StateIs { value, state } = &expression.kind
+            && has_extractable_handle(value)
+        {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::StateIs {
+                value: Box::new(self.lower_value(value)),
+                state: *state,
+            };
             return lowered;
         }
         if let ExpressionKind::Unary { op, value } = &expression.kind

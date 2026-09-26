@@ -1,0 +1,29 @@
+namespace app
+machine Session:
+    states:
+        guest
+        active(name: string)
+    transitions:
+        guest to active
+function maybe_session(valid: bool) returns result[Session, string]:
+    if valid:
+        return ok(Session(active, "Ada"))
+    return fail("missing")
+function state_name(valid: bool) returns string:
+    if (maybe_session(valid) handle error:
+        default Session(guest)
+    ) at active:
+        return "active"
+    return "guest"
+function active_count() returns int64:
+    mutable int64 count = 0
+    while (maybe_session(count < 2) handle error:
+        default Session(guest)
+    ) at active:
+        count = count + 1
+    return count
+function main() returns nothing:
+    println(state_name(true))
+    println(state_name(false))
+    println(active_count())
+    return nothing

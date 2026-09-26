@@ -1,0 +1,20 @@
+namespace app
+enum Message:
+    empty
+    text(value: string)
+function maybe_message(valid: bool) returns result[Message, string]:
+    if valid:
+        return ok(Message.text("hello"))
+    return fail("missing")
+function describe(valid: bool) returns string:
+    match(maybe_message(valid) handle error:
+        default Message.empty
+    ):
+        empty:
+            return "empty"
+        text(value):
+            return value
+function main() returns nothing:
+    println(describe(true))
+    println(describe(false))
+    return nothing

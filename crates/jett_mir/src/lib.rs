@@ -1079,6 +1079,7 @@ impl<'a> Builder<'a> {
         let then_block = self.new_block(then_body.span);
         let else_span = else_body.map_or(statement_span, |body| body.span);
         let else_block = self.new_block(else_span);
+        let condition = self.lower_value(condition);
         self.terminate(
             TerminatorKind::Branch {
                 condition: condition.clone(),
@@ -1113,7 +1114,9 @@ impl<'a> Builder<'a> {
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);
         self.terminate(TerminatorKind::Goto(condition_block), statement_span);
+        self.loops.push((condition_block, exit));
         self.current = condition_block;
+        let condition = self.lower_value(condition);
         self.terminate(
             TerminatorKind::Branch {
                 condition: condition.clone(),
@@ -1122,7 +1125,6 @@ impl<'a> Builder<'a> {
             },
             condition.span,
         );
-        self.loops.push((condition_block, exit));
         self.current = body_block;
         self.lower_block(body);
         self.close_to(condition_block, body.span);
@@ -1187,6 +1189,7 @@ impl<'a> Builder<'a> {
             hir::ExpressionKind::Local(local) => self.view_params.contains(local),
             _ => false,
         };
+        let scrutinee = self.lower_value(scrutinee);
         let scrutinee = if borrowed {
             Expression {
                 kind: hir::ExpressionKind::Clone(Box::new(scrutinee.clone())),

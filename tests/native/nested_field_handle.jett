@@ -1,0 +1,43 @@
+namespace app
+struct User:
+    name: string
+struct Wrapper:
+    user: User
+function maybe_user(valid: bool) returns result[User, string]:
+    if valid:
+        return ok(User(name: "Ada"))
+    return fail("missing")
+function user_name(valid: bool) returns string:
+    return(maybe_user(valid) handle error:
+        default User(name: "fallback")
+    ).name
+function user_name_or_error(valid: bool) returns string:
+    return(maybe_user(valid) handle error:
+        return error
+    ).name
+function maybe_optional(valid: bool) returns optional[User]:
+    if valid:
+        return some(User(name: "Lin"))
+    return none
+function optional_name(valid: bool) returns string:
+    return(maybe_optional(valid) handle:
+        default User(name: "optional fallback")
+    ).name
+function maybe_wrapper(valid: bool) returns result[Wrapper, string]:
+    if valid:
+        return ok(Wrapper(user: User(name: "Kai")))
+    return fail("missing wrapper")
+function nested_name(valid: bool) returns string:
+    return(maybe_wrapper(valid) handle error:
+        default Wrapper(user: User(name: "nested fallback"))
+    ).user.name
+function main() returns nothing:
+    println(user_name(true))
+    println(user_name(false))
+    println(user_name_or_error(true))
+    println(user_name_or_error(false))
+    println(optional_name(true))
+    println(optional_name(false))
+    println(nested_name(true))
+    println(nested_name(false))
+    return nothing
