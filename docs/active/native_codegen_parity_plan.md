@@ -1262,3 +1262,9 @@ Graphics callback state now carries primitive pending depth from the initial
 value through each update result and render call. Scripted interpreter/native
 fixtures cover nested pending `int64`, `bool`, and `float64` state; the coverage
 estimate remains 85% while the broader gaps above remain.
+
+Reflected `type.field_value`, `type.variant_field_value`, and
+`type.machine_field_value` now restore primitive pending depth from the selected
+field after metadata validation. Linked differential fixtures cover nested
+integer, boolean, and floating-point struct fields plus enum and machine
+payloads. Other aggregate reflection and mismatch diagnostics remain open.

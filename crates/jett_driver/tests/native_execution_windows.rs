@@ -1533,6 +1533,23 @@ fn native_pending_reflected_construction_matches_interpreter() {
 }
 
 #[test]
+fn native_pending_reflected_scalar_fields_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_reflected_scalar_fields.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated reflected field directory");
+    let binary = directory.path().join("pending_reflected_scalar_fields.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile reflected fields");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
 fn native_pending_type_construction_invalid_use_matches_interpreter() {
     for name in [
         "pending_type_construction_invalid_use",

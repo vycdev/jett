@@ -87,9 +87,11 @@ fields store scalar depth beside their bits; field access and recursive debug
 formatting restore it. Primitive lists use a sparse per-element depth map,
 preserved by cloning, insertion, removal, iteration, and stable sorting.
 `list.get` carries element depth through its result payload. Differential
-fixtures cover these boundaries, including nested pending wrappers. Pending
-scalar values in unexamined intrinsic operands need further parity work. Direct
-unary and binary operators now reject pending primitive operands with the
+fixtures cover these boundaries, including nested pending wrappers. Reflected
+field reads restore pending depth from the validated struct, enum, or machine
+field slot; differential fixtures cover primitive reflected values. Pending
+scalar values in unexamined intrinsic operands need further parity work.
+Direct unary and binary operators now reject pending primitive operands with the
 interpreter's error text after evaluating the operands in source order.
 Boolean `and` and `or` still skip an unevaluated right operand when the plain
 left value short-circuits; a pending left value evaluates the right operand

@@ -1534,6 +1534,34 @@ impl Translator<'_, '_> {
         }
         Ok(())
     }
+    fn reflected_field_value(
+        &mut self,
+        owner: Value,
+        index: Value,
+        result_type: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        let bits = self.leaf(NativeLeaf::StructField, &[owner, index], true)?;
+        if is_linear(self.types, result_type) {
+            return self.clone_linear(LoweredValue::Scalar(bits), result_type, span);
+        }
+        if is_string(self.types, result_type) {
+            let owned = self.leaf(NativeLeaf::Retain, &[bits], true)?;
+            return self.own(owned);
+        }
+        if is_function(self.types, result_type) {
+            let owned = self.leaf(NativeLeaf::StructClone, &[bits], true)?;
+            return self.own(owned);
+        }
+        let value = self.unpack_payload(bits, result_type, span)?;
+        if is_task_scalar(self.types, result_type)? {
+            let depth = self.leaf(NativeLeaf::StructFieldPendingDepth, &[owner, index], true)?;
+            Ok(LoweredValue::ScalarTask(self.scalar(value, span)?, depth))
+        } else {
+            Ok(value)
+        }
+    }
+
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
@@ -1775,19 +1803,7 @@ impl Translator<'_, '_> {
             let checked_index =
                 self.leaf(NativeLeaf::ReflectedFieldIndex, &[metadata, expected], true)?;
             let owner = self.scalar(evaluated[0], span)?;
-            let bits = self.leaf(NativeLeaf::StructField, &[owner, checked_index], true)?;
-            if is_linear(self.types, result_type) {
-                return self.clone_linear(LoweredValue::Scalar(bits), result_type, span);
-            }
-            if is_string(self.types, result_type) {
-                let owned = self.leaf(NativeLeaf::Retain, &[bits], true)?;
-                return self.own(owned);
-            }
-            if is_function(self.types, result_type) {
-                let owned = self.leaf(NativeLeaf::StructClone, &[bits], true)?;
-                return self.own(owned);
-            }
-            return self.unpack_payload(bits, result_type, span);
+            return self.reflected_field_value(owner, checked_index, result_type, span);
         }
         if matches!(
             id,
@@ -1859,19 +1875,7 @@ impl Translator<'_, '_> {
             let checked_index = self.leaf(leaf, &[metadata, expected], true)?;
             let one = self.builder.ins().iconst(ir::types::I64, 1);
             let slot = self.builder.ins().iadd(checked_index, one);
-            let bits = self.leaf(NativeLeaf::StructField, &[owner, slot], true)?;
-            if is_linear(self.types, result_type) {
-                return self.clone_linear(LoweredValue::Scalar(bits), result_type, span);
-            }
-            if is_string(self.types, result_type) {
-                let owned = self.leaf(NativeLeaf::Retain, &[bits], true)?;
-                return self.own(owned);
-            }
-            if is_function(self.types, result_type) {
-                let owned = self.leaf(NativeLeaf::StructClone, &[bits], true)?;
-                return self.own(owned);
-            }
-            return self.unpack_payload(bits, result_type, span);
+            return self.reflected_field_value(owner, slot, result_type, span);
         }
         if id == IntrinsicId::Range {
             self.check_index_count_arguments(id, &evaluated, span)?;
