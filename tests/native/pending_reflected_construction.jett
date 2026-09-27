@@ -1,0 +1,82 @@
+namespace app
+struct User:
+    age: int64
+enum Message:
+    number(value: int64)
+    empty
+machine Session:
+    states:
+        active(count: int64)
+        closed
+    transitions:
+        active to closed
+bitfield Header:
+    code: 8 bits
+function check_struct() returns nothing:
+    TypeField field = list.get[TypeField](type.fields[User](), 0) handle:
+        return nothing
+    TypeConstruction builder = type.construct_start[User]()
+    TypeConstruction filled = type.construct_put[User, int64](builder, view field, run run 7) handle error:
+        println(error)
+        return nothing
+    trace filled
+    TypeConstruction copied = clone filled
+    trace copied
+    User built = type.construct_finish[User](copied) handle error:
+        println(error)
+        return nothing
+    trace built
+    return nothing
+function check_enum() returns nothing:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Message](), 0) handle:
+        return nothing
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    TypeConstruction builder = type.construct_variant_start[Message](view variant) handle error:
+        println(error)
+        return nothing
+    TypeConstruction filled = type.construct_put[Message, int64](builder, view field, run 8) handle error:
+        println(error)
+        return nothing
+    trace filled
+    Message built = type.construct_finish[Message](filled) handle error:
+        println(error)
+        return nothing
+    trace built
+    return nothing
+function check_machine() returns nothing:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 0) handle:
+        return nothing
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    TypeConstruction builder = type.construct_machine_start[Session](view state) handle error:
+        println(error)
+        return nothing
+    TypeConstruction filled = type.construct_put[Session, int64](builder, view field, run 9) handle error:
+        println(error)
+        return nothing
+    trace filled
+    Session built = type.construct_finish[Session](filled) handle error:
+        println(error)
+        return nothing
+    trace built
+    return nothing
+function check_bitfield() returns nothing:
+    TypeField field = list.get[TypeField](type.fields[Header](), 0) handle:
+        return nothing
+    TypeConstruction builder = type.construct_start[Header]()
+    TypeConstruction filled = type.construct_put[Header, int64](builder, view field, run 10) handle error:
+        println(error)
+        return nothing
+    trace filled
+    Header built = type.construct_finish[Header](filled) handle error:
+        println(error)
+        return nothing
+    trace built
+    return nothing
+function main() returns nothing:
+    check_struct()
+    check_enum()
+    check_machine()
+    check_bitfield()
+    return nothing

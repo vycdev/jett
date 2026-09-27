@@ -725,12 +725,9 @@ impl NativeDebugLayout {
                     }
                     result.push_str(name);
                     result.push_str(": ");
-                    result.push_str(&field_layout.format_value(
-                        values,
-                        field.bits,
-                        field_layout.root,
-                        child,
-                    )?);
+                    let field_value =
+                        field_layout.format_value(values, field.bits, field_layout.root, child)?;
+                    result.push_str(&format_pending_value(&field_value, field.pending_depth)?);
                 }
                 result.push(')');
                 format_pending_value(&result, record.pending_depth)?
@@ -3805,6 +3802,28 @@ impl NativeValues {
         provided_type: &str,
         canonical_type: &str,
     ) -> LeafResult<u64> {
+        self.builder_put_depth(
+            builder,
+            field,
+            bits,
+            0,
+            owned,
+            expected_owner,
+            provided_type,
+            canonical_type,
+        )
+    }
+    fn builder_put_depth(
+        &mut self,
+        builder: u64,
+        field: u64,
+        bits: u64,
+        pending_depth: u64,
+        owned: bool,
+        expected_owner: &str,
+        provided_type: &str,
+        canonical_type: &str,
+    ) -> LeafResult<u64> {
         self.reject_pending_builder(builder, "construct_put")?;
         let info = self
             .builders
@@ -3911,7 +3930,7 @@ impl NativeValues {
             .fields[slot] = Some(NativeField {
             bits,
             owned,
-            pending_depth: 0,
+            pending_depth,
         });
         self.builders
             .get_mut(&builder)
@@ -3982,52 +4001,64 @@ impl NativeValues {
             );
         }
         for (index, rule) in info.validation.iter().enumerate() {
-            let bits = self
-                .struct_field(builder, (index + info.field_offset) as u64)?
-                .bits;
+            let field = self.struct_field(builder, (index + info.field_offset) as u64)?;
+            let bits = field.bits;
             let field_name = &info.field_names[index];
             let bitfield_name = &info.owner;
-            let message = match rule {
-                BuilderFieldValidation::None => None,
-                BuilderFieldValidation::SignedBits(width) => {
-                    let value = bits as i64;
-                    let max = if *width == 64 {
-                        u64::MAX
-                    } else {
-                        (1_u64 << width) - 1
-                    };
-                    (value < 0 || bits > max).then(|| format!(
-                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{value}'"
-                    ))
+            let message = if field.pending_depth != 0 {
+                match rule {
+                    BuilderFieldValidation::SignedBits(_)
+                    | BuilderFieldValidation::UnsignedBits(_) => {
+                        Some(format!("field '{field_name}' expects int64 or uint64"))
+                    }
+                    BuilderFieldValidation::EnumBits(_, enum_name, _) => {
+                        Some(format!("field '{field_name}' expects enum '{enum_name}'"))
+                    }
+                    BuilderFieldValidation::None => None,
                 }
-                BuilderFieldValidation::UnsignedBits(width) => {
-                    let max = if *width == 64 {
-                        u64::MAX
-                    } else {
-                        (1_u64 << width) - 1
-                    };
-                    (bits > max).then(|| format!(
-                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{bits}'"
-                    ))
-                }
-                BuilderFieldValidation::EnumBits(width, enum_name, variants) => {
-                    let tag = usize::try_from(self.struct_field(bits, 0)?.bits)
-                        .map_err(|_| INVALID_CONSTRUCTION)?;
-                    let (variant_name, discriminant) =
-                        variants.get(tag).ok_or(INVALID_CONSTRUCTION)?;
-                    if *discriminant < 0 {
-                        Some(format!(
-                            "enum '{enum_name}.{variant_name}' has negative discriminant {discriminant}"
-                        ))
-                    } else {
+            } else {
+                match rule {
+                    BuilderFieldValidation::None => None,
+                    BuilderFieldValidation::SignedBits(width) => {
+                        let value = bits as i64;
                         let max = if *width == 64 {
                             u64::MAX
                         } else {
                             (1_u64 << width) - 1
                         };
-                        ((*discriminant as u64) > max).then(|| format!(
+                        (value < 0 || bits > max).then(|| format!(
+                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{value}'"
+                    ))
+                    }
+                    BuilderFieldValidation::UnsignedBits(width) => {
+                        let max = if *width == 64 {
+                            u64::MAX
+                        } else {
+                            (1_u64 << width) - 1
+                        };
+                        (bits > max).then(|| format!(
+                        "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold '{bits}'"
+                    ))
+                    }
+                    BuilderFieldValidation::EnumBits(width, enum_name, variants) => {
+                        let tag = usize::try_from(self.struct_field(bits, 0)?.bits)
+                            .map_err(|_| INVALID_CONSTRUCTION)?;
+                        let (variant_name, discriminant) =
+                            variants.get(tag).ok_or(INVALID_CONSTRUCTION)?;
+                        if *discriminant < 0 {
+                            Some(format!(
+                                "enum '{enum_name}.{variant_name}' has negative discriminant {discriminant}"
+                            ))
+                        } else {
+                            let max = if *width == 64 {
+                                u64::MAX
+                            } else {
+                                (1_u64 << width) - 1
+                            };
+                            ((*discriminant as u64) > max).then(|| format!(
                             "bitfield '{bitfield_name}' field '{field_name}' is {width} bit(s) wide and cannot hold enum variant '{enum_name}.{variant_name}'"
                         ))
+                        }
                     }
                 }
             };
@@ -4855,6 +4886,19 @@ leaves! {
             let provided_type = std::str::from_utf8(provided_type).map_err(|_| INVALID_CONSTRUCTION)?;
             let canonical_type = std::str::from_utf8(canonical_type).map_err(|_| INVALID_CONSTRUCTION)?;
             s.builder_put(builder, field, bits, owned != 0, owner, provided_type, canonical_type) };
+    BuilderPutScalarTask, jett_rt_v1_builder_put_scalar_task, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, depth: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64), u64 => I64,
+        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let type_length = usize::try_from(type_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_length = usize::try_from(canonical_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
+            let provided_type = unsafe { std::slice::from_raw_parts(type_pointer as *const u8, type_length) };
+            let canonical_type = unsafe { std::slice::from_raw_parts(canonical_pointer as *const u8, canonical_length) };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
+            let provided_type = std::str::from_utf8(provided_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            let canonical_type = std::str::from_utf8(canonical_type).map_err(|_| INVALID_CONSTRUCTION)?;
+            s.builder_put_depth(builder, field, bits, depth, owned != 0, owner, provided_type, canonical_type) };
     BuilderFinish, jett_rt_v1_builder_finish, false, (builder: u64 => I64, owner_pointer: u64 => I64, owner_length: u64 => I64), u64 => I64,
         |s| { if owner_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
             let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;

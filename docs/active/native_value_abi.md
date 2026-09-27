@@ -88,8 +88,8 @@ formatting restore it. Primitive lists use a sparse per-element depth map,
 preserved by cloning, insertion, removal, iteration, and stable sorting.
 `list.get` carries element depth through its result payload. Differential
 fixtures cover these boundaries, including nested pending wrappers. Pending
-scalar values in reflected construction, primitive operands in intrinsics,
-and actor/Graphics state propagation need further parity work. Direct
+scalar values in unexamined intrinsic operands and actor/Graphics state
+propagation need further parity work. Direct
 unary and binary operators now reject pending primitive operands with the
 interpreter's error text after evaluating the operands in source order.
 Boolean `and` and `or` still skip an unevaluated right operand when the plain
@@ -115,6 +115,10 @@ construction, insert/update, lookup result payloads, removal, cloning,
 String map keys compare both text and their handle's pending depth. Public map
 intrinsics reject pending map containers, while `map.from_lists` rejects
 pending input lists with the interpreter's current errors.
+`TypeConstruction` builder fields also store scalar pending depth, so builder
+debug output, cloning, and finished struct, enum, and machine values preserve
+it. Bitfield width validation rejects pending numeric fields with the
+interpreter's current error.
 
 Owned native strings also carry a pending depth in the runtime registry.
 `StringRun` and `StringTaskJoin` create independent handles, so wrapping a

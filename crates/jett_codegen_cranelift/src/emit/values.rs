@@ -1436,6 +1436,11 @@ impl Translator<'_, '_> {
             let builder = self.scalar(evaluated[0], span)?;
             let field = self.scalar(evaluated[1], span)?;
             let (bits, owned) = self.payload_bits(evaluated[2]);
+            let pending_depth = if let LoweredValue::ScalarTask(_, depth) = evaluated[2] {
+                Some(depth)
+            } else {
+                None
+            };
             let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
             let owner = reflection_arguments
                 .first()
@@ -1456,22 +1461,25 @@ impl Translator<'_, '_> {
             }
             let canonical_type = self.types.type_name(value_type);
             let (canonical_pointer, canonical_length) = self.static_bytes(&canonical_type)?;
-            let result = self.leaf(
-                NativeLeaf::BuilderPut,
-                &[
-                    builder,
-                    field,
-                    bits,
-                    owned,
-                    owner_pointer,
-                    owner_length,
-                    type_pointer,
-                    type_length,
-                    canonical_pointer,
-                    canonical_length,
-                ],
-                true,
-            )?;
+            let mut arguments = vec![builder, field, bits];
+            if let Some(depth) = pending_depth {
+                arguments.push(depth);
+            }
+            arguments.extend([
+                owned,
+                owner_pointer,
+                owner_length,
+                type_pointer,
+                type_length,
+                canonical_pointer,
+                canonical_length,
+            ]);
+            let leaf = if pending_depth.is_some() {
+                NativeLeaf::BuilderPutScalarTask
+            } else {
+                NativeLeaf::BuilderPut
+            };
+            let result = self.leaf(leaf, &arguments, true)?;
             for transferred in [evaluated[0], evaluated[2]] {
                 if let LoweredValue::Owned(_, slot) = transferred {
                     self.clear_slot(slot);
