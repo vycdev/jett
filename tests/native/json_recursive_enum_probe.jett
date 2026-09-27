@@ -1,0 +1,18 @@
+namespace app
+enum IntList:
+    empty
+    item(value: int64, next: IntList)
+function total(value: IntList) returns int64:
+    match value:
+        empty:
+            return 0
+        item(head, tail):
+            return head + total(tail)
+function main() returns nothing:
+    IntList original = IntList.item(2, IntList.item(3, IntList.empty))
+    string raw = json.serialize[IntList](view original)
+    IntList decoded = json.parse[IntList](raw) handle error:
+        println(error)
+        return nothing
+    println(total(decoded))
+    return nothing

@@ -1673,6 +1673,36 @@ fn native_pending_reflected_owner_errors_match_interpreter() {
 }
 
 #[test]
+fn native_json_nested_secrets_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/json_nested_secret_probe.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated nested secret JSON directory");
+    let binary = directory.path().join("json_nested_secret_probe.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile nested secret JSON");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(expected.debug_output.is_empty());
+    assert!(actual.stderr.is_empty());
+}
+
+#[test]
+fn native_json_recursive_enum_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/json_recursive_enum_probe.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated recursive enum JSON directory");
+    let binary = directory.path().join("json_recursive_enum_probe.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile recursive enum JSON");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(expected.debug_output.is_empty());
+    assert!(actual.stderr.is_empty());
+}
+
+#[test]
 fn native_pending_reflected_field_error_matches_interpreter() {
     for name in [
         "pending_reflected_field_failure",

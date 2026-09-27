@@ -1347,3 +1347,9 @@ Field-read validation preserves metadata-before-value precedence;
 for enum and machine payloads, a pending source value precedes a foreign field
 owner error. Differential fixtures include state-qualified machines, foreign
 fields, and both pending metadata and a pending source value.
+
+Linked JSON differential probes now cover nested secret wrappers in lists,
+maps, results, and optionals, including an exact-parse error inside a secret
+list. A recursive enum also roundtrips through serialize and parse. These
+cases match the interpreter and expand evidence for concrete JSON shapes;
+they do not close the remaining JSON row or change the broad 85% estimate.
