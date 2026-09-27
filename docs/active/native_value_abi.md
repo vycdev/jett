@@ -204,6 +204,11 @@ lookup also rejects a pending key before reading the launch snapshot.
 `Stdout.write` follows the interpreter's current behavior: it accepts a
 pending Stdout capability and writes pending string arguments with their
 visible `pending(...)` wrappers.
+`secret.compare` rejects pending string or byte operands before comparing
+their plain buffers; `secret.redact` still returns the fixed redaction text.
+Bitfield byte conversion rejects a pending record or input bytes. Payload
+encoding checks a pending `list[uint8]` or element before copying byte values
+and reports the interpreter's field-specific error.
 
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index

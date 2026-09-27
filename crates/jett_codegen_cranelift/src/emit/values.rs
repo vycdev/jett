@@ -219,6 +219,8 @@ impl Translator<'_, '_> {
             return Err(self.unsupported(span, "bitfield encoding type"));
         };
         let layout = self.types.resolve_bitfield(*id).clone();
+        let message = format!("{}.to_bytes expects a {} value", layout.name, layout.name);
+        self.reject_pending_handle(value, 4, &message, span)?;
         let record = self.scalar(value, span)?;
         let bytes = self.leaf(NativeLeaf::BytesNew, &[], true)?;
         let output = self.own_linear(bytes)?;
@@ -263,6 +265,13 @@ impl Translator<'_, '_> {
                     bit_offset += u64::from(*width);
                 }
                 BitfieldFieldKind::Payload => {
+                    let prefix = format!("bitfield '{}' field '{}': ", layout.name, field.name);
+                    let (pointer, length) = self.static_bytes(&prefix)?;
+                    self.leaf(
+                        NativeLeaf::BitfieldCheckPayloadPending,
+                        &[bits, pointer, length],
+                        true,
+                    )?;
                     self.leaf(NativeLeaf::BitfieldExtendPayload, &[bytes, bits], true)?;
                 }
             }
@@ -282,6 +291,8 @@ impl Translator<'_, '_> {
             return Err(self.unsupported(span, "bitfield decoding type"));
         };
         let layout = self.types.resolve_bitfield(*id).clone();
+        let message = format!("{}.from_bytes expects a bytes argument", layout.name);
+        self.reject_pending_handle(value, 1, &message, span)?;
         fn name(data: &mut Vec<u8>, value: &str) -> Result<(), CodegenError> {
             let length = u32::try_from(value.len())
                 .map_err(|_| CodegenError::Backend("bitfield layout name is too long".into()))?;
@@ -2071,6 +2082,15 @@ impl Translator<'_, '_> {
                 self.own_linear(value)
             }
             IntrinsicId::SecretCompare => {
+                let message = "secret.compare expects two strings or two byte strings";
+                let kind = if is_string(self.types, args[0].ty) {
+                    0
+                } else {
+                    1
+                };
+                for &value in &evaluated {
+                    self.reject_pending_handle(value, kind, message, span)?;
+                }
                 let left = self.scalar(evaluated[0], span)?;
                 let right = self.scalar(evaluated[1], span)?;
                 let leaf = if is_string(self.types, args[0].ty) {

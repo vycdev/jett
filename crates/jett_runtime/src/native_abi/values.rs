@@ -1785,6 +1785,59 @@ impl NativeValues {
         }
         Ok(0)
     }
+    fn check_bitfield_payload_pending(&mut self, payload: u64, prefix: &[u8]) -> LeafResult<u32> {
+        let source = self.lists.get(&payload).ok_or(INVALID_LIST)?;
+        if source.owned {
+            return Err(INVALID_LIST);
+        }
+        let message = if source.pending_depth != 0 {
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(source.elements.len())
+                .map_err(|_| EXHAUSTED)?;
+            for (index, element) in source.elements.iter().enumerate() {
+                let element = element.ok_or(INVALID_LIST)?;
+                let depth = source
+                    .element_pending_depths
+                    .get(&index)
+                    .copied()
+                    .unwrap_or(0);
+                values.push(format_pending_value(&element.to_string(), depth)?);
+            }
+            let list = format!("list({})", values.join(", "));
+            let value = format_pending_value(&list, source.pending_depth)?;
+            Some(format!(
+                "payload expects list[uint8] or bytes, found {value}"
+            ))
+        } else {
+            let pending = source
+                .elements
+                .iter()
+                .enumerate()
+                .find_map(|(index, element)| {
+                    let depth = source
+                        .element_pending_depths
+                        .get(&index)
+                        .copied()
+                        .unwrap_or(0);
+                    (depth != 0).then_some((element, depth))
+                });
+            if let Some((element, depth)) = pending {
+                let element = element.ok_or(INVALID_LIST)?;
+                let value = format_pending_value(&element.to_string(), depth)?;
+                Some(format!("payload expects list[uint8], found {value}"))
+            } else {
+                None
+            }
+        };
+        if let Some(message) = message {
+            let mut full = prefix.to_vec();
+            full.extend_from_slice(message.as_bytes());
+            self.dynamic_failure_message = Some(full);
+            return Err(INVALID_PENDING_HANDLE_CHECK);
+        }
+        Ok(0)
+    }
     fn decode_bitfield(&mut self, input: u64, descriptor: &[u8]) -> LeafResult<u64> {
         let layout = NativeBitfieldLayout::parse(descriptor)?;
         let decoded = layout.decode(self.bytes(input)?);
@@ -2220,6 +2273,12 @@ impl NativeValues {
             1 => self.bytes_depth(handle)?,
             2 => self.lists.get(&handle).ok_or(INVALID_LIST)?.pending_depth,
             3 => self.capability_authority(handle)?.1,
+            4 => {
+                self.structs
+                    .get(&handle)
+                    .ok_or(INVALID_STRUCT)?
+                    .pending_depth
+            }
             _ => return Err(INVALID_PENDING_HANDLE_CHECK),
         };
         if depth == 0 {
@@ -5440,6 +5499,12 @@ leaves! {
         |s| s.write_bitfield_bits(value, numeric, width, network_order, bit_offset);
     BitfieldExtendPayload, jett_rt_v1_bitfield_extend_payload, false, (value: u64 => I64, payload: u64 => I64), u32 => I32,
         |s| s.extend_bitfield_payload(value, payload);
+    BitfieldCheckPayloadPending, jett_rt_v1_bitfield_check_payload_pending, false, (payload: u64 => I64, prefix_pointer: u64 => I64, prefix_length: u64 => I64), u32 => I32,
+        |s| { if prefix_pointer == 0 { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let length = usize::try_from(prefix_length).map_err(|_| INVALID_PENDING_HANDLE_CHECK)?;
+            if length > isize::MAX as usize { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let prefix = unsafe { std::slice::from_raw_parts(prefix_pointer as *const u8, length) };
+            s.check_bitfield_payload_pending(payload, prefix) };
     BitfieldDecode, jett_rt_v1_bitfield_decode, false, (value: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
         |s| { if layout_pointer == 0 { return Err(INVALID_BITFIELD_LAYOUT); }
             let length = usize::try_from(layout_length).map_err(|_| INVALID_BITFIELD_LAYOUT)?;

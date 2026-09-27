@@ -1301,6 +1301,47 @@ fn native_pending_capability_intrinsics_match_interpreter() {
 }
 
 #[test]
+fn native_pending_secret_and_bitfield_intrinsics_match_interpreter() {
+    for name in [
+        "pending_secret_compare_string_first_failure",
+        "pending_secret_compare_string_second_failure",
+        "pending_secret_compare_bytes_first_failure",
+        "pending_secret_compare_bytes_second_failure",
+        "pending_bitfield_to_bytes_failure",
+        "pending_bitfield_from_bytes_failure",
+        "pending_bitfield_payload_element_failure",
+        "pending_bitfield_payload_list_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending secret or bitfield operand");
+        let directory = tempfile::tempdir().expect("isolated pending intrinsic directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending secret or bitfield case");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/pending_secret_redact.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending secret directory");
+    let binary = directory.path().join("pending_secret_redact.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending redaction case");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_pending_set_map_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_set_map_values.jett");

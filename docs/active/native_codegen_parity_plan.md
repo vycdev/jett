@@ -1239,3 +1239,9 @@ pending authority; Environment lookup rejects a pending key; `Stdout.write`
 accepts a pending authority and renders pending text. Linked differential
 fixtures cover each case. The coarse overall estimate remains 80% while
 unresolved language and runtime gaps remain.
+
+Secret comparison and bitfield byte conversion now reject pending operands
+with interpreter-matching diagnostics. Bitfield payload encoding detects a
+pending `list[uint8]` container or element before writing bytes, while
+`secret.redact` retains its unconditional redaction behavior. Linked
+differential fixtures cover these cases. The coarse estimate remains 80%.

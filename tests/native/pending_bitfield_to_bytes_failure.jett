@@ -1,0 +1,8 @@
+namespace app
+bitfield Header:
+    version: 4 bits
+function main() returns nothing:
+    Header header = run Header(version: 4)
+    bytes encoded = Header.to_bytes(header)
+    trace encoded
+    return nothing
