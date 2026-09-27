@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    bytes data = run bytes.from_string("abc")
+    result[string, string] value = bytes.to_string(view data)
+    trace value
+    return nothing

@@ -330,6 +330,9 @@ of pending values remain open.
 Scalar math intrinsics now reject pending numeric arguments before invoking
 native kernels, with differential cases spanning every argument-bearing scalar
 math intrinsic and each argument position used by the multi-argument forms.
+Numeric conversions and `string.from_*` now reject pending primitive operands
+with interpreter type errors. Numeric string parsers and byte/text conversion
+intrinsics reject pending string or bytes handles before parsing or formatting.
 Primitive set elements now preserve pending depth through membership, updates,
 cloning, debug output, and iteration. Pending set containers fail at public set
 intrinsics. Native `for` rejects pending list, string, map, and set containers

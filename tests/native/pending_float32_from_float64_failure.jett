@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    float32 value = float32.from_float64(run 1.5)
+    trace value
+    return nothing

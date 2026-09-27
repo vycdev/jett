@@ -1472,6 +1472,23 @@ impl Translator<'_, '_> {
         }
         Ok(())
     }
+    fn reject_pending_handle(
+        &mut self,
+        value: LoweredValue,
+        kind: i64,
+        message: &str,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let handle = self.scalar(value, span)?;
+        let kind = self.builder.ins().iconst(ir::types::I32, kind);
+        let (pointer, length) = self.static_bytes(message)?;
+        self.leaf(
+            NativeLeaf::RejectPendingHandle,
+            &[handle, kind, pointer, length],
+            true,
+        )?;
+        Ok(())
+    }
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
@@ -1497,6 +1514,35 @@ impl Translator<'_, '_> {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let conversion_expected = match id {
+            IntrinsicId::Float32FromFloat64 | IntrinsicId::Int64FromFloat64 => {
+                Some("a float64 argument")
+            }
+            IntrinsicId::Float64FromInt64 | IntrinsicId::StringFromInt64 => {
+                Some("an int64 argument")
+            }
+            IntrinsicId::StringFromUint64 => Some("a uint64 argument"),
+            IntrinsicId::StringFromFloat64 => Some("a float64 argument"),
+            IntrinsicId::StringFromBool => Some("a bool argument"),
+            _ => None,
+        };
+        if let Some(expected) = conversion_expected {
+            let message = format!("{} expects {expected}", id.canonical_name());
+            self.reject_pending_scalars(&evaluated, &message)?;
+        }
+        let conversion_handle_kind = match id {
+            IntrinsicId::Int64FromString
+            | IntrinsicId::Uint64FromString
+            | IntrinsicId::Float64FromString
+            | IntrinsicId::BytesFromString
+            | IntrinsicId::BytesFromHex => Some((0, "a string argument")),
+            IntrinsicId::BytesToString | IntrinsicId::BytesToHex => Some((1, "a bytes argument")),
+            _ => None,
+        };
+        if let Some((kind, expected)) = conversion_handle_kind {
+            let message = format!("{} expects {expected}", id.canonical_name());
+            self.reject_pending_handle(evaluated[0], kind, &message, span)?;
+        }
         if id == IntrinsicId::GraphicsRun {
             return self.graphics_run(type_arguments, args, &evaluated, span);
         }

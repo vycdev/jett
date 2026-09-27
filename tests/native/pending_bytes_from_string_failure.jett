@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    bytes data = bytes.from_string(run "abc")
+    trace data
+    return nothing

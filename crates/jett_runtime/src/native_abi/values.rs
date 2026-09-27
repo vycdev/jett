@@ -83,6 +83,10 @@ const INVALID_PENDING_SCALAR_CHECK: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native pending scalar check",
 );
+const INVALID_PENDING_HANDLE_CHECK: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native pending handle check",
+);
 const INVALID_SET: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native set handle or element",
@@ -2194,6 +2198,26 @@ impl NativeValues {
         Err((
             JettRuntimeStatusV1::INVALID_ARGUMENT,
             b"pending scalar intrinsic operand",
+        ))
+    }
+    fn reject_pending_handle(&mut self, handle: u64, kind: u32, message: &[u8]) -> LeafResult<u32> {
+        let depth = match kind {
+            0 => {
+                self.strings
+                    .get(&handle)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth
+            }
+            1 => self.bytes_depth(handle)?,
+            _ => return Err(INVALID_PENDING_HANDLE_CHECK),
+        };
+        if depth == 0 {
+            return Ok(0);
+        }
+        self.dynamic_failure_message = Some(message.to_vec());
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"pending handle intrinsic operand",
         ))
     }
     fn new_set(&mut self, strings: u32) -> LeafResult<u64> {
@@ -5076,6 +5100,12 @@ leaves! {
             if length > isize::MAX as usize { return Err(INVALID_PENDING_SCALAR_CHECK); }
             let message = unsafe { std::slice::from_raw_parts(message_pointer as *const u8, length) };
             s.reject_pending_scalars(first_depth, second_depth, third_depth, message) };
+    RejectPendingHandle, jett_rt_v1_reject_pending_handle, false, (handle: u64 => I64, kind: u32 => I32, message_pointer: u64 => I64, message_length: u64 => I64), u32 => I32,
+        |s| { if message_pointer == 0 { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let length = usize::try_from(message_length).map_err(|_| INVALID_PENDING_HANDLE_CHECK)?;
+            if length > isize::MAX as usize { return Err(INVALID_PENDING_HANDLE_CHECK); }
+            let message = unsafe { std::slice::from_raw_parts(message_pointer as *const u8, length) };
+            s.reject_pending_handle(handle, kind, message) };
     ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;

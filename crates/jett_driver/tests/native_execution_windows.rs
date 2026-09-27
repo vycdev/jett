@@ -1125,6 +1125,43 @@ fn native_pending_math_intrinsics_match_interpreter_errors() {
 }
 
 #[test]
+fn native_pending_conversion_intrinsics_match_interpreter_errors() {
+    for name in [
+        "pending_float32_from_float64_failure",
+        "pending_float64_from_int64_failure",
+        "pending_int64_from_float64_failure",
+        "pending_string_from_int64_failure",
+        "pending_string_from_uint64_failure",
+        "pending_string_from_float64_failure",
+        "pending_string_from_bool_failure",
+        "pending_int64_from_string_failure",
+        "pending_uint64_from_string_failure",
+        "pending_float64_from_string_failure",
+        "pending_bytes_from_string_failure",
+        "pending_bytes_from_hex_failure",
+        "pending_bytes_to_string_failure",
+        "pending_bytes_to_hex_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending conversion operand");
+        let directory = tempfile::tempdir().expect("isolated pending conversion directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending conversion case");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_set_map_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_set_map_values.jett");

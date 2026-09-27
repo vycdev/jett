@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    uint64 wide = run 18446744073709551615
+    string value = string.from_uint64(wide)
+    trace value
+    return nothing

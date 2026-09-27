@@ -112,6 +112,10 @@ Native `range` checks all supplied integer operands before generating values.
 indexes or counts and pending receivers with their current interpreter errors.
 Math leaves use a shared pending-scalar check with the checked intrinsic name
 and interpreter's type-error wording before operating on numeric payload bits.
+Numeric conversion and `string.from_*` leaves use the same scalar check. A
+pending-handle check protects numeric string parsing and `bytes.from_string`,
+`bytes.from_hex`, `bytes.to_string`, and `bytes.to_hex` before their kernels
+inspect the underlying plain string or byte buffer.
 Primitive sets likewise keep a sparse per-element pending-depth map. Add,
 remove, contains, clone, recursive debug formatting, and scalar iteration use
 that depth; string set membership compares both text and the string handle's
