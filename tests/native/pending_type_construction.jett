@@ -1,0 +1,22 @@
+namespace app
+struct User:
+    name: string
+function main() returns nothing:
+    TypeConstruction pending = run type.construct_start[User]()
+    trace pending
+    TypeConstruction nested = run pending
+    trace nested
+    TypeConstruction inner = join nested handle error:
+        default type.construct_start[User]()
+    trace inner
+    TypeConstruction builder = join inner handle error:
+        default type.construct_start[User]()
+    trace builder
+    TypeField field = list.get[TypeField](type.fields[User](), 0) handle:
+        return nothing
+    TypeConstruction filled = type.construct_put[User, string](builder, view field, "Ada") handle error:
+        return nothing
+    User user = type.construct_finish[User](filled) handle error:
+        return nothing
+    println(user.name)
+    return nothing

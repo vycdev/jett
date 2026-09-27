@@ -578,7 +578,7 @@ impl NativeDebugLayout {
                     )?);
                 }
                 result.push(')');
-                result
+                format_pending_value(&result, record.pending_depth)?
             }
             NativeDebugNode::List(element) => {
                 let list = values.lists.get(&bits).ok_or(INVALID_LIST)?;
@@ -3180,6 +3180,26 @@ impl NativeValues {
         }
         Ok(result)
     }
+    fn reject_pending_builder(&mut self, builder: u64, operation: &str) -> LeafResult<()> {
+        let depth = self
+            .structs
+            .get(&builder)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .pending_depth;
+        if depth == 0 {
+            return Ok(());
+        }
+        let layout = NativeDebugLayout {
+            root: 0,
+            nodes: vec![NativeDebugNode::TypeConstruction],
+        };
+        let value = layout.format_value(self, builder, 0, 0)?;
+        self.dynamic_failure_message = Some(
+            format!("type.{operation}: first argument must be TypeConstruction, got {value}")
+                .into_bytes(),
+        );
+        Err(INVALID_CONSTRUCTION)
+    }
     fn builder_put(
         &mut self,
         builder: u64,
@@ -3190,6 +3210,7 @@ impl NativeValues {
         provided_type: &str,
         canonical_type: &str,
     ) -> LeafResult<u64> {
+        self.reject_pending_builder(builder, "construct_put")?;
         let info = self
             .builders
             .get(&builder)
@@ -3301,6 +3322,7 @@ impl NativeValues {
         Ok(result)
     }
     fn builder_finish(&mut self, builder: u64, expected_owner: &str) -> LeafResult<u64> {
+        self.reject_pending_builder(builder, "construct_finish")?;
         let info = self
             .builders
             .get(&builder)

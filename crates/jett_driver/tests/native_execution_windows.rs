@@ -1095,6 +1095,48 @@ fn native_pending_function_call_matches_interpreter_error() {
 }
 
 #[test]
+fn native_pending_type_construction_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_type_construction.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending builder directory");
+    let binary = directory.path().join("pending_type_construction.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending builder");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_type_construction_invalid_use_matches_interpreter() {
+    for name in [
+        "pending_type_construction_invalid_use",
+        "pending_type_construction_put_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending builder use");
+        let directory = tempfile::tempdir().expect("isolated pending builder misuse directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending builder misuse");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_enum_comparisons_match_interpreter_errors() {
     for name in [
         "pending_enum_equality_failure",

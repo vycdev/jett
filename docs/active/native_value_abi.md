@@ -108,6 +108,12 @@ that depth to named and captured function labels, including aggregate elements.
 Indirect calls check the descriptor after evaluating arguments and reject a
 still-pending function with the interpreter's runtime error.
 
+`TypeConstruction` builders use the same record-handle pending depth. Task
+`run` and `join` clone their fields and builder metadata; debug formatting
+preserves nested wrappers. `construct_put` and `construct_finish` reject a
+still-pending builder with the interpreter's source-value error before
+performing builder validation or construction.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

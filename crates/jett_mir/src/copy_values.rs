@@ -385,6 +385,7 @@ fn visit(
                         | Type::Machine(_)
                         | Type::MachineState { .. }
                         | Type::Function { .. }
+                        | Type::TypeConstruction
                 )
             }
             _ => false,
@@ -446,6 +447,7 @@ fn visit(
                     | Type::Machine(_)
                     | Type::MachineState { .. }
                     | Type::Function { .. }
+                    | Type::TypeConstruction
             ) =>
         {
             // Joining a pending owned value owns its extracted value before the

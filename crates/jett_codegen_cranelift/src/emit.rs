@@ -1817,6 +1817,7 @@ impl Translator<'_, '_> {
                         | Type::Machine(_)
                         | Type::MachineState { .. }
                         | Type::Function { .. }
+                        | Type::TypeConstruction
                 ) {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::RecordRun, &[source], true)?;
@@ -1873,6 +1874,7 @@ impl Translator<'_, '_> {
                         | Type::Machine(_)
                         | Type::MachineState { .. }
                         | Type::Function { .. }
+                        | Type::TypeConstruction
                 ) {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::RecordTaskJoin, &[source], true)?;
