@@ -96,6 +96,12 @@ binding labels. Direct enum equality rejects pending operands with the
 interpreter's runtime message, while aggregate payload comparison observes
 pending depth.
 
+Optional and result handles also preserve pending depth. Their task leaves
+clone owned payloads before changing the outer depth, and native debug and
+aggregate equality inspect the wrapper. Joining a pending result returns its
+existing success or failure branch, as in the interpreter's sequential task
+simulation; joining a pending optional returns a result containing the optional.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

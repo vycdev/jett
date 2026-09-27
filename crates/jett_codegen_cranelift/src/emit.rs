@@ -1804,6 +1804,13 @@ impl Translator<'_, '_> {
                     self.own_linear(pending)
                 } else if matches!(
                     self.types.resolve(value.ty),
+                    Type::Optional(_) | Type::Result(..)
+                ) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::SumRun, &[source], true)?;
+                    self.own_linear(pending)
+                } else if matches!(
+                    self.types.resolve(value.ty),
                     Type::Struct(_)
                         | Type::Enum(_)
                         | Type::Bitfield(_)
@@ -1846,6 +1853,15 @@ impl Translator<'_, '_> {
                 } else if matches!(self.types.resolve(value.ty), Type::Map(..)) {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::MapTaskJoin, &[source], true)?;
+                    let joined = self.own_linear(joined)?;
+                    self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(value.ty), Type::Result(..)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::SumTaskJoin, &[source], true)?;
+                    self.own_linear(joined)
+                } else if matches!(self.types.resolve(value.ty), Type::Optional(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::SumTaskJoin, &[source], true)?;
                     let joined = self.own_linear(joined)?;
                     self.construct_sum_value(true, joined, expression.span)
                 } else if matches!(

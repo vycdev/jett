@@ -356,6 +356,7 @@ struct NativeSum {
     tag: u32,
     bits: u64,
     owned: bool,
+    pending_depth: u64,
 }
 struct NativeBitfieldLayout {
     name: String,
@@ -621,18 +622,19 @@ impl NativeDebugLayout {
             }
             NativeDebugNode::Optional(element) => {
                 let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
-                match sum.tag {
+                let text = match sum.tag {
                     SUM_FAILURE => "none".to_owned(),
                     SUM_SUCCESS => format!(
                         "some({})",
                         self.format_value(values, sum.bits, *element, child)?
                     ),
                     _ => return Err(INVALID_SUM),
-                }
+                };
+                format_pending_value(&text, sum.pending_depth)?
             }
             NativeDebugNode::Result(ok, error) => {
                 let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
-                match sum.tag {
+                let text = match sum.tag {
                     SUM_FAILURE => format!(
                         "fail({})",
                         self.format_value(values, sum.bits, *error, child)?
@@ -641,7 +643,8 @@ impl NativeDebugLayout {
                         format!("ok({})", self.format_value(values, sum.bits, *ok, child)?)
                     }
                     _ => return Err(INVALID_SUM),
-                }
+                };
+                format_pending_value(&text, sum.pending_depth)?
             }
             NativeDebugNode::Record(name, fields) => {
                 let record = values.structs.get(&bits).ok_or(INVALID_STRUCT)?;
@@ -803,6 +806,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Optional(element) => {
                 let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
                 let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
+                if left.pending_depth != right.pending_depth {
+                    return Ok(false);
+                }
                 if left.tag != right.tag {
                     return Ok(false);
                 }
@@ -817,6 +823,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Result(ok, error) => {
                 let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
                 let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
+                if left.pending_depth != right.pending_depth {
+                    return Ok(false);
+                }
                 if left.tag != right.tag {
                     return Ok(false);
                 }
@@ -1546,7 +1555,15 @@ impl NativeValues {
             return Err(INVALID_SUM);
         }
         let id = next_identity()?;
-        self.sums.insert(id, NativeSum { tag, bits, owned });
+        self.sums.insert(
+            id,
+            NativeSum {
+                tag,
+                bits,
+                owned,
+                pending_depth: 0,
+            },
+        );
         self.sums_created += 1;
         Ok(id)
     }
@@ -3598,6 +3615,32 @@ impl NativeValues {
             .pending_depth = depth;
         Ok(joined)
     }
+    fn run_sum(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sums
+            .get(&id)
+            .ok_or(INVALID_SUM)?
+            .pending_depth
+            .checked_add(1)
+            .ok_or(EXHAUSTED)?;
+        let pending = self.clone_value(id)?;
+        self.sums
+            .get_mut(&pending)
+            .ok_or(INVALID_SUM)?
+            .pending_depth = depth;
+        Ok(pending)
+    }
+    fn join_sum(&mut self, id: u64) -> LeafResult<u64> {
+        let depth = self
+            .sums
+            .get(&id)
+            .ok_or(INVALID_SUM)?
+            .pending_depth
+            .saturating_sub(1);
+        let joined = self.clone_value(id)?;
+        self.sums.get_mut(&joined).ok_or(INVALID_SUM)?.pending_depth = depth;
+        Ok(joined)
+    }
     fn clone_value(&mut self, id: u64) -> LeafResult<u64> {
         if self.structs.contains_key(&id) {
             return self.clone_struct(id);
@@ -3612,10 +3655,14 @@ impl NativeValues {
             return self.clone_map(id);
         }
         if let Some(sum) = self.sums.get(&id) {
-            let (tag, bits, owned) = (sum.tag, sum.bits, sum.owned);
+            let (tag, bits, owned, pending_depth) =
+                (sum.tag, sum.bits, sum.owned, sum.pending_depth);
             let bits = if owned { self.clone_value(bits)? } else { bits };
             return match self.sum(tag, bits, owned) {
-                Ok(id) => Ok(id),
+                Ok(id) => {
+                    self.sums.get_mut(&id).ok_or(INVALID_SUM)?.pending_depth = pending_depth;
+                    Ok(id)
+                }
                 Err(error) => {
                     if owned {
                         self.drop_value(bits)?;
@@ -4387,6 +4434,10 @@ leaves! {
             s.sums_destroyed += 1; Ok(sum.bits) };
     SumClone, jett_rt_v1_sum_clone, false, (value: u64 => I64), u64 => I64,
         |s| { if !s.sums.contains_key(&value) { return Err(INVALID_SUM); } s.clone_value(value) };
+    SumRun, jett_rt_v1_sum_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_sum(value);
+    SumTaskJoin, jett_rt_v1_sum_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_sum(value);
     BytesGet, jett_rt_v1_bytes_get, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let found = usize::try_from(index).ok().and_then(|i| s.bytes(value).ok()?.get(i)).copied();
             s.bytes(value)?;
