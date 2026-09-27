@@ -4367,26 +4367,30 @@ impl NativeValues {
         self.dynamic_failure_message = Some(message.into_bytes());
         Err(INVALID_TYPE_ARG_INDEX)
     }
+    fn reflected_field_owner_label(&self, field: u64, mismatch: Failure) -> LeafResult<String> {
+        let owner = self.text(self.struct_field(field, 1)?.bits)?;
+        let member = self
+            .sums
+            .get(&self.struct_field(field, 2)?.bits)
+            .ok_or(mismatch)?;
+        if member.tag == SUM_SUCCESS {
+            Ok(format!("{owner}.{}", self.text(member.bits)?))
+        } else {
+            Ok(owner.to_owned())
+        }
+    }
     fn reflected_field_index(
-        &self,
+        &mut self,
         actual: u64,
         expected: u64,
         mismatch: Failure,
+        caller: &str,
     ) -> LeafResult<u64> {
         if expected == 0 {
             return Err(mismatch);
         }
-        let index = self.struct_field(actual, 0)?.bits;
-        if index != self.struct_field(expected, 0)?.bits {
-            return Err(mismatch);
-        }
-        for position in [1, 3, 4] {
-            let actual_text = self.text(self.struct_field(actual, position)?.bits)?;
-            let expected_text = self.text(self.struct_field(expected, position)?.bits)?;
-            if actual_text != expected_text {
-                return Err(mismatch);
-            }
-        }
+        let owner_type_matches = self.text(self.struct_field(actual, 1)?.bits)?
+            == self.text(self.struct_field(expected, 1)?.bits)?;
         let actual_member = self
             .sums
             .get(&self.struct_field(actual, 2)?.bits)
@@ -4395,11 +4399,30 @@ impl NativeValues {
             .sums
             .get(&self.struct_field(expected, 2)?.bits)
             .ok_or(mismatch)?;
-        if actual_member.tag != expected_member.tag
-            || (actual_member.tag == SUM_SUCCESS
-                && self.text(actual_member.bits)? != self.text(expected_member.bits)?)
-        {
+        let owner_member_matches = actual_member.tag == expected_member.tag
+            && (actual_member.tag != SUM_SUCCESS
+                || self.text(actual_member.bits)? == self.text(expected_member.bits)?);
+        if !owner_type_matches || !owner_member_matches {
+            let actual_owner = self.reflected_field_owner_label(actual, mismatch)?;
+            let expected_owner = self.reflected_field_owner_label(expected, mismatch)?;
+            self.dynamic_failure_message = Some(
+                format!(
+                    "{caller}: field metadata belongs to '{actual_owner}', expected '{expected_owner}'"
+                )
+                .into_bytes(),
+            );
             return Err(mismatch);
+        }
+        let index = self.struct_field(actual, 0)?.bits;
+        if index != self.struct_field(expected, 0)?.bits {
+            return Err(mismatch);
+        }
+        for position in [3, 4] {
+            let actual_text = self.text(self.struct_field(actual, position)?.bits)?;
+            let expected_text = self.text(self.struct_field(expected, position)?.bits)?;
+            if actual_text != expected_text {
+                return Err(mismatch);
+            }
         }
         Ok(index)
     }
@@ -5163,11 +5186,11 @@ leaves! {
     ActorReplaceScalarTask, jett_rt_v1_actor_replace_scalar_task, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, depth: u64 => I64), u32 => I32,
         |s| s.replace_actor_field_depth(value, index, bits, depth, false);
     ReflectedFieldIndex, jett_rt_v1_reflected_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
-        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_FIELD);
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_FIELD, "type.field_value");
     ReflectedVariantFieldIndex, jett_rt_v1_reflected_variant_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
-        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_VARIANT_FIELD);
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_VARIANT_FIELD, "type.variant_field_value");
     ReflectedMachineFieldIndex, jett_rt_v1_reflected_machine_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
-        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_MACHINE_FIELD);
+        |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value");
     TypeInfoMatches, jett_rt_v1_type_info_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
@@ -7815,7 +7838,12 @@ mod tests {
         let wrong_type = metadata(&mut values, 2, "Shape", Some("circle"), "radius", "int64");
         let wrong_index = metadata(&mut values, 1, "Shape", Some("circle"), "radius", "float64");
         assert_eq!(
-            values.reflected_field_index(matching, expected, INVALID_REFLECTED_VARIANT_FIELD),
+            values.reflected_field_index(
+                matching,
+                expected,
+                INVALID_REFLECTED_VARIANT_FIELD,
+                "type.variant_field_value"
+            ),
             Ok(2)
         );
         for candidate in [
@@ -7826,7 +7854,12 @@ mod tests {
             wrong_index,
         ] {
             assert_eq!(
-                values.reflected_field_index(candidate, expected, INVALID_REFLECTED_VARIANT_FIELD),
+                values.reflected_field_index(
+                    candidate,
+                    expected,
+                    INVALID_REFLECTED_VARIANT_FIELD,
+                    "type.variant_field_value"
+                ),
                 Err(INVALID_REFLECTED_VARIANT_FIELD)
             );
         }
