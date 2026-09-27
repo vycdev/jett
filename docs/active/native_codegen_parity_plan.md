@@ -1272,9 +1272,10 @@ integer, boolean, and floating-point struct fields plus enum and machine
 payloads. Other aggregate reflection and mismatch diagnostics remain open.
 
 Linked reflected-read coverage now also includes pending owned strings, lists,
-maps, and sets in struct fields, enum payloads, and machine state fields. The
-fixtures check each copied value's debug shape and successful `join` after
-reflection; other aggregate shapes and mismatch diagnostics remain open.
+maps, sets, optionals, and results in struct fields, enum payloads, and machine
+state fields. The fixtures check each copied value's debug shape and
+successful `join` after reflection; other aggregate shapes and mismatch
+diagnostics remain open.
 
 MIR handler extraction now keeps a noncopyable view of an immutable local at
 the call site while hoisting the later handled argument into control flow.
@@ -1322,3 +1323,11 @@ maps, state-qualified machines in records and lists, and nested missing-field,
 unknown-state, extra-field, and state-mismatch errors. All match the
 interpreter; other concrete JSON shapes remain open, so the broad estimate
 stays at about 85%.
+
+Native value validation and ownership analysis now treat a contextually
+inferred `never` arm as uninhabited rather than an unsupported runtime type.
+Linked fixtures cover pending `some`, `none`, `ok`, and `fail` values carried
+through reflected struct, enum, and machine fields, plus pending empty lists
+and maps embedded in a struct. The interpreter and native paths agree on
+debug output, joins, and cleanup. Other semantic gaps keep the broad estimate
+at about 85%.

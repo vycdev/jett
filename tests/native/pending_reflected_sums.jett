@@ -1,0 +1,56 @@
+namespace app
+struct Parcel:
+    maybe: optional[string]
+    outcome: result[string, string]
+enum Message:
+    outcome(value: result[string, string])
+machine Session:
+    states:
+        active(maybe: optional[string])
+    transitions:
+        active to active
+function check_struct() returns nothing:
+    Parcel parcel = Parcel(maybe: run some("Ada"), outcome: run ok("Lin"))
+    TypeField maybe_field = list.get[TypeField](type.fields[Parcel](), 0) handle:
+        return nothing
+    optional[string] maybe = type.field_value[Parcel, optional[string]](view parcel, view maybe_field)
+    trace maybe
+    optional[string] joined_maybe = join maybe handle error:
+        return nothing
+    string text = joined_maybe handle:
+        default "missing"
+    println(text)
+    TypeField outcome_field = list.get[TypeField](type.fields[Parcel](), 1) handle:
+        return nothing
+    result[string, string] outcome = type.field_value[Parcel, result[string, string]](view parcel, view outcome_field)
+    trace outcome
+    string result_text = join outcome handle error:
+        default error
+    println(result_text)
+function check_enum() returns nothing:
+    Message message = Message.outcome(run fail("missing"))
+    TypeVariant variant = type.variant_value[Message](view message)
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    result[string, string] outcome = type.variant_field_value[Message, result[string, string]](view message, view field)
+    trace outcome
+    string text = join outcome handle error:
+        default error
+    println(text)
+function check_machine() returns nothing:
+    Session session = Session(active, run none)
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    optional[string] maybe = type.machine_field_value[Session, optional[string]](view session, view field)
+    trace maybe
+    optional[string] joined = join maybe handle error:
+        return nothing
+    string text = joined handle:
+        default "absent"
+    println(text)
+function main() returns nothing:
+    check_struct()
+    check_enum()
+    check_machine()
+    return nothing

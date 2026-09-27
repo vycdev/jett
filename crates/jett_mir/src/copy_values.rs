@@ -707,6 +707,11 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
     if ty.index() as usize >= types.len() {
         return Err("invalid type in native ownership plan".into());
     }
+    if ty == TypeInterner::NEVER {
+        // An uninhabited sum arm or empty collection contributes no value to
+        // move, borrow, or drop.
+        return Ok(());
+    }
     if let Type::Secret(inner) | Type::Refinement { base: inner, .. } = types.resolve(ty) {
         return copy_plan_type(types, *inner);
     }

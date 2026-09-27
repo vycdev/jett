@@ -376,18 +376,28 @@ fn scalar_kind_inner(
             ScalarKind::Set
         }
         Type::Map(key, value) => {
-            scalar_kind_inner(types, *key, "map key".into(), seen)?;
-            scalar_kind_inner(types, *value, "map value".into(), seen)?;
+            if *key != TypeInterner::NEVER {
+                scalar_kind_inner(types, *key, "map key".into(), seen)?;
+            }
+            if *value != TypeInterner::NEVER {
+                scalar_kind_inner(types, *value, "map value".into(), seen)?;
+            }
             ScalarKind::Map
         }
         Type::TypeConstruction => ScalarKind::Construction,
         Type::Optional(inner) => {
-            scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
+            if *inner != TypeInterner::NEVER {
+                scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
+            }
             ScalarKind::Sum
         }
         Type::Result(ok, error) => {
-            scalar_kind_inner(types, *ok, "result success payload".into(), seen)?;
-            scalar_kind_inner(types, *error, "result failure payload".into(), seen)?;
+            if *ok != TypeInterner::NEVER {
+                scalar_kind_inner(types, *ok, "result success payload".into(), seen)?;
+            }
+            if *error != TypeInterner::NEVER {
+                scalar_kind_inner(types, *error, "result failure payload".into(), seen)?;
+            }
             ScalarKind::Sum
         }
         Type::Capability(jett_types::CapabilityKind::Stdout) => ScalarKind::Stdout,
@@ -403,6 +413,31 @@ fn scalar_kind_inner(
         }
     };
     Ok(kind)
+}
+
+// An empty collection or an absent sum arm has no value of its inferred
+// `never` element type. Its runtime representation is the same as the checked
+// contextual type, so embedding it does not require a conversion.
+fn never_value_compatible(types: &TypeInterner, expected: TypeId, actual: TypeId) -> bool {
+    if expected == actual {
+        return true;
+    }
+    if actual == TypeInterner::NEVER {
+        return true;
+    }
+    match (types.resolve(expected), types.resolve(actual)) {
+        (Type::List(expected), Type::List(actual))
+        | (Type::Optional(expected), Type::Optional(actual))
+        | (Type::Secret(expected), Type::Secret(actual)) => {
+            never_value_compatible(types, *expected, *actual)
+        }
+        (Type::Map(expected_key, expected_value), Type::Map(actual_key, actual_value))
+        | (Type::Result(expected_key, expected_value), Type::Result(actual_key, actual_value)) => {
+            never_value_compatible(types, *expected_key, *actual_key)
+                && never_value_compatible(types, *expected_value, *actual_value)
+        }
+        _ => false,
+    }
 }
 
 struct Verifier<'a> {
@@ -2867,7 +2902,7 @@ impl Verifier<'_> {
         actual: TypeId,
         message: &str,
     ) -> Result<(), CodegenError> {
-        if expected == actual
+        if never_value_compatible(self.types, expected, actual)
             || matches!(
                 (self.types.resolve(expected), self.types.resolve(actual)),
                 (Type::Machine(expected), Type::MachineState { machine: actual, .. })
