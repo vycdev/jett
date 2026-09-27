@@ -331,6 +331,10 @@ impl Flow<'_> {
                     self.expr(value, false)?;
                     self.state.insert(local.index() as usize);
                 }
+                StatementKind::CheckRefinement { local, call, .. } => {
+                    self.expr(call, false)?;
+                    self.state.insert(local.index() as usize);
+                }
                 StatementKind::Assign { target, value } => {
                     self.expr(value, false)?;
                     let ExpressionKind::Local(local) = target.kind else {

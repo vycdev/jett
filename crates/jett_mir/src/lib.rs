@@ -142,6 +142,13 @@ pub enum StatementKind {
         local: LocalId,
         value: Expression,
     },
+    /// Evaluate a checked refinement predicate and materialize either an empty
+    /// success string or the interpreter-compatible failure message.
+    CheckRefinement {
+        local: LocalId,
+        call: Expression,
+        type_name: String,
+    },
     Assign {
         target: Expression,
         value: Expression,
@@ -444,6 +451,10 @@ impl FunctionValidator<'_, '_> {
             StatementKind::Let { local, value } => {
                 self.check_local(*local, statement.span, "let statement");
                 self.expression(value);
+            }
+            StatementKind::CheckRefinement { local, call, .. } => {
+                self.check_local(*local, statement.span, "refinement error text");
+                self.expression(call);
             }
             StatementKind::Assign { target, value } => {
                 self.expression(target);

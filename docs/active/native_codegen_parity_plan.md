@@ -285,6 +285,8 @@ For planning, the broad native-language coverage estimate is **about 85%**.
 Track it in five-percentage-point steps as the remaining surface gaps close.
 This is a judgment based on the matrix, while the fixture counts below are
 measured pass/denominator gates.
+Later dated notes retain earlier 80% checkpoints as history; 85% is the
+current estimate.
 
 | Surface | Validated HIR/MIR | Cranelift object | Linked native behavior |
 | --- | --- | --- | --- |
@@ -1284,6 +1286,14 @@ Native `type.arg` now checks pending, negative, and out-of-range indexes with
 interpreter-matching errors before selecting checked `TypeInfo` metadata.
 Differential fixtures include nested pending depth and alias-typed owners;
 other reflected-metadata mismatch diagnostics remain open.
+
+Pending `int8`, `int16`, `int32`, `uint8`, `uint16`, and `uint32` now have
+linked differential coverage through nested tasks, joins, traces, and aggregate
+fields. Explicitly handled refinement conversions also preserve predicate
+evaluation errors and reject pending boolean predicate results with the
+interpreter's message. Other refinement construction paths still need that
+error-path audit. The current broad planning estimate remains about 85%; these
+fixtures do not establish a new five-point step.
 
 Reflected struct, enum, and machine field reads now report the interpreter's
 specific owner-mismatch error when the metadata index selects a checked

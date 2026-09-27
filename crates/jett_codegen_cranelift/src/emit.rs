@@ -1208,6 +1208,76 @@ impl Translator<'_, '_> {
                 let value = self.expression(value)?;
                 self.define_local(*local, value, statement.span)
             }
+            StatementKind::CheckRefinement {
+                local,
+                call,
+                type_name,
+            } => {
+                let slot = self.local_slots[local.index() as usize].ok_or_else(|| {
+                    self.unsupported(statement.span, "refinement error text place")
+                })?;
+                let caught = self.builder.create_block();
+                let accepted = self.builder.create_block();
+                let rejected = self.builder.create_block();
+                let continuation = self.builder.create_block();
+                let original_failure = std::mem::replace(&mut self.failure_block, caught);
+                let result = self.expression(call)?;
+                self.failure_block = original_failure;
+                let (passed, depth) = self.scalar_task(result, statement.span)?;
+                let pending = self.builder.create_block();
+                let ready = self.builder.create_block();
+                let is_pending = self.builder.ins().icmp_imm(IntCC::NotEqual, depth, 0);
+                self.builder
+                    .ins()
+                    .brif(is_pending, pending, &[], ready, &[]);
+
+                self.builder.switch_to_block(ready);
+                self.builder
+                    .ins()
+                    .brif(passed, accepted, &[], rejected, &[]);
+
+                self.builder.switch_to_block(pending);
+                let (pointer, length) = self.static_bytes(type_name)?;
+                let bits = self.builder.ins().uextend(ir::types::I64, passed);
+                let text = self.leaf(
+                    NativeLeaf::RefinementPendingBoolText,
+                    &[bits, depth, pointer, length],
+                    true,
+                )?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(text, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(accepted);
+                let (pointer, length) = self.static_bytes("")?;
+                let empty = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(empty, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(rejected);
+                let message = format!("refinement type constraint failed for '{type_name}'");
+                let (pointer, length) = self.static_bytes(&message)?;
+                let text = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(text, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(caught);
+                let prefix = format!("error evaluating refinement constraint for '{type_name}': ");
+                let (pointer, length) = self.static_bytes(&prefix)?;
+                let text = self.leaf(
+                    NativeLeaf::FailureTakePrefixedText,
+                    &[pointer, length],
+                    true,
+                )?;
+                self.drop_slot(slot)?;
+                self.builder.ins().stack_store(text, slot, 0);
+                self.builder.ins().jump(continuation, &[]);
+
+                self.builder.switch_to_block(continuation);
+                Ok(())
+            }
             StatementKind::Assign { target, value } => {
                 let ExpressionKind::Local(local) = &target.kind else {
                     return Err(self.unsupported(statement.span, "non-local assignment"));

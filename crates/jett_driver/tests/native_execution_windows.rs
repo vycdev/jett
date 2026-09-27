@@ -1775,6 +1775,53 @@ fn native_pending_scalar_values_match_interpreter() {
 }
 
 #[test]
+fn native_pending_narrow_integers_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_narrow_integers.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending narrow integer directory");
+    let binary = directory.path().join("pending_narrow_integers.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending narrow integers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_refined_narrow_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_refined_narrow.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending refinement directory");
+    let binary = directory.path().join("pending_refined_narrow.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending refinement");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_refinement_pending_predicate_result_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/refinement_pending_predicate_result.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending predicate directory");
+    let binary = directory
+        .path()
+        .join("refinement_pending_predicate_result.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending predicate");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_pending_scalar_aggregates_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_scalar_aggregates.jett");

@@ -657,6 +657,30 @@ impl Verifier<'_> {
                     "let initializer type does not match its local",
                 )
             }
+            StatementKind::CheckRefinement { local, call, .. } => {
+                let local = function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "refinement error target is absent from the local table",
+                    )
+                })?;
+                self.expression(function, call)?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    TypeInterner::STRING,
+                    local.ty,
+                    "refinement error target must be string",
+                )?;
+                self.require_same_type(
+                    function,
+                    statement.span,
+                    TypeInterner::BOOL,
+                    call.ty,
+                    "refinement predicate must return bool",
+                )
+            }
             StatementKind::Assign { target, value } => {
                 let ExpressionKind::Local(local_id) = target.kind else {
                     return Err(self.unsupported(

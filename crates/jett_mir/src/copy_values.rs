@@ -79,6 +79,10 @@ impl CopyValuePlan {
                         visit(value, &mut reads, &mut temporaries, types, program, false)?;
                         Some(local.index() as usize)
                     }
+                    StatementKind::CheckRefinement { local, call, .. } => {
+                        visit(call, &mut reads, &mut temporaries, types, program, false)?;
+                        Some(local.index() as usize)
+                    }
                     StatementKind::Assign { target, value } => {
                         let ExpressionKind::Local(local) = target.kind else {
                             return Err("nonlocal assignment needs place ownership".into());

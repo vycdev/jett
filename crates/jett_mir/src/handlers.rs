@@ -943,15 +943,44 @@ impl Builder<'_> {
 
         for predicate in predicates {
             let input = self.refinement_predicate_input(source, target.ty, predicate, span);
+            let error_text = self.temporary(TypeInterner::STRING, span);
+            self.push(
+                StatementKind::CheckRefinement {
+                    local: error_text,
+                    call: Expression {
+                        kind: ExpressionKind::Call {
+                            function: predicate.function,
+                            args: vec![input],
+                            evaluation_order: vec![0],
+                        },
+                        ty: TypeInterner::BOOL,
+                        span,
+                    },
+                    type_name: predicate.type_name.clone(),
+                },
+                span,
+            );
             let passed = self.temporary(TypeInterner::BOOL, span);
             self.push(
                 StatementKind::Let {
                     local: passed,
                     value: Expression {
-                        kind: ExpressionKind::Call {
-                            function: predicate.function,
-                            args: vec![input],
-                            evaluation_order: vec![0],
+                        kind: ExpressionKind::Binary {
+                            left: Box::new(Expression {
+                                kind: ExpressionKind::View(Box::new(Expression {
+                                    kind: ExpressionKind::Local(error_text),
+                                    ty: TypeInterner::STRING,
+                                    span,
+                                })),
+                                ty: TypeInterner::STRING,
+                                span,
+                            }),
+                            op: hir::BinaryOp::Equal,
+                            right: Box::new(Expression {
+                                kind: ExpressionKind::String(String::new()),
+                                ty: TypeInterner::STRING,
+                                span,
+                            }),
                         },
                         ty: TypeInterner::BOOL,
                         span,
@@ -979,10 +1008,7 @@ impl Builder<'_> {
                     StatementKind::Let {
                         local: error_local,
                         value: Expression {
-                            kind: ExpressionKind::String(format!(
-                                "refinement type constraint failed for '{}'",
-                                predicate.type_name
-                            )),
+                            kind: ExpressionKind::Local(error_text),
                             ty: TypeInterner::STRING,
                             span,
                         },

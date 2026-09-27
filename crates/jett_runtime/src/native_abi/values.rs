@@ -5748,6 +5748,31 @@ leaves! {
         };
     Status, jett_rt_v1_value_status, true, (), u32 => I32,
         |s| Ok(s.failure.map_or(0, |e| e.0.code()));
+    FailureTakePrefixedText, jett_rt_v1_failure_take_prefixed_text, true, (prefix: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
+            if length > isize::MAX as usize || (length != 0 && prefix.is_null()) { return Err(INVALID_FAILURE_COPY); }
+            if s.cleanup_failed { return Err(INVALID_FAILURE_COPY); }
+            let (_, static_message) = s.failure.ok_or(INVALID_FAILURE_COPY)?;
+            let prefix = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(prefix, length) } };
+            let message = s.dynamic_failure_message.as_deref().unwrap_or(static_message);
+            let prefix = std::str::from_utf8(prefix).map_err(|_| INVALID_FAILURE_COPY)?;
+            let message = std::str::from_utf8(message).map_err(|_| INVALID_FAILURE_COPY)?;
+            let mut text = String::new();
+            text.try_reserve(prefix.len().checked_add(message.len()).ok_or(EXHAUSTED)?).map_err(|_| EXHAUSTED)?;
+            text.push_str(prefix);
+            text.push_str(message);
+            let value = s.insert(text)?;
+            s.failure = None;
+            s.dynamic_failure_message = None;
+            Ok(value) };
+    RefinementPendingBoolText, jett_rt_v1_refinement_pending_bool_text, true, (bits: u64 => I64, depth: u64 => I64, name: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_FAILURE_COPY)?;
+            if length > isize::MAX as usize || (length != 0 && name.is_null()) { return Err(INVALID_FAILURE_COPY); }
+            let name = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(name, length) } };
+            let name = std::str::from_utf8(name).map_err(|_| INVALID_FAILURE_COPY)?;
+            let value = match bits { 0 => "false", 1 => "true", _ => return Err(INVALID_TRACE_LABEL) };
+            let value = format_pending_value(value, depth)?;
+            s.insert(format!("refinement constraint for '{name}' must return bool, got {value}")) };
     AssertFail, jett_rt_v1_assert_fail, false, (), u32 => I32,
         |_s| Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed"));
     AssertFailMessage, jett_rt_v1_assert_fail_message, false, (message: u64 => I64), u32 => I32,
@@ -7235,6 +7260,30 @@ mod tests {
                 JettRuntimeStatusV1::OK
             );
             assert_eq!(copied, b"assertion failed");
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn failed_predicate_text_can_be_captured_and_execution_can_resume() {
+        let context = Context::new();
+        let prefix = b"constraint: ";
+        unsafe {
+            assert_ne!(jett_rt_v1_assert_fail(context.pointer()), 0);
+            let captured = jett_rt_v1_failure_take_prefixed_text(
+                context.pointer(),
+                prefix.as_ptr(),
+                prefix.len() as u64,
+            );
+            assert_ne!(captured, 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+            let expected = context.text("constraint: assertion failed");
+            assert_eq!(
+                jett_rt_v1_string_equal(context.pointer(), captured, expected),
+                1
+            );
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), captured), 0);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), expected), 0);
+            assert_eq!(context.count(), 0);
         }
         context.destroy(JettRuntimeStatusV1::OK);
     }

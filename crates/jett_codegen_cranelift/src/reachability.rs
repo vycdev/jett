@@ -107,6 +107,7 @@ fn collect_function_references(function: &Function, references: &mut Vec<(Functi
         for statement in &block.statements {
             match &statement.kind {
                 StatementKind::Let { value, .. }
+                | StatementKind::CheckRefinement { call: value, .. }
                 | StatementKind::Evaluate(value)
                 | StatementKind::HandleDefault(value) => {
                     collect_expression_references(value, references);
