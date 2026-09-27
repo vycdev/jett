@@ -1291,9 +1291,12 @@ Pending `int8`, `int16`, `int32`, `uint8`, `uint16`, and `uint32` now have
 linked differential coverage through nested tasks, joins, traces, and aggregate
 fields. Explicitly handled refinement conversions also preserve predicate
 evaluation errors and reject pending boolean predicate results with the
-interpreter's message. Other refinement construction paths still need that
-error-path audit. The current broad planning estimate remains about 85%; these
-fixtures do not establish a new five-point step.
+interpreter's message. Direct struct construction and reflected struct, enum,
+and machine builder finish paths now share that error handling. Differential
+fixtures cover pending predicate results in all four shapes and a predicate
+evaluation failure during reflected struct finish. Other refinement boundaries
+still need coverage. The current broad planning estimate remains about 85%;
+these fixtures do not establish a new five-point step.
 
 Reflected struct, enum, and machine field reads now report the interpreter's
 specific owner-mismatch error when the metadata index selects a checked

@@ -1822,6 +1822,29 @@ fn native_refinement_pending_predicate_result_matches_interpreter() {
 }
 
 #[test]
+fn native_refinement_pending_aggregate_builders_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/refinement_pending_aggregate_builders.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let message = "refinement constraint for 'app.Positive' must return bool, got pending(true)";
+    let evaluation_error = "error evaluating refinement constraint for 'app.StrictPositive': unsupported binary operation: pending(7) Gt 0";
+    assert_eq!(
+        expected.stdout,
+        format!("{message}\n{message}\n{evaluation_error}\n{message}\n{message}\n")
+    );
+    let directory = tempfile::tempdir().expect("isolated aggregate refinement directory");
+    let binary = directory
+        .path()
+        .join("refinement_pending_aggregate_builders.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile aggregate refinement builders");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_pending_scalar_aggregates_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_scalar_aggregates.jett");

@@ -916,6 +916,60 @@ impl Builder<'_> {
         }
     }
 
+    fn lower_refinement_check(
+        &mut self,
+        input: Expression,
+        predicate: &hir::RefinementPredicate,
+        span: Span,
+    ) -> (LocalId, LocalId) {
+        let error_text = self.temporary(TypeInterner::STRING, span);
+        self.push(
+            StatementKind::CheckRefinement {
+                local: error_text,
+                call: Expression {
+                    kind: ExpressionKind::Call {
+                        function: predicate.function,
+                        args: vec![input],
+                        evaluation_order: vec![0],
+                    },
+                    ty: TypeInterner::BOOL,
+                    span,
+                },
+                type_name: predicate.type_name.clone(),
+            },
+            span,
+        );
+        let passed = self.temporary(TypeInterner::BOOL, span);
+        self.push(
+            StatementKind::Let {
+                local: passed,
+                value: Expression {
+                    kind: ExpressionKind::Binary {
+                        left: Box::new(Expression {
+                            kind: ExpressionKind::View(Box::new(Expression {
+                                kind: ExpressionKind::Local(error_text),
+                                ty: TypeInterner::STRING,
+                                span,
+                            })),
+                            ty: TypeInterner::STRING,
+                            span,
+                        }),
+                        op: hir::BinaryOp::Equal,
+                        right: Box::new(Expression {
+                            kind: ExpressionKind::String(String::new()),
+                            ty: TypeInterner::STRING,
+                            span,
+                        }),
+                    },
+                    ty: TypeInterner::BOOL,
+                    span,
+                },
+            },
+            span,
+        );
+        (error_text, passed)
+    }
+
     fn lower_refinement_handle(
         &mut self,
         expression: &Expression,
@@ -943,51 +997,7 @@ impl Builder<'_> {
 
         for predicate in predicates {
             let input = self.refinement_predicate_input(source, target.ty, predicate, span);
-            let error_text = self.temporary(TypeInterner::STRING, span);
-            self.push(
-                StatementKind::CheckRefinement {
-                    local: error_text,
-                    call: Expression {
-                        kind: ExpressionKind::Call {
-                            function: predicate.function,
-                            args: vec![input],
-                            evaluation_order: vec![0],
-                        },
-                        ty: TypeInterner::BOOL,
-                        span,
-                    },
-                    type_name: predicate.type_name.clone(),
-                },
-                span,
-            );
-            let passed = self.temporary(TypeInterner::BOOL, span);
-            self.push(
-                StatementKind::Let {
-                    local: passed,
-                    value: Expression {
-                        kind: ExpressionKind::Binary {
-                            left: Box::new(Expression {
-                                kind: ExpressionKind::View(Box::new(Expression {
-                                    kind: ExpressionKind::Local(error_text),
-                                    ty: TypeInterner::STRING,
-                                    span,
-                                })),
-                                ty: TypeInterner::STRING,
-                                span,
-                            }),
-                            op: hir::BinaryOp::Equal,
-                            right: Box::new(Expression {
-                                kind: ExpressionKind::String(String::new()),
-                                ty: TypeInterner::STRING,
-                                span,
-                            }),
-                        },
-                        ty: TypeInterner::BOOL,
-                        span,
-                    },
-                },
-                span,
-            );
+            let (error_text, passed) = self.lower_refinement_check(input, predicate, span);
             let next = self.new_block(span);
             let rejected = self.new_block(span);
             self.terminate(
@@ -1183,27 +1193,13 @@ impl Builder<'_> {
             self.current = block;
             for (index, binding) in bindings.iter().enumerate() {
                 for predicate in &refinement_predicates[offset + index] {
-                    let passed = self.temporary(TypeInterner::BOOL, span);
-                    self.push(
-                        StatementKind::Let {
-                            local: passed,
-                            value: Expression {
-                                kind: ExpressionKind::Call {
-                                    function: predicate.function,
-                                    args: vec![self.refinement_predicate_input(
-                                        *binding,
-                                        variants[variant_index][index],
-                                        predicate,
-                                        span,
-                                    )],
-                                    evaluation_order: vec![0],
-                                },
-                                ty: TypeInterner::BOOL,
-                                span,
-                            },
-                        },
+                    let input = self.refinement_predicate_input(
+                        *binding,
+                        variants[variant_index][index],
+                        predicate,
                         span,
                     );
+                    let (error_text, passed) = self.lower_refinement_check(input, predicate, span);
                     let next = self.new_block(span);
                     let rejected = self.new_block(span);
                     self.terminate(
@@ -1224,10 +1220,7 @@ impl Builder<'_> {
                             local: output,
                             value: Expression {
                                 kind: ExpressionKind::ResultFail(Box::new(Expression {
-                                    kind: ExpressionKind::String(format!(
-                                        "refinement type constraint failed for '{}'",
-                                        predicate.type_name
-                                    )),
+                                    kind: ExpressionKind::Local(error_text),
                                     ty: TypeInterner::STRING,
                                     span,
                                 })),
@@ -1431,27 +1424,9 @@ impl Builder<'_> {
                         },
                         span,
                     );
-                    let passed = self.temporary(TypeInterner::BOOL, span);
-                    self.push(
-                        StatementKind::Let {
-                            local: passed,
-                            value: Expression {
-                                kind: ExpressionKind::Call {
-                                    function: predicate.function,
-                                    args: vec![self.refinement_predicate_input(
-                                        value,
-                                        *field_type,
-                                        predicate,
-                                        span,
-                                    )],
-                                    evaluation_order: vec![0],
-                                },
-                                ty: TypeInterner::BOOL,
-                                span,
-                            },
-                        },
-                        span,
-                    );
+                    let input =
+                        self.refinement_predicate_input(value, *field_type, predicate, span);
+                    let (error_text, passed) = self.lower_refinement_check(input, predicate, span);
                     let next = self.new_block(span);
                     let rejected = self.new_block(span);
                     self.terminate(
@@ -1472,10 +1447,7 @@ impl Builder<'_> {
                             local: output,
                             value: Expression {
                                 kind: ExpressionKind::ResultFail(Box::new(Expression {
-                                    kind: ExpressionKind::String(format!(
-                                        "refinement type constraint failed for '{}'",
-                                        predicate.type_name
-                                    )),
+                                    kind: ExpressionKind::Local(error_text),
                                     ty: TypeInterner::STRING,
                                     span,
                                 })),
@@ -1650,27 +1622,9 @@ impl Builder<'_> {
                     },
                     span,
                 );
-                let passed = self.temporary(TypeInterner::BOOL, span);
-                self.push(
-                    StatementKind::Let {
-                        local: passed,
-                        value: Expression {
-                            kind: ExpressionKind::Call {
-                                function: predicate.function,
-                                args: vec![self.refinement_predicate_input(
-                                    value,
-                                    field_types[index],
-                                    predicate,
-                                    span,
-                                )],
-                                evaluation_order: vec![0],
-                            },
-                            ty: TypeInterner::BOOL,
-                            span,
-                        },
-                    },
-                    span,
-                );
+                let input =
+                    self.refinement_predicate_input(value, field_types[index], predicate, span);
+                let (error_text, passed) = self.lower_refinement_check(input, predicate, span);
                 let next = self.new_block(span);
                 let rejected = self.new_block(span);
                 self.terminate(
@@ -1691,10 +1645,7 @@ impl Builder<'_> {
                         local: output,
                         value: Expression {
                             kind: ExpressionKind::ResultFail(Box::new(Expression {
-                                kind: ExpressionKind::String(format!(
-                                    "refinement type constraint failed for '{}'",
-                                    predicate.type_name
-                                )),
+                                kind: ExpressionKind::Local(error_text),
                                 ty: TypeInterner::STRING,
                                 span,
                             })),
@@ -1762,22 +1713,7 @@ impl Builder<'_> {
             let mut field_type = field.ty;
             for predicate in &refinement_predicates[index] {
                 let input = self.refinement_predicate_input(source, field.ty, predicate, span);
-                let passed = self.temporary(TypeInterner::BOOL, span);
-                self.push(
-                    StatementKind::Let {
-                        local: passed,
-                        value: Expression {
-                            kind: ExpressionKind::Call {
-                                function: predicate.function,
-                                args: vec![input],
-                                evaluation_order: vec![0],
-                            },
-                            ty: TypeInterner::BOOL,
-                            span,
-                        },
-                    },
-                    span,
-                );
+                let (error_text, passed) = self.lower_refinement_check(input, predicate, span);
                 let next = self.new_block(span);
                 let rejected = self.new_block(span);
                 self.terminate(
@@ -1798,10 +1734,7 @@ impl Builder<'_> {
                         local: output,
                         value: Expression {
                             kind: ExpressionKind::ResultFail(Box::new(Expression {
-                                kind: ExpressionKind::String(format!(
-                                    "refinement type constraint failed for '{}'",
-                                    predicate.type_name
-                                )),
+                                kind: ExpressionKind::Local(error_text),
                                 ty: TypeInterner::STRING,
                                 span,
                             })),
