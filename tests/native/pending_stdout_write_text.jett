@@ -1,0 +1,5 @@
+namespace app
+function main(stdout: Stdout) returns nothing:
+    string message = run "ready"
+    Stdout.write(view stdout, message)
+    return nothing

@@ -1,0 +1,6 @@
+namespace app
+function main(env: Environment) returns nothing:
+    Environment pending = run env
+    result[optional[string], string] found = Environment.get(view pending, "PATH")
+    trace found
+    return nothing

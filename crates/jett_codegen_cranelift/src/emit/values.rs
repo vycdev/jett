@@ -2008,6 +2008,8 @@ impl Translator<'_, '_> {
                 self.own(value)
             }
             IntrinsicId::ClockNow => {
+                let message = format!("{} expects Clock", id.canonical_name());
+                self.reject_pending_handle(evaluated[0], 3, &message, span)?;
                 let authority = self.scalar(evaluated[0], span)?;
                 Ok(LoweredValue::Scalar(self.leaf(
                     NativeLeaf::ClockNow,
@@ -2016,6 +2018,12 @@ impl Translator<'_, '_> {
                 )?))
             }
             IntrinsicId::RandomBounded => {
+                let message = format!(
+                    "{} expects Random and two int64 arguments",
+                    id.canonical_name()
+                );
+                self.reject_pending_handle(evaluated[0], 3, &message, span)?;
+                self.reject_pending_scalars(&evaluated[1..], &message)?;
                 let arguments = evaluated
                     .iter()
                     .map(|value| self.scalar(*value, span))
@@ -2027,6 +2035,8 @@ impl Translator<'_, '_> {
                 )?))
             }
             IntrinsicId::RandomUnitFloat64 => {
+                let message = format!("{} expects Random", id.canonical_name());
+                self.reject_pending_handle(evaluated[0], 3, &message, span)?;
                 let authority = self.scalar(evaluated[0], span)?;
                 Ok(LoweredValue::Scalar(self.leaf(
                     NativeLeaf::RandomUnit53,
@@ -2035,6 +2045,8 @@ impl Translator<'_, '_> {
                 )?))
             }
             IntrinsicId::RandomBool => {
+                let message = format!("{} expects Random", id.canonical_name());
+                self.reject_pending_handle(evaluated[0], 3, &message, span)?;
                 let authority = self.scalar(evaluated[0], span)?;
                 let value = self.leaf(NativeLeaf::RandomBool, &[authority], true)?;
                 Ok(LoweredValue::Scalar(
@@ -2042,12 +2054,18 @@ impl Translator<'_, '_> {
                 ))
             }
             IntrinsicId::EnvironmentGet => {
+                let authority_error = format!("{} expects Environment", id.canonical_name());
+                self.reject_pending_handle(evaluated[0], 3, &authority_error, span)?;
+                let key_error = format!("{} expects a string key", id.canonical_name());
+                self.reject_pending_handle(evaluated[1], 0, &key_error, span)?;
                 let authority = self.scalar(evaluated[0], span)?;
                 let key = self.scalar(evaluated[1], span)?;
                 let value = self.leaf(NativeLeaf::EnvironmentGet, &[authority, key], true)?;
                 self.own_linear(value)
             }
             IntrinsicId::EnvironmentArgs => {
+                let message = format!("{} expects Environment", id.canonical_name());
+                self.reject_pending_handle(evaluated[0], 3, &message, span)?;
                 let authority = self.scalar(evaluated[0], span)?;
                 let value = self.leaf(NativeLeaf::EnvironmentArgs, &[authority], true)?;
                 self.own_linear(value)

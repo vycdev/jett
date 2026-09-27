@@ -1,0 +1,6 @@
+namespace app
+function main(env: Environment) returns nothing:
+    Environment pending = run env
+    list[string] arguments = Environment.args(view pending)
+    trace arguments
+    return nothing

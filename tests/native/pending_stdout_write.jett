@@ -1,0 +1,5 @@
+namespace app
+function main(stdout: Stdout) returns nothing:
+    Stdout pending = run stdout
+    Stdout.write(view pending, "ready")
+    return nothing

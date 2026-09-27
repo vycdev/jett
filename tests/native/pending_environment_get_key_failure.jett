@@ -1,0 +1,6 @@
+namespace app
+function main(env: Environment) returns nothing:
+    string key = run "PATH"
+    result[optional[string], string] found = Environment.get(view env, key)
+    trace found
+    return nothing

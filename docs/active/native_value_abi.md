@@ -198,6 +198,12 @@ the interpreter's current `nothing` display for the first three capabilities
 and the named capability display for Environment and Graphics, with pending
 wrappers at each depth. The original granted token remains the authority for
 capability operations after the final join.
+Clock, Random, and Environment intrinsics reject a pending capability before
+using its authority, with their interpreter-specific errors. Environment
+lookup also rejects a pending key before reading the launch snapshot.
+`Stdout.write` follows the interpreter's current behavior: it accepts a
+pending Stdout capability and writes pending string arguments with their
+visible `pending(...)` wrappers.
 
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index

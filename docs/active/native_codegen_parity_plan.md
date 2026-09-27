@@ -1232,3 +1232,10 @@ values now use the underlying runtime representation for `run` and `join`,
 including contextual promotion of a `run` byte value to `secret[bytes]`.
 Differential fixtures cover those paths; the coarse coverage estimate stays
 at 80% while broader semantic gaps remain.
+
+Capability intrinsic parity now distinguishes the interpreter's current
+pending-value rules: Clock, Random, and Environment operations reject a
+pending authority; Environment lookup rejects a pending key; `Stdout.write`
+accepts a pending authority and renders pending text. Linked differential
+fixtures cover each case. The coarse overall estimate remains 80% while
+unresolved language and runtime gaps remain.

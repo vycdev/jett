@@ -2219,6 +2219,7 @@ impl NativeValues {
             }
             1 => self.bytes_depth(handle)?,
             2 => self.lists.get(&handle).ok_or(INVALID_LIST)?.pending_depth,
+            3 => self.capability_authority(handle)?.1,
             _ => return Err(INVALID_PENDING_HANDLE_CHECK),
         };
         if depth == 0 {
@@ -5771,8 +5772,11 @@ leaves! {
             } };
     Stdout, jett_rt_v1_string_stdout, false, (authority: u64 => I64, value: u64 => I64), u32 => I32,
         |s| {
+            let (authority, _) = s.capability_authority(authority)
+                .map_err(|_| (JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority".as_slice()))?;
             if s.stdout != Some(authority) { return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid Stdout authority")); }
-            { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, s.text(value)?.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0)
+            let text = s.format_string(value)?;
+            { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, text.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0)
         };
     DebugPrint, jett_rt_v1_string_debug_print, false, (value: u64 => I64), u32 => I32,
         |s| { { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, s.text(value)?.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0) };

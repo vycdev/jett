@@ -1,0 +1,6 @@
+namespace app
+function main(clock: Clock) returns nothing:
+    Clock pending = run clock
+    time.Timestamp sampled = Clock.now(view pending)
+    trace sampled
+    return nothing
