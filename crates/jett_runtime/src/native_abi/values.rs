@@ -2137,6 +2137,45 @@ impl NativeValues {
         }
         Ok(0)
     }
+    fn check_index_count_arguments(
+        &self,
+        value: u64,
+        kind: u32,
+        first_depth: u64,
+        second_depth: u64,
+        third_depth: u64,
+    ) -> LeafResult<u32> {
+        let (receiver_depth, message): (u64, &'static [u8]) = match kind {
+            0 => (0, b"range expects int64 arguments"),
+            1 => (
+                self.bytes_depth(value)?,
+                b"bytes.__get expects a bytes value and an int64 index",
+            ),
+            2 => (
+                self.bytes_depth(value)?,
+                b"bytes.__slice expects a bytes value and two int64 indices",
+            ),
+            3 => (
+                self.strings
+                    .get(&value)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth,
+                b"string.__slice expects a string and two int64 indices",
+            ),
+            4 => (
+                self.strings
+                    .get(&value)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth,
+                b"string.__repeat expects a string and an int64",
+            ),
+            _ => return Err(INVALID_LIST),
+        };
+        if receiver_depth != 0 || first_depth != 0 || second_depth != 0 || third_depth != 0 {
+            return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, message));
+        }
+        Ok(0)
+    }
     fn new_set(&mut self, strings: u32) -> LeafResult<u64> {
         if strings > 1 {
             return Err(INVALID_SET);
@@ -5009,6 +5048,8 @@ leaves! {
         |s| s.join_strings(value, separator);
     Range, jett_rt_v1_range_int64, false, (start: i64 => I64, end: i64 => I64, step: i64 => I64), u64 => I64,
         |s| s.range(start, end, step);
+    CheckIndexCountArguments, jett_rt_v1_check_index_count_arguments, false, (value: u64 => I64, kind: u32 => I32, first_depth: u64 => I64, second_depth: u64 => I64, third_depth: u64 => I64), u32 => I32,
+        |s| s.check_index_count_arguments(value, kind, first_depth, second_depth, third_depth);
     ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;

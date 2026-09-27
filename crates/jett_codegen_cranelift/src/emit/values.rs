@@ -1414,6 +1414,40 @@ impl Translator<'_, '_> {
         }
         Ok(result)
     }
+    fn check_index_count_arguments(
+        &mut self,
+        id: IntrinsicId,
+        evaluated: &[LoweredValue],
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (kind, offset) = match id {
+            IntrinsicId::Range => (0, 0),
+            IntrinsicId::BytesGet => (1, 1),
+            IntrinsicId::BytesSlice => (2, 1),
+            IntrinsicId::StringSlice => (3, 1),
+            IntrinsicId::StringRepeat => (4, 1),
+            _ => return Ok(()),
+        };
+        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+        let receiver = if offset == 0 {
+            zero
+        } else {
+            self.scalar(evaluated[0], span)?
+        };
+        let mut depths = [zero; 3];
+        for (slot, value) in evaluated.iter().skip(offset).enumerate() {
+            if let LoweredValue::ScalarTask(_, depth) = value {
+                depths[slot] = *depth;
+            }
+        }
+        let kind = self.builder.ins().iconst(ir::types::I32, kind);
+        self.leaf(
+            NativeLeaf::CheckIndexCountArguments,
+            &[receiver, kind, depths[0], depths[1], depths[2]],
+            true,
+        )?;
+        Ok(())
+    }
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
@@ -1725,6 +1759,7 @@ impl Translator<'_, '_> {
             return self.unpack_payload(bits, result_type, span);
         }
         if id == IntrinsicId::Range {
+            self.check_index_count_arguments(id, &evaluated, span)?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let one = self.builder.ins().iconst(ir::types::I64, 1);
             let mut native = evaluated
@@ -1750,6 +1785,7 @@ impl Translator<'_, '_> {
             return self.map_intrinsic(id, &evaluated, result_type, span);
         }
         if let Some(leaf) = crate::values::bytes_leaf(id) {
+            self.check_index_count_arguments(id, &evaluated, span)?;
             let arguments = evaluated
                 .iter()
                 .map(|v| self.scalar(*v, span))
@@ -1792,6 +1828,7 @@ impl Translator<'_, '_> {
             return Ok(LoweredValue::Scalar(self.leaf(leaf, &arguments, true)?));
         }
         if let Some(leaf) = crate::values::string_leaf(id) {
+            self.check_index_count_arguments(id, &evaluated, span)?;
             let native_args = evaluated
                 .iter()
                 .map(|v| self.scalar(*v, span))

@@ -323,6 +323,10 @@ Public list intrinsics reject pending list containers, and index-taking list
 intrinsics reject pending integer indexes with interpreter-matching errors.
 Differential cases cover length, append, get, insert, remove, sort, indexed
 sort, sortedness, and both swap indexes.
+`range`, `bytes.get`, `bytes.slice`, `string.slice`, and `string.repeat` now
+reject pending integer operands with interpreter diagnostics. The byte and
+string operations also reject a pending receiver. Other intrinsic consumers
+of pending values remain open.
 Primitive set elements now preserve pending depth through membership, updates,
 cloning, debug output, and iteration. Pending set containers fail at public set
 intrinsics. Native `for` rejects pending list, string, map, and set containers

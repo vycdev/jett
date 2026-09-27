@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    list[int64] values = range(0, 3, run 1)
+    trace values
+    return nothing

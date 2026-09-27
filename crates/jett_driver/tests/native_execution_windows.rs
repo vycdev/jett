@@ -1044,6 +1044,43 @@ fn native_pending_list_intrinsics_match_interpreter_errors() {
 }
 
 #[test]
+fn native_pending_index_and_count_intrinsics_match_interpreter_errors() {
+    for name in [
+        "pending_range_end_failure",
+        "pending_range_start_failure",
+        "pending_range_second_failure",
+        "pending_range_step_failure",
+        "pending_bytes_get_index_failure",
+        "pending_bytes_get_container_failure",
+        "pending_bytes_slice_start_failure",
+        "pending_bytes_slice_end_failure",
+        "pending_bytes_slice_container_failure",
+        "pending_string_slice_start_failure",
+        "pending_string_slice_end_failure",
+        "pending_string_slice_container_failure",
+        "pending_string_repeat_count_failure",
+        "pending_string_repeat_container_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending index or count");
+        let directory = tempfile::tempdir().expect("isolated pending intrinsic directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending index or count intrinsic");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_set_map_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_set_map_values.jett");

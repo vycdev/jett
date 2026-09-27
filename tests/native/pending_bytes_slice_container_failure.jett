@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    bytes data = run bytes.from_string("abc")
+    bytes part = bytes.slice(view data, 0, 2)
+    trace part
+    return nothing

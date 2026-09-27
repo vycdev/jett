@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    string part = string.slice("abcd", 0, run 2)
+    trace part
+    return nothing
