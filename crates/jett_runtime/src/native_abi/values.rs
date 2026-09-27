@@ -4426,6 +4426,29 @@ impl NativeValues {
         }
         Ok(index)
     }
+    fn reflected_checked_field_index(
+        &mut self,
+        actual: u64,
+        expected: u64,
+        compatible: u64,
+        requested_type: &str,
+        mismatch: Failure,
+        caller: &str,
+    ) -> LeafResult<u64> {
+        let index = self.reflected_field_index(actual, expected, mismatch, caller)?;
+        if compatible == 0 {
+            let name = self.text(self.struct_field(expected, 3)?.bits)?;
+            let field_type = self.text(self.struct_field(expected, 4)?.bits)?;
+            self.dynamic_failure_message = Some(
+                format!(
+                    "{caller}: field '{name}' has type '{field_type}', requested '{requested_type}'"
+                )
+                .into_bytes(),
+            );
+            return Err(mismatch);
+        }
+        Ok(index)
+    }
     fn type_info_identity(&self, value: u64, depth: usize) -> LeafResult<String> {
         if depth >= 64 {
             return Err(INVALID_TYPE_INFO);
@@ -5191,6 +5214,18 @@ leaves! {
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_VARIANT_FIELD, "type.variant_field_value");
     ReflectedMachineFieldIndex, jett_rt_v1_reflected_machine_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value");
+    ReflectedCheckedFieldIndex, jett_rt_v1_reflected_checked_field_index, false, (actual: u64 => I64, expected: u64 => I64, compatible: u64 => I64, requested_type: *const u8 => Pointer, requested_length: u64 => I64, kind: u32 => I32), u64 => I64,
+        |s| { let length = usize::try_from(requested_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            if length > isize::MAX as usize || (length != 0 && requested_type.is_null()) { return Err(INVALID_REFLECTED_FIELD); }
+            let bytes = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(requested_type, length) } };
+            let requested = std::str::from_utf8(bytes).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let (mismatch, caller) = match kind {
+                0 => (INVALID_REFLECTED_FIELD, "type.field_value"),
+                1 => (INVALID_REFLECTED_VARIANT_FIELD, "type.variant_field_value"),
+                2 => (INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value"),
+                _ => return Err(INVALID_REFLECTED_FIELD),
+            };
+            s.reflected_checked_field_index(actual, expected, compatible, requested, mismatch, caller) };
     TypeInfoMatches, jett_rt_v1_type_info_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }

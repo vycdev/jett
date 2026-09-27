@@ -698,16 +698,18 @@ member, field name, and type name with the supplied metadata before reading
 the value slot. Linear results are deep-cloned, strings are retained, and
 scalar results are unpacked, so the source stays owned by its caller. When a
 checked candidate field exists, owner mismatches report the actual and
-expected type or member labels. Other invalid metadata still produces a static
-terminal error; exact interpreter diagnostics and alias-equivalence behavior
-remain parity work.
+expected type or member labels. A valid field with an incompatible requested
+type reports both checked type names. Other invalid metadata still produces a
+static terminal error; exact interpreter diagnostics and alias-equivalence
+behavior remain parity work.
 Native `type.machine_state_value[T]` uses the borrowed machine tag to select
 and clone a checked `TypeMachineState` snapshot. `type.machine_field_value[T, U]`
 borrows both the machine and `TypeField`, selects a checked field snapshot by
 state tag and field index, and validates it before reading the payload slot.
 The result is cloned or retained when it owns storage. Wrong-state owner
-metadata with a checked candidate reports the interpreter's specific mismatch;
-other metadata errors still need exact diagnostic parity.
+metadata with a checked candidate and incompatible requested types report the
+interpreter's specific errors; other metadata errors still need exact
+diagnostic parity.
 Static machine layout, state, and transition reflection materializes checked
 metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;

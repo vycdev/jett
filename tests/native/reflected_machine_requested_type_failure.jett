@@ -1,0 +1,15 @@
+namespace app
+machine Session:
+    states:
+        active(label: string, count: int64)
+        closed
+    transitions:
+        active to closed
+function main() returns nothing:
+    Session session = Session(active, "ready", 7)
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    int64 wrong = type.machine_field_value[Session, int64](view session, view field)
+    println(wrong)
+    return nothing

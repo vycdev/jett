@@ -1553,6 +1553,7 @@ fn native_pending_reflected_scalar_fields_match_interpreter() {
 fn native_reflected_foreign_field_errors_match_interpreter() {
     for name in [
         "reflected_struct_foreign_field_failure",
+        "reflected_struct_foreign_incompatible_failure",
         "reflected_enum_foreign_field_failure",
         "reflected_machine_foreign_field_failure",
     ] {
@@ -1564,6 +1565,32 @@ fn native_reflected_foreign_field_errors_match_interpreter() {
         let binary = directory.path().join(format!("{name}.exe"));
         build_host_executable(&fixture, launcher(), &binary)
             .expect("compile foreign reflected field");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn native_reflected_requested_type_errors_match_interpreter() {
+    for name in [
+        "reflected_struct_requested_type_failure",
+        "reflected_enum_requested_type_failure",
+        "reflected_machine_requested_type_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject requested reflected field type");
+        let directory = tempfile::tempdir().expect("isolated reflected type directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile requested reflected field type");
         let actual = run_bounded(&binary, directory.path());
         assert!(!actual.status.success(), "{name}: {actual:?}");
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");

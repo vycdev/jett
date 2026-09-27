@@ -1,0 +1,13 @@
+namespace app
+struct User:
+    id: string
+    age: int64
+struct OtherUser:
+    id: string
+function main() returns nothing:
+    User user = User(id: "u1", age: 7)
+    TypeField foreign = list.get[TypeField](type.fields[OtherUser](), 0) handle:
+        return nothing
+    int64 wrong = type.field_value[User, int64](view user, view foreign)
+    println(wrong)
+    return nothing

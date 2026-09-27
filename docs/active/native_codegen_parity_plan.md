@@ -1277,5 +1277,11 @@ other reflected-metadata mismatch diagnostics remain open.
 Reflected struct, enum, and machine field reads now report the interpreter's
 specific owner-mismatch error when the metadata index selects a checked
 candidate field but the `TypeField` belongs to another type, variant, or state.
-Linked differential fixtures cover all three owner forms; missing-candidate,
-field-name, and type diagnostics still need parity work.
+Linked differential fixtures cover all three owner forms; invalid-index and
+field-name diagnostics still need parity work.
+
+Reflected field reads now validate a checked field candidate before checking
+whether its type can satisfy the requested result type. This preserves owner
+error precedence and gives interpreter-matching requested-type errors for
+struct, enum, and machine fields. A foreign owner with an incompatible
+requested type is covered by the same differential gate.

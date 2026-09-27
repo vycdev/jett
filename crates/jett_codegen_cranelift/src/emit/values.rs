@@ -1791,14 +1791,8 @@ impl Translator<'_, '_> {
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
+            let mut compatible = zero;
             for (index, field_ty) in field_types.iter().enumerate() {
-                if representation_type(self.types, *field_ty)
-                    != representation_type(self.types, result_type)
-                    || jett_mir::move_values::is_secret(self.types, *field_ty)
-                        != jett_mir::move_values::is_secret(self.types, result_type)
-                {
-                    continue;
-                }
                 let candidate = self.scalar(evaluated[index + 2], span)?;
                 let index = i64::try_from(index)
                     .map_err(|_| self.unsupported(span, "reflected field index"))?;
@@ -1807,9 +1801,31 @@ impl Translator<'_, '_> {
                     .ins()
                     .icmp_imm(IntCC::Equal, requested_index, index);
                 expected = self.builder.ins().select(matches, candidate, expected);
+                if representation_type(self.types, *field_ty)
+                    == representation_type(self.types, result_type)
+                    && jett_mir::move_values::is_secret(self.types, *field_ty)
+                        == jett_mir::move_values::is_secret(self.types, result_type)
+                {
+                    compatible = self.builder.ins().select(matches, candidate, compatible);
+                }
             }
-            let checked_index =
-                self.leaf(NativeLeaf::ReflectedFieldIndex, &[metadata, expected], true)?;
+            let requested_type = reflection_arguments
+                .get(1)
+                .ok_or_else(|| self.unsupported(span, "checked reflected field type"))?;
+            let (name_pointer, name_length) = self.static_bytes(&requested_type.type_name)?;
+            let kind = self.builder.ins().iconst(ir::types::I32, 0);
+            let checked_index = self.leaf(
+                NativeLeaf::ReflectedCheckedFieldIndex,
+                &[
+                    metadata,
+                    expected,
+                    compatible,
+                    name_pointer,
+                    name_length,
+                    kind,
+                ],
+                true,
+            )?;
             let owner = self.scalar(evaluated[0], span)?;
             return self.reflected_field_value(owner, checked_index, result_type, span);
         }
@@ -1847,18 +1863,12 @@ impl Translator<'_, '_> {
             let tag = self.leaf(NativeLeaf::StructField, &[owner, zero], true)?;
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
+            let mut compatible = zero;
             let mut argument_index = 2;
             for (variant_index, fields) in field_groups.iter().enumerate() {
                 for (field_index, field_ty) in fields.iter().enumerate() {
                     let candidate = self.scalar(evaluated[argument_index], span)?;
                     argument_index += 1;
-                    if representation_type(self.types, *field_ty)
-                        != representation_type(self.types, result_type)
-                        || jett_mir::move_values::is_secret(self.types, *field_ty)
-                            != jett_mir::move_values::is_secret(self.types, result_type)
-                    {
-                        continue;
-                    }
                     let variant_index = i64::try_from(variant_index)
                         .map_err(|_| self.unsupported(span, "reflected variant index"))?;
                     let field_index = i64::try_from(field_index)
@@ -1873,14 +1883,37 @@ impl Translator<'_, '_> {
                             .icmp_imm(IntCC::Equal, requested_index, field_index);
                     let matches = self.builder.ins().band(variant_matches, field_matches);
                     expected = self.builder.ins().select(matches, candidate, expected);
+                    if representation_type(self.types, *field_ty)
+                        == representation_type(self.types, result_type)
+                        && jett_mir::move_values::is_secret(self.types, *field_ty)
+                            == jett_mir::move_values::is_secret(self.types, result_type)
+                    {
+                        compatible = self.builder.ins().select(matches, candidate, compatible);
+                    }
                 }
             }
-            let leaf = if id == IntrinsicId::TypeMachineFieldValue {
-                NativeLeaf::ReflectedMachineFieldIndex
+            let requested_type = reflection_arguments
+                .get(1)
+                .ok_or_else(|| self.unsupported(span, "checked reflected payload field type"))?;
+            let (name_pointer, name_length) = self.static_bytes(&requested_type.type_name)?;
+            let kind = if id == IntrinsicId::TypeMachineFieldValue {
+                2
             } else {
-                NativeLeaf::ReflectedVariantFieldIndex
+                1
             };
-            let checked_index = self.leaf(leaf, &[metadata, expected], true)?;
+            let kind = self.builder.ins().iconst(ir::types::I32, kind);
+            let checked_index = self.leaf(
+                NativeLeaf::ReflectedCheckedFieldIndex,
+                &[
+                    metadata,
+                    expected,
+                    compatible,
+                    name_pointer,
+                    name_length,
+                    kind,
+                ],
+                true,
+            )?;
             let one = self.builder.ins().iconst(ir::types::I64, 1);
             let slot = self.builder.ins().iadd(checked_index, one);
             return self.reflected_field_value(owner, slot, result_type, span);
