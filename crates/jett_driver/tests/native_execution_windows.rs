@@ -1312,6 +1312,52 @@ fn native_pending_set_elements_match_interpreter() {
 }
 
 #[test]
+fn native_pending_map_entries_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/pending_map_entries.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending map directory");
+    let binary = directory.path().join("pending_map_entries.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending map entries");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_map_intrinsics_match_interpreter_errors() {
+    for name in [
+        "pending_map_length_failure",
+        "pending_map_has_failure",
+        "pending_map_get_failure",
+        "pending_map_insert_failure",
+        "pending_map_remove_failure",
+        "pending_map_from_lists_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending map or input list");
+        let directory = tempfile::tempdir().expect("isolated pending map directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending map intrinsic");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_set_intrinsics_match_interpreter_errors() {
     for name in [
         "pending_set_length_failure",

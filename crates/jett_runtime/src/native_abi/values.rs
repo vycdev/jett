@@ -107,6 +107,30 @@ const INVALID_MAP: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native map handle or entry",
 );
+const PENDING_MAP_LENGTH: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__length expects a map argument",
+);
+const PENDING_MAP_HAS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__has expects a map as first argument",
+);
+const PENDING_MAP_GET: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__get expects a map as first argument",
+);
+const PENDING_MAP_INSERT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__insert expects a map as first argument",
+);
+const PENDING_MAP_REMOVE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__remove expects a map as first argument",
+);
+const PENDING_MAP_FROM_LISTS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"map.__from_lists expects two list arguments",
+);
 const INVALID_BYTES: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native bytes handle",
@@ -471,6 +495,8 @@ struct NativeSet {
 struct NativeMapEntry {
     key: u64,
     value: u64,
+    key_pending_depth: u64,
+    value_pending_depth: u64,
     key_taken: bool,
 }
 struct NativeMap {
@@ -758,9 +784,14 @@ impl NativeDebugLayout {
                     if position > 0 {
                         result.push_str(", ");
                     }
-                    result.push_str(&self.format_value(values, entry.key, *key, child)?);
+                    let key_value = self.format_value(values, entry.key, *key, child)?;
+                    result.push_str(&format_pending_value(&key_value, entry.key_pending_depth)?);
                     result.push_str(": ");
-                    result.push_str(&self.format_value(values, entry.value, *value, child)?);
+                    let mapped_value = self.format_value(values, entry.value, *value, child)?;
+                    result.push_str(&format_pending_value(
+                        &mapped_value,
+                        entry.value_pending_depth,
+                    )?);
                 }
                 result.push(')');
                 format_pending_value(&result, map.pending_depth)?
@@ -965,7 +996,9 @@ impl NativeDebugLayout {
                     if a.key_taken || b.key_taken {
                         return Err(INVALID_MAP);
                     }
-                    if !self.equal_value(values, a.key, b.key, *key, child)?
+                    if a.key_pending_depth != b.key_pending_depth
+                        || a.value_pending_depth != b.value_pending_depth
+                        || !self.equal_value(values, a.key, b.key, *key, child)?
                         || !self.equal_value(values, a.value, b.value, *value, child)?
                     {
                         return Ok(false);
@@ -2121,26 +2154,50 @@ impl NativeValues {
         Ok(id)
     }
     fn map_position(&self, id: u64, key: u64) -> LeafResult<Option<usize>> {
+        self.map_position_depth(id, key, 0)
+    }
+    fn require_plain_map(&self, id: u64, error: Failure) -> LeafResult<()> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        if map.pending_depth != 0 {
+            return Err(error);
+        }
+        Ok(())
+    }
+    fn map_position_depth(&self, id: u64, key: u64, depth: u64) -> LeafResult<Option<usize>> {
         let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
         if map.key_strings {
-            let key_text = self.text(key)?;
+            if depth != 0 {
+                return Err(INVALID_MAP);
+            }
             for (index, entry) in map.entries.iter().enumerate() {
                 if let Some(entry) = entry {
-                    if !entry.key_taken && self.text(entry.key)? == key_text {
+                    if !entry.key_taken && self.same_string_value(entry.key, key)? {
                         return Ok(Some(index));
                     }
                 }
             }
             Ok(None)
         } else {
-            Ok(map
-                .entries
-                .iter()
-                .position(|entry| entry.is_some_and(|entry| !entry.key_taken && entry.key == key)))
+            Ok(map.entries.iter().position(|entry| {
+                entry.is_some_and(|entry| {
+                    !entry.key_taken && entry.key == key && entry.key_pending_depth == depth
+                })
+            }))
         }
     }
     fn map_insert(&mut self, id: u64, key: u64, value: u64) -> LeafResult<u64> {
-        let position = self.map_position(id, key)?;
+        self.map_insert_depth(id, key, 0, value, 0)
+    }
+    fn map_insert_depth(
+        &mut self,
+        id: u64,
+        key: u64,
+        key_depth: u64,
+        value: u64,
+        value_depth: u64,
+    ) -> LeafResult<u64> {
+        self.require_plain_map(id, PENDING_MAP_INSERT)?;
+        let position = self.map_position_depth(id, key, key_depth)?;
         let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
         let key_strings = map.key_strings;
         let value_owned = map.value_owned;
@@ -2149,6 +2206,8 @@ impl NativeValues {
             map.entries.push(Some(NativeMapEntry {
                 key,
                 value,
+                key_pending_depth: key_depth,
+                value_pending_depth: value_depth,
                 key_taken: false,
             }));
         } else {
@@ -2156,6 +2215,7 @@ impl NativeValues {
                 .as_mut()
                 .ok_or(INVALID_MAP)?;
             let old_value = std::mem::replace(&mut old.value, value);
+            old.value_pending_depth = value_depth;
             if key_strings {
                 self.drop_value(key)?;
             }
@@ -2166,21 +2226,40 @@ impl NativeValues {
         Ok(id)
     }
     fn map_append_literal(&mut self, id: u64, key: u64, value: u64) -> LeafResult<u64> {
+        self.map_append_literal_depth(id, key, 0, value, 0)
+    }
+    fn map_append_literal_depth(
+        &mut self,
+        id: u64,
+        key: u64,
+        key_depth: u64,
+        value: u64,
+        value_depth: u64,
+    ) -> LeafResult<u64> {
         let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
         if map.key_strings {
             self.text(key)?;
+            if key_depth != 0 {
+                return Err(INVALID_MAP);
+            }
         }
         let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
         map.entries.try_reserve(1).map_err(|_| EXHAUSTED)?;
         map.entries.push(Some(NativeMapEntry {
             key,
             value,
+            key_pending_depth: key_depth,
+            value_pending_depth: value_depth,
             key_taken: false,
         }));
         Ok(id)
     }
     fn map_remove(&mut self, id: u64, key: u64) -> LeafResult<u64> {
-        while let Some(index) = self.map_position(id, key)? {
+        self.map_remove_depth(id, key, 0)
+    }
+    fn map_remove_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_map(id, PENDING_MAP_REMOVE)?;
+        while let Some(index) = self.map_position_depth(id, key, depth)? {
             let map = self.maps.get_mut(&id).ok_or(INVALID_MAP)?;
             let key_strings = map.key_strings;
             let value_owned = map.value_owned;
@@ -2195,19 +2274,31 @@ impl NativeValues {
         Ok(id)
     }
     fn map_get(&mut self, id: u64, key: u64) -> LeafResult<u64> {
-        let Some(index) = self.map_position(id, key)? else {
+        self.map_get_depth(id, key, 0)
+    }
+    fn map_get_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_map(id, PENDING_MAP_GET)?;
+        let Some(index) = self.map_position_depth(id, key, depth)? else {
             return self.sum(SUM_FAILURE, 0, false);
         };
         let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
         let value_owned = map.value_owned;
-        let bits = map.entries[index].ok_or(INVALID_MAP)?.value;
+        let entry = map.entries[index].ok_or(INVALID_MAP)?;
+        let bits = entry.value;
+        let value_depth = entry.value_pending_depth;
         let bits = if value_owned {
             self.clone_value(bits)?
         } else {
             bits
         };
         match self.sum(SUM_SUCCESS, bits, value_owned) {
-            Ok(result) => Ok(result),
+            Ok(result) => {
+                self.sums
+                    .get_mut(&result)
+                    .ok_or(INVALID_SUM)?
+                    .payload_pending_depth = value_depth;
+                Ok(result)
+            }
             Err(error) => {
                 if value_owned {
                     self.drop_value(bits)?;
@@ -2248,6 +2339,21 @@ impl NativeValues {
             *slot = None;
         }
         Ok(bits)
+    }
+    fn map_element_depth(&self, id: u64, index: i64, key: u32) -> LeafResult<u64> {
+        let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
+        let index = usize::try_from(index).map_err(|_| INVALID_MAP)?;
+        let entry = map
+            .entries
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(INVALID_MAP)?;
+        match key {
+            0 => Ok(entry.value_pending_depth),
+            1 if !entry.key_taken => Ok(entry.key_pending_depth),
+            _ => Err(INVALID_MAP),
+        }
     }
     fn clone_map(&mut self, id: u64) -> LeafResult<u64> {
         let map = self.maps.get(&id).ok_or(INVALID_MAP)?;
@@ -2314,6 +2420,8 @@ impl NativeValues {
                 .push(Some(NativeMapEntry {
                     key,
                     value,
+                    key_pending_depth: entry.key_pending_depth,
+                    value_pending_depth: entry.value_pending_depth,
                     key_taken: false,
                 }));
         }
@@ -2361,10 +2469,17 @@ impl NativeValues {
         if key_list.owned != (key_strings != 0) || value_list.owned != (value_owned != 0) {
             return Err(INVALID_MAP);
         }
-        let (key_elements, value_elements) =
-            (key_list.elements.clone(), value_list.elements.clone());
+        if key_list.pending_depth != 0 || value_list.pending_depth != 0 {
+            return Err(PENDING_MAP_FROM_LISTS);
+        }
+        let (key_elements, value_elements, key_depths, value_depths) = (
+            key_list.elements.clone(),
+            value_list.elements.clone(),
+            key_list.element_pending_depths.clone(),
+            value_list.element_pending_depths.clone(),
+        );
         let output = self.new_map(key_strings, value_owned)?;
-        for (key, value) in key_elements.into_iter().zip(value_elements) {
+        for (index, (key, value)) in key_elements.into_iter().zip(value_elements).enumerate() {
             let Some(key) = key else {
                 self.drop_value(output)?;
                 return Err(INVALID_LIST);
@@ -2398,7 +2513,9 @@ impl NativeValues {
             } else {
                 value
             };
-            if let Err(error) = self.map_insert(output, key, value) {
+            let key_depth = key_depths.get(&index).copied().unwrap_or(0);
+            let value_depth = value_depths.get(&index).copied().unwrap_or(0);
+            if let Err(error) = self.map_insert_depth(output, key, key_depth, value, value_depth) {
                 if key_strings != 0 {
                     self.drop_value(key)?;
                 }
@@ -4952,16 +5069,29 @@ leaves! {
         |s| s.new_map(key_strings, value_owned);
     MapInsert, jett_rt_v1_map_insert, false, (map: u64 => I64, key: u64 => I64, value: u64 => I64), u64 => I64,
         |s| s.map_insert(map, key, value);
+    MapInsertScalarTasks, jett_rt_v1_map_insert_scalar_tasks, false, (map: u64 => I64, key: u64 => I64, key_depth: u64 => I64, value: u64 => I64, value_depth: u64 => I64), u64 => I64,
+        |s| s.map_insert_depth(map, key, key_depth, value, value_depth);
     MapAppendLiteral, jett_rt_v1_map_append_literal, false, (map: u64 => I64, key: u64 => I64, value: u64 => I64), u64 => I64,
         |s| s.map_append_literal(map, key, value);
+    MapAppendLiteralScalarTasks, jett_rt_v1_map_append_literal_scalar_tasks, false, (map: u64 => I64, key: u64 => I64, key_depth: u64 => I64, value: u64 => I64, value_depth: u64 => I64), u64 => I64,
+        |s| s.map_append_literal_depth(map, key, key_depth, value, value_depth);
     MapRemove, jett_rt_v1_map_remove, false, (map: u64 => I64, key: u64 => I64), u64 => I64,
         |s| s.map_remove(map, key);
+    MapRemoveScalarTask, jett_rt_v1_map_remove_scalar_task, false, (map: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.map_remove_depth(map, key, depth);
     MapHas, jett_rt_v1_map_has, false, (map: u64 => I64, key: u64 => I64), u32 => I32,
-        |s| Ok(u32::from(s.map_position(map, key)?.is_some()));
+        |s| { s.require_plain_map(map, PENDING_MAP_HAS)?;
+            Ok(u32::from(s.map_position(map, key)?.is_some())) };
+    MapHasScalarTask, jett_rt_v1_map_has_scalar_task, false, (map: u64 => I64, key: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| { s.require_plain_map(map, PENDING_MAP_HAS)?;
+            Ok(u32::from(s.map_position_depth(map, key, depth)?.is_some())) };
     MapLength, jett_rt_v1_map_length, false, (map: u64 => I64), i64 => I64,
-        |s| Ok(s.maps.get(&map).ok_or(INVALID_MAP)?.entries.len() as i64);
+        |s| { s.require_plain_map(map, PENDING_MAP_LENGTH)?;
+            Ok(s.maps.get(&map).ok_or(INVALID_MAP)?.entries.len() as i64) };
     MapGet, jett_rt_v1_map_get, false, (map: u64 => I64, key: u64 => I64), u64 => I64,
         |s| s.map_get(map, key);
+    MapGetScalarTask, jett_rt_v1_map_get_scalar_task, false, (map: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.map_get_depth(map, key, depth);
     MapClone, jett_rt_v1_map_clone, false, (map: u64 => I64), u64 => I64,
         |s| s.clone_map(map);
     MapRun, jett_rt_v1_map_run, false, (map: u64 => I64), u64 => I64,
@@ -4978,6 +5108,8 @@ leaves! {
         |s| s.map_element(map, index, false, true);
     MapValueClone, jett_rt_v1_map_value_clone, false, (map: u64 => I64, index: i64 => I64), u64 => I64,
         |s| s.map_element(map, index, false, false);
+    MapElementPendingDepth, jett_rt_v1_map_element_pending_depth, false, (map: u64 => I64, index: i64 => I64, key: u32 => I32), u64 => I64,
+        |s| s.map_element_depth(map, index, key);
     ListLength, jett_rt_v1_list_length, false, (value: u64 => I64), i64 => I64,
         |s| Ok(s.lists.get(&value).ok_or(INVALID_LIST)?.elements.len() as i64);
     ListAppend, jett_rt_v1_list_append, false, (value: u64 => I64, bits: u64 => I64), u64 => I64,

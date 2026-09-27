@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    map[int64, int64] values = run map(2: 3)
+    map[int64, int64] changed = map.remove[int64, int64](values, 2)
+    trace changed
+    return nothing

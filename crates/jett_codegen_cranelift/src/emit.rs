@@ -1109,13 +1109,25 @@ impl Translator<'_, '_> {
                         NativeLeaf::ListElementClone
                     };
                     let target_ty = self.local_types[target.index() as usize].ty;
-                    let depth = if !string && !map && is_task_scalar(self.types, target_ty)? {
-                        let depth_leaf = if set {
-                            NativeLeaf::SetElementPendingDepth
+                    let depth = if !string && is_task_scalar(self.types, target_ty)? {
+                        if map {
+                            let key = self.builder.ins().iconst(
+                                ir::types::I32,
+                                i64::from(matches!(part, jett_mir::SequencePart::Key)),
+                            );
+                            Some(self.leaf(
+                                NativeLeaf::MapElementPendingDepth,
+                                &[value, index, key],
+                                true,
+                            )?)
                         } else {
-                            NativeLeaf::ListElementPendingDepth
-                        };
-                        Some(self.leaf(depth_leaf, &[value, index], true)?)
+                            let depth_leaf = if set {
+                                NativeLeaf::SetElementPendingDepth
+                            } else {
+                                NativeLeaf::ListElementPendingDepth
+                            };
+                            Some(self.leaf(depth_leaf, &[value, index], true)?)
+                        }
                     } else {
                         None
                     };

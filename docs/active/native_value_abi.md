@@ -88,7 +88,7 @@ formatting restore it. Primitive lists use a sparse per-element depth map,
 preserved by cloning, insertion, removal, iteration, and stable sorting.
 `list.get` carries element depth through its result payload. Differential
 fixtures cover these boundaries, including nested pending wrappers. Pending
-scalar values in other collection shapes, primitive operands in intrinsics,
+scalar values in reflected construction, primitive operands in intrinsics,
 and actor/Graphics state propagation need further parity work. Direct
 unary and binary operators now reject pending primitive operands with the
 interpreter's error text after evaluating the operands in source order.
@@ -109,6 +109,12 @@ that depth; string set membership compares both text and the string handle's
 pending depth. Set intrinsics reject a pending set container. Native `for`
 checks the container before fetching length or elements and reports the
 interpreter's shared iterable error for pending lists, strings, maps, and sets.
+Map entries store pending depth beside primitive key and value bits. Literal
+construction, insert/update, lookup result payloads, removal, cloning,
+`from_lists`, recursive debug formatting, and key/value iteration preserve it.
+String map keys compare both text and their handle's pending depth. Public map
+intrinsics reject pending map containers, while `map.from_lists` rejects
+pending input lists with the interpreter's current errors.
 
 Owned native strings also carry a pending depth in the runtime registry.
 `StringRun` and `StringTaskJoin` create independent handles, so wrapping a

@@ -1,0 +1,7 @@
+namespace app
+function main() returns nothing:
+    map[int64, int64] values = run map(2: 3)
+    int64 found = map.get[int64, int64](values, 2) handle:
+        default -1
+    trace found
+    return nothing

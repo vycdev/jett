@@ -1,0 +1,40 @@
+namespace app
+function main() returns nothing:
+    map[int64, int64] entries = map(run 2: run 7, 2: 8)
+    trace entries
+    bool has_pending = map.has[int64, int64](view entries, run 2)
+    bool has_plain = map.has[int64, int64](view entries, 2)
+    trace has_pending
+    trace has_plain
+    int64 found = map.get[int64, int64](clone entries, run 2) handle:
+        default -1
+    trace found
+    map[int64, int64] copied = clone entries
+    trace copied
+    map[int64, int64] kept = map.remove[int64, int64](clone entries, 2)
+    trace kept
+    map[int64, int64] removed_pending = map.remove[int64, int64](clone entries, run 2)
+    trace removed_pending
+    map[int64, int64] updated = map.insert[int64, int64](clone entries, run 2, run 9)
+    trace updated
+    map[int64, int64] added = map.insert[int64, int64](clone entries, 3, run 10)
+    trace added
+    mutable list[int64] keys = list()
+    mutable list[int64] values = list()
+    for key, value in copied:
+        keys = list.append[int64](keys, key)
+        values = list.append[int64](values, value)
+    trace keys
+    trace values
+    map[int64, int64] zipped = map.from_lists[int64, int64](list(run 5), list(run 6))
+    trace zipped
+    map[string, int64] words = map(run "north": run 1, "north": 2)
+    trace words
+    bool has_pending_word = map.has[string, int64](view words, run "north")
+    bool has_plain_word = map.has[string, int64](view words, "north")
+    trace has_pending_word
+    trace has_plain_word
+    map[string, int64] only_pending = map(run "east": 3)
+    bool missing_plain_word = map.has[string, int64](view only_pending, "east")
+    trace missing_plain_word
+    return nothing

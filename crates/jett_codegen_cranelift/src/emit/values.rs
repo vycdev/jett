@@ -590,13 +590,23 @@ impl Translator<'_, '_> {
         let handle = self.scalar(map, span)?;
         let (key_bits, _) = self.payload_bits(key);
         let (value_bits, _) = self.payload_bits(value);
+        let key_depth = if let LoweredValue::ScalarTask(_, depth) = key {
+            depth
+        } else {
+            self.builder.ins().iconst(ir::types::I64, 0)
+        };
+        let value_depth = if let LoweredValue::ScalarTask(_, depth) = value {
+            depth
+        } else {
+            self.builder.ins().iconst(ir::types::I64, 0)
+        };
         self.leaf(
             if literal {
-                NativeLeaf::MapAppendLiteral
+                NativeLeaf::MapAppendLiteralScalarTasks
             } else {
-                NativeLeaf::MapInsert
+                NativeLeaf::MapInsertScalarTasks
             },
-            &[handle, key_bits, value_bits],
+            &[handle, key_bits, key_depth, value_bits, value_depth],
             true,
         )?;
         if let LoweredValue::Owned(_, slot) = key {
@@ -641,7 +651,11 @@ impl Translator<'_, '_> {
             IntrinsicId::MapHas => {
                 let map = self.scalar(values[0], span)?;
                 let (key, _) = self.payload_bits(values[1]);
-                let found = self.leaf(NativeLeaf::MapHas, &[map, key], true)?;
+                let found = if let LoweredValue::ScalarTask(_, depth) = values[1] {
+                    self.leaf(NativeLeaf::MapHasScalarTask, &[map, key, depth], true)?
+                } else {
+                    self.leaf(NativeLeaf::MapHas, &[map, key], true)?
+                };
                 Ok(LoweredValue::Scalar(
                     self.builder.ins().ireduce(ir::types::I8, found),
                 ))
@@ -649,7 +663,11 @@ impl Translator<'_, '_> {
             IntrinsicId::MapGet => {
                 let map = self.scalar(values[0], span)?;
                 let (key, _) = self.payload_bits(values[1]);
-                let result = self.leaf(NativeLeaf::MapGet, &[map, key], true)?;
+                let result = if let LoweredValue::ScalarTask(_, depth) = values[1] {
+                    self.leaf(NativeLeaf::MapGetScalarTask, &[map, key, depth], true)?
+                } else {
+                    self.leaf(NativeLeaf::MapGet, &[map, key], true)?
+                };
                 self.own_linear(result)
             }
             IntrinsicId::MapInsert => {
@@ -665,7 +683,11 @@ impl Translator<'_, '_> {
                     return Err(self.unsupported(span, "map remove requires owner"));
                 };
                 let (key, _) = self.payload_bits(values[1]);
-                let result = self.leaf(NativeLeaf::MapRemove, &[map, key], true)?;
+                let result = if let LoweredValue::ScalarTask(_, depth) = values[1] {
+                    self.leaf(NativeLeaf::MapRemoveScalarTask, &[map, key, depth], true)?
+                } else {
+                    self.leaf(NativeLeaf::MapRemove, &[map, key], true)?
+                };
                 self.clear_slot(slot);
                 self.own_linear(result)
             }

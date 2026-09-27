@@ -314,7 +314,7 @@ insertion, removal, iteration, access, and sorting. Native unary and binary
 operators plus boolean branch and breakpoint conditions now reject pending
 primitive values with interpreter diagnostics; short-circuit operators retain
 the interpreter's right-operand evaluation order. Pending scalar values in
-other collection shapes and unexamined intrinsic operands, plus actor/Graphics
+reflected construction and unexamined intrinsic operands, plus actor/Graphics
 state, remain open, so the coarse coverage estimate stays 80%.
 Numeric list aggregates now reject pending containers and elements before
 operating on scalar payload bits, with differential cases for `list.sum`,
@@ -323,7 +323,10 @@ Primitive set elements now preserve pending depth through membership, updates,
 cloning, debug output, and iteration. Pending set containers fail at public set
 intrinsics. Native `for` rejects pending list, string, map, and set containers
 before iteration, matching the interpreter's shared iterable error. Pending
-primitive map keys and values remain open.
+primitive map keys and values now retain pending depth through literals,
+updates, lookup, removal, cloning, `from_lists`, and iteration. Pending map
+containers fail at public map intrinsics, and pending input lists fail at
+`map.from_lists`. Other intrinsic consumers of pending primitives remain open.
 
 Capability task handles preserve pending nesting independently of the original
 authority token. Joining a task restores the authority needed by the capability
