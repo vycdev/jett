@@ -314,7 +314,7 @@ insertion, removal, iteration, access, and sorting. Native unary and binary
 operators plus boolean branch and breakpoint conditions now reject pending
 primitive values with interpreter diagnostics; short-circuit operators retain
 the interpreter's right-operand evaluation order. Pending scalar values in
-unexamined intrinsic operands and Graphics state remain open.
+unexamined intrinsic operands remain open.
 Numeric list aggregates now reject pending containers and elements before
 operating on scalar payload bits, with differential cases for `list.sum`,
 `math.average`, and `math.median`.
@@ -1253,7 +1253,12 @@ differential fixtures cover these cases. The coarse estimate remains 80%.
 As of 2026-09-27, the working estimate is **about 85%**. The pending-value
 passes above closed identified gaps in strings, bytes, encoding, CSV, crypto,
 capabilities, secrets, bitfields, and actor state. This is a five-point planning
-step, not a fixture-derived percentage. Graphics state still loses primitive
-pending depth; projected views and generic collection shapes, nested handlers,
-aggregate reflection, runtime providers and scheduling, concrete JSON shapes,
-and special-value diagnostics remain incomplete.
+step, not a fixture-derived percentage. Projected views and generic collection
+shapes, nested handlers, aggregate reflection, runtime providers and
+scheduling, concrete JSON shapes, and special-value diagnostics remain
+incomplete.
+
+Graphics callback state now carries primitive pending depth from the initial
+value through each update result and render call. Scripted interpreter/native
+fixtures cover nested pending `int64`, `bool`, and `float64` state; the coverage
+estimate remains 85% while the broader gaps above remain.

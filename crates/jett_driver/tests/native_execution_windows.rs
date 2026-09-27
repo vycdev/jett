@@ -815,6 +815,55 @@ fn native_scripted_graphics_matches_interpreter() {
 }
 
 #[test]
+fn native_graphics_pending_scalar_state_matches_interpreter() {
+    for (name, events) in [
+        (
+            "graphics_pending_scalar_state.jett",
+            vec![
+                graphics::TestEvent::Key(graphics::Key::Right),
+                graphics::TestEvent::Key(graphics::Key::Left),
+                graphics::TestEvent::Close,
+            ],
+        ),
+        (
+            "graphics_pending_scalar_state_types.jett",
+            vec![
+                graphics::TestEvent::Key(graphics::Key::Right),
+                graphics::TestEvent::Close,
+                graphics::TestEvent::Key(graphics::Key::Left),
+                graphics::TestEvent::Close,
+            ],
+        ),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/native")
+            .join(name);
+        let expected = jett_driver::run_file_capture_output_with_graphics_test_events(
+            &fixture,
+            events.clone(),
+        )
+        .expect("pending Graphics interpreter oracle");
+        let script = graphics::encode_test_script(&events);
+        let directory = tempfile::tempdir().expect("isolated pending Graphics state directory");
+        let binary = directory.path().join("graphics_pending_state.exe");
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending Graphics state");
+        let actual = run_bounded_with_env(
+            &binary,
+            directory.path(),
+            Some((graphics::TEST_SCRIPT_ENV, &script)),
+        );
+        assert!(actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.debug_output.join("\n")).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_graphics_callback_runtime_error_is_terminal() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/run_pass/graphics_callback_runtime_error.jett");

@@ -6,7 +6,7 @@ impl Translator<'_, '_> {
         descriptor: Value,
         params: &[TypeId],
         result_type: TypeId,
-        arguments: &[Option<Value>],
+        arguments: &[Option<LoweredValue>],
         transfers: &[ir::StackSlot],
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
@@ -46,12 +46,16 @@ impl Translator<'_, '_> {
         for (parameter, argument) in params.iter().zip(arguments) {
             if let Some(ty) = clif_type(self.types, *parameter, "Graphics callback parameter")? {
                 signature.params.push(AbiParam::new(ty));
-                native_args.push(argument.ok_or_else(|| {
+                let argument = argument.ok_or_else(|| {
                     contract_error(self.symbol, span, "Graphics callback value is absent")
-                })?);
+                })?;
                 if is_task_scalar(self.types, *parameter)? {
+                    let (bits, depth) = self.scalar_task(argument, span)?;
+                    native_args.push(bits);
                     signature.params.push(AbiParam::new(ir::types::I64));
-                    native_args.push(self.builder.ins().iconst(ir::types::I64, 0));
+                    native_args.push(depth);
+                } else {
+                    native_args.push(self.scalar(argument, span)?);
                 }
             } else if argument.is_some() {
                 return Err(contract_error(
@@ -250,12 +254,21 @@ impl Translator<'_, '_> {
 
         let state_var = clif_type(self.types, *state_type, "Graphics state")?
             .map(|ty| self.builder.declare_var(ty));
+        let state_depth_var = if is_task_scalar(self.types, *state_type)? {
+            Some(self.builder.declare_var(ir::types::I64))
+        } else {
+            None
+        };
         let state_slot = match initial {
             LoweredValue::Owned(_, slot) => Some(*slot),
             _ => None,
         };
         if let Some(variable) = state_var {
             self.builder.def_var(variable, self.scalar(*initial, span)?);
+        }
+        if let Some(variable) = state_depth_var {
+            let (_, depth) = self.scalar_task(*initial, span)?;
+            self.builder.def_var(variable, depth);
         }
 
         let validated_config =
@@ -274,7 +287,12 @@ impl Translator<'_, '_> {
             self.drop_slot(slot)?;
         }
 
-        let current_state = state_var.map(|variable| self.builder.use_var(variable));
+        let current_state = state_var.map(|variable| {
+            let bits = self.builder.use_var(variable);
+            state_depth_var.map_or(LoweredValue::Scalar(bits), |depth_variable| {
+                LoweredValue::ScalarTask(bits, self.builder.use_var(depth_variable))
+            })
+        });
         let first_scene = self.graphics_callback(
             render_descriptor,
             &render_params,
@@ -419,12 +437,17 @@ impl Translator<'_, '_> {
         if let LoweredValue::Owned(_, slot) = key {
             transfers.push(slot);
         }
-        let current_state = state_var.map(|variable| self.builder.use_var(variable));
+        let current_state = state_var.map(|variable| {
+            let bits = self.builder.use_var(variable);
+            state_depth_var.map_or(LoweredValue::Scalar(bits), |depth_variable| {
+                LoweredValue::ScalarTask(bits, self.builder.use_var(depth_variable))
+            })
+        });
         let updated = self.graphics_callback(
             update_descriptor,
             &update_params,
             update_result,
-            &[current_state, Some(key_handle)],
+            &[current_state, Some(LoweredValue::Scalar(key_handle))],
             &transfers,
             span,
         )?;
@@ -441,8 +464,17 @@ impl Translator<'_, '_> {
             }
             self.builder.def_var(variable, value);
         }
+        if let Some(variable) = state_depth_var {
+            let (_, depth) = self.scalar_task(updated, span)?;
+            self.builder.def_var(variable, depth);
+        }
 
-        let current_state = state_var.map(|variable| self.builder.use_var(variable));
+        let current_state = state_var.map(|variable| {
+            let bits = self.builder.use_var(variable);
+            state_depth_var.map_or(LoweredValue::Scalar(bits), |depth_variable| {
+                LoweredValue::ScalarTask(bits, self.builder.use_var(depth_variable))
+            })
+        });
         let scene = self.graphics_callback(
             render_descriptor,
             &render_params,

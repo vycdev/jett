@@ -88,8 +88,7 @@ formatting restore it. Primitive lists use a sparse per-element depth map,
 preserved by cloning, insertion, removal, iteration, and stable sorting.
 `list.get` carries element depth through its result payload. Differential
 fixtures cover these boundaries, including nested pending wrappers. Pending
-scalar values in unexamined intrinsic operands and Graphics state
-propagation need further parity work. Direct
+scalar values in unexamined intrinsic operands need further parity work. Direct
 unary and binary operators now reject pending primitive operands with the
 interpreter's error text after evaluating the operands in source order.
 Boolean `and` and `or` still skip an unevaluated right operand when the plain
@@ -261,6 +260,9 @@ a terminal callback failure. Named callbacks, including render's `view`
 parameter, now match the interpreter in scripted fixtures. Inline Graphics
 callbacks with `view` parameters extract to checked function values before
 MIR lowering, preserving their borrow mode.
+Primitive Graphics state retains pending depth across the initial callback,
+update returns, and subsequent callbacks. Scripted differential fixtures
+cover nested pending integer, boolean, and floating-point state.
 For deterministic parity runs, the launcher configures a context-local Graphics
 event queue from `JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1` before entry. The runtime
 and interpreter share the JSON event grammar (key, close, host error); no

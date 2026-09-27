@@ -1,0 +1,15 @@
+namespace app
+function update(state: int64, key: graphics.Key) returns int64:
+    trace state
+    return run state
+function render(view state: int64) returns graphics.Scene:
+    trace state
+    graphics.Color color = graphics.Color(red: 0, green: 0, blue: 0)
+    return graphics.Scene(background: color, rectangles: list.new[graphics.Rect](), texts: list.new[graphics.Text]())
+function main(display: Graphics, stdout: Stdout) returns nothing:
+    graphics.Config config = graphics.Config(title: "Pending state", width: 32, height: 32)
+    int64 initial = run 5
+    graphics.run[int64](view display, config, initial, update, render) handle error:
+        Stdout.write(view stdout, error)
+        return nothing
+    Stdout.write(view stdout, "closed\n")
