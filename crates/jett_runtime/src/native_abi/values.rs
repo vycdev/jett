@@ -3332,6 +3332,19 @@ impl NativeValues {
         bits: u64,
         owned: bool,
     ) -> LeafResult<u32> {
+        self.replace_actor_field_depth(id, index, bits, 0, owned)
+    }
+    fn replace_actor_field_depth(
+        &mut self,
+        id: u64,
+        index: u64,
+        bits: u64,
+        pending_depth: u64,
+        owned: bool,
+    ) -> LeafResult<u32> {
+        if owned && pending_depth != 0 {
+            return Err(INVALID_ACTOR);
+        }
         if !self.actors.contains_key(&id) {
             return Err(INVALID_ACTOR);
         }
@@ -3348,7 +3361,7 @@ impl NativeValues {
             .replace(NativeField {
                 bits,
                 owned,
-                pending_depth: 0,
+                pending_depth,
             })
             .ok_or(INVALID_ACTOR)?;
         if old.owned {
@@ -5127,6 +5140,8 @@ leaves! {
     ActorReplace, jett_rt_v1_actor_replace, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
         |s| { if owned > 1 { return Err(INVALID_ACTOR); }
             s.replace_actor_field(value, index, bits, owned != 0) };
+    ActorReplaceScalarTask, jett_rt_v1_actor_replace_scalar_task, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| s.replace_actor_field_depth(value, index, bits, depth, false);
     ReflectedFieldIndex, jett_rt_v1_reflected_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,
         |s| s.reflected_field_index(actual, expected, INVALID_REFLECTED_FIELD);
     ReflectedVariantFieldIndex, jett_rt_v1_reflected_variant_field_index, false, (actual: u64 => I64, expected: u64 => I64), u64 => I64,

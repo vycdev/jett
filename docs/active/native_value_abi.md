@@ -88,7 +88,7 @@ formatting restore it. Primitive lists use a sparse per-element depth map,
 preserved by cloning, insertion, removal, iteration, and stable sorting.
 `list.get` carries element depth through its result payload. Differential
 fixtures cover these boundaries, including nested pending wrappers. Pending
-scalar values in unexamined intrinsic operands and actor/Graphics state
+scalar values in unexamined intrinsic operands and Graphics state
 propagation need further parity work. Direct
 unary and binary operators now reject pending primitive operands with the
 interpreter's error text after evaluating the operands in source order.
@@ -187,6 +187,11 @@ Actor identities also carry pending depth in their registered record. Task
 debug output retains the actor ordinal. `send` and `ask` reject a pending actor
 before evaluating message arguments, matching the interpreter's actor-value
 check.
+
+Actor state records now store primitive pending depth alongside scalar bits.
+Handler entry restores that depth from each state field, and every writeback
+replaces bits and depth together. Differential fixtures cover pending state
+initialization and updates for integer, boolean, and floating-point fields.
 
 Capability task values use separate scalar handles mapped to the granted
 authority token and a pending depth. `run` allocates a new handle and consumes

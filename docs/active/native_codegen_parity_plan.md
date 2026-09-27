@@ -281,7 +281,7 @@ below records implementation coverage; a row is complete only when its native
 object, linked execution, and differential behavior gates all pass. Typed
 lowering alone never changes an execution row to complete.
 
-For planning, the broad native-language coverage estimate is **about 80%**.
+For planning, the broad native-language coverage estimate is **about 85%**.
 Track it in five-percentage-point steps as the remaining surface gaps close.
 This is a judgment based on the matrix, while the fixture counts below are
 measured pass/denominator gates.
@@ -314,8 +314,7 @@ insertion, removal, iteration, access, and sorting. Native unary and binary
 operators plus boolean branch and breakpoint conditions now reject pending
 primitive values with interpreter diagnostics; short-circuit operators retain
 the interpreter's right-operand evaluation order. Pending scalar values in
-unexamined intrinsic operands and actor/Graphics state remain open, so the
-coarse coverage estimate stays 80%.
+unexamined intrinsic operands and Graphics state remain open.
 Numeric list aggregates now reject pending containers and elements before
 operating on scalar payload bits, with differential cases for `list.sum`,
 `math.average`, and `math.median`.
@@ -360,6 +359,11 @@ reference directly. Typed runtime leaves register actor-owned state records,
 replace owned fields, and clean them at context destruction. Native actor
 allocation, state writeback, and message dispatch pass linked differential
 fixtures; true asynchronous scheduling remains a separate task.
+Actor state now preserves pending primitive depth across constructor
+initialization, handler entry, state updates, responses, and joins. Linked
+interpreter/native fixtures cover `int64`, `bool`, and `float64` state, including
+trace output and repeated handler calls. This closes the identified actor
+state propagation gap while broader task scheduling remains open.
 
 The current fixture gates are:
 
@@ -1245,3 +1249,11 @@ with interpreter-matching diagnostics. Bitfield payload encoding detects a
 pending `list[uint8]` container or element before writing bytes, while
 `secret.redact` retains its unconditional redaction behavior. Linked
 differential fixtures cover these cases. The coarse estimate remains 80%.
+
+As of 2026-09-27, the working estimate is **about 85%**. The pending-value
+passes above closed identified gaps in strings, bytes, encoding, CSV, crypto,
+capabilities, secrets, bitfields, and actor state. This is a five-point planning
+step, not a fixture-derived percentage. Graphics state still loses primitive
+pending depth; projected views and generic collection shapes, nested handlers,
+aggregate reflection, runtime providers and scheduling, concrete JSON shapes,
+and special-value diagnostics remain incomplete.

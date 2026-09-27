@@ -1342,6 +1342,29 @@ fn native_pending_secret_and_bitfield_intrinsics_match_interpreter() {
 }
 
 #[test]
+fn native_pending_actor_scalar_state_matches_interpreter() {
+    for name in [
+        "pending_actor_scalar_state",
+        "pending_actor_scalar_state_types",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+        let directory = tempfile::tempdir().expect("isolated pending actor state directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary).expect("compile pending actor state");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.debug_output.join("\n")).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_set_map_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_set_map_values.jett");

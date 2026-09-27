@@ -859,23 +859,29 @@ fn translate_function(
                     } else {
                         bits
                     };
-                    let pending_depth = if pending_variables[parameter.local.index() as usize]
-                        .is_some()
-                        && actor_state_range.is_none()
-                    {
-                        let depth_index = function.capture_count + index;
-                        let depth_field = translator
-                            .builder
-                            .ins()
-                            .iconst(ir::types::I64, depth_index as i64);
-                        translator.leaf(
-                            NativeLeaf::StructField,
-                            &[environment, depth_field],
-                            true,
-                        )?
-                    } else {
-                        translator.builder.ins().iconst(ir::types::I64, 0)
-                    };
+                    let pending_depth =
+                        if pending_variables[parameter.local.index() as usize].is_some() {
+                            if actor_state_range.is_some() {
+                                translator.leaf(
+                                    NativeLeaf::StructFieldPendingDepth,
+                                    &[environment, field],
+                                    true,
+                                )?
+                            } else {
+                                let depth_index = function.capture_count + index;
+                                let depth_field = translator
+                                    .builder
+                                    .ins()
+                                    .iconst(ir::types::I64, depth_index as i64);
+                                translator.leaf(
+                                    NativeLeaf::StructField,
+                                    &[environment, depth_field],
+                                    true,
+                                )?
+                            }
+                        } else {
+                            translator.builder.ins().iconst(ir::types::I64, 0)
+                        };
                     (value, pending_depth)
                 } else {
                     let value = incoming.get(incoming_index).copied().ok_or_else(|| {
@@ -1381,8 +1387,17 @@ impl Translator<'_, '_> {
                 self.payload_bits(LoweredValue::Scalar(value)).0
             };
             let field = self.builder.ins().iconst(ir::types::I64, index as i64);
-            let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
-            self.leaf(NativeLeaf::ActorReplace, &[actor, field, bits, owns], true)?;
+            if let Some(pending_variable) = self.pending_variables[index] {
+                let depth = self.builder.use_var(pending_variable);
+                self.leaf(
+                    NativeLeaf::ActorReplaceScalarTask,
+                    &[actor, field, bits, depth],
+                    true,
+                )?;
+            } else {
+                let owns = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+                self.leaf(NativeLeaf::ActorReplace, &[actor, field, bits, owns], true)?;
+            }
             if let Some(slot) = self.local_slots[index] {
                 self.clear_slot(slot);
             }
