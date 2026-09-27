@@ -319,6 +319,10 @@ coarse coverage estimate stays 80%.
 Numeric list aggregates now reject pending containers and elements before
 operating on scalar payload bits, with differential cases for `list.sum`,
 `math.average`, and `math.median`.
+Public list intrinsics reject pending list containers, and index-taking list
+intrinsics reject pending integer indexes with interpreter-matching errors.
+Differential cases cover length, append, get, insert, remove, sort, indexed
+sort, sortedness, and both swap indexes.
 Primitive set elements now preserve pending depth through membership, updates,
 cloning, debug output, and iteration. Pending set containers fail at public set
 intrinsics. Native `for` rejects pending list, string, map, and set containers

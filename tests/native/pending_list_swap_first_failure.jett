@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] items = list(1, 2)
+    list[int64] changed = list.swap[int64](items, run 0, 1)
+    trace changed
+    return nothing

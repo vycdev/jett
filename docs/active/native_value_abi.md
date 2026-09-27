@@ -103,6 +103,10 @@ per-element depth map before reading scalar bits. `list.sum` distinguishes a
 pending first element from a later pending element, matching the interpreter's
 two current error paths; `math.average` and `math.median` report their current
 numeric-list errors for pending containers or elements.
+List intrinsic argument checks reject a pending list container before the
+operation, and reject pending int64 indexes for get, insert, remove, indexed
+sort, and swap with the interpreter's operation-specific errors. Pending scalar
+elements remain valid inputs to append and insert, and retain their depth.
 Primitive sets likewise keep a sparse per-element pending-depth map. Add,
 remove, contains, clone, recursive debug formatting, and scalar iteration use
 that depth; string set membership compares both text and the string handle's

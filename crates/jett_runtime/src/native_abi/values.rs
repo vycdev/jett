@@ -2112,6 +2112,31 @@ impl NativeValues {
             Some(format!("{operation}: index {index} out of bounds").into_bytes());
         Err(fallback)
     }
+    fn check_list_arguments(
+        &self,
+        value: u64,
+        kind: u32,
+        first_depth: u64,
+        second_depth: u64,
+    ) -> LeafResult<u32> {
+        let message: &'static [u8] = match kind {
+            0 => b"list.__length expects a list argument",
+            1 => b"list.__append expects a list as first argument",
+            2 => b"list.__get_clone expects a list and an int64 index",
+            3 => b"list.__insert_at expects a list, an int64 index, and a value",
+            4 => b"list.__remove_at expects a list and an int64 index",
+            5 => b"list.__sort expects a list argument",
+            6 => b"list.__sort_by_index expects a list of lists and an int64 index",
+            7 => b"list.__is_sorted expects a list argument",
+            8 => b"list.__swap expects a list and two int64 indices",
+            _ => return Err(INVALID_LIST),
+        };
+        let list = self.lists.get(&value).ok_or(INVALID_LIST)?;
+        if list.pending_depth != 0 || first_depth != 0 || second_depth != 0 {
+            return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, message));
+        }
+        Ok(0)
+    }
     fn new_set(&mut self, strings: u32) -> LeafResult<u64> {
         if strings > 1 {
             return Err(INVALID_SET);
@@ -5027,6 +5052,8 @@ leaves! {
 
     ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
+    ListCheckArguments, jett_rt_v1_list_check_arguments, false, (value: u64 => I64, kind: u32 => I32, first_depth: u64 => I64, second_depth: u64 => I64), u32 => I32,
+        |s| s.check_list_arguments(value, kind, first_depth, second_depth);
     ListInsertAt, jett_rt_v1_list_insert_at, false, (value: u64 => I64, index: i64 => I64, bits: u64 => I64), u64 => I64,
         |s| s.insert_list(value, index, bits, 0);
     ListInsertAtScalarTask, jett_rt_v1_list_insert_at_scalar_task, false, (value: u64 => I64, index: i64 => I64, bits: u64 => I64, depth: u64 => I64), u64 => I64,

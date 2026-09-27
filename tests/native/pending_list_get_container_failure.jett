@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] items = run list(1)
+    optional[int64] value = list.get[int64](view items, 0)
+    trace value
+    return nothing

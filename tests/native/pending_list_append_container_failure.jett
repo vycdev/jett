@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] items = run list(1)
+    list[int64] changed = list.append[int64](items, 2)
+    trace changed
+    return nothing

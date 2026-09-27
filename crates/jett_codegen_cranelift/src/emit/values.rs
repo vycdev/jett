@@ -732,6 +732,52 @@ impl Translator<'_, '_> {
         result_type: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
+        let check_kind = match id {
+            IntrinsicId::ListLength => Some(0),
+            IntrinsicId::ListAppend => Some(1),
+            IntrinsicId::ListGetClone => Some(2),
+            IntrinsicId::ListInsertAt => Some(3),
+            IntrinsicId::ListRemoveAt => Some(4),
+            IntrinsicId::ListSort => Some(5),
+            IntrinsicId::ListSortByIndex => Some(6),
+            IntrinsicId::ListIsSorted => Some(7),
+            IntrinsicId::ListSwap => Some(8),
+            _ => None,
+        };
+        if let Some(check_kind) = check_kind {
+            let list = self.scalar(values[0], span)?;
+            let kind = self.builder.ins().iconst(ir::types::I32, check_kind);
+            let zero = self.builder.ins().iconst(ir::types::I64, 0);
+            let indexed = matches!(
+                id,
+                IntrinsicId::ListGetClone
+                    | IntrinsicId::ListInsertAt
+                    | IntrinsicId::ListRemoveAt
+                    | IntrinsicId::ListSortByIndex
+                    | IntrinsicId::ListSwap
+            );
+            let first_depth = if indexed {
+                match values[1] {
+                    LoweredValue::ScalarTask(_, depth) => depth,
+                    _ => zero,
+                }
+            } else {
+                zero
+            };
+            let second_depth = if id == IntrinsicId::ListSwap {
+                match values[2] {
+                    LoweredValue::ScalarTask(_, depth) => depth,
+                    _ => zero,
+                }
+            } else {
+                zero
+            };
+            self.leaf(
+                NativeLeaf::ListCheckArguments,
+                &[list, kind, first_depth, second_depth],
+                true,
+            )?;
+        }
         match id {
             IntrinsicId::ListNew => self.list_new(result_type, span),
             IntrinsicId::ListSum => {

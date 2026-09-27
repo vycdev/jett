@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[list[int64]] rows = list(list(2), list(1))
+    list[list[int64]] sorted = list.sort_by_index[int64](rows, run 0)
+    trace sorted
+    return nothing
