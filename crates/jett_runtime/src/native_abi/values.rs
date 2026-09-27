@@ -2638,7 +2638,14 @@ impl NativeValues {
         Ok(id)
     }
 
-    fn math_numbers(&self, id: u64, raw_kind: u32, empty: Failure) -> LeafResult<Vec<f64>> {
+    fn math_numbers(
+        &self,
+        id: u64,
+        raw_kind: u32,
+        empty: Failure,
+        invalid_element: Failure,
+        invalid_list: Failure,
+    ) -> LeafResult<Vec<f64>> {
         let kind = NativeSortKind::from_raw(raw_kind)?;
         if !matches!(
             kind,
@@ -2650,8 +2657,14 @@ impl NativeValues {
         if list.owned {
             return Err(INVALID_LIST);
         }
+        if list.pending_depth != 0 {
+            return Err(invalid_list);
+        }
         if list.elements.is_empty() {
             return Err(empty);
+        }
+        if !list.element_pending_depths.is_empty() {
+            return Err(invalid_element);
         }
         list.elements
             .iter()
@@ -4706,13 +4719,22 @@ leaves! {
     ListSumInt, jett_rt_v1_list_sum_int64, false, (value: u64 => I64), i64 => I64,
         |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
             if list.owned { return Err(INVALID_LIST); }
+            if list.pending_depth != 0 {
+                return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__sum: argument must be a list"));
+            }
+            if list.element_pending_depths.contains_key(&0) {
+                return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__sum: list elements must be int64 or float64"));
+            }
+            if !list.element_pending_depths.is_empty() {
+                return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__sum: mixed types"));
+            }
             Ok(list.elements.iter().flatten().fold(0_i64, |acc, bits| acc.wrapping_add(*bits as i64))) };
 
     MathAverage, jett_rt_v1_math_average, false, (value: u64 => I64, kind: u32 => I32), f64 => F64,
-        |s| { let numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average: list is empty"))?;
+        |s| { let numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average: list is empty"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average expects a list of numeric values"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.__average expects a list of numbers"))?;
             Ok(math::float_average(&numbers)) };
     MathMedian, jett_rt_v1_math_median, false, (value: u64 => I64, kind: u32 => I32), f64 => F64,
-        |s| { let mut numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.median: list is empty"))?;
+        |s| { let mut numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.median: list is empty"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.median expects a list of numeric values"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.__median expects a list of numbers"))?;
             numbers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(CompareOrdering::Equal));
             let middle = numbers.len() / 2;
             Ok(if numbers.len() % 2 == 0 { math::float_midpoint(numbers[middle - 1], numbers[middle]) } else { numbers[middle] }) };

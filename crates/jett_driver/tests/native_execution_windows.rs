@@ -1265,6 +1265,36 @@ fn native_pending_scalar_operations_match_interpreter_errors() {
 }
 
 #[test]
+fn native_pending_numeric_aggregates_match_interpreter_errors() {
+    for name in [
+        "pending_list_sum_first_failure",
+        "pending_list_sum_later_failure",
+        "pending_list_sum_container_failure",
+        "pending_math_average_failure",
+        "pending_math_average_container_failure",
+        "pending_math_median_failure",
+        "pending_math_median_container_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending numeric list element");
+        let directory = tempfile::tempdir().expect("isolated pending numeric directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending numeric aggregate");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_scalar_short_circuit_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_scalar_short_circuit.jett");

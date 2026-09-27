@@ -316,6 +316,9 @@ primitive values with interpreter diagnostics; short-circuit operators retain
 the interpreter's right-operand evaluation order. Pending scalar values in
 other collection shapes and unexamined intrinsic operands, plus actor/Graphics
 state, remain open, so the coarse coverage estimate stays 80%.
+Numeric list aggregates now reject pending containers and elements before
+operating on scalar payload bits, with differential cases for `list.sum`,
+`math.average`, and `math.median`.
 
 Capability task handles preserve pending nesting independently of the original
 authority token. Joining a task restores the authority needed by the capability

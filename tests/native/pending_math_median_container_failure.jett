@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[float64] values = run list(2.0, 3.0)
+    float64 median = math.median(values)
+    trace median
+    return nothing
