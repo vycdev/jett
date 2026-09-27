@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string encoded = run "a%20b"
+    result[string, string] decoded = encoding.url_decode(encoded)
+    trace decoded
+    return nothing

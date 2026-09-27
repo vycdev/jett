@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string data = run "a,b"
+    result[list[list[string]], string] parsed = csv.parse(data)
+    trace parsed
+    return nothing

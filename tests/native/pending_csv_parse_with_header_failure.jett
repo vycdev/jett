@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string data = run "name\na"
+    result[list[map[string, string]], string] parsed = csv.parse_with_header(data)
+    trace parsed
+    return nothing

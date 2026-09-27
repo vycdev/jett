@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string encoded = run "61"
+    result[bytes, string] decoded = encoding.hex_decode(encoded)
+    trace decoded
+    return nothing

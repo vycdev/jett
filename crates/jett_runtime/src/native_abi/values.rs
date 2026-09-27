@@ -2066,7 +2066,7 @@ impl NativeValues {
         }
         Ok(outer)
     }
-    fn csv_records(&self, rows: u64) -> LeafResult<Vec<Vec<String>>> {
+    fn csv_records(&mut self, rows: u64) -> LeafResult<Vec<Vec<String>>> {
         let outer = self.lists.get(&rows).ok_or(INVALID_LIST)?;
         if !outer.owned {
             return Err(INVALID_LIST);
@@ -2083,12 +2083,21 @@ impl NativeValues {
             if !inner.owned {
                 return Err(INVALID_LIST);
             }
+            if inner.pending_depth != 0 {
+                self.dynamic_failure_message =
+                    Some(b"csv.__stringify expects list[list[string]]".to_vec());
+                return Err(INVALID_PENDING_HANDLE_CHECK);
+            }
             let mut fields = Vec::new();
             fields
                 .try_reserve_exact(inner.elements.len())
                 .map_err(|_| EXHAUSTED)?;
             for field in &inner.elements {
-                fields.push(self.text(field.ok_or(INVALID_LIST)?)?.to_owned());
+                let field = self
+                    .strings
+                    .get(&field.ok_or(INVALID_LIST)?)
+                    .ok_or(INVALID_HANDLE)?;
+                fields.push(format_pending_value(&field.text, field.pending_depth)?);
             }
             records.push(fields);
         }

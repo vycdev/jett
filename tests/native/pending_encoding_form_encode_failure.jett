@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    string data = run "a b"
+    string encoded = encoding.form_encode(data)
+    trace encoded
+    return nothing

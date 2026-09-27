@@ -2366,13 +2366,13 @@ impl Verifier<'_> {
             }
             ExpressionKind::Run(value) => {
                 self.expression(function, value)?;
-                self.require_same_type(
-                    function,
-                    expression.span,
-                    value.ty,
-                    expression.ty,
-                    "run result type mismatch",
-                )
+                if value.ty == expression.ty
+                    || matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == value.ty)
+                {
+                    Ok(())
+                } else {
+                    Err(self.contract_error(function, expression.span, "run result type mismatch"))
+                }
             }
             ExpressionKind::Join(value) => {
                 self.expression(function, value)?;

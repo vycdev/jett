@@ -120,6 +120,11 @@ The same check rejects pending receivers and arguments for string text
 intrinsics and `bytes.length`/`bytes.concat` with interpreter-matching errors.
 `string.join` additionally rejects a plain list containing a pending string
 element, reporting the wrapped element as the interpreter does.
+Encoding and CSV parser hooks reject pending input strings, while base64
+encoding and crypto hooks reject pending byte inputs. CSV stringify rejects a
+pending outer list or row and formats pending fields before quoting them.
+`run` and `join` dispatch through the representation type for secret and
+refinement wrappers, preserving task depth in secret strings and bytes.
 Primitive sets likewise keep a sparse per-element pending-depth map. Add,
 remove, contains, clone, recursive debug formatting, and scalar iteration use
 that depth; string set membership compares both text and the string handle's

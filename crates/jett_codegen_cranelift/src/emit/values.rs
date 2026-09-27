@@ -1890,15 +1890,29 @@ impl Translator<'_, '_> {
         }
         if let Some(leaf) = crate::values::bytes_leaf(id) {
             self.check_index_count_arguments(id, &evaluated, span)?;
-            let expected = match id {
-                IntrinsicId::BytesLength => Some("a bytes argument"),
-                IntrinsicId::BytesConcat => Some("two bytes arguments"),
+            let pending_check = match id {
+                IntrinsicId::BytesLength
+                | IntrinsicId::EncodingBase64Encode
+                | IntrinsicId::CryptoSha256
+                | IntrinsicId::CryptoSha512
+                | IntrinsicId::CryptoMd5 => Some(("a bytes argument", 1)),
+                IntrinsicId::BytesConcat => Some(("two bytes arguments", 1)),
+                IntrinsicId::CryptoHmacSha256 => Some(("bytes arguments", 1)),
+                IntrinsicId::EncodingBase64Decode
+                | IntrinsicId::EncodingHexDecode
+                | IntrinsicId::EncodingUrlEncode
+                | IntrinsicId::EncodingUrlDecode
+                | IntrinsicId::EncodingFormEncode
+                | IntrinsicId::EncodingFormDecode
+                | IntrinsicId::CsvParse
+                | IntrinsicId::CsvParseWithHeader => Some(("a string argument", 0)),
+                IntrinsicId::CsvStringify => Some(("a list argument", 2)),
                 _ => None,
             };
-            if let Some(expected) = expected {
+            if let Some((expected, kind)) = pending_check {
                 let message = format!("{} expects {expected}", id.canonical_name());
                 for &value in &evaluated {
-                    self.reject_pending_handle(value, 1, &message, span)?;
+                    self.reject_pending_handle(value, kind, &message, span)?;
                 }
             }
             let arguments = evaluated

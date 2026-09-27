@@ -1224,3 +1224,11 @@ otherwise plain list. Interpreter/native differential fixtures cover unary,
 multi-argument, list, and bytes cases. This closes those identified behavior
 gaps; the coarse overall language-coverage estimate remains 80% until the
 remaining semantic matrix is audited.
+
+Encoding, CSV, and crypto trusted hooks now validate pending inputs against
+the interpreter's operation-specific errors. CSV stringify also formats a
+pending string field and rejects a pending row. Secret string and byte task
+values now use the underlying runtime representation for `run` and `join`,
+including contextual promotion of a `run` byte value to `secret[bytes]`.
+Differential fixtures cover those paths; the coarse coverage estimate stays
+at 80% while broader semantic gaps remain.

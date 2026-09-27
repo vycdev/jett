@@ -1194,6 +1194,71 @@ fn native_pending_string_and_bytes_intrinsics_match_interpreter_errors() {
 }
 
 #[test]
+fn native_pending_encoding_csv_and_crypto_intrinsics_match_interpreter() {
+    for name in [
+        "pending_encoding_base64_encode_failure",
+        "pending_encoding_base64_decode_failure",
+        "pending_encoding_hex_decode_failure",
+        "pending_encoding_url_encode_failure",
+        "pending_encoding_url_decode_failure",
+        "pending_encoding_form_encode_failure",
+        "pending_encoding_form_decode_failure",
+        "pending_csv_parse_failure",
+        "pending_csv_parse_with_header_failure",
+        "pending_csv_stringify_list_failure",
+        "pending_csv_stringify_row_failure",
+        "pending_crypto_hmac_contextual_key_failure",
+        "pending_crypto_hmac_key_failure",
+        "pending_crypto_hmac_message_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending intrinsic operand");
+        let directory = tempfile::tempdir().expect("isolated pending intrinsic directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending intrinsic case");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_csv_stringify_field.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending CSV field directory");
+    let binary = directory.path().join("pending_csv_stringify_field.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending CSV field case");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_secret_task_join_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_secret_task_join.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated secret task directory");
+    let binary = directory.path().join("pending_secret_task_join.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile secret task case");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_pending_set_map_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_set_map_values.jett");
