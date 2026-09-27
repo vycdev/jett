@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    bool pending = run true
+    if pending:
+        println("wrong branch")
+    return nothing

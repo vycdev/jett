@@ -1230,6 +1230,59 @@ fn native_pending_scalar_aggregates_match_interpreter() {
 }
 
 #[test]
+fn native_pending_scalar_operations_match_interpreter_errors() {
+    for name in [
+        "pending_scalar_add_failure",
+        "pending_scalar_nested_add_failure",
+        "pending_scalar_comparison_failure",
+        "pending_scalar_float_comparison_failure",
+        "pending_scalar_negation_failure",
+        "pending_scalar_not_failure",
+        "pending_scalar_and_failure",
+        "pending_scalar_and_right_failure",
+        "pending_scalar_or_failure",
+        "pending_scalar_or_right_failure",
+        "pending_scalar_condition_failure",
+        "pending_scalar_breakpoint_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending scalar operation");
+        let directory = tempfile::tempdir().expect("isolated pending scalar operation directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending scalar operation");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn native_pending_scalar_short_circuit_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_scalar_short_circuit.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending scalar directory");
+    let binary = directory.path().join("pending_scalar_short_circuit.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile pending scalar short circuit");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
 fn native_pending_enum_comparisons_match_interpreter_errors() {
     for name in [
         "pending_enum_equality_failure",

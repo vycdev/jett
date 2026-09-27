@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    bool bad = false or run true
+    trace bad
+    return nothing

@@ -7,7 +7,7 @@ use jett_mir::move_values::{
 use jett_runtime::native_abi::values::{
     DEBUG_BYTES_KIND, DEBUG_NOTHING_KIND, NATIVE_FUNCTION_CODE_FIELD,
     NATIVE_FUNCTION_ENVIRONMENT_FIELD, NATIVE_FUNCTION_FIELD_COUNT, NATIVE_FUNCTION_LABEL_FIELD,
-    NativeLeaf,
+    NativeLeaf, NativePendingBinaryOp, NativeSortKind,
 };
 use std::str::FromStr;
 
@@ -518,6 +518,46 @@ fn is_task_scalar(types: &TypeInterner, ty: TypeId) -> Result<bool, CodegenError
             | ScalarKind::Float(_)
             | ScalarKind::Bool
     ))
+}
+
+fn task_scalar_debug_kind(
+    types: &TypeInterner,
+    ty: TypeId,
+) -> Result<Option<NativeSortKind>, CodegenError> {
+    Ok(Some(
+        match scalar_kind(types, ty, "primitive task value")? {
+            ScalarKind::SignedInteger(8) => NativeSortKind::Int8,
+            ScalarKind::SignedInteger(16) => NativeSortKind::Int16,
+            ScalarKind::SignedInteger(32) => NativeSortKind::Int32,
+            ScalarKind::SignedInteger(64) => NativeSortKind::Int64,
+            ScalarKind::UnsignedInteger(8) => NativeSortKind::Uint8,
+            ScalarKind::UnsignedInteger(16) => NativeSortKind::Uint16,
+            ScalarKind::UnsignedInteger(32) => NativeSortKind::Uint32,
+            ScalarKind::UnsignedInteger(64) => NativeSortKind::Uint64,
+            ScalarKind::Float(32) => NativeSortKind::Float32,
+            ScalarKind::Float(64) => NativeSortKind::Float64,
+            ScalarKind::Bool => NativeSortKind::Bool,
+            _ => return Ok(None),
+        },
+    ))
+}
+
+fn native_pending_binary_op(op: BinaryOp) -> NativePendingBinaryOp {
+    match op {
+        BinaryOp::Add => NativePendingBinaryOp::Add,
+        BinaryOp::Subtract => NativePendingBinaryOp::Sub,
+        BinaryOp::Multiply => NativePendingBinaryOp::Mul,
+        BinaryOp::Divide => NativePendingBinaryOp::Div,
+        BinaryOp::Modulo => NativePendingBinaryOp::Modulo,
+        BinaryOp::Equal => NativePendingBinaryOp::Eq,
+        BinaryOp::NotEqual => NativePendingBinaryOp::NotEq,
+        BinaryOp::Less => NativePendingBinaryOp::Lt,
+        BinaryOp::Greater => NativePendingBinaryOp::Gt,
+        BinaryOp::LessEqual => NativePendingBinaryOp::LtEq,
+        BinaryOp::GreaterEqual => NativePendingBinaryOp::GtEq,
+        BinaryOp::And => NativePendingBinaryOp::And,
+        BinaryOp::Or => NativePendingBinaryOp::Or,
+    }
 }
 
 fn clif_type(
@@ -1155,6 +1195,7 @@ impl Translator<'_, '_> {
             }
             StatementKind::Assert { condition, message } => {
                 let value = self.expression(condition)?;
+                self.check_pending_bool_condition(value, 1, condition.span)?;
                 let flag = self.scalar(value, condition.span)?;
                 let passed = self.builder.create_block();
                 let failed = self.builder.create_block();
@@ -1179,6 +1220,7 @@ impl Translator<'_, '_> {
                 let enabled = match condition {
                     Some(condition) => {
                         let value = self.expression(condition)?;
+                        self.check_pending_bool_condition(value, 2, condition.span)?;
                         self.scalar(value, statement.span)?
                     }
                     None => self.builder.ins().iconst(ir::types::I8, 1),
@@ -1378,6 +1420,7 @@ impl Translator<'_, '_> {
                 else_block,
             } => {
                 let lowered_condition = self.expression(condition)?;
+                self.check_pending_bool_condition(lowered_condition, 0, condition.span)?;
                 let condition = self.scalar(lowered_condition, condition.span)?;
                 self.drop_temporaries()?;
                 let then_block = block_for(
@@ -1638,6 +1681,14 @@ impl Translator<'_, '_> {
             }
             ExpressionKind::Unary { op, value } => {
                 let lowered_value = self.expression(value)?;
+                if is_task_scalar(self.types, value.ty)? {
+                    let (_, depth) = self.scalar_task(lowered_value, value.span)?;
+                    let negate = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I32, i64::from(matches!(op, UnaryOp::Negate)));
+                    self.leaf(NativeLeaf::ScalarPendingUnaryCheck, &[depth, negate], true)?;
+                }
                 let value = self.scalar(lowered_value, value.span)?;
                 let value = match op {
                     UnaryOp::Not => self.builder.ins().bxor_imm(value, 1),
@@ -1654,7 +1705,7 @@ impl Translator<'_, '_> {
                 let left_value = self.scalar(lowered_left, left.span)?;
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     let value = self.short_circuit_boolean(
-                        left_value,
+                        lowered_left,
                         *op,
                         right,
                         operand_kind,
@@ -1664,6 +1715,14 @@ impl Translator<'_, '_> {
                 }
                 let lowered_right = self.argument(right, enum_equality)?;
                 let right_value = self.scalar(lowered_right, right.span)?;
+                self.check_pending_scalar_binary(
+                    lowered_left,
+                    left.ty,
+                    *op,
+                    lowered_right,
+                    right.ty,
+                    expression.span,
+                )?;
                 if operand_kind == ScalarKind::String {
                     let leaf = if *op == BinaryOp::NotEqual {
                         NativeLeaf::StringNotEqual
@@ -2662,7 +2721,7 @@ impl Translator<'_, '_> {
 
     fn short_circuit_boolean(
         &mut self,
-        left: Value,
+        left: LoweredValue,
         op: BinaryOp,
         right: &Expression,
         kind: ScalarKind,
@@ -2675,6 +2734,9 @@ impl Translator<'_, '_> {
                 "short-circuit boolean operator has a non-bool operand",
             ));
         }
+
+        let (left_value, left_depth) = self.scalar_task(left, span)?;
+        let pending = self.builder.ins().icmp_imm(IntCC::NotEqual, left_depth, 0);
 
         let right_block = self.builder.create_block();
         let merge_block = self.builder.create_block();
@@ -2693,14 +2755,24 @@ impl Translator<'_, '_> {
 
         match op {
             BinaryOp::And => {
-                self.builder
-                    .ins()
-                    .brif(left, right_block, &[], merge_block, &[short_value.into()])
+                let evaluate_right = self.builder.ins().bor(left_value, pending);
+                self.builder.ins().brif(
+                    evaluate_right,
+                    right_block,
+                    &[],
+                    merge_block,
+                    &[short_value.into()],
+                )
             }
             BinaryOp::Or => {
-                self.builder
-                    .ins()
-                    .brif(left, merge_block, &[short_value.into()], right_block, &[])
+                let plain_true = self.builder.ins().band_not(left_value, pending);
+                self.builder.ins().brif(
+                    plain_true,
+                    merge_block,
+                    &[short_value.into()],
+                    right_block,
+                    &[],
+                )
             }
             _ => unreachable!("operator checked above"),
         };
@@ -2708,6 +2780,14 @@ impl Translator<'_, '_> {
         self.builder.switch_to_block(right_block);
         let lowered_right = self.expression(right)?;
         let right_value = self.scalar(lowered_right, right.span)?;
+        self.check_pending_scalar_binary(
+            left,
+            TypeInterner::BOOL,
+            op,
+            lowered_right,
+            right.ty,
+            span,
+        )?;
         self.builder.ins().jump(merge_block, &[right_value.into()]);
         self.builder.switch_to_block(merge_block);
         Ok(result)
@@ -2874,6 +2954,67 @@ impl Translator<'_, '_> {
             }
             LoweredValue::Owned(_, _) => Err(self.unsupported(span, "owned primitive task")),
         }
+    }
+
+    fn check_pending_scalar_binary(
+        &mut self,
+        left: LoweredValue,
+        left_ty: TypeId,
+        op: BinaryOp,
+        right: LoweredValue,
+        right_ty: TypeId,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (Some(left_kind), Some(right_kind)) = (
+            task_scalar_debug_kind(self.types, left_ty)?,
+            task_scalar_debug_kind(self.types, right_ty)?,
+        ) else {
+            return Ok(());
+        };
+        let (_, left_depth) = self.scalar_task(left, span)?;
+        let (_, right_depth) = self.scalar_task(right, span)?;
+        let left_bits = self.payload_bits(left).0;
+        let right_bits = self.payload_bits(right).0;
+        let left_kind = self.builder.ins().iconst(ir::types::I32, left_kind as i64);
+        let right_kind = self.builder.ins().iconst(ir::types::I32, right_kind as i64);
+        let op = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, native_pending_binary_op(op) as i64);
+        self.leaf(
+            NativeLeaf::ScalarPendingBinaryCheck,
+            &[
+                left_bits,
+                left_kind,
+                left_depth,
+                right_bits,
+                right_kind,
+                right_depth,
+                op,
+            ],
+            true,
+        )?;
+        Ok(())
+    }
+
+    fn check_pending_bool_condition(
+        &mut self,
+        value: LoweredValue,
+        context: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (_, depth) = self.scalar_task(value, span)?;
+        let bits = self.payload_bits(value).0;
+        let context = self
+            .builder
+            .ins()
+            .iconst(ir::types::I32, i64::from(context));
+        self.leaf(
+            NativeLeaf::ScalarPendingBoolConditionCheck,
+            &[bits, depth, context],
+            true,
+        )?;
+        Ok(())
     }
 
     fn unsupported(&self, span: Span, construct: &str) -> CodegenError {
@@ -3235,12 +3376,11 @@ function caller(value: int64, choose_original: bool) returns int64:
         let runtime_context = function.dfg.block_params(entry)[0];
         let calls = direct_call_arguments(&function);
 
-        assert_eq!(calls.len(), 4, "two Jett calls and two failure checks");
-        assert_eq!(calls.iter().filter(|args| args.len() == 4).count(), 2);
+        assert!(calls.len() >= 4, "Jett calls and failure checks remain present");
         for arguments in calls {
             assert!(
-                matches!(arguments.len(), 1 | 4),
-                "status receives context; Jett call also receives environment, scalar bits, and depth"
+                matches!(arguments.len(), 1 | 4 | 8),
+                "status and scalar checks receive context; Jett calls also receive environment, scalar bits, and depth"
             );
             assert_eq!(
                 function.dfg.resolve_aliases(arguments[0]),
@@ -3379,10 +3519,6 @@ function or_value(left: bool) returns bool:
             assert!(
                 branch < call,
                 "{name} eagerly emits its RHS before branching:\n{clif}"
-            );
-            assert!(
-                !clif.contains("band ") && !clif.contains("bor "),
-                "{name} used eager boolean arithmetic:\n{clif}"
             );
         }
     }

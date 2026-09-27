@@ -119,6 +119,20 @@ const UNSUPPORTED_NOTHING_COMPARISON: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"unsupported binary operation on pending nothing",
 );
+const UNSUPPORTED_SCALAR_BINARY: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unsupported binary operation on pending scalar",
+);
+const PENDING_BOOL_NEGATION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"'not' requires a boolean operand",
+);
+const PENDING_NUMERIC_NEGATION: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"unary '-' requires a numeric operand",
+);
+const PENDING_BOOL_CONDITION: Failure =
+    (JettRuntimeStatusV1::INVALID_ARGUMENT, b"expected boolean");
 const UNSUPPORTED_STRING_COMPARISON: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"unsupported binary operation on pending string",
@@ -310,6 +324,63 @@ impl NativeSortKind {
         }
     }
 }
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub enum NativePendingBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Modulo,
+    Eq,
+    NotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    And,
+    Or,
+}
+
+impl NativePendingBinaryOp {
+    fn from_raw(raw: u32) -> LeafResult<Self> {
+        Ok(match raw {
+            0 => Self::Add,
+            1 => Self::Sub,
+            2 => Self::Mul,
+            3 => Self::Div,
+            4 => Self::Modulo,
+            5 => Self::Eq,
+            6 => Self::NotEq,
+            7 => Self::Lt,
+            8 => Self::Gt,
+            9 => Self::LtEq,
+            10 => Self::GtEq,
+            11 => Self::And,
+            12 => Self::Or,
+            _ => return Err(INVALID_TRACE_LABEL),
+        })
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Add => "Add",
+            Self::Sub => "Sub",
+            Self::Mul => "Mul",
+            Self::Div => "Div",
+            Self::Modulo => "Modulo",
+            Self::Eq => "Eq",
+            Self::NotEq => "NotEq",
+            Self::Lt => "Lt",
+            Self::Gt => "Gt",
+            Self::LtEq => "LtEq",
+            Self::GtEq => "GtEq",
+            Self::And => "And",
+            Self::Or => "Or",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct NativeField {
     bits: u64,
@@ -1748,6 +1819,53 @@ impl NativeValues {
         self.dynamic_failure_message =
             Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
         Err(UNSUPPORTED_NOTHING_COMPARISON)
+    }
+    fn check_pending_scalar_binary(
+        &mut self,
+        left_bits: u64,
+        left_kind: u32,
+        left_depth: u64,
+        right_bits: u64,
+        right_kind: u32,
+        right_depth: u64,
+        operation: u32,
+    ) -> LeafResult<u32> {
+        let operation = NativePendingBinaryOp::from_raw(operation)?;
+        if left_depth == 0 && right_depth == 0 {
+            return Ok(0);
+        }
+        let left = format_pending_value(&self.debug_value(left_bits, left_kind)?, left_depth)?;
+        let right = format_pending_value(&self.debug_value(right_bits, right_kind)?, right_depth)?;
+        self.dynamic_failure_message = Some(
+            format!(
+                "unsupported binary operation: {left} {} {right}",
+                operation.label()
+            )
+            .into_bytes(),
+        );
+        Err(UNSUPPORTED_SCALAR_BINARY)
+    }
+    fn check_pending_bool_condition(
+        &mut self,
+        bits: u64,
+        depth: u64,
+        context: u32,
+    ) -> LeafResult<u32> {
+        if bits > 1 {
+            return Err(INVALID_TRACE_LABEL);
+        }
+        if depth == 0 {
+            return Ok(0);
+        }
+        let value = format_pending_value(if bits == 0 { "false" } else { "true" }, depth)?;
+        let message = match context {
+            0 => format!("expected boolean, got {value}"),
+            1 => "assert condition must be a boolean".to_owned(),
+            2 => format!("breakpoint condition must be bool, got {value}"),
+            _ => return Err(INVALID_TRACE_LABEL),
+        };
+        self.dynamic_failure_message = Some(message.into_bytes());
+        Err(PENDING_BOOL_CONDITION)
     }
     fn byte_result(&mut self, decoded: Result<Vec<u8>, String>) -> LeafResult<u64> {
         let (tag, payload) = match decoded {
@@ -5038,6 +5156,14 @@ leaves! {
         |s| s.insert(format_nothing(depth)?);
     NothingEqual, jett_rt_v1_nothing_equal, false, (left: u64 => I64, right: u64 => I64, not_equal: u32 => I32), u32 => I32,
         |s| s.equal_nothing(left, right, not_equal);
+    ScalarPendingUnaryCheck, jett_rt_v1_scalar_pending_unary_check, false, (depth: u64 => I64, negate: u32 => I32), u32 => I32,
+        |_s| { if negate > 1 { return Err(INVALID_TRACE_LABEL); }
+            if depth == 0 { Ok(0) } else if negate == 0 { Err(PENDING_BOOL_NEGATION) }
+            else { Err(PENDING_NUMERIC_NEGATION) } };
+    ScalarPendingBinaryCheck, jett_rt_v1_scalar_pending_binary_check, false, (left_bits: u64 => I64, left_kind: u32 => I32, left_depth: u64 => I64, right_bits: u64 => I64, right_kind: u32 => I32, right_depth: u64 => I64, operation: u32 => I32), u32 => I32,
+        |s| s.check_pending_scalar_binary(left_bits, left_kind, left_depth, right_bits, right_kind, right_depth, operation);
+    ScalarPendingBoolConditionCheck, jett_rt_v1_scalar_pending_bool_condition_check, false, (bits: u64 => I64, depth: u64 => I64, context: u32 => I32), u32 => I32,
+        |s| s.check_pending_bool_condition(bits, depth, context);
     EnumEqual, jett_rt_v1_enum_equal, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
         |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
             let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;

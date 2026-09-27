@@ -1,0 +1,9 @@
+namespace app
+function right() returns bool:
+    println("right")
+    return false
+function main() returns nothing:
+    bool pending = run true
+    bool bad = pending or right()
+    trace bad
+    return nothing

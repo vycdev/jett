@@ -88,8 +88,16 @@ formatting restore it. Primitive lists use a sparse per-element depth map,
 preserved by cloning, insertion, removal, iteration, and stable sorting.
 `list.get` carries element depth through its result payload. Differential
 fixtures cover these boundaries, including nested pending wrappers. Pending
-scalar values in other collection shapes, scalar operations on still-pending
-values, and actor/Graphics state propagation need further parity work.
+scalar values in other collection shapes, primitive operands in intrinsics,
+and actor/Graphics state propagation need further parity work. Direct
+unary and binary operators now reject pending primitive operands with the
+interpreter's error text after evaluating the operands in source order.
+Boolean `and` and `or` still skip an unevaluated right operand when the plain
+left value short-circuits; a pending left value evaluates the right operand
+before reporting the error. `if`/`while` branch conditions, breakpoint
+conditions, and assertion conditions reject pending booleans with their
+respective interpreter diagnostics. Pending primitive operands passed into
+other intrinsics remain to be audited.
 
 Owned native strings also carry a pending depth in the runtime registry.
 `StringRun` and `StringTaskJoin` create independent handles, so wrapping a
