@@ -123,6 +123,10 @@ const UNSUPPORTED_ENUM_COMPARISON: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"unsupported binary operation on pending enum",
 );
+const PENDING_FUNCTION_CALL: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"expected function value",
+);
 
 fn format_nothing(depth: u64) -> LeafResult<String> {
     format_pending_value("nothing", depth)
@@ -520,7 +524,15 @@ impl NativeDebugLayout {
             NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
             NativeDebugNode::Alias(base) => return self.format_value(values, bits, *base, child),
             NativeDebugNode::Capability(name) => format!("<{name} capability>"),
-            NativeDebugNode::Function => values.function_debug_label(bits)?.to_owned(),
+            NativeDebugNode::Function => {
+                let label = values.function_debug_label(bits)?;
+                let depth = values
+                    .structs
+                    .get(&bits)
+                    .ok_or(INVALID_STRUCT)?
+                    .pending_depth;
+                format_pending_value(label, depth)?
+            }
             NativeDebugNode::Actor => {
                 let ordinal = values.actors.get(&bits).ok_or(INVALID_ACTOR)?;
                 format!("actor#{ordinal}")
@@ -1355,6 +1367,17 @@ impl NativeValues {
             return Err(INVALID_FUNCTION);
         }
         Ok(text)
+    }
+    fn check_function_callable(&mut self, id: u64) -> LeafResult<u32> {
+        let label = self.function_debug_label(id)?.to_owned();
+        let depth = self.structs.get(&id).ok_or(INVALID_FUNCTION)?.pending_depth;
+        if depth == 0 {
+            return Ok(0);
+        }
+        let pending = format_pending_value(&label, depth)?;
+        self.dynamic_failure_message =
+            Some(format!("expected function value, got {pending}").into_bytes());
+        Err(PENDING_FUNCTION_CALL)
     }
     fn debug_append(&mut self, builder: u64, label: &str, bits: u64, kind: u32) -> LeafResult<u32> {
         let value = self.debug_value(bits, kind)?;
@@ -4251,6 +4274,8 @@ leaves! {
         |s| s.run_record(value);
     RecordTaskJoin, jett_rt_v1_record_task_join, false, (value: u64 => I64), u64 => I64,
         |s| s.join_record(value);
+    FunctionCallableCheck, jett_rt_v1_function_callable_check, false, (value: u64 => I64), u32 => I32,
+        |s| s.check_function_callable(value);
     StringChars, jett_rt_v1_string_chars, false, (value: u64 => I64), u64 => I64,
         |s| { let parts = s.text(value)?.graphemes(true).map(str::to_owned).collect(); s.string_list(parts) };
     StringScalarCount, jett_rt_v1_string_scalar_count, false, (value: u64 => I64), i64 => I64,

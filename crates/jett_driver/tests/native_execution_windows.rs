@@ -1062,6 +1062,39 @@ fn native_pending_sum_values_match_interpreter() {
 }
 
 #[test]
+fn native_pending_function_values_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_function_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending function directory");
+    let binary = directory.path().join("pending_function_values.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending function values");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_function_call_matches_interpreter_error() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_function_call_failure.jett");
+    let expected = jett_driver::run_file_capture_outcome(&fixture)
+        .expect_err("interpreter must reject a pending function call");
+    let directory = tempfile::tempdir().expect("isolated pending function call directory");
+    let binary = directory.path().join("pending_function_call_failure.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile pending function call failure");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(!actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
 fn native_pending_enum_comparisons_match_interpreter_errors() {
     for name in [
         "pending_enum_equality_failure",

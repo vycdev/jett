@@ -102,6 +102,12 @@ aggregate equality inspect the wrapper. Joining a pending result returns its
 existing success or failure branch, as in the interpreter's sequential task
 simulation; joining a pending optional returns a result containing the optional.
 
+Function descriptors use owned record handles, so task `run` and `join` retain
+pending depth while cloning captured environments. Debug formatting applies
+that depth to named and captured function labels, including aggregate elements.
+Indirect calls check the descriptor after evaluating arguments and reject a
+still-pending function with the interpreter's runtime error.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

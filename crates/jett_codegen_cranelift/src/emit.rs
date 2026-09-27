@@ -1816,6 +1816,7 @@ impl Translator<'_, '_> {
                         | Type::Bitfield(_)
                         | Type::Machine(_)
                         | Type::MachineState { .. }
+                        | Type::Function { .. }
                 ) {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::RecordRun, &[source], true)?;
@@ -1871,6 +1872,7 @@ impl Translator<'_, '_> {
                         | Type::Bitfield(_)
                         | Type::Machine(_)
                         | Type::MachineState { .. }
+                        | Type::Function { .. }
                 ) {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::RecordTaskJoin, &[source], true)?;
@@ -2204,6 +2206,7 @@ impl Translator<'_, '_> {
         // source arguments, which can rebind that local through a handler.
         let lowered_callee = self.expression(callee)?;
         let descriptor = self.scalar(lowered_callee, callee.span)?;
+        self.leaf(NativeLeaf::FunctionCallableCheck, &[descriptor], true)?;
         let code_index = self
             .builder
             .ins()

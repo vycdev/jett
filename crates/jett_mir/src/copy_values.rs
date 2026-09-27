@@ -384,6 +384,7 @@ fn visit(
                         | Type::Bitfield(_)
                         | Type::Machine(_)
                         | Type::MachineState { .. }
+                        | Type::Function { .. }
                 )
             }
             _ => false,
@@ -444,6 +445,7 @@ fn visit(
                     | Type::Bitfield(_)
                     | Type::Machine(_)
                     | Type::MachineState { .. }
+                    | Type::Function { .. }
             ) =>
         {
             // Joining a pending owned value owns its extracted value before the
