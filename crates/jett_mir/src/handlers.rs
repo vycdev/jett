@@ -144,6 +144,7 @@ fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
 
 fn valid_ordered_owned_values(
     types: &TypeInterner,
+    locals: &[Local],
     values: &[Expression],
     order: &[usize],
 ) -> bool {
@@ -158,8 +159,22 @@ fn valid_ordered_owned_values(
             .len()
             == values.len()
         && values.iter().all(|value| {
-            !matches!(value.kind, ExpressionKind::View(_)) || can_snapshot_view(types, value.ty)
+            !matches!(value.kind, ExpressionKind::View(_))
+                || can_snapshot_view(types, value.ty)
+                || stable_deferred_view(locals, value)
         })
+}
+
+fn stable_deferred_view(locals: &[Local], expression: &Expression) -> bool {
+    let ExpressionKind::View(value) = &expression.kind else {
+        return false;
+    };
+    let ExpressionKind::Local(id) = value.kind else {
+        return false;
+    };
+    locals
+        .get(id.index() as usize)
+        .is_some_and(|local| local.id == id && !local.mutable)
 }
 
 impl Builder<'_> {
@@ -215,11 +230,19 @@ impl Builder<'_> {
         values: &[Expression],
         order: &[usize],
     ) -> Option<Vec<Expression>> {
-        if !valid_ordered_owned_values(self.types, values, order) {
+        if !valid_ordered_owned_values(self.types, &self.locals, values, order) {
             return None;
         }
         let mut lowered = values.to_vec();
         for &index in order {
+            // Reading an immutable local through a view has no effect and
+            // cannot change which value is observed after an earlier handler.
+            // Keep noncopyable views at the call instead of cloning authority.
+            if stable_deferred_view(&self.locals, &values[index])
+                && !can_snapshot_view(self.types, values[index].ty)
+            {
+                continue;
+            }
             let mut value = self.lower_value(&values[index]);
             if matches!(values[index].kind, ExpressionKind::View(_))
                 && crate::move_values::is_linear(self.types, value.ty)
@@ -670,6 +693,7 @@ impl Builder<'_> {
             && args.iter().enumerate().all(|(index, arg)| {
                 !crate::move_values::intrinsic_borrows(*intrinsic, index)
                     || can_snapshot_view(self.types, arg.ty)
+                    || stable_deferred_view(&self.locals, arg)
             })
         {
             let inputs = args
@@ -730,7 +754,7 @@ impl Builder<'_> {
             kind,
         } = &expression.kind
             && (has_extractable_handle(actor) || args.iter().any(has_extractable_handle))
-            && valid_ordered_owned_values(self.types, args, evaluation_order)
+            && valid_ordered_owned_values(self.types, &self.locals, args, evaluation_order)
         {
             let actor_value = self.lower_value(actor);
             let actor_local = self.temporary(actor.ty, actor.span);
@@ -766,7 +790,7 @@ impl Builder<'_> {
         } = &expression.kind
             && (has_extractable_handle(callee) || args.iter().any(has_extractable_handle))
             && !matches!(callee.kind, ExpressionKind::View(_))
-            && valid_ordered_owned_values(self.types, args, evaluation_order)
+            && valid_ordered_owned_values(self.types, &self.locals, args, evaluation_order)
         {
             let args = self
                 .lower_ordered_owned_values(args, evaluation_order)

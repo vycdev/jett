@@ -3497,3 +3497,18 @@ fn native_borrowed_stdlib_call_before_handler_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert!(actual.stderr.is_empty(), "{actual:?}");
 }
+
+#[test]
+fn native_capability_view_before_handler_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_handle_capability_view.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated capability view directory");
+    let binary = directory.path().join("nested_handle_capability_view.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile capability view before a handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}

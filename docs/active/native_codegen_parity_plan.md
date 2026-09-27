@@ -1274,6 +1274,12 @@ lists in struct fields, enum payloads, and machine state fields. The fixture
 checks the copied value's debug shape and successful `join` after reflection;
 other aggregate shapes and mismatch diagnostics remain open.
 
+MIR handler extraction now keeps a noncopyable view of an immutable local at
+the call site while hoisting the later handled argument into control flow.
+This permits a `view Stdout` before a handled optional in direct calls,
+indirect calls, and the `Stdout.write` intrinsic without copying capability
+authority. A linked fixture compares all three forms with the interpreter.
+
 Native `type.arg` now checks pending, negative, and out-of-range indexes with
 interpreter-matching errors before selecting checked `TypeInfo` metadata.
 Differential fixtures include nested pending depth and alias-typed owners;
