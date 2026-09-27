@@ -1,0 +1,19 @@
+namespace app
+struct Record:
+    name: string
+function main() returns nothing:
+    TypeInfo info = run type.info[list[int64]]()
+    trace info
+    TypeInfo ready_info = join info handle error:
+        return nothing
+    println(ready_info.type_name, ready_info.kind)
+    TypeField field = list.get[TypeField](type.fields[Record](), 0) handle:
+        return nothing
+    TypeField pending_field = run field
+    trace pending_field
+    TypeField ready_field = join pending_field handle error:
+        return nothing
+    Record record = Record(name: "Ada")
+    string copied = type.field_value[Record, string](view record, view ready_field)
+    println(ready_field.name, copied)
+    return nothing

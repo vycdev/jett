@@ -1331,3 +1331,10 @@ through reflected struct, enum, and machine fields, plus pending empty lists
 and maps embedded in a struct. The interpreter and native paths agree on
 debug output, joins, and cleanup. Other semantic gaps keep the broad estimate
 at about 85%.
+
+Pending reflection metadata now follows the interpreter at native use sites.
+`TypeInfo` and `TypeField` survive `run`, `join`, trace, and subsequent valid
+reflection. Unjoined `TypeField` values fail with the interpreter's diagnostic
+for struct, enum, and machine field reads and `type.construct_put`;
+unjoined `TypeVariant` and `TypeMachineState` values return the corresponding
+builder-start error. Linked differential fixtures exercise all of these paths.

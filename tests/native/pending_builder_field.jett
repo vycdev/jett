@@ -1,0 +1,16 @@
+namespace app
+struct Record:
+    name: string
+function main() returns nothing:
+    TypeField field = list.get[TypeField](type.fields[Record](), 0) handle:
+        return nothing
+    TypeField pending_field = run field
+    mutable TypeConstruction builder = type.construct_start[Record]()
+    builder = type.construct_put[Record, string](builder, view pending_field, "Ada") handle error:
+        println(error)
+        return nothing
+    Record record = type.construct_finish[Record](builder) handle error:
+        println(error)
+        return nothing
+    println(record.name)
+    return nothing

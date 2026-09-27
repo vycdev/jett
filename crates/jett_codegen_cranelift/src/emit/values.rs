@@ -1210,6 +1210,7 @@ impl Translator<'_, '_> {
         owner: TypeId,
         reflection_arguments: &[ReflectionTypeInfo],
         metadata: LoweredValue,
+        metadata_type: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
         let Type::Enum(id) = self.types.resolve(owner) else {
@@ -1261,9 +1262,12 @@ impl Translator<'_, '_> {
         }
         let (pointer, length) = self.static_data(&layout)?;
         let metadata = self.scalar(metadata, span)?;
+        let debug_layout = super::debug::debug_layout(self.types, metadata_type)
+            .ok_or_else(|| self.unsupported(span, "variant metadata debug layout"))?;
+        let (debug_pointer, debug_length) = self.static_data(&debug_layout)?;
         let result = self.leaf(
             NativeLeaf::BuilderVariantNew,
-            &[pointer, length, metadata],
+            &[pointer, length, metadata, debug_pointer, debug_length],
             true,
         )?;
         self.own_linear(result)
@@ -1273,6 +1277,7 @@ impl Translator<'_, '_> {
         owner: TypeId,
         reflection_arguments: &[ReflectionTypeInfo],
         metadata: LoweredValue,
+        metadata_type: TypeId,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
         let (machine_id, state_id) = match self.types.resolve(owner) {
@@ -1332,9 +1337,12 @@ impl Translator<'_, '_> {
         }
         let (pointer, length) = self.static_data(&layout)?;
         let metadata = self.scalar(metadata, span)?;
+        let debug_layout = super::debug::debug_layout(self.types, metadata_type)
+            .ok_or_else(|| self.unsupported(span, "machine metadata debug layout"))?;
+        let (debug_pointer, debug_length) = self.static_data(&debug_layout)?;
         let result = self.leaf(
             NativeLeaf::BuilderMachineNew,
-            &[pointer, length, metadata],
+            &[pointer, length, metadata, debug_pointer, debug_length],
             true,
         )?;
         self.own_linear(result)
@@ -1537,12 +1545,16 @@ impl Translator<'_, '_> {
     fn check_reflected_field_owner(
         &mut self,
         metadata: Value,
+        metadata_type: TypeId,
         owner_name: &str,
         members: Option<(&[String], Value)>,
         kind: i64,
         span: Span,
     ) -> Result<(), CodegenError> {
         let (owner_pointer, owner_length) = self.static_bytes(owner_name)?;
+        let layout = super::debug::debug_layout(self.types, metadata_type)
+            .ok_or_else(|| self.unsupported(span, "reflected field metadata debug layout"))?;
+        let (layout_pointer, layout_length) = self.static_data(&layout)?;
         let pointer_type = self.module.target_config().pointer_type();
         let mut member_pointer = self.builder.ins().iconst(pointer_type, 0);
         let mut member_length = self.builder.ins().iconst(ir::types::I64, 0);
@@ -1571,6 +1583,8 @@ impl Translator<'_, '_> {
                 member_length,
                 has_member,
                 kind,
+                layout_pointer,
+                layout_length,
             ],
             true,
         )?;
@@ -1690,13 +1704,25 @@ impl Translator<'_, '_> {
             let owner = *type_arguments
                 .first()
                 .ok_or_else(|| self.unsupported(span, "checked variant construction type"))?;
-            return self.construct_variant_builder(owner, reflection_arguments, evaluated[0], span);
+            return self.construct_variant_builder(
+                owner,
+                reflection_arguments,
+                evaluated[0],
+                args[0].ty,
+                span,
+            );
         }
         if id == IntrinsicId::TypeConstructMachineStart {
             let owner = *type_arguments
                 .first()
                 .ok_or_else(|| self.unsupported(span, "checked machine construction type"))?;
-            return self.construct_machine_builder(owner, reflection_arguments, evaluated[0], span);
+            return self.construct_machine_builder(
+                owner,
+                reflection_arguments,
+                evaluated[0],
+                args[0].ty,
+                span,
+            );
         }
         if id == IntrinsicId::TypeConstructPut {
             let builder = self.scalar(evaluated[0], span)?;
@@ -1727,6 +1753,11 @@ impl Translator<'_, '_> {
             }
             let canonical_type = self.types.type_name(value_type);
             let (canonical_pointer, canonical_length) = self.static_bytes(&canonical_type)?;
+            let metadata_layout =
+                super::debug::debug_layout(self.types, args[1].ty).ok_or_else(|| {
+                    self.unsupported(span, "construction field metadata debug layout")
+                })?;
+            let (layout_pointer, layout_length) = self.static_data(&metadata_layout)?;
             let mut arguments = vec![builder, field, bits];
             if let Some(depth) = pending_depth {
                 arguments.push(depth);
@@ -1739,6 +1770,8 @@ impl Translator<'_, '_> {
                 type_length,
                 canonical_pointer,
                 canonical_length,
+                layout_pointer,
+                layout_length,
             ]);
             let leaf = if pending_depth.is_some() {
                 NativeLeaf::BuilderPutScalarTask
@@ -1836,7 +1869,7 @@ impl Translator<'_, '_> {
                 .ok_or_else(|| self.unsupported(span, "checked reflected field owner"))?
                 .type_name
                 .clone();
-            self.check_reflected_field_owner(metadata, &owner_name, None, 0, span)?;
+            self.check_reflected_field_owner(metadata, args[1].ty, &owner_name, None, 0, span)?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
@@ -1945,6 +1978,7 @@ impl Translator<'_, '_> {
             };
             self.check_reflected_field_owner(
                 metadata,
+                args[1].ty,
                 &owner_name,
                 Some((&member_names, tag)),
                 kind,

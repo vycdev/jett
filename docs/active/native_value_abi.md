@@ -710,6 +710,11 @@ state tag and field index, and validates it before reading the payload slot.
 The result is cloned or retained when it owns storage. Wrong-state owner
 metadata and incompatible requested types report the interpreter's specific
 errors; other metadata errors still need exact diagnostic parity.
+The reflected field-read leaves reject a pending `TypeField` before inspecting
+its owner or selecting a checked field. The construction leaves do the same
+for `construct_put` and reject pending `TypeVariant` or `TypeMachineState`
+builder-start metadata. Source-derived debug layouts format these errors with
+the interpreter's full pending value while retaining borrowed metadata.
 Static machine layout, state, and transition reflection materializes checked
 metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;

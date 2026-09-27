@@ -1622,6 +1622,81 @@ fn native_pending_contextual_empty_collections_match_interpreter() {
 }
 
 #[test]
+fn native_pending_reflection_metadata_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_reflection_metadata.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending reflection directory");
+    let binary = directory.path().join("pending_reflection_metadata.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile pending reflection metadata");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_pending_reflected_field_error_matches_interpreter() {
+    for name in [
+        "pending_reflected_field_failure",
+        "pending_reflected_variant_field_failure",
+        "pending_reflected_machine_field_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending reflected field metadata");
+        let directory = tempfile::tempdir().expect("isolated pending reflection failure directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending reflected field failure");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn native_pending_builder_field_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/pending_builder_field.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending builder field directory");
+    let binary = directory.path().join("pending_builder_field.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending builder field");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(expected.debug_output.is_empty());
+    assert!(actual.stderr.is_empty());
+}
+
+#[test]
+fn native_pending_builder_member_metadata_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_builder_member_metadata.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending builder member directory");
+    let binary = directory.path().join("pending_builder_member_metadata.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile pending builder member metadata");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(expected.debug_output.is_empty());
+    assert!(actual.stderr.is_empty());
+}
+
+#[test]
 fn native_reflected_foreign_field_errors_match_interpreter() {
     for name in [
         "reflected_struct_foreign_field_failure",

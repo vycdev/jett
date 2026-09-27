@@ -3738,6 +3738,7 @@ impl NativeValues {
         &mut self,
         layout: &[u8],
         metadata: u64,
+        metadata_debug_layout: &[u8],
         machine: bool,
     ) -> LeafResult<u64> {
         let mut cursor = BitfieldLayoutCursor {
@@ -3765,6 +3766,26 @@ impl NativeValues {
             .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
         if count > layout.len() {
             return Err(INVALID_CONSTRUCTION_LAYOUT);
+        }
+        if self
+            .structs
+            .get(&metadata)
+            .ok_or(INVALID_CONSTRUCTION)?
+            .pending_depth
+            != 0
+        {
+            let debug = NativeDebugLayout::parse(metadata_debug_layout)
+                .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            let value = debug
+                .format_value(self, metadata, debug.root, 0)
+                .map_err(|_| INVALID_CONSTRUCTION)?;
+            let (caller, kind) = if machine {
+                ("type.construct_machine_start", "TypeMachineState")
+            } else {
+                ("type.construct_variant_start", "TypeVariant")
+            };
+            return self
+                .builder_start_failure(format!("{caller}: argument must be {kind}, got {value}"));
         }
         let index = usize::try_from(self.struct_field(metadata, 0)?.bits)
             .map_err(|_| INVALID_CONSTRUCTION)?;
@@ -4005,6 +4026,7 @@ impl NativeValues {
         expected_owner: &str,
         provided_type: &str,
         canonical_type: &str,
+        metadata_layout: &[u8],
     ) -> LeafResult<u64> {
         self.builder_put_depth(
             builder,
@@ -4015,6 +4037,7 @@ impl NativeValues {
             expected_owner,
             provided_type,
             canonical_type,
+            metadata_layout,
         )
     }
     fn builder_put_depth(
@@ -4027,6 +4050,7 @@ impl NativeValues {
         expected_owner: &str,
         provided_type: &str,
         canonical_type: &str,
+        metadata_layout: &[u8],
     ) -> LeafResult<u64> {
         self.reject_pending_builder(builder, "construct_put")?;
         let info = self
@@ -4041,6 +4065,11 @@ impl NativeValues {
                 bits,
                 owned,
             );
+        }
+        if let Some(message) =
+            self.pending_type_field_message(field, metadata_layout, "type.construct_put")?
+        {
+            return self.builder_failure(message, builder, bits, owned);
         }
         let (index, actual_owner, member, name, metadata_type) =
             self.builder_field_metadata(field)?;
@@ -4384,9 +4413,17 @@ impl NativeValues {
         actual: u64,
         expected_owner: &str,
         expected_member: Option<&str>,
+        metadata_layout: &[u8],
         mismatch: Failure,
         caller: &str,
     ) -> LeafResult<u32> {
+        if let Some(message) = self
+            .pending_type_field_message(actual, metadata_layout, caller)
+            .map_err(|_| mismatch)?
+        {
+            self.dynamic_failure_message = Some(message.into_bytes());
+            return Err(mismatch);
+        }
         let actual_owner = self.text(self.struct_field(actual, 1)?.bits)?;
         let actual_member = self
             .sums
@@ -4413,6 +4450,27 @@ impl NativeValues {
             .into_bytes(),
         );
         Err(mismatch)
+    }
+    fn pending_type_field_message(
+        &self,
+        actual: u64,
+        metadata_layout: &[u8],
+        caller: &str,
+    ) -> LeafResult<Option<String>> {
+        if self
+            .structs
+            .get(&actual)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            == 0
+        {
+            return Ok(None);
+        }
+        let layout = NativeDebugLayout::parse(metadata_layout)?;
+        let value = layout.format_value(self, actual, layout.root, 0)?;
+        Ok(Some(format!(
+            "{caller}: second argument must be TypeField, got {value}"
+        )))
     }
     fn reflected_field_index(
         &mut self,
@@ -5166,44 +5224,52 @@ leaves! {
             if length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
             s.new_builder(layout) };
-    BuilderVariantNew, jett_rt_v1_builder_variant_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64, metadata: u64 => I64), u64 => I64,
-        |s| { if layout_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+    BuilderVariantNew, jett_rt_v1_builder_variant_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64, metadata: u64 => I64, debug_pointer: u64 => I64, debug_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 || debug_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
             let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
-            if length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let debug_length = usize::try_from(debug_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if length > isize::MAX as usize || debug_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
-            s.new_member_builder(layout, metadata, false) };
-    BuilderMachineNew, jett_rt_v1_builder_machine_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64, metadata: u64 => I64), u64 => I64,
-        |s| { if layout_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let debug = unsafe { std::slice::from_raw_parts(debug_pointer as *const u8, debug_length) };
+            s.new_member_builder(layout, metadata, debug, false) };
+    BuilderMachineNew, jett_rt_v1_builder_machine_new, false, (layout_pointer: u64 => I64, layout_length: u64 => I64, metadata: u64 => I64, debug_pointer: u64 => I64, debug_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 || debug_pointer == 0 { return Err(INVALID_CONSTRUCTION_LAYOUT); }
             let length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
-            if length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
+            let debug_length = usize::try_from(debug_length).map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
+            if length > isize::MAX as usize || debug_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION_LAYOUT); }
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
-            s.new_member_builder(layout, metadata, true) };
-    BuilderPut, jett_rt_v1_builder_put, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64), u64 => I64,
-        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            let debug = unsafe { std::slice::from_raw_parts(debug_pointer as *const u8, debug_length) };
+            s.new_member_builder(layout, metadata, debug, true) };
+    BuilderPut, jett_rt_v1_builder_put, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 || layout_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
             let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
             let type_length = usize::try_from(type_length).map_err(|_| INVALID_CONSTRUCTION)?;
             let canonical_length = usize::try_from(canonical_length).map_err(|_| INVALID_CONSTRUCTION)?;
-            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize || layout_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
             let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
             let provided_type = unsafe { std::slice::from_raw_parts(type_pointer as *const u8, type_length) };
             let canonical_type = unsafe { std::slice::from_raw_parts(canonical_pointer as *const u8, canonical_length) };
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, layout_length) };
             let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
             let provided_type = std::str::from_utf8(provided_type).map_err(|_| INVALID_CONSTRUCTION)?;
             let canonical_type = std::str::from_utf8(canonical_type).map_err(|_| INVALID_CONSTRUCTION)?;
-            s.builder_put(builder, field, bits, owned != 0, owner, provided_type, canonical_type) };
-    BuilderPutScalarTask, jett_rt_v1_builder_put_scalar_task, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, depth: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64), u64 => I64,
-        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
+            s.builder_put(builder, field, bits, owned != 0, owner, provided_type, canonical_type, layout) };
+    BuilderPutScalarTask, jett_rt_v1_builder_put_scalar_task, false, (builder: u64 => I64, field: u64 => I64, bits: u64 => I64, depth: u64 => I64, owned: u32 => I32, owner_pointer: u64 => I64, owner_length: u64 => I64, type_pointer: u64 => I64, type_length: u64 => I64, canonical_pointer: u64 => I64, canonical_length: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if owned > 1 || owner_pointer == 0 || type_pointer == 0 || canonical_pointer == 0 || layout_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
             let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
             let type_length = usize::try_from(type_length).map_err(|_| INVALID_CONSTRUCTION)?;
             let canonical_length = usize::try_from(canonical_length).map_err(|_| INVALID_CONSTRUCTION)?;
-            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_CONSTRUCTION)?;
+            if owner_length > isize::MAX as usize || type_length > isize::MAX as usize || canonical_length > isize::MAX as usize || layout_length > isize::MAX as usize { return Err(INVALID_CONSTRUCTION); }
             let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
             let provided_type = unsafe { std::slice::from_raw_parts(type_pointer as *const u8, type_length) };
             let canonical_type = unsafe { std::slice::from_raw_parts(canonical_pointer as *const u8, canonical_length) };
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, layout_length) };
             let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
             let provided_type = std::str::from_utf8(provided_type).map_err(|_| INVALID_CONSTRUCTION)?;
             let canonical_type = std::str::from_utf8(canonical_type).map_err(|_| INVALID_CONSTRUCTION)?;
-            s.builder_put_depth(builder, field, bits, depth, owned != 0, owner, provided_type, canonical_type) };
+            s.builder_put_depth(builder, field, bits, depth, owned != 0, owner, provided_type, canonical_type, layout) };
     BuilderFinish, jett_rt_v1_builder_finish, false, (builder: u64 => I64, owner_pointer: u64 => I64, owner_length: u64 => I64), u64 => I64,
         |s| { if owner_pointer == 0 { return Err(INVALID_CONSTRUCTION); }
             let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_CONSTRUCTION)?;
@@ -5261,14 +5327,17 @@ leaves! {
                 _ => return Err(INVALID_REFLECTED_FIELD),
             };
             s.reflected_checked_field_index(actual, expected, compatible, requested, mismatch, caller) };
-    ReflectedFieldOwnerCheck, jett_rt_v1_reflected_field_owner_check, false, (actual: u64 => I64, owner: *const u8 => Pointer, owner_length: u64 => I64, member: *const u8 => Pointer, member_length: u64 => I64, has_member: u32 => I32, kind: u32 => I32), u32 => I32,
+    ReflectedFieldOwnerCheck, jett_rt_v1_reflected_field_owner_check, false, (actual: u64 => I64, owner: *const u8 => Pointer, owner_length: u64 => I64, member: *const u8 => Pointer, member_length: u64 => I64, has_member: u32 => I32, kind: u32 => I32, layout: *const u8 => Pointer, layout_length: u64 => I64), u32 => I32,
         |s| { let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
             let member_length = usize::try_from(member_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
             if owner_length > isize::MAX as usize || (owner_length != 0 && owner.is_null())
                 || member_length > isize::MAX as usize || (member_length != 0 && member.is_null())
                 || has_member > 1 { return Err(INVALID_REFLECTED_FIELD); }
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            if layout_length > isize::MAX as usize || (layout_length != 0 && layout.is_null()) { return Err(INVALID_REFLECTED_FIELD); }
             let owner = if owner_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(owner, owner_length) } };
             let member = if member_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(member, member_length) } };
+            let layout = if layout_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, layout_length) } };
             let owner = std::str::from_utf8(owner).map_err(|_| INVALID_REFLECTED_FIELD)?;
             let member = std::str::from_utf8(member).map_err(|_| INVALID_REFLECTED_FIELD)?;
             let (mismatch, caller) = match kind {
@@ -5277,7 +5346,7 @@ leaves! {
                 2 => (INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value"),
                 _ => return Err(INVALID_REFLECTED_FIELD),
             };
-            s.check_reflected_field_owner(actual, owner, (has_member != 0).then_some(member), mismatch, caller) };
+            s.check_reflected_field_owner(actual, owner, (has_member != 0).then_some(member), layout, mismatch, caller) };
     TypeInfoMatches, jett_rt_v1_type_info_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
