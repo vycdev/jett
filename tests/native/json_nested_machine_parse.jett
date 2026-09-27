@@ -1,0 +1,45 @@
+namespace app
+machine Session:
+    states:
+        guest
+        active(user_id: string)
+    transitions:
+        guest to active
+struct SessionBox:
+    sessions: list[Session]
+    by_name: map[string, Session]
+struct QualifiedBox:
+    current: Session at active
+    history: list[Session at active]
+function parse_box() returns string:
+    SessionBox value = json.parse_exact[SessionBox]("{{\"sessions\":[{{\"state\":\"guest\",\"payload\":{{}}}},{{\"state\":\"active\",\"payload\":{{\"user_id\":\"Ada\"}}}}],\"by_name\":{{\"first\":{{\"state\":\"active\",\"payload\":{{\"user_id\":\"Lin\"}}}}}}}}") handle error:
+        return error
+    return json.serialize[SessionBox](view value)
+function missing_payload_field() returns string:
+    SessionBox value = json.parse_exact[SessionBox]("{{\"sessions\":[{{\"state\":\"active\",\"payload\":{{}}}}],\"by_name\":{{}}}}") handle error:
+        return error
+    return json.serialize[SessionBox](view value)
+function unknown_state() returns string:
+    SessionBox value = json.parse_exact[SessionBox]("{{\"sessions\":[{{\"state\":\"offline\",\"payload\":{{}}}}],\"by_name\":{{}}}}") handle error:
+        return error
+    return json.serialize[SessionBox](view value)
+function extra_payload_field() returns string:
+    SessionBox value = json.parse_exact[SessionBox]("{{\"sessions\":[{{\"state\":\"active\",\"payload\":{{\"user_id\":\"Ada\",\"extra\":1}}}}],\"by_name\":{{}}}}") handle error:
+        return error
+    return json.serialize[SessionBox](view value)
+function parse_qualified() returns string:
+    QualifiedBox value = json.parse_exact[QualifiedBox]("{{\"current\":{{\"state\":\"active\",\"payload\":{{\"user_id\":\"Ada\"}}}},\"history\":[{{\"state\":\"active\",\"payload\":{{\"user_id\":\"Lin\"}}}}]}}") handle error:
+        return error
+    return json.serialize[QualifiedBox](view value)
+function mismatched_qualified_state() returns string:
+    QualifiedBox value = json.parse_exact[QualifiedBox]("{{\"current\":{{\"state\":\"guest\",\"payload\":{{}}}},\"history\":[]}}") handle error:
+        return error
+    return json.serialize[QualifiedBox](view value)
+function main() returns nothing:
+    println(parse_box())
+    println(missing_payload_field())
+    println(unknown_state())
+    println(extra_payload_field())
+    println(parse_qualified())
+    println(mismatched_qualified_state())
+    return nothing

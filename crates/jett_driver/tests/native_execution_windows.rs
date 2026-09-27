@@ -3124,6 +3124,20 @@ fn native_nested_json_bitfields_match_interpreter() {
 }
 
 #[test]
+fn native_nested_json_machines_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/json_nested_machine_parse.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated nested machine JSON directory");
+    let binary = directory.path().join("json_nested_machine_parse.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile nested machine JSON");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_projected_machine_sequences_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_machine_sequences.jett");

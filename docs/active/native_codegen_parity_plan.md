@@ -1315,3 +1315,10 @@ candidate field. Differential fixtures cover foreign indexes beyond the active
 struct, enum variant, or machine state's fields, plus empty active variants and
 states. The interpreter's owner error is retained even when no candidate
 exists; forged metadata and other invalid-index diagnostics remain open.
+
+`tests/native/json_nested_machine_parse.jett` adds linked differential
+coverage for exact JSON parsing of bare machines in lists and string-keyed
+maps, state-qualified machines in records and lists, and nested missing-field,
+unknown-state, extra-field, and state-mismatch errors. All match the
+interpreter; other concrete JSON shapes remain open, so the broad estimate
+stays at about 85%.
