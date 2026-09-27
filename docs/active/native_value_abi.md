@@ -120,6 +120,17 @@ debug output retains the actor ordinal. `send` and `ask` reject a pending actor
 before evaluating message arguments, matching the interpreter's actor-value
 check.
 
+Capability task values use separate scalar handles mapped to the granted
+authority token and a pending depth. `run` allocates a new handle and consumes
+an earlier task handle; `join` returns a result containing the authority token
+or a handle with one less pending level. Joining a plain Stdout, Clock, or
+Random value returns the interpreter's current cancellation error, while a
+plain Environment or Graphics value joins successfully. Debug formatting uses
+the interpreter's current `nothing` display for the first three capabilities
+and the named capability display for Environment and Graphics, with pending
+wrappers at each depth. The original granted token remains the authority for
+capability operations after the final join.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

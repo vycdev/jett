@@ -1,0 +1,9 @@
+namespace app
+function main(env: Environment) returns nothing:
+    trace env
+    Environment pending = run env
+    trace pending
+    Environment joined = join pending handle error:
+        return nothing
+    trace joined
+    return nothing

@@ -1169,6 +1169,32 @@ fn native_pending_actor_send_matches_interpreter_error() {
 }
 
 #[test]
+fn native_pending_capability_values_match_interpreter() {
+    for name in [
+        "pending_capability_values",
+        "pending_capability_cancelled",
+        "pending_environment_values",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+        let directory = tempfile::tempdir().expect("isolated pending capability directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending capability values");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+        let expected_debug = if expected.debug_output.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", expected.debug_output.join("\n"))
+        };
+        assert_eq!(actual.stderr, expected_debug.as_bytes(), "{name}");
+    }
+}
+
+#[test]
 fn native_pending_enum_comparisons_match_interpreter_errors() {
     for name in [
         "pending_enum_equality_failure",

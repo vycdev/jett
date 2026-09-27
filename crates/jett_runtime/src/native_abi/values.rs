@@ -39,6 +39,10 @@ const INVALID_ACTOR: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native actor handle or field",
 );
+const INVALID_CAPABILITY: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native capability authority or task",
+);
 const INVALID_GRAPHICS: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native Graphics authority or session",
@@ -527,7 +531,7 @@ impl NativeDebugLayout {
             NativeDebugNode::Nothing => format_nothing(bits)?,
             NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
             NativeDebugNode::Alias(base) => return self.format_value(values, bits, *base, child),
-            NativeDebugNode::Capability(name) => format!("<{name} capability>"),
+            NativeDebugNode::Capability(name) => values.debug_capability(bits, name)?,
             NativeDebugNode::Function => {
                 let label = values.function_debug_label(bits)?;
                 let depth = values
@@ -1127,6 +1131,7 @@ pub(super) struct NativeValues {
     maps: HashMap<NativeHandle, NativeMap>,
     structs: HashMap<NativeHandle, NativeStruct>,
     actors: HashMap<NativeHandle, u64>,
+    capability_tasks: HashMap<NativeHandle, (u64, u64)>,
     next_actor_ordinal: u64,
     builders: HashMap<NativeHandle, NativeBuilderInfo>,
     structs_created: u64,
@@ -1156,6 +1161,66 @@ pub(super) struct NativeValues {
     graphics_session: Option<u64>,
 }
 impl NativeValues {
+    fn capability_authority(&self, value: u64) -> LeafResult<(u64, u64)> {
+        let (authority, depth) = self
+            .capability_tasks
+            .get(&value)
+            .copied()
+            .unwrap_or((value, 0));
+        if [
+            self.stdout,
+            self.clock,
+            self.random,
+            self.environment,
+            self.graphics,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|token| token == authority)
+        {
+            Ok((authority, depth))
+        } else {
+            Err(INVALID_CAPABILITY)
+        }
+    }
+
+    fn run_capability(&mut self, value: u64) -> LeafResult<u64> {
+        let (authority, depth) = self.capability_authority(value)?;
+        let depth = depth.checked_add(1).ok_or(EXHAUSTED)?;
+        let task = next_identity()?;
+        self.capability_tasks.insert(task, (authority, depth));
+        self.capability_tasks.remove(&value);
+        Ok(task)
+    }
+
+    fn join_capability(&mut self, value: u64) -> LeafResult<u64> {
+        let (authority, depth) = self.capability_authority(value)?;
+        if depth == 0 && self.environment != Some(authority) && self.graphics != Some(authority) {
+            return self.parsed_sum(Err("task was cancelled".to_owned()));
+        }
+        let joined = if depth <= 1 {
+            authority
+        } else {
+            next_identity()?
+        };
+        let result = self.parsed_sum(Ok(joined))?;
+        if depth > 1 {
+            self.capability_tasks.insert(joined, (authority, depth - 1));
+        }
+        self.capability_tasks.remove(&value);
+        Ok(result)
+    }
+
+    fn debug_capability(&self, value: u64, name: &str) -> LeafResult<String> {
+        let (authority, depth) = self.capability_authority(value)?;
+        let inner = if self.environment == Some(authority) || self.graphics == Some(authority) {
+            format!("<{name} capability>")
+        } else {
+            "nothing".to_owned()
+        };
+        format_pending_value(&inner, depth)
+    }
+
     fn validate_scripted_consumption(&mut self) -> LeafResult<u32> {
         let remaining = [
             (
@@ -4307,6 +4372,10 @@ leaves! {
         |s| s.run_actor(value);
     ActorTaskJoin, jett_rt_v1_actor_task_join, false, (value: u64 => I64), u64 => I64,
         |s| s.join_actor(value);
+    CapabilityRun, jett_rt_v1_capability_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_capability(value);
+    CapabilityTaskJoin, jett_rt_v1_capability_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_capability(value);
     ActorMessageCheck, jett_rt_v1_actor_message_check, false, (value: u64 => I64), u32 => I32,
         |s| s.check_actor_message(value);
     ActorReplace, jett_rt_v1_actor_replace, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
@@ -5264,6 +5333,55 @@ mod tests {
             Err(INVALID_ACTOR)
         ));
         values.release_actors().unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn capability_tasks_preserve_authority_and_release_consumed_handles() {
+        let mut values = NativeValues::default();
+        let authority = next_identity().unwrap();
+        values.stdout = Some(authority);
+        assert_eq!(
+            values.debug_capability(authority, "Stdout").unwrap(),
+            "nothing"
+        );
+
+        let first = values.run_capability(authority).unwrap();
+        assert_eq!(
+            values.debug_capability(first, "Stdout").unwrap(),
+            "pending(nothing)"
+        );
+        let nested = values.run_capability(first).unwrap();
+        assert!(!values.capability_tasks.contains_key(&first));
+        let outer = values.join_capability(nested).unwrap();
+        let inner = values.sums.get(&outer).unwrap().bits;
+        assert_eq!(
+            values.debug_capability(inner, "Stdout").unwrap(),
+            "pending(nothing)"
+        );
+        values.drop_value(outer).unwrap();
+        let completed = values.join_capability(inner).unwrap();
+        assert_eq!(values.sums.get(&completed).unwrap().bits, authority);
+        values.drop_value(completed).unwrap();
+        assert!(values.capability_tasks.is_empty());
+
+        let cancelled = values.join_capability(authority).unwrap();
+        let failure = values.sums.get(&cancelled).unwrap();
+        assert_eq!(failure.tag, SUM_FAILURE);
+        assert_eq!(values.text(failure.bits).unwrap(), "task was cancelled");
+        values.drop_value(cancelled).unwrap();
+
+        let environment = next_identity().unwrap();
+        values.environment = Some(environment);
+        assert_eq!(
+            values.debug_capability(environment, "Environment").unwrap(),
+            "<Environment capability>"
+        );
+        let resolved = values.join_capability(environment).unwrap();
+        let value = values.sums.get(&resolved).unwrap();
+        assert_eq!(value.tag, SUM_SUCCESS);
+        assert_eq!(value.bits, environment);
+        values.drop_value(resolved).unwrap();
         assert!(values.is_empty());
     }
 

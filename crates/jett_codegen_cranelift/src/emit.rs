@@ -1826,6 +1826,10 @@ impl Translator<'_, '_> {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::ActorRun, &[source], true)?;
                     Ok(LoweredValue::Scalar(pending))
+                } else if matches!(self.types.resolve(value.ty), Type::Capability(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::CapabilityRun, &[source], true)?;
+                    Ok(LoweredValue::Scalar(pending))
                 } else {
                     Ok(lowered)
                 }
@@ -1888,6 +1892,10 @@ impl Translator<'_, '_> {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::ActorTaskJoin, &[source], true)?;
                     self.construct_sum_value(true, LoweredValue::Scalar(joined), expression.span)
+                } else if matches!(self.types.resolve(value.ty), Type::Capability(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::CapabilityTaskJoin, &[source], true)?;
+                    self.own_linear(joined)
                 } else if value.ty == expression.ty {
                     Ok(result)
                 } else {

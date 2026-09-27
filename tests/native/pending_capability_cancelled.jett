@@ -1,0 +1,7 @@
+namespace app
+function main(stdout: Stdout) returns nothing:
+    Stdout joined = join stdout handle error:
+        println(error)
+        return nothing
+    trace joined
+    return nothing
