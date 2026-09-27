@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    set[int64] values = run set.new[int64]()
+    bool contains = set.contains[int64](view values, 2)
+    trace contains
+    return nothing

@@ -83,6 +83,26 @@ const INVALID_SET: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native set handle or element",
 );
+const PENDING_SET_LENGTH: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__length expects a set argument",
+);
+const PENDING_SET_CONTAINS: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__contains expects a set as first argument",
+);
+const PENDING_SET_ADD: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__add expects a set as first argument",
+);
+const PENDING_SET_REMOVE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"set.__remove expects a set as first argument",
+);
+const PENDING_ITERABLE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"for loop requires a list, string, map, or set value",
+);
 const INVALID_MAP: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native map handle or entry",
@@ -342,6 +362,27 @@ pub enum NativePendingBinaryOp {
     Or,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy)]
+pub enum NativeSequenceKind {
+    List,
+    String,
+    Map,
+    Set,
+}
+
+impl NativeSequenceKind {
+    fn from_raw(raw: u32) -> LeafResult<Self> {
+        Ok(match raw {
+            0 => Self::List,
+            1 => Self::String,
+            2 => Self::Map,
+            3 => Self::Set,
+            _ => return Err(INVALID_LIST),
+        })
+    }
+}
+
 impl NativePendingBinaryOp {
     fn from_raw(raw: u32) -> LeafResult<Self> {
         Ok(match raw {
@@ -422,6 +463,7 @@ struct NativeList {
 }
 struct NativeSet {
     elements: Vec<Option<u64>>,
+    element_pending_depths: HashMap<usize, u64>,
     strings: bool,
     pending_depth: u64,
 }
@@ -693,12 +735,14 @@ impl NativeDebugLayout {
                     if position > 0 {
                         result.push_str(", ");
                     }
-                    result.push_str(&self.format_value(
-                        values,
-                        item.ok_or(INVALID_SET)?,
-                        *element,
-                        child,
-                    )?);
+                    let value =
+                        self.format_value(values, item.ok_or(INVALID_SET)?, *element, child)?;
+                    let depth = set
+                        .element_pending_depths
+                        .get(&position)
+                        .copied()
+                        .unwrap_or(0);
+                    result.push_str(&format_pending_value(&value, depth)?);
                 }
                 result.push(')');
                 format_pending_value(&result, set.pending_depth)?
@@ -881,14 +925,26 @@ impl NativeDebugLayout {
                 if left.elements.len() != right.elements.len() {
                     return Ok(false);
                 }
-                for (a, b) in left.elements.iter().zip(&right.elements) {
-                    if !self.equal_value(
-                        values,
-                        a.ok_or(INVALID_SET)?,
-                        b.ok_or(INVALID_SET)?,
-                        *element,
-                        child,
-                    )? {
+                for (position, (a, b)) in left.elements.iter().zip(&right.elements).enumerate() {
+                    let left_depth = left
+                        .element_pending_depths
+                        .get(&position)
+                        .copied()
+                        .unwrap_or(0);
+                    let right_depth = right
+                        .element_pending_depths
+                        .get(&position)
+                        .copied()
+                        .unwrap_or(0);
+                    if left_depth != right_depth
+                        || !self.equal_value(
+                            values,
+                            a.ok_or(INVALID_SET)?,
+                            b.ok_or(INVALID_SET)?,
+                            *element,
+                            child,
+                        )?
+                    {
                         return Ok(false);
                     }
                 }
@@ -2037,6 +2093,7 @@ impl NativeValues {
             id,
             NativeSet {
                 elements: Vec::new(),
+                element_pending_depths: HashMap::new(),
                 strings: strings != 0,
                 pending_depth: 0,
             },
@@ -2357,12 +2414,41 @@ impl NativeValues {
         Ok(output)
     }
     fn set_position(&self, id: u64, key: u64) -> LeafResult<Option<usize>> {
+        self.set_position_depth(id, key, 0)
+    }
+    fn require_plain_set(&self, id: u64, error: Failure) -> LeafResult<()> {
+        let set = self.sets.get(&id).ok_or(INVALID_SET)?;
+        if set.pending_depth != 0 {
+            return Err(error);
+        }
+        Ok(())
+    }
+    fn check_iterable(&self, value: u64, raw_kind: u32) -> LeafResult<u32> {
+        let depth = match NativeSequenceKind::from_raw(raw_kind)? {
+            NativeSequenceKind::List => self.lists.get(&value).ok_or(INVALID_LIST)?.pending_depth,
+            NativeSequenceKind::String => {
+                self.strings
+                    .get(&value)
+                    .ok_or(INVALID_HANDLE)?
+                    .pending_depth
+            }
+            NativeSequenceKind::Map => self.maps.get(&value).ok_or(INVALID_MAP)?.pending_depth,
+            NativeSequenceKind::Set => self.sets.get(&value).ok_or(INVALID_SET)?.pending_depth,
+        };
+        if depth != 0 {
+            return Err(PENDING_ITERABLE);
+        }
+        Ok(0)
+    }
+    fn set_position_depth(&self, id: u64, key: u64, depth: u64) -> LeafResult<Option<usize>> {
         let set = self.sets.get(&id).ok_or(INVALID_SET)?;
         if set.strings {
-            let key_text = self.text(key)?;
+            if depth != 0 {
+                return Err(INVALID_SET);
+            }
             for (index, &element) in set.elements.iter().enumerate() {
                 if let Some(element) = element {
-                    if self.text(element)? == key_text {
+                    if self.same_string_value(element, key)? {
                         return Ok(Some(index));
                     }
                 }
@@ -2372,11 +2458,19 @@ impl NativeValues {
             Ok(set
                 .elements
                 .iter()
-                .position(|element| *element == Some(key)))
+                .enumerate()
+                .position(|(index, element)| {
+                    *element == Some(key)
+                        && set.element_pending_depths.get(&index).copied().unwrap_or(0) == depth
+                }))
         }
     }
     fn set_add(&mut self, id: u64, key: u64) -> LeafResult<u64> {
-        let duplicate = self.set_position(id, key)?.is_some();
+        self.set_add_depth(id, key, 0)
+    }
+    fn set_add_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_set(id, PENDING_SET_ADD)?;
+        let duplicate = self.set_position_depth(id, key, depth)?.is_some();
         if duplicate {
             if self.sets.get(&id).ok_or(INVALID_SET)?.strings {
                 self.drop_value(key)?;
@@ -2385,13 +2479,36 @@ impl NativeValues {
         }
         let set = self.sets.get_mut(&id).ok_or(INVALID_SET)?;
         set.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        if depth != 0 {
+            set.element_pending_depths
+                .try_reserve(1)
+                .map_err(|_| EXHAUSTED)?;
+            set.element_pending_depths.insert(set.elements.len(), depth);
+        }
         set.elements.push(Some(key));
         Ok(id)
     }
     fn set_remove(&mut self, id: u64, key: u64) -> LeafResult<u64> {
-        if let Some(index) = self.set_position(id, key)? {
+        self.set_remove_depth(id, key, 0)
+    }
+    fn set_remove_depth(&mut self, id: u64, key: u64, depth: u64) -> LeafResult<u64> {
+        self.require_plain_set(id, PENDING_SET_REMOVE)?;
+        if let Some(index) = self.set_position_depth(id, key, depth)? {
             let set = self.sets.get_mut(&id).ok_or(INVALID_SET)?;
             let old = set.elements.remove(index);
+            set.element_pending_depths.remove(&index);
+            let mut moved = set
+                .element_pending_depths
+                .keys()
+                .copied()
+                .filter(|position| *position > index)
+                .collect::<Vec<_>>();
+            moved.sort_unstable();
+            for position in moved {
+                if let Some(depth) = set.element_pending_depths.remove(&position) {
+                    set.element_pending_depths.insert(position - 1, depth);
+                }
+            }
             if set.strings {
                 self.drop_value(old.ok_or(INVALID_SET)?)?;
             }
@@ -2400,8 +2517,12 @@ impl NativeValues {
     }
     fn clone_set(&mut self, id: u64) -> LeafResult<u64> {
         let set = self.sets.get(&id).ok_or(INVALID_SET)?;
-        let (elements, strings, pending_depth) =
-            (set.elements.clone(), set.strings, set.pending_depth);
+        let (elements, element_pending_depths, strings, pending_depth) = (
+            set.elements.clone(),
+            set.element_pending_depths.clone(),
+            set.strings,
+            set.pending_depth,
+        );
         let output = self.new_set(u32::from(strings))?;
         if let Err(error) = self
             .sets
@@ -2432,7 +2553,9 @@ impl NativeValues {
                 .elements
                 .push(value);
         }
-        self.sets.get_mut(&output).ok_or(INVALID_SET)?.pending_depth = pending_depth;
+        let copy = self.sets.get_mut(&output).ok_or(INVALID_SET)?;
+        copy.element_pending_depths = element_pending_depths;
+        copy.pending_depth = pending_depth;
         Ok(output)
     }
     fn run_set(&mut self, id: u64) -> LeafResult<u64> {
@@ -4692,6 +4815,8 @@ leaves! {
         |s| { let parts = s.text(value)?.split_whitespace().map(str::to_owned).collect(); s.string_list(parts) };
     StringLines, jett_rt_v1_string_lines, false, (value: u64 => I64), u64 => I64,
         |s| { let parts = native_lines(s.text(value)?); s.string_list(parts) };
+    SequenceCheckIterable, jett_rt_v1_sequence_check_iterable, false, (value: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| s.check_iterable(value, kind);
     StringSplit, jett_rt_v1_string_split, false, (value: u64 => I64, delimiter: u64 => I64), u64 => I64,
         |s| { let parts = native_split(s.text(value)?, s.text(delimiter)?).into_iter().map(str::to_owned).collect(); s.string_list(parts) };
     StringJoin, jett_rt_v1_string_join, false, (value: u64 => I64, separator: u64 => I64), u64 => I64,
@@ -4786,12 +4911,21 @@ leaves! {
         |s| s.new_set(strings);
     SetAdd, jett_rt_v1_set_add, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
         |s| s.set_add(value, key);
+    SetAddScalarTask, jett_rt_v1_set_add_scalar_task, false, (value: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.set_add_depth(value, key, depth);
     SetRemove, jett_rt_v1_set_remove, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
         |s| s.set_remove(value, key);
+    SetRemoveScalarTask, jett_rt_v1_set_remove_scalar_task, false, (value: u64 => I64, key: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.set_remove_depth(value, key, depth);
     SetContains, jett_rt_v1_set_contains, false, (value: u64 => I64, key: u64 => I64), u32 => I32,
-        |s| Ok(u32::from(s.set_position(value, key)?.is_some()));
+        |s| { s.require_plain_set(value, PENDING_SET_CONTAINS)?;
+            Ok(u32::from(s.set_position(value, key)?.is_some())) };
+    SetContainsScalarTask, jett_rt_v1_set_contains_scalar_task, false, (value: u64 => I64, key: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| { s.require_plain_set(value, PENDING_SET_CONTAINS)?;
+            Ok(u32::from(s.set_position_depth(value, key, depth)?.is_some())) };
     SetLength, jett_rt_v1_set_length, false, (value: u64 => I64), i64 => I64,
-        |s| Ok(s.sets.get(&value).ok_or(INVALID_SET)?.elements.len() as i64);
+        |s| { s.require_plain_set(value, PENDING_SET_LENGTH)?;
+            Ok(s.sets.get(&value).ok_or(INVALID_SET)?.elements.len() as i64) };
     SetClone, jett_rt_v1_set_clone, false, (value: u64 => I64), u64 => I64,
         |s| s.clone_set(value);
     SetRun, jett_rt_v1_set_run, false, (value: u64 => I64), u64 => I64,
@@ -4799,9 +4933,16 @@ leaves! {
     SetTaskJoin, jett_rt_v1_set_task_join, false, (value: u64 => I64), u64 => I64,
         |s| s.join_set(value);
     SetElementTake, jett_rt_v1_set_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
-        |s| s.sets.get_mut(&value).ok_or(INVALID_SET)?
-            .elements.get_mut(usize::try_from(index).map_err(|_| INVALID_SET)?)
-            .and_then(Option::take).ok_or(INVALID_SET);
+        |s| { let set = s.sets.get_mut(&value).ok_or(INVALID_SET)?;
+            let index = usize::try_from(index).map_err(|_| INVALID_SET)?;
+            let bits = set.elements.get_mut(index).and_then(Option::take).ok_or(INVALID_SET)?;
+            set.element_pending_depths.remove(&index);
+            Ok(bits) };
+    SetElementPendingDepth, jett_rt_v1_set_element_pending_depth, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let set = s.sets.get(&value).ok_or(INVALID_SET)?;
+            let index = usize::try_from(index).map_err(|_| INVALID_SET)?;
+            set.elements.get(index).copied().flatten().ok_or(INVALID_SET)?;
+            Ok(set.element_pending_depths.get(&index).copied().unwrap_or(0)) };
     SetElementClone, jett_rt_v1_set_element_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let set = s.sets.get(&value).ok_or(INVALID_SET)?;
             let element = set.elements.get(usize::try_from(index).map_err(|_| INVALID_SET)?)

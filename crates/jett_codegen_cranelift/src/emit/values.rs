@@ -860,7 +860,15 @@ impl Translator<'_, '_> {
             IntrinsicId::SetContains => {
                 let value = self.scalar(values[0], span)?;
                 let (key, _) = self.payload_bits(values[1]);
-                let found = self.leaf(NativeLeaf::SetContains, &[value, key], true)?;
+                let found = if let LoweredValue::ScalarTask(_, depth) = values[1] {
+                    self.leaf(
+                        NativeLeaf::SetContainsScalarTask,
+                        &[value, key, depth],
+                        true,
+                    )?
+                } else {
+                    self.leaf(NativeLeaf::SetContains, &[value, key], true)?
+                };
                 Ok(LoweredValue::Scalar(
                     self.builder.ins().ireduce(ir::types::I8, found),
                 ))
@@ -870,12 +878,21 @@ impl Translator<'_, '_> {
                     return Err(self.unsupported(span, "set mutation requires owner"));
                 };
                 let (key, _) = self.payload_bits(values[1]);
-                let leaf = if id == IntrinsicId::SetAdd {
-                    NativeLeaf::SetAdd
+                let value = if let LoweredValue::ScalarTask(_, depth) = values[1] {
+                    let leaf = if id == IntrinsicId::SetAdd {
+                        NativeLeaf::SetAddScalarTask
+                    } else {
+                        NativeLeaf::SetRemoveScalarTask
+                    };
+                    self.leaf(leaf, &[set, key, depth], true)?
                 } else {
-                    NativeLeaf::SetRemove
+                    let leaf = if id == IntrinsicId::SetAdd {
+                        NativeLeaf::SetAdd
+                    } else {
+                        NativeLeaf::SetRemove
+                    };
+                    self.leaf(leaf, &[set, key], true)?
                 };
-                let value = self.leaf(leaf, &[set, key], true)?;
                 self.clear_slot(slot);
                 if id == IntrinsicId::SetAdd {
                     if let LoweredValue::Owned(_, key_slot) = values[1] {

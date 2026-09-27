@@ -319,6 +319,11 @@ state, remain open, so the coarse coverage estimate stays 80%.
 Numeric list aggregates now reject pending containers and elements before
 operating on scalar payload bits, with differential cases for `list.sum`,
 `math.average`, and `math.median`.
+Primitive set elements now preserve pending depth through membership, updates,
+cloning, debug output, and iteration. Pending set containers fail at public set
+intrinsics. Native `for` rejects pending list, string, map, and set containers
+before iteration, matching the interpreter's shared iterable error. Pending
+primitive map keys and values remain open.
 
 Capability task handles preserve pending nesting independently of the original
 authority token. Joining a task restores the authority needed by the capability

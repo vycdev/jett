@@ -103,6 +103,12 @@ per-element depth map before reading scalar bits. `list.sum` distinguishes a
 pending first element from a later pending element, matching the interpreter's
 two current error paths; `math.average` and `math.median` report their current
 numeric-list errors for pending containers or elements.
+Primitive sets likewise keep a sparse per-element pending-depth map. Add,
+remove, contains, clone, recursive debug formatting, and scalar iteration use
+that depth; string set membership compares both text and the string handle's
+pending depth. Set intrinsics reject a pending set container. Native `for`
+checks the container before fetching length or elements and reports the
+interpreter's shared iterable error for pending lists, strings, maps, and sets.
 
 Owned native strings also carry a pending depth in the runtime registry.
 `StringRun` and `StringTaskJoin` create independent handles, so wrapping a

@@ -7,7 +7,7 @@ use jett_mir::move_values::{
 use jett_runtime::native_abi::values::{
     DEBUG_BYTES_KIND, DEBUG_NOTHING_KIND, NATIVE_FUNCTION_CODE_FIELD,
     NATIVE_FUNCTION_ENVIRONMENT_FIELD, NATIVE_FUNCTION_FIELD_COUNT, NATIVE_FUNCTION_LABEL_FIELD,
-    NativeLeaf, NativePendingBinaryOp, NativeSortKind,
+    NativeLeaf, NativePendingBinaryOp, NativeSequenceKind, NativeSortKind,
 };
 use std::str::FromStr;
 
@@ -1109,13 +1109,13 @@ impl Translator<'_, '_> {
                         NativeLeaf::ListElementClone
                     };
                     let target_ty = self.local_types[target.index() as usize].ty;
-                    let depth = if !string && !map && !set && is_task_scalar(self.types, target_ty)?
-                    {
-                        Some(self.leaf(
-                            NativeLeaf::ListElementPendingDepth,
-                            &[value, index],
-                            true,
-                        )?)
+                    let depth = if !string && !map && is_task_scalar(self.types, target_ty)? {
+                        let depth_leaf = if set {
+                            NativeLeaf::SetElementPendingDepth
+                        } else {
+                            NativeLeaf::ListElementPendingDepth
+                        };
+                        Some(self.leaf(depth_leaf, &[value, index], true)?)
                     } else {
                         None
                     };
@@ -1128,6 +1128,17 @@ impl Translator<'_, '_> {
                         None => output,
                     }
                 } else {
+                    let kind = if string {
+                        NativeSequenceKind::String
+                    } else if map {
+                        NativeSequenceKind::Map
+                    } else if set {
+                        NativeSequenceKind::Set
+                    } else {
+                        NativeSequenceKind::List
+                    };
+                    let kind = self.builder.ins().iconst(ir::types::I32, kind as i64);
+                    self.leaf(NativeLeaf::SequenceCheckIterable, &[value, kind], true)?;
                     let leaf = if string {
                         NativeLeaf::StringScalarCount
                     } else if map {

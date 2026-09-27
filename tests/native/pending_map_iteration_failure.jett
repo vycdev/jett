@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    map[string, int64] values = run map("a": 2)
+    for key, value in values:
+        trace key
+    return nothing

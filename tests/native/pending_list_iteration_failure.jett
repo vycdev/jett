@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    list[int64] values = run list(2)
+    for item in values:
+        trace item
+    return nothing
