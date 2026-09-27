@@ -3376,7 +3376,10 @@ function caller(value: int64, choose_original: bool) returns int64:
         let runtime_context = function.dfg.block_params(entry)[0];
         let calls = direct_call_arguments(&function);
 
-        assert!(calls.len() >= 4, "Jett calls and failure checks remain present");
+        assert!(
+            calls.len() >= 4,
+            "Jett calls and failure checks remain present"
+        );
         for arguments in calls {
             assert!(
                 matches!(arguments.len(), 1 | 4 | 8),
