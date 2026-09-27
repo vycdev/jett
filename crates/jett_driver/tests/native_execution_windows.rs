@@ -1640,6 +1640,39 @@ fn native_pending_reflection_metadata_matches_interpreter() {
 }
 
 #[test]
+fn native_pending_reflected_owner_errors_match_interpreter() {
+    for name in [
+        "pending_variant_value_failure",
+        "pending_machine_state_value_failure",
+        "pending_struct_field_owner_failure",
+        "pending_variant_field_owner_failure",
+        "pending_machine_field_owner_failure",
+        "pending_bitfield_field_owner_failure",
+        "pending_narrowed_machine_field_owner_failure",
+        "pending_variant_foreign_field_precedence",
+        "pending_machine_foreign_field_precedence",
+        "pending_variant_both_metadata_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending reflected owner");
+        let directory = tempfile::tempdir().expect("isolated pending reflected owner directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending reflected owner");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_reflected_field_error_matches_interpreter() {
     for name in [
         "pending_reflected_field_failure",

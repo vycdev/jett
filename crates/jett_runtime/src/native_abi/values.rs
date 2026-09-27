@@ -67,6 +67,10 @@ const INVALID_REFLECTED_MACHINE_FIELD: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"type.machine_field_value: field metadata does not match the active state and requested type",
 );
+const INVALID_REFLECTED_OWNER: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid reflected enum or machine value",
+);
 const INVALID_TYPE_INFO: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid reflected TypeInfo for native type dispatch",
@@ -4472,6 +4476,40 @@ impl NativeValues {
             "{caller}: second argument must be TypeField, got {value}"
         )))
     }
+    fn check_reflected_owner_pending(
+        &mut self,
+        value: u64,
+        owner_name: &str,
+        debug_layout: &[u8],
+        kind: u32,
+    ) -> LeafResult<u32> {
+        if self
+            .structs
+            .get(&value)
+            .ok_or(INVALID_REFLECTED_OWNER)?
+            .pending_depth
+            == 0
+        {
+            return Ok(0);
+        }
+        let layout = NativeDebugLayout::parse(debug_layout).map_err(|_| INVALID_REFLECTED_OWNER)?;
+        let actual = layout
+            .format_value(self, value, layout.root, 0)
+            .map_err(|_| INVALID_REFLECTED_OWNER)?;
+        let (caller, expected) = match kind {
+            0 => ("type.variant_value", "enum"),
+            1 => ("type.machine_state_value", "machine"),
+            2 => ("type.field_value", "struct"),
+            3 => ("type.variant_field_value", "enum"),
+            4 => ("type.machine_field_value", "machine"),
+            _ => return Err(INVALID_REFLECTED_OWNER),
+        };
+        self.dynamic_failure_message = Some(
+            format!("{caller}: expected {expected} value for '{owner_name}', got {actual}")
+                .into_bytes(),
+        );
+        Err(INVALID_REFLECTED_OWNER)
+    }
     fn reflected_field_index(
         &mut self,
         actual: u64,
@@ -5347,6 +5385,30 @@ leaves! {
                 _ => return Err(INVALID_REFLECTED_FIELD),
             };
             s.check_reflected_field_owner(actual, owner, (has_member != 0).then_some(member), layout, mismatch, caller) };
+    ReflectedOwnerPendingCheck, jett_rt_v1_reflected_owner_pending_check, false, (value: u64 => I64, owner: *const u8 => Pointer, owner_length: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| { let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_REFLECTED_OWNER)?;
+            let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_REFLECTED_OWNER)?;
+            if owner_length > isize::MAX as usize || (owner_length != 0 && owner.is_null())
+                || layout_length > isize::MAX as usize || (layout_length != 0 && layout.is_null()) { return Err(INVALID_REFLECTED_OWNER); }
+            let owner = if owner_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(owner, owner_length) } };
+            let layout = if layout_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, layout_length) } };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_REFLECTED_OWNER)?;
+            s.check_reflected_owner_pending(value, owner, layout, kind) };
+    ReflectedFieldMetadataPendingCheck, jett_rt_v1_reflected_field_metadata_pending_check, false, (metadata: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64, kind: u32 => I32), u32 => I32,
+        |s| { let (caller, mismatch) = match kind {
+                1 => ("type.variant_field_value", INVALID_REFLECTED_VARIANT_FIELD),
+                2 => ("type.machine_field_value", INVALID_REFLECTED_MACHINE_FIELD),
+                _ => return Err(INVALID_REFLECTED_FIELD),
+            };
+            let length = usize::try_from(layout_length).map_err(|_| mismatch)?;
+            if length > isize::MAX as usize || (length != 0 && layout.is_null()) { return Err(mismatch); }
+            let layout = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, length) } };
+            if let Some(message) = s.pending_type_field_message(metadata, layout, caller).map_err(|_| mismatch)? {
+                s.dynamic_failure_message = Some(message.into_bytes());
+                Err(mismatch)
+            } else {
+                Ok(0)
+            } };
     TypeInfoMatches, jett_rt_v1_type_info_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }

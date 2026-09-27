@@ -1338,3 +1338,12 @@ reflection. Unjoined `TypeField` values fail with the interpreter's diagnostic
 for struct, enum, and machine field reads and `type.construct_put`;
 unjoined `TypeVariant` and `TypeMachineState` values return the corresponding
 builder-start error. Linked differential fixtures exercise all of these paths.
+
+Native reflected variant/state selection and struct, bitfield, enum, and machine
+field reads now reject pending source values with the interpreter's full value
+diagnostic when their checked debug layout is available. Secret-bearing pending
+owners still use a conservative native error pending the secret-debug policy.
+Field-read validation preserves metadata-before-value precedence;
+for enum and machine payloads, a pending source value precedes a foreign field
+owner error. Differential fixtures include state-qualified machines, foreign
+fields, and both pending metadata and a pending source value.

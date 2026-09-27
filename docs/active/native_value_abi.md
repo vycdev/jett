@@ -715,6 +715,13 @@ its owner or selecting a checked field. The construction leaves do the same
 for `construct_put` and reject pending `TypeVariant` or `TypeMachineState`
 builder-start metadata. Source-derived debug layouts format these errors with
 the interpreter's full pending value while retaining borrowed metadata.
+The selection and field-read leaves also reject pending source enum, machine,
+struct, and bitfield records before returning reflected data. For payload
+fields, a pending `TypeField` is diagnosed first, then a pending source value,
+then an owner mismatch; struct field reads retain their checked field/type
+validation before checking the source value. Secret-bearing owners have no
+debug layout, so a pending one fails without formatting its payload while the
+secret-debug policy remains open.
 Static machine layout, state, and transition reflection materializes checked
 metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;

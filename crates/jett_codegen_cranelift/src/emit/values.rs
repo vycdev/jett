@@ -1591,6 +1591,54 @@ impl Translator<'_, '_> {
         Ok(())
     }
 
+    fn check_reflected_owner_pending(
+        &mut self,
+        value: Value,
+        owner_type: TypeId,
+        owner_name: &str,
+        kind: i64,
+    ) -> Result<(), CodegenError> {
+        let (name_pointer, name_length) = self.static_bytes(owner_name)?;
+        // Secret-bearing owners deliberately have no debug layout. Their
+        // ordinary reflected operations still compile; a pending owner is
+        // rejected by the runtime without exposing its secret payload.
+        let layout = super::debug::debug_layout(self.types, owner_type).unwrap_or_default();
+        let (layout_pointer, layout_length) = self.static_data(&layout)?;
+        let kind = self.builder.ins().iconst(ir::types::I32, kind);
+        self.leaf(
+            NativeLeaf::ReflectedOwnerPendingCheck,
+            &[
+                value,
+                name_pointer,
+                name_length,
+                layout_pointer,
+                layout_length,
+                kind,
+            ],
+            true,
+        )?;
+        Ok(())
+    }
+
+    fn check_reflected_field_metadata_pending(
+        &mut self,
+        metadata: Value,
+        metadata_type: TypeId,
+        kind: i64,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let layout = super::debug::debug_layout(self.types, metadata_type)
+            .ok_or_else(|| self.unsupported(span, "reflected field metadata debug layout"))?;
+        let (layout_pointer, layout_length) = self.static_data(&layout)?;
+        let kind = self.builder.ins().iconst(ir::types::I32, kind);
+        self.leaf(
+            NativeLeaf::ReflectedFieldMetadataPendingCheck,
+            &[metadata, layout_pointer, layout_length, kind],
+            true,
+        )?;
+        Ok(())
+    }
+
     fn reflected_field_value(
         &mut self,
         owner: Value,
@@ -1832,6 +1880,15 @@ impl Translator<'_, '_> {
             IntrinsicId::TypeVariantValue | IntrinsicId::TypeMachineStateValue
         ) {
             let value = self.scalar(evaluated[0], span)?;
+            let owner = reflection_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked reflected owner"))?;
+            self.check_reflected_owner_pending(
+                value,
+                args[0].ty,
+                &owner.type_name,
+                i64::from(id == IntrinsicId::TypeMachineStateValue),
+            )?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let tag = self.leaf(NativeLeaf::StructField, &[value, zero], true)?;
             let mut selected = self.scalar(evaluated[1], span)?;
@@ -1909,6 +1966,7 @@ impl Translator<'_, '_> {
                 true,
             )?;
             let owner = self.scalar(evaluated[0], span)?;
+            self.check_reflected_owner_pending(owner, args[0].ty, &owner_name, 2)?;
             return self.reflected_field_value(owner, checked_index, result_type, span);
         }
         if matches!(
@@ -1976,6 +2034,21 @@ impl Translator<'_, '_> {
             } else {
                 1
             };
+            self.check_reflected_field_metadata_pending(metadata, args[1].ty, kind, span)?;
+            let reflected_owner_name = &reflection_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked reflected payload owner"))?
+                .type_name;
+            self.check_reflected_owner_pending(
+                owner,
+                args[0].ty,
+                reflected_owner_name,
+                if id == IntrinsicId::TypeMachineFieldValue {
+                    4
+                } else {
+                    3
+                },
+            )?;
             self.check_reflected_field_owner(
                 metadata,
                 args[1].ty,

@@ -1,0 +1,15 @@
+namespace app
+machine Session:
+    states:
+        active(name: string)
+    transitions:
+        active to active
+function main() returns nothing:
+    Session session = Session(active, "Ada")
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    Session pending_session = run Session(active, "Lin")
+    string copied = type.machine_field_value[Session, string](view pending_session, view field)
+    println(copied)
+    return nothing

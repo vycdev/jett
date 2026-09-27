@@ -1,0 +1,10 @@
+namespace app
+bitfield Header:
+    version: 4 bits
+function main() returns nothing:
+    Header header = run Header(version: 3)
+    TypeField field = list.get[TypeField](type.fields[Header](), 0) handle:
+        return nothing
+    int64 copied = type.field_value[Header, int64](view header, view field)
+    println(copied)
+    return nothing

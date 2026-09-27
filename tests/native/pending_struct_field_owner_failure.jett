@@ -1,0 +1,10 @@
+namespace app
+struct Record:
+    name: string
+function main() returns nothing:
+    Record record = run Record(name: "Ada")
+    TypeField field = list.get[TypeField](type.fields[Record](), 0) handle:
+        return nothing
+    string copied = type.field_value[Record, string](view record, view field)
+    println(copied)
+    return nothing
