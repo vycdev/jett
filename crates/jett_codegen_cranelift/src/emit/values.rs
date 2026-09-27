@@ -425,6 +425,15 @@ impl Translator<'_, '_> {
         value: LoweredValue,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
+        if let LoweredValue::ScalarTask(bits, depth) = value {
+            let (bits, _) = self.payload_bits(LoweredValue::Scalar(bits));
+            let tag = self
+                .builder
+                .ins()
+                .iconst(ir::types::I32, i64::from(success));
+            let sum = self.leaf(NativeLeaf::SumNewScalarTask, &[tag, bits, depth], true)?;
+            return self.own_linear(sum);
+        }
         let (bits, owned) = self.payload_bits(value);
         let tag = self
             .builder
@@ -441,7 +450,7 @@ impl Translator<'_, '_> {
     pub(super) fn payload_bits(&mut self, value: LoweredValue) -> (Value, bool) {
         match value {
             LoweredValue::Owned(v, _) => (v, true),
-            LoweredValue::Scalar(v) => {
+            LoweredValue::Scalar(v) | LoweredValue::ScalarTask(v, _) => {
                 let ty = self.builder.func.dfg.value_type(v);
                 let bits = if ty == ir::types::F64 {
                     self.builder

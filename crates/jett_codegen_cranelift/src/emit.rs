@@ -496,12 +496,28 @@ fn signature(
     for parameter in function.params.iter().skip(function.capture_count) {
         if let Some(ty) = clif_type(types, parameter.ty, "function parameter")? {
             signature.params.push(AbiParam::new(ty));
+            if is_task_scalar(types, parameter.ty)? {
+                signature.params.push(AbiParam::new(ir::types::I64));
+            }
         }
     }
     if let Some(ty) = clif_type(types, function.return_type, "function return")? {
         signature.returns.push(AbiParam::new(ty));
+        if is_task_scalar(types, function.return_type)? {
+            signature.returns.push(AbiParam::new(ir::types::I64));
+        }
     }
     Ok(signature)
+}
+
+fn is_task_scalar(types: &TypeInterner, ty: TypeId) -> Result<bool, CodegenError> {
+    Ok(matches!(
+        scalar_kind(types, ty, "primitive task value")?,
+        ScalarKind::SignedInteger(_)
+            | ScalarKind::UnsignedInteger(_)
+            | ScalarKind::Float(_)
+            | ScalarKind::Bool
+    ))
 }
 
 fn clif_type(
@@ -668,9 +684,15 @@ fn translate_function(
     let failure_block = builder.create_block();
 
     let mut variables = Vec::with_capacity(function.locals.len());
+    let mut pending_variables = Vec::with_capacity(function.locals.len());
     for local in &function.locals {
         variables
             .push(clif_type(types, local.ty, "function local")?.map(|ty| builder.declare_var(ty)));
+        pending_variables.push(if is_task_scalar(types, local.ty)? {
+            Some(builder.declare_var(ir::types::I64))
+        } else {
+            None
+        });
     }
 
     let control_flow = ControlFlowGraph::analyze(function).map_err(|errors| {
@@ -724,6 +746,7 @@ fn translate_function(
             declarations,
             blocks: &blocks,
             variables: &variables,
+            pending_variables: &pending_variables,
             runtime_context,
             environment_variable,
             actor_state_range,
@@ -765,7 +788,7 @@ fn translate_function(
                 let Some(variable) = variable else {
                     continue;
                 };
-                let value = if index < function.capture_count {
+                let (value, pending_depth) = if index < function.capture_count {
                     let field = translator
                         .builder
                         .ins()
@@ -780,7 +803,7 @@ fn translate_function(
                                 "nothing capture has no native value",
                             )
                         })?;
-                    if native == ir::types::F64 {
+                    let value = if native == ir::types::F64 {
                         translator
                             .builder
                             .ins()
@@ -795,13 +818,45 @@ fn translate_function(
                         translator.builder.ins().ireduce(native, bits)
                     } else {
                         bits
-                    }
+                    };
+                    let pending_depth = if pending_variables[parameter.local.index() as usize]
+                        .is_some()
+                        && actor_state_range.is_none()
+                    {
+                        let depth_index = function.capture_count + index;
+                        let depth_field = translator
+                            .builder
+                            .ins()
+                            .iconst(ir::types::I64, depth_index as i64);
+                        translator.leaf(
+                            NativeLeaf::StructField,
+                            &[environment, depth_field],
+                            true,
+                        )?
+                    } else {
+                        translator.builder.ins().iconst(ir::types::I64, 0)
+                    };
+                    (value, pending_depth)
                 } else {
                     let value = incoming.get(incoming_index).copied().ok_or_else(|| {
                         contract_error(symbol, parameter.span, "missing native function parameter")
                     })?;
                     incoming_index += 1;
-                    value
+                    let pending_depth =
+                        if pending_variables[parameter.local.index() as usize].is_some() {
+                            let depth = incoming.get(incoming_index).copied().ok_or_else(|| {
+                                contract_error(
+                                    symbol,
+                                    parameter.span,
+                                    "missing native primitive pending depth",
+                                )
+                            })?;
+                            incoming_index += 1;
+                            depth
+                        } else {
+                            translator.builder.ins().iconst(ir::types::I64, 0)
+                        };
+                    (value, pending_depth)
                 };
                 translator
                     .builder
@@ -813,6 +868,19 @@ fn translate_function(
                             format!("cannot bind native function parameter: {error}"),
                         )
                     })?;
+                if let Some(pending_variable) = pending_variables[parameter.local.index() as usize]
+                {
+                    translator
+                        .builder
+                        .try_def_var(pending_variable, pending_depth)
+                        .map_err(|error| {
+                            contract_error(
+                                symbol,
+                                parameter.span,
+                                format!("cannot bind primitive pending depth: {error}"),
+                            )
+                        })?;
+                }
             }
             for parameter in &function.params {
                 if let Some(slot) = local_slots[parameter.local.index() as usize] {
@@ -856,6 +924,7 @@ fn translate_function(
         declarations,
         blocks: &blocks,
         variables: &variables,
+        pending_variables: &pending_variables,
         runtime_context,
         environment_variable,
         actor_state_range,
@@ -872,12 +941,15 @@ fn translate_function(
         failure_block,
     };
     translator.drop_all()?;
-    let results = match clif_type(types, function.return_type, "failure return")? {
+    let mut results = match clif_type(types, function.return_type, "failure return")? {
         None => vec![],
         Some(ir::types::F32) => vec![translator.builder.ins().f32const(0.0)],
         Some(ir::types::F64) => vec![translator.builder.ins().f64const(0.0)],
         Some(t) => vec![translator.builder.ins().iconst(t, 0)],
     };
+    if is_task_scalar(types, function.return_type)? {
+        results.push(translator.builder.ins().iconst(ir::types::I64, 0));
+    }
     translator.builder.ins().return_(&results);
     builder.seal_all_blocks();
     builder.finalize();
@@ -887,6 +959,7 @@ fn translate_function(
 #[derive(Clone, Copy)]
 enum LoweredValue {
     Scalar(Value),
+    ScalarTask(Value, Value),
     Owned(Value, ir::StackSlot),
 }
 
@@ -896,6 +969,7 @@ struct Translator<'a, 'builder> {
     declarations: &'a DeclaredFunctions,
     blocks: &'a [ir::Block],
     variables: &'a [Option<Variable>],
+    pending_variables: &'a [Option<Variable>],
     runtime_context: Variable,
     environment_variable: Variable,
     actor_state_range: Option<(usize, usize)>,
@@ -1035,10 +1109,16 @@ impl Translator<'_, '_> {
                     .builder
                     .ins()
                     .iconst(ir::types::I32, i64::from(*success));
+                let depth = self.leaf(NativeLeaf::SumPayloadPendingDepth, &[v], true)?;
                 let bits = self.leaf(NativeLeaf::SumTake, &[v, tag], true)?;
                 self.clear_slot(slot);
                 let ty = self.local_types[target.index() as usize].ty;
                 let value = self.unpack_payload(bits, ty, statement.span)?;
+                let value = if is_task_scalar(self.types, ty)? {
+                    LoweredValue::ScalarTask(self.scalar(value, statement.span)?, depth)
+                } else {
+                    value
+                };
                 self.define_local(*target, value, statement.span)
             }
 
@@ -1157,11 +1237,20 @@ impl Translator<'_, '_> {
             let (label_pointer, label_length) = self.static_bytes(&label)?;
             if let Some(kind) = kind {
                 let kind = self.builder.ins().iconst(ir::types::I32, i64::from(kind));
-                self.leaf(
-                    NativeLeaf::DebugAppend,
-                    &[text, label_pointer, label_length, bits, kind],
-                    true,
-                )?;
+                if let Some(pending_variable) = self.pending_variables[binding.index() as usize] {
+                    let depth = self.builder.use_var(pending_variable);
+                    self.leaf(
+                        NativeLeaf::DebugAppendPendingScalar,
+                        &[text, label_pointer, label_length, bits, kind, depth],
+                        true,
+                    )?;
+                } else {
+                    self.leaf(
+                        NativeLeaf::DebugAppend,
+                        &[text, label_pointer, label_length, bits, kind],
+                        true,
+                    )?;
+                }
             } else {
                 let layout = debug::debug_layout(self.types, local.ty)
                     .ok_or_else(|| self.unsupported(span, "aggregate debug value"))?;
@@ -1241,12 +1330,22 @@ impl Translator<'_, '_> {
             self.clear_slot(slot);
             result = LoweredValue::Scalar(v);
         }
+        let primitive_return = match value {
+            Some(expression) => is_task_scalar(self.types, expression.ty)?,
+            None => false,
+        };
+        let primitive = if primitive_return {
+            Some(self.scalar_task(result, span)?)
+        } else {
+            None
+        };
         self.flush_actor_state(span)?;
         self.drop_all()?;
-        match result {
-            LoweredValue::Scalar(v) | LoweredValue::Owned(v, _) => {
-                self.builder.ins().return_(&[v]);
-            }
+        if let Some((bits, depth)) = primitive {
+            self.builder.ins().return_(&[bits, depth]);
+        } else {
+            let value = self.scalar(result, span)?;
+            self.builder.ins().return_(&[value]);
         }
         Ok(())
     }
@@ -1449,16 +1548,33 @@ impl Translator<'_, '_> {
                         format!("cannot read native local: {error}"),
                     )
                 })?;
-                Ok(LoweredValue::Scalar(value))
+                if let Some(pending_variable) = self.pending_variables[local.index() as usize] {
+                    let depth = self
+                        .builder
+                        .try_use_var(pending_variable)
+                        .map_err(|error| {
+                            contract_error(
+                                self.symbol,
+                                expression.span,
+                                format!("cannot read primitive pending depth: {error}"),
+                            )
+                        })?;
+                    Ok(LoweredValue::ScalarTask(value, depth))
+                } else {
+                    Ok(LoweredValue::Scalar(value))
+                }
             }
             ExpressionKind::FunctionRef(function) => {
                 self.function_descriptor(*function, None, expression.span)
             }
             ExpressionKind::ClosureRef { function, captures } => {
-                let count = self
-                    .builder
-                    .ins()
-                    .iconst(ir::types::I64, captures.len() as i64);
+                let field_count = captures.len().checked_mul(2).ok_or_else(|| {
+                    contract_error(self.symbol, expression.span, "too many closure captures")
+                })?;
+                let field_count = i64::try_from(field_count).map_err(|_| {
+                    contract_error(self.symbol, expression.span, "too many closure captures")
+                })?;
+                let count = self.builder.ins().iconst(ir::types::I64, field_count);
                 let environment = self.leaf(NativeLeaf::StructNew, &[count], true)?;
                 let environment_owned = self.own(environment)?;
                 for (index, capture) in captures.iter().enumerate() {
@@ -1478,12 +1594,27 @@ impl Translator<'_, '_> {
                         ty,
                         span: expression.span,
                     })?;
+                    let depth = if is_task_scalar(self.types, ty)? {
+                        self.scalar_task(captured, expression.span)?.1
+                    } else {
+                        self.builder.ins().iconst(ir::types::I64, 0)
+                    };
                     let (bits, owned) = self.payload_bits(captured);
-                    let index = self.builder.ins().iconst(ir::types::I64, index as i64);
+                    let field_index = self.builder.ins().iconst(ir::types::I64, index as i64);
                     let owned_flag = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
                     self.leaf(
                         NativeLeaf::StructInit,
-                        &[environment, index, bits, owned_flag],
+                        &[environment, field_index, bits, owned_flag],
+                        true,
+                    )?;
+                    let depth_index = self
+                        .builder
+                        .ins()
+                        .iconst(ir::types::I64, (captures.len() + index) as i64);
+                    let false_flag = self.builder.ins().iconst(ir::types::I32, 0);
+                    self.leaf(
+                        NativeLeaf::StructInit,
+                        &[environment, depth_index, depth, false_flag],
                         true,
                     )?;
                     if let LoweredValue::Owned(_, slot) = captured {
@@ -1830,6 +1961,10 @@ impl Translator<'_, '_> {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::CapabilityRun, &[source], true)?;
                     Ok(LoweredValue::Scalar(pending))
+                } else if is_task_scalar(self.types, value.ty)? {
+                    let (bits, depth) = self.scalar_task(lowered, value.span)?;
+                    let depth = self.leaf(NativeLeaf::NothingRun, &[depth], true)?;
+                    Ok(LoweredValue::ScalarTask(bits, depth))
                 } else {
                     Ok(lowered)
                 }
@@ -1896,6 +2031,17 @@ impl Translator<'_, '_> {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::CapabilityTaskJoin, &[source], true)?;
                     self.own_linear(joined)
+                } else if is_task_scalar(self.types, value.ty)? {
+                    let (bits, depth) = self.scalar_task(result, value.span)?;
+                    let zero = self.builder.ins().iconst(ir::types::I64, 0);
+                    let empty = self.builder.ins().icmp(IntCC::Equal, depth, zero);
+                    let decreased = self.builder.ins().iadd_imm(depth, -1);
+                    let depth = self.builder.ins().select(empty, zero, decreased);
+                    self.construct_sum_value(
+                        true,
+                        LoweredValue::ScalarTask(bits, depth),
+                        expression.span,
+                    )
                 } else if value.ty == expression.ty {
                     Ok(result)
                 } else {
@@ -2059,8 +2205,15 @@ impl Translator<'_, '_> {
         native_args.push(runtime_context);
         native_args.push(environment);
         for (index, (argument, value)) in args.iter().zip(evaluated).enumerate() {
+            if is_task_scalar(self.types, argument.ty)? {
+                let (bits, depth) = self.scalar_task(value, argument.span)?;
+                native_args.push(bits);
+                native_args.push(depth);
+                continue;
+            }
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
+                LoweredValue::ScalarTask(value, _) => native_args.push(value),
                 LoweredValue::Owned(value, slot) => {
                     if modes[index] == jett_mir::ParamMode::Owned
                         && is_linear(self.types, argument.ty)
@@ -2095,6 +2248,16 @@ impl Translator<'_, '_> {
                 "value-returning call produced no native value",
             )
         })?;
+        if is_task_scalar(self.types, result_type)? {
+            let depth = results.get(1).copied().ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    "primitive call produced no pending depth",
+                )
+            })?;
+            return Ok(LoweredValue::ScalarTask(value, depth));
+        }
         if is_linear(self.types, result_type) {
             self.own_linear(value)
         } else if is_copy_owned(self.types, result_type) {
@@ -2258,8 +2421,15 @@ impl Translator<'_, '_> {
             })?;
         let mut native_args = vec![context, environment];
         for ((argument, value), view) in args.iter().zip(evaluated).zip(&view_params) {
+            if is_task_scalar(self.types, argument.ty)? {
+                let (bits, depth) = self.scalar_task(value, argument.span)?;
+                native_args.push(bits);
+                native_args.push(depth);
+                continue;
+            }
             match value {
                 LoweredValue::Scalar(value) => native_args.push(value),
+                LoweredValue::ScalarTask(value, _) => native_args.push(value),
                 LoweredValue::Owned(value, slot) => {
                     if !view && is_linear(self.types, argument.ty) {
                         self.clear_slot(slot);
@@ -2276,10 +2446,16 @@ impl Translator<'_, '_> {
         for param in params {
             if let Some(ty) = clif_type(self.types, param, "indirect call parameter")? {
                 signature.params.push(AbiParam::new(ty));
+                if is_task_scalar(self.types, param)? {
+                    signature.params.push(AbiParam::new(ir::types::I64));
+                }
             }
         }
         if let Some(ty) = clif_type(self.types, return_type, "indirect call result")? {
             signature.returns.push(AbiParam::new(ty));
+            if is_task_scalar(self.types, return_type)? {
+                signature.returns.push(AbiParam::new(ir::types::I64));
+            }
         }
         let signature = self.builder.import_signature(signature);
         let call = self
@@ -2295,6 +2471,16 @@ impl Translator<'_, '_> {
                 "value-returning indirect call produced no value",
             )
         })?;
+        if is_task_scalar(self.types, expression.ty)? {
+            let depth = results.get(1).copied().ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    expression.span,
+                    "primitive indirect call produced no pending depth",
+                )
+            })?;
+            return Ok(LoweredValue::ScalarTask(value, depth));
+        }
         if is_linear(self.types, expression.ty) {
             self.own_linear(value)
         } else if is_copy_owned(self.types, expression.ty) {
@@ -2600,6 +2786,28 @@ impl Translator<'_, '_> {
             return Ok(());
         }
         let variable = variable_for(self.variables, local.index(), span, self.symbol)?;
+        if let (Some(variable), Some(pending_variable)) =
+            (variable, self.pending_variables[local.index() as usize])
+        {
+            let (bits, depth) = self.scalar_task(value, span)?;
+            self.builder.try_def_var(variable, bits).map_err(|error| {
+                contract_error(
+                    self.symbol,
+                    span,
+                    format!("cannot define primitive native local: {error}"),
+                )
+            })?;
+            return self
+                .builder
+                .try_def_var(pending_variable, depth)
+                .map_err(|error| {
+                    contract_error(
+                        self.symbol,
+                        span,
+                        format!("cannot define primitive pending depth: {error}"),
+                    )
+                });
+        }
         match (variable, value) {
             (Some(variable), LoweredValue::Scalar(value)) => {
                 self.builder.try_def_var(variable, value).map_err(|error| {
@@ -2634,7 +2842,24 @@ impl Translator<'_, '_> {
 
     fn scalar(&self, value: LoweredValue, _span: Span) -> Result<Value, CodegenError> {
         match value {
-            LoweredValue::Scalar(value) | LoweredValue::Owned(value, _) => Ok(value),
+            LoweredValue::Scalar(value)
+            | LoweredValue::ScalarTask(value, _)
+            | LoweredValue::Owned(value, _) => Ok(value),
+        }
+    }
+
+    fn scalar_task(
+        &mut self,
+        value: LoweredValue,
+        span: Span,
+    ) -> Result<(Value, Value), CodegenError> {
+        match value {
+            LoweredValue::ScalarTask(bits, depth) => Ok((bits, depth)),
+            LoweredValue::Scalar(bits) => {
+                let depth = self.builder.ins().iconst(ir::types::I64, 0);
+                Ok((bits, depth))
+            }
+            LoweredValue::Owned(_, _) => Err(self.unsupported(span, "owned primitive task")),
         }
     }
 
@@ -2928,7 +3153,7 @@ mod tests {
 
     #[test]
     fn emitted_jett_signatures_prepend_runtime_context_and_environment() {
-        let (program, _types, module, declarations) = declared_program(
+        let (program, types, module, declarations) = declared_program(
             r#"namespace app
 function leaf(value: int64, enabled: bool) returns int64:
     if enabled:
@@ -2942,10 +3167,16 @@ function root() returns int64:
 
         for declaration in declarations.iter() {
             let function = program_function(&program, declaration.mir_id).expect("MIR function");
+            let pending_parameters = function
+                .params
+                .iter()
+                .skip(function.capture_count)
+                .filter(|parameter| is_task_scalar(&types, parameter.ty).unwrap())
+                .count();
             assert_eq!(
                 declaration.signature.params.len(),
-                function.params.len() - function.capture_count + 2,
-                "{} must gain context and environment parameters",
+                function.params.len() - function.capture_count + pending_parameters + 2,
+                "{} must gain context, environment, and primitive depth parameters",
                 function.identity.declaration.name
             );
             assert_eq!(
@@ -2992,11 +3223,11 @@ function caller(value: int64, choose_original: bool) returns int64:
         let calls = direct_call_arguments(&function);
 
         assert_eq!(calls.len(), 4, "two Jett calls and two failure checks");
-        assert_eq!(calls.iter().filter(|args| args.len() == 3).count(), 2);
+        assert_eq!(calls.iter().filter(|args| args.len() == 4).count(), 2);
         for arguments in calls {
             assert!(
-                matches!(arguments.len(), 1 | 3),
-                "status receives context; Jett call also receives environment and source argument"
+                matches!(arguments.len(), 1 | 4),
+                "status receives context; Jett call also receives environment, scalar bits, and depth"
             );
             assert_eq!(
                 function.dfg.resolve_aliases(arguments[0]),

@@ -305,14 +305,20 @@ measured pass/denominator gates.
 | JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections including sets of primitive-backed elements, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32`, `uint16`/`uint32`, and `float32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of primitive-backed hashable types, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections including lists/maps of enums and enum payload structs, result branches, errors, and owned cleanup; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | primitive, capability, function, actor, `TypeConstruction`, and recursive list, set, map, optional, result, struct, bitfield, enum, and machine values trace; zero- and multi-binding breakpoints over those types; default and interpolated custom-message `assert` in test bodies; other special debug values pending | native debug lines match interpreter stderr for scalar and aggregate fixtures, including empty and recursive values, bitfield numeric/enum/payload fields, false conditions, Unicode strings, bytes, `nothing`, plain/pending capabilities, and an out-of-scope local; named, inline, captured, and comptime callbacks inside aggregates, with subsequent calls and failure cleanup; actor ordinals and partially filled struct, bitfield, enum, and machine builders match; custom assertion codegen, context-owned error text, launcher copy-out, and passing verify/property suites have separate tests; secret-bearing debug output and cross-function breakpoint binding scope pending |
 
+Numeric and boolean task values now retain pending depth through native locals,
+direct and indirect function calls, closure captures, and result payloads.
+Linked differential coverage spans `int64`, `uint64`, `float32`, `float64`, and
+`bool`, including nested joins and cloned results. Pending scalar values inside
+general records or collections, scalar operations while still pending, and
+actor/Graphics state remain open, so the coarse coverage estimate stays 80%.
+
 Capability task handles preserve pending nesting independently of the original
 authority token. Joining a task restores the authority needed by the capability
 operation; joining plain Stdout follows the interpreter's current cancellation
 result. Stdout, Clock, and Random debug values use the interpreter's current
 `nothing` representation, while Environment and Graphics retain their named
-capability representation. This closes a handle-shaped task gap, but primitive
-scalar tasks still need a general pending representation. The coarse language
-coverage estimate remains about 80%.
+capability representation. This closes a handle-shaped task gap while the
+remaining task semantics above stay open.
 
 Actor handler capability and state snapshots are explicit leading HIR/MIR
 parameters, and `respond` participates in native ownership analysis. Checked

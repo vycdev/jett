@@ -369,6 +369,7 @@ struct NativeSum {
     bits: u64,
     owned: bool,
     pending_depth: u64,
+    payload_pending_depth: u64,
 }
 struct NativeBitfieldLayout {
     name: String,
@@ -649,10 +650,11 @@ impl NativeDebugLayout {
                 let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
                 let text = match sum.tag {
                     SUM_FAILURE => "none".to_owned(),
-                    SUM_SUCCESS => format!(
-                        "some({})",
-                        self.format_value(values, sum.bits, *element, child)?
-                    ),
+                    SUM_SUCCESS => {
+                        let payload = self.format_value(values, sum.bits, *element, child)?;
+                        let payload = format_pending_value(&payload, sum.payload_pending_depth)?;
+                        format!("some({payload})")
+                    }
                     _ => return Err(INVALID_SUM),
                 };
                 format_pending_value(&text, sum.pending_depth)?
@@ -660,12 +662,15 @@ impl NativeDebugLayout {
             NativeDebugNode::Result(ok, error) => {
                 let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
                 let text = match sum.tag {
-                    SUM_FAILURE => format!(
-                        "fail({})",
-                        self.format_value(values, sum.bits, *error, child)?
-                    ),
+                    SUM_FAILURE => {
+                        let payload = self.format_value(values, sum.bits, *error, child)?;
+                        let payload = format_pending_value(&payload, sum.payload_pending_depth)?;
+                        format!("fail({payload})")
+                    }
                     SUM_SUCCESS => {
-                        format!("ok({})", self.format_value(values, sum.bits, *ok, child)?)
+                        let payload = self.format_value(values, sum.bits, *ok, child)?;
+                        let payload = format_pending_value(&payload, sum.payload_pending_depth)?;
+                        format!("ok({payload})")
                     }
                     _ => return Err(INVALID_SUM),
                 };
@@ -831,7 +836,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Optional(element) => {
                 let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
                 let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
-                if left.pending_depth != right.pending_depth {
+                if left.pending_depth != right.pending_depth
+                    || left.payload_pending_depth != right.payload_pending_depth
+                {
                     return Ok(false);
                 }
                 if left.tag != right.tag {
@@ -848,7 +855,9 @@ impl NativeDebugLayout {
             NativeDebugNode::Result(ok, error) => {
                 let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
                 let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
-                if left.pending_depth != right.pending_depth {
+                if left.pending_depth != right.pending_depth
+                    || left.payload_pending_depth != right.payload_pending_depth
+                {
                     return Ok(false);
                 }
                 if left.tag != right.tag {
@@ -1460,6 +1469,21 @@ impl NativeValues {
         text.push_str(&value);
         Ok(0)
     }
+    fn debug_append_pending_scalar(
+        &mut self,
+        builder: u64,
+        label: &str,
+        bits: u64,
+        kind: u32,
+        depth: u64,
+    ) -> LeafResult<u32> {
+        let value = self.debug_value(bits, kind)?;
+        let value = format_pending_value(&value, depth)?;
+        let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
+        text.push_str(label);
+        text.push_str(&value);
+        Ok(0)
+    }
     fn debug_append_aggregate(
         &mut self,
         builder: u64,
@@ -1659,6 +1683,7 @@ impl NativeValues {
                 bits,
                 owned,
                 pending_depth: 0,
+                payload_pending_depth: 0,
             },
         );
         self.sums_created += 1;
@@ -3801,12 +3826,19 @@ impl NativeValues {
             return self.clone_map(id);
         }
         if let Some(sum) = self.sums.get(&id) {
-            let (tag, bits, owned, pending_depth) =
-                (sum.tag, sum.bits, sum.owned, sum.pending_depth);
+            let (tag, bits, owned, pending_depth, payload_pending_depth) = (
+                sum.tag,
+                sum.bits,
+                sum.owned,
+                sum.pending_depth,
+                sum.payload_pending_depth,
+            );
             let bits = if owned { self.clone_value(bits)? } else { bits };
             return match self.sum(tag, bits, owned) {
                 Ok(id) => {
-                    self.sums.get_mut(&id).ok_or(INVALID_SUM)?.pending_depth = pending_depth;
+                    let copy = self.sums.get_mut(&id).ok_or(INVALID_SUM)?;
+                    copy.pending_depth = pending_depth;
+                    copy.payload_pending_depth = payload_pending_depth;
                     Ok(id)
                 }
                 Err(error) => {
@@ -4584,8 +4616,14 @@ leaves! {
 
     SumNew, jett_rt_v1_sum_new, false, (tag: u32 => I32, bits: u64 => I64, owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_SUM); } s.sum(tag, bits, owned != 0) };
+    SumNewScalarTask, jett_rt_v1_sum_new_scalar_task, false, (tag: u32 => I32, bits: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| { let id = s.sum(tag, bits, false)?;
+            s.sums.get_mut(&id).ok_or(INVALID_SUM)?.payload_pending_depth = depth;
+            Ok(id) };
     SumTag, jett_rt_v1_sum_tag, false, (value: u64 => I64), u32 => I32,
         |s| s.sums.get(&value).map(|v| v.tag).ok_or(INVALID_SUM);
+    SumPayloadPendingDepth, jett_rt_v1_sum_payload_pending_depth, false, (value: u64 => I64), u64 => I64,
+        |s| s.sums.get(&value).map(|v| v.payload_pending_depth).ok_or(INVALID_SUM);
     SumTake, jett_rt_v1_sum_take, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
         |s| { if s.sums.get(&value).is_none_or(|v| v.tag != tag) { return Err(INVALID_SUM); }
             let sum = s.sums.remove(&value).ok_or(INVALID_SUM)?;
@@ -5001,6 +5039,13 @@ leaves! {
             let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, length) };
             let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
             s.debug_append(builder, label, bits, kind) };
+    DebugAppendPendingScalar, jett_rt_v1_debug_append_pending_scalar, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, kind: u32 => I32, depth: u64 => I64), u32 => I32,
+        |s| { if label_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
+            let length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;
+            if length > isize::MAX as usize { return Err(INVALID_TRACE_LABEL); }
+            let label = unsafe { std::slice::from_raw_parts(label_pointer as *const u8, length) };
+            let label = std::str::from_utf8(label).map_err(|_| INVALID_TRACE_LABEL)?;
+            s.debug_append_pending_scalar(builder, label, bits, kind, depth) };
     DebugAppendAggregate, jett_rt_v1_debug_append_aggregate, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
         |s| { if label_pointer == 0 || layout_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
             let label_length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;

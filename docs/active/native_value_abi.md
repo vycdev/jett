@@ -74,6 +74,18 @@ interpreter: `cancel` yields plain `nothing` without changing the pending
 operand. They do not establish asynchronous scheduling or cancellation
 checkpoints.
 
+Numeric and boolean values now carry a separate u64 pending depth alongside
+their existing width-correct bits in native locals and Jett function signatures.
+Direct and indirect calls, returns, and ordinary closure captures forward both
+parts. Sequential `run` increments depth with the checked unit-task leaf;
+`join` removes one level and places any remaining depth beside the scalar
+payload in its result handle. Taking a result restores both parts, including
+after cloning the result. Directly primitive-typed trace and breakpoint
+bindings format the nested pending wrappers. Graphics callbacks supply the
+depth component required by the same function ABI. Pending scalar fields in
+general records and collections, scalar operations on still-pending values,
+and actor/Graphics state propagation need further parity work.
+
 Owned native strings also carry a pending depth in the runtime registry.
 `StringRun` and `StringTaskJoin` create independent handles, so wrapping a
 cloned string does not change its aliases. Trace, aggregate debug output,

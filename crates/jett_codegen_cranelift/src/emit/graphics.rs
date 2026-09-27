@@ -49,6 +49,10 @@ impl Translator<'_, '_> {
                 native_args.push(argument.ok_or_else(|| {
                     contract_error(self.symbol, span, "Graphics callback value is absent")
                 })?);
+                if is_task_scalar(self.types, *parameter)? {
+                    signature.params.push(AbiParam::new(ir::types::I64));
+                    native_args.push(self.builder.ins().iconst(ir::types::I64, 0));
+                }
             } else if argument.is_some() {
                 return Err(contract_error(
                     self.symbol,
@@ -59,6 +63,9 @@ impl Translator<'_, '_> {
         }
         if let Some(ty) = clif_type(self.types, result_type, "Graphics callback result")? {
             signature.returns.push(AbiParam::new(ty));
+            if is_task_scalar(self.types, result_type)? {
+                signature.returns.push(AbiParam::new(ir::types::I64));
+            }
         }
         let signature = self.builder.import_signature(signature);
         for &slot in transfers {
@@ -73,6 +80,16 @@ impl Translator<'_, '_> {
         let value = results.first().copied().ok_or_else(|| {
             contract_error(self.symbol, span, "Graphics callback produced no value")
         })?;
+        if is_task_scalar(self.types, result_type)? {
+            let depth = results.get(1).copied().ok_or_else(|| {
+                contract_error(
+                    self.symbol,
+                    span,
+                    "Graphics callback produced no pending depth",
+                )
+            })?;
+            return Ok(LoweredValue::ScalarTask(value, depth));
+        }
         if is_linear(self.types, result_type) {
             self.own_linear(value)
         } else if is_copy_owned(self.types, result_type) {
