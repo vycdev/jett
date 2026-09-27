@@ -87,8 +87,16 @@ impl Translator<'_, '_> {
             let value = self.expression(&fields[index])?;
             let (bits, owned) = self.payload_bits(value);
             let index = self.builder.ins().iconst(ir::types::I64, index as i64);
-            let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
-            self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
+            if let LoweredValue::ScalarTask(_, depth) = value {
+                self.leaf(
+                    NativeLeaf::StructInitScalarTask,
+                    &[handle, index, bits, depth],
+                    true,
+                )?;
+            } else {
+                let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+                self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
+            }
             if let LoweredValue::Owned(_, slot) = value {
                 self.clear_slot(slot);
             }
@@ -185,8 +193,16 @@ impl Translator<'_, '_> {
             let value = self.expression(&payloads[field])?;
             let (bits, owned) = self.payload_bits(value);
             let index = self.builder.ins().iconst(ir::types::I64, field as i64 + 1);
-            let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
-            self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
+            if let LoweredValue::ScalarTask(_, depth) = value {
+                self.leaf(
+                    NativeLeaf::StructInitScalarTask,
+                    &[handle, index, bits, depth],
+                    true,
+                )?;
+            } else {
+                let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+                self.leaf(NativeLeaf::StructInit, &[handle, index, bits, owned], true)?;
+            }
             if let LoweredValue::Owned(_, slot) = value {
                 self.clear_slot(slot);
             }
@@ -404,7 +420,13 @@ impl Translator<'_, '_> {
         } else {
             bits
         };
-        self.unpack_payload(bits, ty, span)
+        let value = self.unpack_payload(bits, ty, span)?;
+        if is_task_scalar(self.types, ty)? {
+            let depth = self.leaf(NativeLeaf::StructFieldPendingDepth, &[parent, index], true)?;
+            Ok(LoweredValue::ScalarTask(self.scalar(value, span)?, depth))
+        } else {
+            Ok(value)
+        }
     }
     pub(super) fn construct_sum(
         &mut self,
@@ -515,7 +537,15 @@ impl Translator<'_, '_> {
     ) -> Result<(), CodegenError> {
         let handle = self.scalar(list, span)?;
         let (bits, _) = self.payload_bits(value);
-        self.leaf(NativeLeaf::ListAppend, &[handle, bits], true)?;
+        if let LoweredValue::ScalarTask(_, depth) = value {
+            self.leaf(
+                NativeLeaf::ListAppendScalarTask,
+                &[handle, bits, depth],
+                true,
+            )?;
+        } else {
+            self.leaf(NativeLeaf::ListAppend, &[handle, bits], true)?;
+        }
         if let LoweredValue::Owned(_, slot) = value {
             self.clear_slot(slot);
         }
@@ -718,7 +748,15 @@ impl Translator<'_, '_> {
                 };
                 let index = self.scalar(values[1], span)?;
                 let (bits, _) = self.payload_bits(values[2]);
-                let inserted = self.leaf(NativeLeaf::ListInsertAt, &[list, index, bits], true)?;
+                let inserted = if let LoweredValue::ScalarTask(_, depth) = values[2] {
+                    self.leaf(
+                        NativeLeaf::ListInsertAtScalarTask,
+                        &[list, index, bits, depth],
+                        true,
+                    )?
+                } else {
+                    self.leaf(NativeLeaf::ListInsertAt, &[list, index, bits], true)?
+                };
                 self.clear_slot(list_slot);
                 if let LoweredValue::Owned(_, value_slot) = values[2] {
                     self.clear_slot(value_slot);

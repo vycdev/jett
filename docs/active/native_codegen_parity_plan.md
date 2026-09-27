@@ -308,9 +308,11 @@ measured pass/denominator gates.
 Numeric and boolean task values now retain pending depth through native locals,
 direct and indirect function calls, closure captures, and result payloads.
 Linked differential coverage spans `int64`, `uint64`, `float32`, `float64`, and
-`bool`, including nested joins and cloned results. Pending scalar values inside
-general records or collections, scalar operations while still pending, and
-actor/Graphics state remain open, so the coarse coverage estimate stays 80%.
+`bool`, including nested joins and cloned results. Scalar pending depth now
+survives struct and enum fields plus primitive list construction, cloning,
+insertion, removal, iteration, access, and sorting. Pending scalar values in
+other collection shapes, scalar operations while still pending, and actor/Graphics
+state remain open, so the coarse coverage estimate stays 80%.
 
 Capability task handles preserve pending nesting independently of the original
 authority token. Joining a task restores the authority needed by the capability

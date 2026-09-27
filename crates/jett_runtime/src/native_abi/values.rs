@@ -314,6 +314,7 @@ impl NativeSortKind {
 struct NativeField {
     bits: u64,
     owned: bool,
+    pending_depth: u64,
 }
 struct NativeStruct {
     fields: Vec<Option<NativeField>>,
@@ -344,6 +345,7 @@ enum BuilderFieldValidation {
 }
 struct NativeList {
     elements: Vec<Option<u64>>,
+    element_pending_depths: HashMap<usize, u64>,
     owned: bool,
     pending_depth: u64,
 }
@@ -601,12 +603,14 @@ impl NativeDebugLayout {
                     if position > 0 {
                         result.push_str(", ");
                     }
-                    result.push_str(&self.format_value(
-                        values,
-                        item.ok_or(INVALID_LIST)?,
-                        *element,
-                        child,
-                    )?);
+                    let value =
+                        self.format_value(values, item.ok_or(INVALID_LIST)?, *element, child)?;
+                    let depth = list
+                        .element_pending_depths
+                        .get(&position)
+                        .copied()
+                        .unwrap_or(0);
+                    result.push_str(&format_pending_value(&value, depth)?);
                 }
                 result.push(')');
                 format_pending_value(&result, list.pending_depth)?
@@ -689,7 +693,8 @@ impl NativeDebugLayout {
                     let field = record.fields[position].ok_or(INVALID_STRUCT)?;
                     result.push_str(field_name);
                     result.push_str(": ");
-                    result.push_str(&self.format_value(values, field.bits, *field_type, child)?);
+                    let value = self.format_value(values, field.bits, *field_type, child)?;
+                    result.push_str(&format_pending_value(&value, field.pending_depth)?);
                 }
                 result.push(')');
                 format_pending_value(&result, record.pending_depth)?
@@ -724,12 +729,8 @@ impl NativeDebugLayout {
                             result.push_str(", ");
                         }
                         let field = record.fields[position + 1].ok_or(INVALID_STRUCT)?;
-                        result.push_str(&self.format_value(
-                            values,
-                            field.bits,
-                            *field_type,
-                            child,
-                        )?);
+                        let value = self.format_value(values, field.bits, *field_type, child)?;
+                        result.push_str(&format_pending_value(&value, field.pending_depth)?);
                     }
                     result.push(')');
                 }
@@ -775,14 +776,26 @@ impl NativeDebugLayout {
                 if left.elements.len() != right.elements.len() {
                     return Ok(false);
                 }
-                for (a, b) in left.elements.iter().zip(&right.elements) {
-                    if !self.equal_value(
-                        values,
-                        a.ok_or(INVALID_LIST)?,
-                        b.ok_or(INVALID_LIST)?,
-                        *element,
-                        child,
-                    )? {
+                for (position, (a, b)) in left.elements.iter().zip(&right.elements).enumerate() {
+                    let left_depth = left
+                        .element_pending_depths
+                        .get(&position)
+                        .copied()
+                        .unwrap_or(0);
+                    let right_depth = right
+                        .element_pending_depths
+                        .get(&position)
+                        .copied()
+                        .unwrap_or(0);
+                    if left_depth != right_depth
+                        || !self.equal_value(
+                            values,
+                            a.ok_or(INVALID_LIST)?,
+                            b.ok_or(INVALID_LIST)?,
+                            *element,
+                            child,
+                        )?
+                    {
                         return Ok(false);
                     }
                 }
@@ -880,9 +893,11 @@ impl NativeDebugLayout {
                     return Err(INVALID_STRUCT);
                 }
                 for (position, (_, field_type)) in fields.iter().enumerate() {
-                    let a = left.fields[position].ok_or(INVALID_STRUCT)?.bits;
-                    let b = right.fields[position].ok_or(INVALID_STRUCT)?.bits;
-                    if !self.equal_value(values, a, b, *field_type, child)? {
+                    let a = left.fields[position].ok_or(INVALID_STRUCT)?;
+                    let b = right.fields[position].ok_or(INVALID_STRUCT)?;
+                    if a.pending_depth != b.pending_depth
+                        || !self.equal_value(values, a.bits, b.bits, *field_type, child)?
+                    {
                         return Ok(false);
                     }
                 }
@@ -921,9 +936,11 @@ impl NativeDebugLayout {
                     return Err(INVALID_STRUCT);
                 }
                 for (position, field_type) in fields.iter().enumerate() {
-                    let a = left.fields[position + 1].ok_or(INVALID_STRUCT)?.bits;
-                    let b = right.fields[position + 1].ok_or(INVALID_STRUCT)?.bits;
-                    if !self.equal_value(values, a, b, *field_type, child)? {
+                    let a = left.fields[position + 1].ok_or(INVALID_STRUCT)?;
+                    let b = right.fields[position + 1].ok_or(INVALID_STRUCT)?;
+                    if a.pending_depth != b.pending_depth
+                        || !self.equal_value(values, a.bits, b.bits, *field_type, child)?
+                    {
                         return Ok(false);
                     }
                 }
@@ -1622,17 +1639,23 @@ impl NativeValues {
                 let materialize = (|| -> LeafResult<()> {
                     for (index, field) in fields.into_iter().enumerate() {
                         let value = match field {
-                            DecodedBitfieldField::Plain(bits) => NativeField { bits, owned: false },
+                            DecodedBitfieldField::Plain(bits) => NativeField {
+                                bits,
+                                owned: false,
+                                pending_depth: 0,
+                            },
                             DecodedBitfieldField::Enum(variant) => {
                                 let nested = self.new_struct(1)?;
                                 self.structs.get_mut(&nested).ok_or(INVALID_STRUCT)?.fields[0] =
                                     Some(NativeField {
                                         bits: u64::from(variant),
                                         owned: false,
+                                        pending_depth: 0,
                                     });
                                 NativeField {
                                     bits: nested,
                                     owned: true,
+                                    pending_depth: 0,
                                 }
                             }
                             DecodedBitfieldField::Payload(bytes) => {
@@ -1647,6 +1670,7 @@ impl NativeValues {
                                 NativeField {
                                     bits: list,
                                     owned: true,
+                                    pending_depth: 0,
                                 }
                             }
                         };
@@ -1866,6 +1890,7 @@ impl NativeValues {
             id,
             NativeList {
                 elements: Vec::new(),
+                element_pending_depths: HashMap::new(),
                 owned,
                 pending_depth: 0,
             },
@@ -2318,6 +2343,47 @@ impl NativeValues {
         self.sets.get_mut(&joined).ok_or(INVALID_SET)?.pending_depth = depth;
         Ok(joined)
     }
+    fn insert_list(&mut self, value: u64, index: i64, bits: u64, depth: u64) -> LeafResult<u64> {
+        let invalid = (
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"list.__insert_at: index out of bounds".as_slice(),
+        );
+        let position = match usize::try_from(index) {
+            Ok(position) => position,
+            Err(_) => return self.list_index_failure("list.__insert_at", index, invalid),
+        };
+        let length = self.lists.get(&value).ok_or(INVALID_LIST)?.elements.len();
+        if position > length {
+            return self.list_index_failure("list.__insert_at", index, invalid);
+        }
+        let list = self.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+        if depth != 0 && list.owned {
+            return Err(INVALID_LIST);
+        }
+        list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+        if depth != 0 {
+            list.element_pending_depths
+                .try_reserve(1)
+                .map_err(|_| EXHAUSTED)?;
+        }
+        let mut moved = list
+            .element_pending_depths
+            .keys()
+            .copied()
+            .filter(|key| *key >= position)
+            .collect::<Vec<_>>();
+        moved.sort_unstable_by(|left, right| right.cmp(left));
+        for key in moved {
+            if let Some(existing_depth) = list.element_pending_depths.remove(&key) {
+                list.element_pending_depths.insert(key + 1, existing_depth);
+            }
+        }
+        if depth != 0 {
+            list.element_pending_depths.insert(position, depth);
+        }
+        list.elements.insert(position, Some(bits));
+        Ok(value)
+    }
     fn sort_list(&mut self, id: u64, raw_kind: u32) -> LeafResult<u64> {
         let kind = NativeSortKind::from_raw(raw_kind)?;
         let list = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
@@ -2331,19 +2397,34 @@ impl NativeValues {
         {
             return Err(INVALID_LIST);
         }
-        if kind == NativeSortKind::String {
-            list.elements.sort_by(|left, right| {
-                let left = &self.strings[&left.expect("validated list element")].text;
-                let right = &self.strings[&right.expect("validated list element")].text;
-                left.cmp(right)
-            });
-        } else {
-            list.elements.sort_by(|left, right| {
-                kind.compare(
-                    left.expect("validated list element"),
-                    right.expect("validated list element"),
-                )
-            });
+        let mut sorted = Vec::new();
+        sorted
+            .try_reserve_exact(list.elements.len())
+            .map_err(|_| EXHAUSTED)?;
+        for (index, element) in list.elements.iter().enumerate() {
+            let bits = element.ok_or(INVALID_LIST)?;
+            let depth = list
+                .element_pending_depths
+                .get(&index)
+                .copied()
+                .unwrap_or(0);
+            sorted.push((bits, depth));
+        }
+        sorted.sort_by(|(left, left_depth), (right, right_depth)| {
+            if *left_depth != 0 || *right_depth != 0 {
+                CompareOrdering::Equal
+            } else if kind == NativeSortKind::String {
+                self.strings[left].text.cmp(&self.strings[right].text)
+            } else {
+                kind.compare(*left, *right)
+            }
+        });
+        list.element_pending_depths.clear();
+        for (index, (bits, depth)) in sorted.into_iter().enumerate() {
+            list.elements[index] = Some(bits);
+            if depth != 0 {
+                list.element_pending_depths.insert(index, depth);
+            }
         }
         Ok(id)
     }
@@ -2358,15 +2439,22 @@ impl NativeValues {
             return Err(INVALID_LIST);
         }
         let mut previous = None;
-        for element in &list.elements {
+        for (index, element) in list.elements.iter().enumerate() {
             let bits = element.ok_or(INVALID_LIST)?;
             if !kind.valid_bits(bits)
                 || (kind == NativeSortKind::String && !self.strings.contains_key(&bits))
             {
                 return Err(INVALID_LIST);
             }
-            if let Some(left) = previous {
-                let ordering = if kind == NativeSortKind::String {
+            let depth = list
+                .element_pending_depths
+                .get(&index)
+                .copied()
+                .unwrap_or(0);
+            if let Some((left, left_depth)) = previous {
+                let ordering = if depth != 0 || left_depth != 0 {
+                    CompareOrdering::Equal
+                } else if kind == NativeSortKind::String {
                     self.strings[&left].text.cmp(&self.strings[&bits].text)
                 } else {
                     kind.compare(left, bits)
@@ -2375,7 +2463,7 @@ impl NativeValues {
                     return Ok(false);
                 }
             }
-            previous = Some(bits);
+            previous = Some((bits, depth));
         }
         Ok(true)
     }
@@ -2546,8 +2634,12 @@ impl NativeValues {
     }
     fn clone_list(&mut self, id: u64) -> LeafResult<u64> {
         let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
-        let (elements, owned, pending_depth) =
-            (list.elements.clone(), list.owned, list.pending_depth);
+        let (elements, element_pending_depths, owned, pending_depth) = (
+            list.elements.clone(),
+            list.element_pending_depths.clone(),
+            list.owned,
+            list.pending_depth,
+        );
         let mut output = Vec::new();
         output
             .try_reserve_exact(elements.len())
@@ -2584,6 +2676,7 @@ impl NativeValues {
         };
         let list = self.lists.get_mut(&id).ok_or(INVALID_LIST)?;
         list.elements = output;
+        list.element_pending_depths = element_pending_depths;
         list.pending_depth = pending_depth;
         Ok(id)
     }
@@ -2693,7 +2786,11 @@ impl NativeValues {
             })
             .ok_or(INVALID_ACTOR)?;
         let old = slot
-            .replace(NativeField { bits, owned })
+            .replace(NativeField {
+                bits,
+                owned,
+                pending_depth: 0,
+            })
             .ok_or(INVALID_ACTOR)?;
         if old.owned {
             self.drop_value(old.bits)?;
@@ -3236,6 +3333,7 @@ impl NativeValues {
             .fields[0] = Some(NativeField {
             bits: index as u64,
             owned: false,
+            pending_depth: 0,
         });
         self.builders.insert(
             builder,
@@ -3439,7 +3537,11 @@ impl NativeValues {
         self.structs
             .get_mut(&builder)
             .ok_or(INVALID_CONSTRUCTION)?
-            .fields[slot] = Some(NativeField { bits, owned });
+            .fields[slot] = Some(NativeField {
+            bits,
+            owned,
+            pending_depth: 0,
+        });
         self.builders
             .get_mut(&builder)
             .ok_or(INVALID_CONSTRUCTION)?
@@ -4395,9 +4497,15 @@ leaves! {
         |s| { if owned > 1 { return Err(INVALID_STRUCT); }
             let slot = s.structs.get_mut(&value).and_then(|v| usize::try_from(index).ok().and_then(|i| v.fields.get_mut(i))).ok_or(INVALID_STRUCT)?;
             if slot.is_some() { return Err(INVALID_STRUCT); }
-            *slot = Some(NativeField { bits, owned: owned != 0 }); Ok(0) };
+            *slot = Some(NativeField { bits, owned: owned != 0, pending_depth: 0 }); Ok(0) };
+    StructInitScalarTask, jett_rt_v1_struct_init_scalar_task, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, depth: u64 => I64), u32 => I32,
+        |s| { let slot = s.structs.get_mut(&value).and_then(|v| usize::try_from(index).ok().and_then(|i| v.fields.get_mut(i))).ok_or(INVALID_STRUCT)?;
+            if slot.is_some() { return Err(INVALID_STRUCT); }
+            *slot = Some(NativeField { bits, owned: false, pending_depth: depth }); Ok(0) };
     StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.struct_field(value, index)?.bits);
+    StructFieldPendingDepth, jett_rt_v1_struct_field_pending_depth, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
+        |s| Ok(s.struct_field(value, index)?.pending_depth);
     ActorRegister, jett_rt_v1_actor_register, false, (value: u64 => I64), u64 => I64,
         |s| s.register_actor(value);
     ActorRun, jett_rt_v1_actor_run, false, (value: u64 => I64), u64 => I64,
@@ -4461,7 +4569,16 @@ leaves! {
         |s| s.range(start, end, step);
     ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
-            usize::try_from(index).ok().and_then(|i| list.elements.get_mut(i)).and_then(Option::take).ok_or(INVALID_LIST) };
+            let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;
+            let bits = list.elements.get_mut(index).and_then(Option::take).ok_or(INVALID_LIST)?;
+            list.element_pending_depths.remove(&index);
+            Ok(bits) };
+
+    ListElementPendingDepth, jett_rt_v1_list_element_pending_depth, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
+        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
+            let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;
+            list.elements.get(index).copied().flatten().ok_or(INVALID_LIST)?;
+            Ok(list.element_pending_depths.get(&index).copied().unwrap_or(0)) };
 
     ListElementClone, jett_rt_v1_list_element_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
@@ -4485,16 +4602,9 @@ leaves! {
     ListNew, jett_rt_v1_list_new, false, (owned: u32 => I32), u64 => I64,
         |s| { if owned > 1 { return Err(INVALID_LIST); } s.new_list(owned != 0) };
     ListInsertAt, jett_rt_v1_list_insert_at, false, (value: u64 => I64, index: i64 => I64, bits: u64 => I64), u64 => I64,
-        |s| { let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__insert_at: index out of bounds".as_slice());
-            let position = match usize::try_from(index) {
-                Ok(position) => position,
-                Err(_) => return s.list_index_failure("list.__insert_at", index, invalid),
-            };
-            let length = s.lists.get(&value).ok_or(INVALID_LIST)?.elements.len();
-            if position > length { return s.list_index_failure("list.__insert_at", index, invalid); }
-            let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
-            list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
-            list.elements.insert(position, Some(bits)); Ok(value) };
+        |s| s.insert_list(value, index, bits, 0);
+    ListInsertAtScalarTask, jett_rt_v1_list_insert_at_scalar_task, false, (value: u64 => I64, index: i64 => I64, bits: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| s.insert_list(value, index, bits, depth);
     ListRemoveAt, jett_rt_v1_list_remove_at, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let invalid = (JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__remove_at: index out of bounds".as_slice());
             let position = match usize::try_from(index) {
@@ -4506,7 +4616,13 @@ leaves! {
                 return s.list_index_failure("list.__remove_at", index, invalid);
             };
             if list.owned { s.drop_value(bits)?; }
-            s.lists.get_mut(&value).ok_or(INVALID_LIST)?.elements.remove(position);
+            let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            list.elements.remove(position);
+            list.element_pending_depths.remove(&position);
+            let mut moved = list.element_pending_depths.keys().copied().filter(|key| *key > position).collect::<Vec<_>>();
+            moved.sort_unstable();
+            for key in moved { if let Some(depth) = list.element_pending_depths.remove(&key) {
+                list.element_pending_depths.insert(key - 1, depth); } }
             Ok(value) };
     ListSort, jett_rt_v1_list_sort, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
         |s| s.sort_list(value, kind);
@@ -4520,7 +4636,12 @@ leaves! {
             let first = usize::try_from(first).map_err(|_| invalid)?;
             let second = usize::try_from(second).map_err(|_| invalid)?;
             if first >= list.elements.len() || second >= list.elements.len() { return Err(invalid); }
-            list.elements.swap(first, second); Ok(value) };
+            list.elements.swap(first, second);
+            let first_depth = list.element_pending_depths.remove(&first);
+            let second_depth = list.element_pending_depths.remove(&second);
+            if let Some(depth) = first_depth { list.element_pending_depths.insert(second, depth); }
+            if let Some(depth) = second_depth { list.element_pending_depths.insert(first, depth); }
+            Ok(value) };
     SetNew, jett_rt_v1_set_new, false, (strings: u32 => I32), u64 => I64,
         |s| s.new_set(strings);
     SetAdd, jett_rt_v1_set_add, false, (value: u64 => I64, key: u64 => I64), u64 => I64,
@@ -4582,13 +4703,24 @@ leaves! {
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
             list.elements.push(Some(bits)); Ok(value) };
+    ListAppendScalarTask, jett_rt_v1_list_append_scalar_task, false, (value: u64 => I64, bits: u64 => I64, depth: u64 => I64), u64 => I64,
+        |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
+            if list.owned { return Err(INVALID_LIST); }
+            list.elements.try_reserve(1).map_err(|_| EXHAUSTED)?;
+            if depth != 0 { list.element_pending_depths.try_reserve(1).map_err(|_| EXHAUSTED)?;
+                list.element_pending_depths.insert(list.elements.len(), depth); }
+            list.elements.push(Some(bits)); Ok(value) };
     ListGet, jett_rt_v1_list_get_clone, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
             let owned = list.owned;
-            let found = usize::try_from(index).ok().and_then(|i| list.elements.get(i)).copied().flatten();
+            let index = usize::try_from(index).ok();
+            let found = index.and_then(|i| list.elements.get(i)).copied().flatten();
+            let depth = index.and_then(|i| list.element_pending_depths.get(&i)).copied().unwrap_or(0);
             let Some(bits) = found else { return s.sum(SUM_FAILURE, 0, false); };
             let bits = if owned { s.clone_value(bits)? } else { bits };
-            match s.sum(SUM_SUCCESS, bits, owned) { Ok(v) => Ok(v), Err(e) => { if owned { s.drop_value(bits)?; } Err(e) } } };
+            match s.sum(SUM_SUCCESS, bits, owned) { Ok(v) => {
+                s.sums.get_mut(&v).ok_or(INVALID_SUM)?.payload_pending_depth = depth;
+                Ok(v) }, Err(e) => { if owned { s.drop_value(bits)?; } Err(e) } } };
     ListClone, jett_rt_v1_list_clone, false, (value: u64 => I64), u64 => I64,
         |s| s.clone_list(value);
     ListRun, jett_rt_v1_list_run, false, (value: u64 => I64), u64 => I64,
@@ -5278,6 +5410,7 @@ mod tests {
             values.structs.get_mut(&environment).unwrap().fields[0] = Some(NativeField {
                 bits: secret,
                 owned: true,
+                pending_depth: 0,
             });
             environment
         } else {
@@ -5290,14 +5423,17 @@ mod tests {
                 // Deliberately not a callable address: debug must never invoke it.
                 bits: u64::MAX,
                 owned: false,
+                pending_depth: 0,
             }),
             Some(NativeField {
                 bits: environment,
                 owned: captured,
+                pending_depth: 0,
             }),
             Some(NativeField {
                 bits: label,
                 owned: true,
+                pending_depth: 0,
             }),
         ];
         descriptor
@@ -5524,6 +5660,7 @@ mod tests {
                 Some(NativeField {
                     bits: 0,
                     owned: false,
+                    pending_depth: 0,
                 }),
             ),
             (
@@ -5531,6 +5668,7 @@ mod tests {
                 Some(NativeField {
                     bits: u64::MAX,
                     owned: true,
+                    pending_depth: 0,
                 }),
             ),
             (
@@ -5538,6 +5676,7 @@ mod tests {
                 Some(NativeField {
                     bits: 0,
                     owned: true,
+                    pending_depth: 0,
                 }),
             ),
             (
@@ -5545,6 +5684,7 @@ mod tests {
                 Some(NativeField {
                     bits: environment,
                     owned: false,
+                    pending_depth: 0,
                 }),
             ),
             (
@@ -5552,6 +5692,7 @@ mod tests {
                 Some(NativeField {
                     bits: label,
                     owned: true,
+                    pending_depth: 0,
                 }),
             ),
             (
@@ -5559,6 +5700,7 @@ mod tests {
                 Some(NativeField {
                     bits: label,
                     owned: false,
+                    pending_depth: 0,
                 }),
             ),
             (
@@ -5566,6 +5708,7 @@ mod tests {
                 Some(NativeField {
                     bits: environment,
                     owned: true,
+                    pending_depth: 0,
                 }),
             ),
             (
@@ -5573,6 +5716,7 @@ mod tests {
                 Some(NativeField {
                     bits: 0,
                     owned: true,
+                    pending_depth: 0,
                 }),
             ),
         ] {
@@ -6914,22 +7058,27 @@ mod tests {
                 Some(NativeField {
                     bits: index,
                     owned: false,
+                    pending_depth: 0,
                 }),
                 Some(NativeField {
                     bits: owner,
                     owned: true,
+                    pending_depth: 0,
                 }),
                 Some(NativeField {
                     bits: member,
                     owned: true,
+                    pending_depth: 0,
                 }),
                 Some(NativeField {
                     bits: name,
                     owned: true,
+                    pending_depth: 0,
                 }),
                 Some(NativeField {
                     bits: ty,
                     owned: true,
+                    pending_depth: 0,
                 }),
             ];
             record

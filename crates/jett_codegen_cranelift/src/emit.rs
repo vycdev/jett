@@ -1068,12 +1068,25 @@ impl Translator<'_, '_> {
                     } else {
                         NativeLeaf::ListElementClone
                     };
+                    let target_ty = self.local_types[target.index() as usize].ty;
+                    let depth = if !string && !map && !set && is_task_scalar(self.types, target_ty)?
+                    {
+                        Some(self.leaf(
+                            NativeLeaf::ListElementPendingDepth,
+                            &[value, index],
+                            true,
+                        )?)
+                    } else {
+                        None
+                    };
                     let bits = self.leaf(leaf, &[value, index], true)?;
-                    self.unpack_payload(
-                        bits,
-                        self.local_types[target.index() as usize].ty,
-                        statement.span,
-                    )?
+                    let output = self.unpack_payload(bits, target_ty, statement.span)?;
+                    match depth {
+                        Some(depth) => {
+                            LoweredValue::ScalarTask(self.scalar(output, statement.span)?, depth)
+                        }
+                        None => output,
+                    }
                 } else {
                     let leaf = if string {
                         NativeLeaf::StringScalarCount

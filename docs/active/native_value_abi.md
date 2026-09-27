@@ -82,9 +82,14 @@ parts. Sequential `run` increments depth with the checked unit-task leaf;
 payload in its result handle. Taking a result restores both parts, including
 after cloning the result. Directly primitive-typed trace and breakpoint
 bindings format the nested pending wrappers. Graphics callbacks supply the
-depth component required by the same function ABI. Pending scalar fields in
-general records and collections, scalar operations on still-pending values,
-and actor/Graphics state propagation need further parity work.
+depth component required by the same function ABI. Struct and enum payload
+fields store scalar depth beside their bits; field access and recursive debug
+formatting restore it. Primitive lists use a sparse per-element depth map,
+preserved by cloning, insertion, removal, iteration, and stable sorting.
+`list.get` carries element depth through its result payload. Differential
+fixtures cover these boundaries, including nested pending wrappers. Pending
+scalar values in other collection shapes, scalar operations on still-pending
+values, and actor/Graphics state propagation need further parity work.
 
 Owned native strings also carry a pending depth in the runtime registry.
 `StringRun` and `StringTaskJoin` create independent handles, so wrapping a
