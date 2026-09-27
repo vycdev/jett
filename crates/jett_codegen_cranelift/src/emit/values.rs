@@ -1534,6 +1534,49 @@ impl Translator<'_, '_> {
         }
         Ok(())
     }
+    fn check_reflected_field_owner(
+        &mut self,
+        metadata: Value,
+        owner_name: &str,
+        members: Option<(&[String], Value)>,
+        kind: i64,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (owner_pointer, owner_length) = self.static_bytes(owner_name)?;
+        let pointer_type = self.module.target_config().pointer_type();
+        let mut member_pointer = self.builder.ins().iconst(pointer_type, 0);
+        let mut member_length = self.builder.ins().iconst(ir::types::I64, 0);
+        let has_member = if let Some((names, tag)) = members {
+            for (index, name) in names.iter().enumerate() {
+                let index = i64::try_from(index)
+                    .map_err(|_| self.unsupported(span, "reflected member index"))?;
+                let matches = self.builder.ins().icmp_imm(IntCC::Equal, tag, index);
+                let (pointer, length) = self.static_bytes(name)?;
+                member_pointer = self.builder.ins().select(matches, pointer, member_pointer);
+                member_length = self.builder.ins().select(matches, length, member_length);
+            }
+            1
+        } else {
+            0
+        };
+        let has_member = self.builder.ins().iconst(ir::types::I32, has_member);
+        let kind = self.builder.ins().iconst(ir::types::I32, kind);
+        self.leaf(
+            NativeLeaf::ReflectedFieldOwnerCheck,
+            &[
+                metadata,
+                owner_pointer,
+                owner_length,
+                member_pointer,
+                member_length,
+                has_member,
+                kind,
+            ],
+            true,
+        )?;
+        Ok(())
+    }
+
     fn reflected_field_value(
         &mut self,
         owner: Value,
@@ -1788,6 +1831,12 @@ impl Translator<'_, '_> {
                 _ => return Err(self.unsupported(span, "reflected field owner")),
             };
             let metadata = self.scalar(evaluated[1], span)?;
+            let owner_name = reflection_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked reflected field owner"))?
+                .type_name
+                .clone();
+            self.check_reflected_field_owner(metadata, &owner_name, None, 0, span)?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
@@ -1833,34 +1882,74 @@ impl Translator<'_, '_> {
             id,
             IntrinsicId::TypeVariantFieldValue | IntrinsicId::TypeMachineFieldValue
         ) {
-            let field_groups = match (id, self.types.resolve(args[0].ty)) {
-                (IntrinsicId::TypeVariantFieldValue, Type::Enum(enum_id)) => self
-                    .types
-                    .resolve_enum(*enum_id)
-                    .variants
-                    .iter()
-                    .map(|variant| variant.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>())
-                    .collect::<Vec<_>>(),
-                (IntrinsicId::TypeMachineFieldValue, Type::Machine(machine_id))
-                | (
-                    IntrinsicId::TypeMachineFieldValue,
-                    Type::MachineState {
-                        machine: machine_id,
-                        ..
-                    },
-                ) => self
-                    .types
-                    .resolve_machine(*machine_id)
-                    .states
-                    .iter()
-                    .map(|state| state.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>())
-                    .collect::<Vec<_>>(),
-                _ => return Err(self.unsupported(span, "reflected payload field owner")),
-            };
+            let (field_groups, owner_name, member_names) =
+                match (id, self.types.resolve(args[0].ty)) {
+                    (IntrinsicId::TypeVariantFieldValue, Type::Enum(enum_id)) => {
+                        let definition = self.types.resolve_enum(*enum_id);
+                        let owner_name = reflection_arguments
+                            .first()
+                            .ok_or_else(|| self.unsupported(span, "checked reflected enum owner"))?
+                            .type_name
+                            .clone();
+                        (
+                            definition
+                                .variants
+                                .iter()
+                                .map(|variant| {
+                                    variant.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>(),
+                            owner_name,
+                            definition
+                                .variants
+                                .iter()
+                                .map(|variant| variant.name.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                    }
+                    (IntrinsicId::TypeMachineFieldValue, Type::Machine(machine_id))
+                    | (
+                        IntrinsicId::TypeMachineFieldValue,
+                        Type::MachineState {
+                            machine: machine_id,
+                            ..
+                        },
+                    ) => {
+                        let definition = self.types.resolve_machine(*machine_id);
+                        (
+                            definition
+                                .states
+                                .iter()
+                                .map(|state| {
+                                    state.fields.iter().map(|(_, ty)| *ty).collect::<Vec<_>>()
+                                })
+                                .collect::<Vec<_>>(),
+                            definition.name.clone(),
+                            definition
+                                .states
+                                .iter()
+                                .map(|state| state.name.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                    }
+                    _ => return Err(self.unsupported(span, "reflected payload field owner")),
+                };
             let owner = self.scalar(evaluated[0], span)?;
             let metadata = self.scalar(evaluated[1], span)?;
             let zero = self.builder.ins().iconst(ir::types::I64, 0);
             let tag = self.leaf(NativeLeaf::StructField, &[owner, zero], true)?;
+            let kind = if id == IntrinsicId::TypeMachineFieldValue {
+                2
+            } else {
+                1
+            };
+            self.check_reflected_field_owner(
+                metadata,
+                &owner_name,
+                Some((&member_names, tag)),
+                kind,
+                span,
+            )?;
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
             let mut compatible = zero;

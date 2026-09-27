@@ -4379,6 +4379,41 @@ impl NativeValues {
             Ok(owner.to_owned())
         }
     }
+    fn check_reflected_field_owner(
+        &mut self,
+        actual: u64,
+        expected_owner: &str,
+        expected_member: Option<&str>,
+        mismatch: Failure,
+        caller: &str,
+    ) -> LeafResult<u32> {
+        let actual_owner = self.text(self.struct_field(actual, 1)?.bits)?;
+        let actual_member = self
+            .sums
+            .get(&self.struct_field(actual, 2)?.bits)
+            .ok_or(mismatch)?;
+        let actual_member_name = if actual_member.tag == SUM_SUCCESS {
+            Some(self.text(actual_member.bits)?)
+        } else {
+            None
+        };
+        let member_matches = actual_member_name == expected_member;
+        if actual_owner == expected_owner && member_matches {
+            return Ok(0);
+        }
+        let actual_label = self.reflected_field_owner_label(actual, mismatch)?;
+        let expected_label = expected_member.map_or_else(
+            || expected_owner.to_owned(),
+            |member| format!("{expected_owner}.{member}"),
+        );
+        self.dynamic_failure_message = Some(
+            format!(
+                "{caller}: field metadata belongs to '{actual_label}', expected '{expected_label}'"
+            )
+            .into_bytes(),
+        );
+        Err(mismatch)
+    }
     fn reflected_field_index(
         &mut self,
         actual: u64,
@@ -5226,6 +5261,23 @@ leaves! {
                 _ => return Err(INVALID_REFLECTED_FIELD),
             };
             s.reflected_checked_field_index(actual, expected, compatible, requested, mismatch, caller) };
+    ReflectedFieldOwnerCheck, jett_rt_v1_reflected_field_owner_check, false, (actual: u64 => I64, owner: *const u8 => Pointer, owner_length: u64 => I64, member: *const u8 => Pointer, member_length: u64 => I64, has_member: u32 => I32, kind: u32 => I32), u32 => I32,
+        |s| { let owner_length = usize::try_from(owner_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let member_length = usize::try_from(member_length).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            if owner_length > isize::MAX as usize || (owner_length != 0 && owner.is_null())
+                || member_length > isize::MAX as usize || (member_length != 0 && member.is_null())
+                || has_member > 1 { return Err(INVALID_REFLECTED_FIELD); }
+            let owner = if owner_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(owner, owner_length) } };
+            let member = if member_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(member, member_length) } };
+            let owner = std::str::from_utf8(owner).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let member = std::str::from_utf8(member).map_err(|_| INVALID_REFLECTED_FIELD)?;
+            let (mismatch, caller) = match kind {
+                0 => (INVALID_REFLECTED_FIELD, "type.field_value"),
+                1 => (INVALID_REFLECTED_VARIANT_FIELD, "type.variant_field_value"),
+                2 => (INVALID_REFLECTED_MACHINE_FIELD, "type.machine_field_value"),
+                _ => return Err(INVALID_REFLECTED_FIELD),
+            };
+            s.check_reflected_field_owner(actual, owner, (has_member != 0).then_some(member), mismatch, caller) };
     TypeInfoMatches, jett_rt_v1_type_info_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }

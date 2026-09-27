@@ -1,0 +1,16 @@
+namespace app
+machine Session:
+    states:
+        active(count: int64)
+        inactive(label: string, count: int64)
+    transitions:
+        active to inactive
+function main() returns nothing:
+    Session session = Session(active, 7)
+    TypeMachineState other = list.get[TypeMachineState](type.machine_states[Session](), 1) handle:
+        return nothing
+    TypeField foreign = list.get[TypeField](other.fields, 1) handle:
+        return nothing
+    int64 count = type.machine_field_value[Session, int64](view session, view foreign)
+    println(count)
+    return nothing

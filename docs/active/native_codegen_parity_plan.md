@@ -1285,3 +1285,9 @@ whether its type can satisfy the requested result type. This preserves owner
 error precedence and gives interpreter-matching requested-type errors for
 struct, enum, and machine fields. A foreign owner with an incompatible
 requested type is covered by the same differential gate.
+
+Native reflected reads now check the `TypeField` owner before searching for a
+candidate field. Differential fixtures cover foreign indexes beyond the active
+struct, enum variant, or machine state's fields, plus empty active variants and
+states. The interpreter's owner error is retained even when no candidate
+exists; forged metadata and other invalid-index diagnostics remain open.

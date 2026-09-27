@@ -1603,6 +1603,34 @@ fn native_reflected_requested_type_errors_match_interpreter() {
 }
 
 #[test]
+fn native_reflected_missing_candidate_owner_errors_match_interpreter() {
+    for name in [
+        "reflected_struct_missing_candidate_owner_failure",
+        "reflected_enum_missing_candidate_owner_failure",
+        "reflected_enum_empty_candidate_owner_failure",
+        "reflected_machine_missing_candidate_owner_failure",
+        "reflected_machine_empty_candidate_owner_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject foreign reflected field");
+        let directory = tempfile::tempdir().expect("isolated missing field directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile missing reflected field candidate");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_type_arg_index_errors_match_interpreter() {
     for name in [
         "pending_type_arg_failure",
