@@ -1162,6 +1162,38 @@ fn native_pending_conversion_intrinsics_match_interpreter_errors() {
 }
 
 #[test]
+fn native_pending_string_and_bytes_intrinsics_match_interpreter_errors() {
+    for name in [
+        "pending_string_upper_failure",
+        "pending_string_split_delimiter_failure",
+        "pending_string_join_separator_failure",
+        "pending_string_join_element_failure",
+        "pending_string_join_list_failure",
+        "pending_string_replace_third_failure",
+        "pending_bytes_length_failure",
+        "pending_bytes_concat_first_failure",
+        "pending_bytes_concat_second_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending string or bytes operands");
+        let directory = tempfile::tempdir().expect("isolated pending text/bytes directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile pending text/bytes case");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_set_map_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_set_map_values.jett");

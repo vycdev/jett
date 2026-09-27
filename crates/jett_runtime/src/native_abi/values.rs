@@ -2209,6 +2209,7 @@ impl NativeValues {
                     .pending_depth
             }
             1 => self.bytes_depth(handle)?,
+            2 => self.lists.get(&handle).ok_or(INVALID_LIST)?.pending_depth,
             _ => return Err(INVALID_PENDING_HANDLE_CHECK),
         };
         if depth == 0 {
@@ -3047,6 +3048,19 @@ impl NativeValues {
         let list = self.lists.get(&value).ok_or(INVALID_LIST)?;
         if !list.owned {
             return Err(INVALID_LIST);
+        }
+        for element in &list.elements {
+            let string = self
+                .strings
+                .get(&element.ok_or(INVALID_LIST)?)
+                .ok_or(INVALID_HANDLE)?;
+            if string.pending_depth != 0 {
+                let value = format_pending_value(&string.text, string.pending_depth)?;
+                self.dynamic_failure_message = Some(
+                    format!("string.__join requires a list of strings, found {value}").into_bytes(),
+                );
+                return Err(INVALID_PENDING_HANDLE_CHECK);
+            }
         }
         let separator = self.text(separator)?;
         let mut parts = Vec::new();

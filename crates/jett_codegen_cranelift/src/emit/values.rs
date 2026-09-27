@@ -1489,6 +1489,40 @@ impl Translator<'_, '_> {
         )?;
         Ok(())
     }
+    fn check_string_arguments(
+        &mut self,
+        id: IntrinsicId,
+        evaluated: &[LoweredValue],
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let (expected, kinds): (&str, &[i64]) = match id {
+            IntrinsicId::StringJoin => ("a list and a string separator", &[2, 0]),
+            IntrinsicId::StringReplace => ("three string arguments", &[0, 0, 0]),
+            IntrinsicId::StringSplit | IntrinsicId::StringIndexOf | IntrinsicId::StringCount => {
+                ("two string arguments", &[0, 0])
+            }
+            IntrinsicId::StringCharCount
+            | IntrinsicId::StringChars
+            | IntrinsicId::StringWords
+            | IntrinsicId::StringLines
+            | IntrinsicId::StringLower
+            | IntrinsicId::StringUpper
+            | IntrinsicId::StringTrim
+            | IntrinsicId::StringTrimStart
+            | IntrinsicId::StringTrimEnd
+            | IntrinsicId::StringSlugify
+            | IntrinsicId::StringToUpperFirst
+            | IntrinsicId::StringToLowerFirst
+            | IntrinsicId::StringIsAlpha
+            | IntrinsicId::StringIsNumeric => ("a string argument", &[0]),
+            _ => return Ok(()),
+        };
+        let message = format!("{} expects {expected}", id.canonical_name());
+        for (&kind, &value) in kinds.iter().zip(evaluated) {
+            self.reject_pending_handle(value, kind, &message, span)?;
+        }
+        Ok(())
+    }
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
@@ -1856,6 +1890,17 @@ impl Translator<'_, '_> {
         }
         if let Some(leaf) = crate::values::bytes_leaf(id) {
             self.check_index_count_arguments(id, &evaluated, span)?;
+            let expected = match id {
+                IntrinsicId::BytesLength => Some("a bytes argument"),
+                IntrinsicId::BytesConcat => Some("two bytes arguments"),
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                let message = format!("{} expects {expected}", id.canonical_name());
+                for &value in &evaluated {
+                    self.reject_pending_handle(value, 1, &message, span)?;
+                }
+            }
             let arguments = evaluated
                 .iter()
                 .map(|v| self.scalar(*v, span))
@@ -1928,6 +1973,7 @@ impl Translator<'_, '_> {
         }
         if let Some(leaf) = crate::values::string_leaf(id) {
             self.check_index_count_arguments(id, &evaluated, span)?;
+            self.check_string_arguments(id, &evaluated, span)?;
             let native_args = evaluated
                 .iter()
                 .map(|v| self.scalar(*v, span))

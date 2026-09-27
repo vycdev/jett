@@ -1216,3 +1216,11 @@ assertion skips an otherwise failing message expression and compiles in native
 verify and property suites; a failing message is exercised by backend, runtime,
 and launcher tests. Special debug values and cross-function breakpoint binding
 scope remain open.
+
+The pending-value parity pass now checks string text operations and
+`bytes.length`/`bytes.concat` before their runtime kernels read a wrapped
+receiver or argument. `string.join` also diagnoses a pending string inside an
+otherwise plain list. Interpreter/native differential fixtures cover unary,
+multi-argument, list, and bytes cases. This closes those identified behavior
+gaps; the coarse overall language-coverage estimate remains 80% until the
+remaining semantic matrix is audited.
