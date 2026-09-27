@@ -1268,3 +1268,8 @@ Reflected `type.field_value`, `type.variant_field_value`, and
 field after metadata validation. Linked differential fixtures cover nested
 integer, boolean, and floating-point struct fields plus enum and machine
 payloads. Other aggregate reflection and mismatch diagnostics remain open.
+
+Native `type.arg` now checks pending, negative, and out-of-range indexes with
+interpreter-matching errors before selecting checked `TypeInfo` metadata.
+Differential fixtures include nested pending depth and alias-typed owners;
+other reflected-metadata mismatch diagnostics remain open.

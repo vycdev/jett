@@ -4347,6 +4347,26 @@ impl NativeValues {
             0,
         )?))
     }
+    fn checked_type_arg_index(
+        &mut self,
+        index: i64,
+        count: u64,
+        depth: u64,
+        type_name: &str,
+    ) -> LeafResult<u64> {
+        let message = if depth != 0 {
+            let index = format_pending_value(&index.to_string(), depth)?;
+            format!("type.arg expects a non-negative int64 index, got {index}")
+        } else if index < 0 {
+            format!("type.arg expects a non-negative int64 index, got {index}")
+        } else if index as u64 >= count {
+            format!("type.arg index {index} is out of range for type '{type_name}'")
+        } else {
+            return Ok(index as u64);
+        };
+        self.dynamic_failure_message = Some(message.into_bytes());
+        Err(INVALID_TYPE_ARG_INDEX)
+    }
     fn reflected_field_index(
         &self,
         actual: u64,
@@ -5157,6 +5177,12 @@ leaves! {
         |_s| { let index = u64::try_from(index).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
             if index >= count { return Err(INVALID_TYPE_ARG_INDEX); }
             Ok(index) };
+    TypeArgCheckedIndex, jett_rt_v1_type_arg_checked_index, false, (index: i64 => I64, count: u64 => I64, depth: u64 => I64, type_name: *const u8 => Pointer, type_name_length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(type_name_length).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
+            if length > isize::MAX as usize || (length != 0 && type_name.is_null()) { return Err(INVALID_TYPE_ARG_INDEX); }
+            let bytes = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(type_name, length) } };
+            let name = std::str::from_utf8(bytes).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
+            s.checked_type_arg_index(index, count, depth, name) };
     MachineExpectState, jett_rt_v1_machine_expect_state, false, (value: u64 => I64, state: u64 => I64), u32 => I32,
         |s| { if s.struct_field(value, 0)?.bits == state { Ok(0) }
             else { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"machine state does not match narrowed type")) } };

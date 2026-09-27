@@ -1,0 +1,6 @@
+namespace app
+function main() returns nothing:
+    int64 index = run run 0
+    TypeInfo argument = type.arg[map[string, int64]](index)
+    println(argument.type_name)
+    return nothing

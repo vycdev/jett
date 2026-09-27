@@ -1,0 +1,6 @@
+namespace app
+type NumberList = list[int64]
+function main() returns nothing:
+    TypeInfo argument = type.arg[NumberList](1)
+    println(argument.type_name)
+    return nothing

@@ -709,6 +709,9 @@ Static machine layout, state, and transition reflection materializes checked
 metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;
 alias and non-machine total probes produce empty values.
+Native `type.arg` checks pending and negative indexes and reports an
+out-of-range index with the reflected source type name. It validates the index
+before cloning the selected checked `TypeInfo` record.
 Native `TypeConstruction` is a move-only handle backed by a partially filled
 owned record and checked field layout metadata. The HIR handoff keeps
 each field's source type spelling alongside its canonical value type, so

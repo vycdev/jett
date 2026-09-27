@@ -1727,11 +1727,19 @@ impl Translator<'_, '_> {
             return self.own_linear(result);
         }
         if id == IntrinsicId::TypeArg {
-            let requested = self.scalar(evaluated[0], span)?;
+            let (requested, depth) = self.scalar_task(evaluated[0], span)?;
             let count = i64::try_from(evaluated.len() - 1)
                 .map_err(|_| self.unsupported(span, "reflected type argument count"))?;
             let count = self.builder.ins().iconst(ir::types::I64, count);
-            let checked = self.leaf(NativeLeaf::TypeArgIndex, &[requested, count], true)?;
+            let reflected = reflection_arguments
+                .first()
+                .ok_or_else(|| self.unsupported(span, "checked type.arg owner"))?;
+            let (name_pointer, name_length) = self.static_bytes(&reflected.type_name)?;
+            let checked = self.leaf(
+                NativeLeaf::TypeArgCheckedIndex,
+                &[requested, count, depth, name_pointer, name_length],
+                true,
+            )?;
             let mut selected = self.builder.ins().iconst(ir::types::I64, 0);
             for (index, candidate) in evaluated.iter().enumerate().skip(1) {
                 let index = i64::try_from(index - 1)
