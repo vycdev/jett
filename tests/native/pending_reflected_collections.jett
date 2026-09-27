@@ -1,0 +1,56 @@
+namespace app
+struct Parcel:
+    rows: map[string, string]
+    tags: set[string]
+enum Message:
+    entries(rows: map[string, string])
+machine Session:
+    states:
+        active(tags: set[string])
+    transitions:
+        active to active
+function pending_tags() returns set[string]:
+    mutable set[string] tags = set.new[string]()
+    tags = set.add[string](tags, "live")
+    return run tags
+function check_struct() returns nothing:
+    Parcel parcel = Parcel(rows: run map("a": "Ada"), tags: pending_tags())
+    TypeField rows_field = list.get[TypeField](type.fields[Parcel](), 0) handle:
+        return nothing
+    map[string, string] rows = type.field_value[Parcel, map[string, string]](view parcel, view rows_field)
+    trace rows
+    map[string, string] joined_rows = join rows handle error:
+        return nothing
+    println(map.length[string, string](view joined_rows))
+    TypeField tags_field = list.get[TypeField](type.fields[Parcel](), 1) handle:
+        return nothing
+    set[string] tags = type.field_value[Parcel, set[string]](view parcel, view tags_field)
+    trace tags
+    set[string] joined_tags = join tags handle error:
+        return nothing
+    println(set.length[string](view joined_tags))
+function check_enum() returns nothing:
+    Message message = Message.entries(run map("b": "Bea"))
+    TypeVariant variant = type.variant_value[Message](view message)
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    map[string, string] rows = type.variant_field_value[Message, map[string, string]](view message, view field)
+    trace rows
+    map[string, string] joined = join rows handle error:
+        return nothing
+    println(map.length[string, string](view joined))
+function check_machine() returns nothing:
+    Session session = Session(active, pending_tags())
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    set[string] tags = type.machine_field_value[Session, set[string]](view session, view field)
+    trace tags
+    set[string] joined = join tags handle error:
+        return nothing
+    println(set.length[string](view joined))
+function main() returns nothing:
+    check_struct()
+    check_enum()
+    check_machine()
+    return nothing

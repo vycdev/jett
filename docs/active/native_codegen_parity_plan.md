@@ -1271,10 +1271,10 @@ field after metadata validation. Linked differential fixtures cover nested
 integer, boolean, and floating-point struct fields plus enum and machine
 payloads. Other aggregate reflection and mismatch diagnostics remain open.
 
-Linked reflected-read coverage now also includes pending owned strings and
-lists in struct fields, enum payloads, and machine state fields. The fixture
-checks the copied value's debug shape and successful `join` after reflection;
-other aggregate shapes and mismatch diagnostics remain open.
+Linked reflected-read coverage now also includes pending owned strings, lists,
+maps, and sets in struct fields, enum payloads, and machine state fields. The
+fixtures check each copied value's debug shape and successful `join` after
+reflection; other aggregate shapes and mismatch diagnostics remain open.
 
 MIR handler extraction now keeps a noncopyable view of an immutable local at
 the call site while hoisting the later handled argument into control flow.

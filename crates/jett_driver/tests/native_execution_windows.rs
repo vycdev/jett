@@ -1567,6 +1567,24 @@ fn native_pending_reflected_owned_fields_match_interpreter() {
 }
 
 #[test]
+fn native_pending_reflected_collections_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_reflected_collections.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated reflected collection directory");
+    let binary = directory.path().join("pending_reflected_collections.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile reflected pending collections");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
 fn native_reflected_foreign_field_errors_match_interpreter() {
     for name in [
         "reflected_struct_foreign_field_failure",
