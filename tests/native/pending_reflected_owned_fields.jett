@@ -1,0 +1,54 @@
+namespace app
+struct Parcel:
+    label: string
+    items: list[int64]
+enum Message:
+    items(values: list[int64])
+    empty
+machine Session:
+    states:
+        active(values: list[int64])
+        closed
+    transitions:
+        active to closed
+function check_struct() returns nothing:
+    Parcel parcel = Parcel(label: run "ready", items: run list(1, 2))
+    TypeField label_field = list.get[TypeField](type.fields[Parcel](), 0) handle:
+        return nothing
+    string label = type.field_value[Parcel, string](view parcel, view label_field)
+    trace label
+    string joined_label = join label handle error:
+        return nothing
+    println(joined_label)
+    TypeField items_field = list.get[TypeField](type.fields[Parcel](), 1) handle:
+        return nothing
+    list[int64] items = type.field_value[Parcel, list[int64]](view parcel, view items_field)
+    trace items
+    list[int64] joined_items = join items handle error:
+        return nothing
+    println(list.sum[int64](view joined_items))
+function check_enum() returns nothing:
+    Message message = Message.items(run list(3, 4))
+    TypeVariant variant = type.variant_value[Message](view message)
+    TypeField field = list.get[TypeField](variant.fields, 0) handle:
+        return nothing
+    list[int64] values = type.variant_field_value[Message, list[int64]](view message, view field)
+    trace values
+    list[int64] joined = join values handle error:
+        return nothing
+    println(list.sum[int64](view joined))
+function check_machine() returns nothing:
+    Session session = Session(active, run list(5, 6))
+    TypeMachineState state = type.machine_state_value[Session](view session)
+    TypeField field = list.get[TypeField](state.fields, 0) handle:
+        return nothing
+    list[int64] values = type.machine_field_value[Session, list[int64]](view session, view field)
+    trace values
+    list[int64] joined = join values handle error:
+        return nothing
+    println(list.sum[int64](view joined))
+function main() returns nothing:
+    check_struct()
+    check_enum()
+    check_machine()
+    return nothing

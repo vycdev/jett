@@ -1269,6 +1269,11 @@ field after metadata validation. Linked differential fixtures cover nested
 integer, boolean, and floating-point struct fields plus enum and machine
 payloads. Other aggregate reflection and mismatch diagnostics remain open.
 
+Linked reflected-read coverage now also includes pending owned strings and
+lists in struct fields, enum payloads, and machine state fields. The fixture
+checks the copied value's debug shape and successful `join` after reflection;
+other aggregate shapes and mismatch diagnostics remain open.
+
 Native `type.arg` now checks pending, negative, and out-of-range indexes with
 interpreter-matching errors before selecting checked `TypeInfo` metadata.
 Differential fixtures include nested pending depth and alias-typed owners;
