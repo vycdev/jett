@@ -1,0 +1,18 @@
+namespace app
+actor Holder(seed: string):
+    mutable string label = seed
+    receive noop:
+        return nothing
+function main() returns nothing:
+    Holder pending = run spawn Holder(seed: "Ada")
+    trace pending
+    Holder nested = run pending
+    trace nested
+    Holder inner = join nested handle error:
+        default spawn Holder(seed: "fallback")
+    trace inner
+    Holder joined = join inner handle error:
+        default spawn Holder(seed: "fallback")
+    trace joined
+    send joined.noop
+    return nothing

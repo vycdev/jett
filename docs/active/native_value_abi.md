@@ -114,6 +114,12 @@ preserves nested wrappers. `construct_put` and `construct_finish` reject a
 still-pending builder with the interpreter's source-value error before
 performing builder validation or construction.
 
+Actor identities also carry pending depth in their registered record. Task
+`run` and `join` change that depth without allocating a second actor identity;
+debug output retains the actor ordinal. `send` and `ask` reject a pending actor
+before evaluating message arguments, matching the interpreter's actor-value
+check.
+
 Native string search shares one linear grapheme-boundary scanner with split.
 `string.index_of` returns an optional int64 handle with a non-owning index
 payload, including index zero for an empty needle. `string.count` returns the

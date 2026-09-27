@@ -127,6 +127,10 @@ const PENDING_FUNCTION_CALL: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"expected function value",
 );
+const PENDING_ACTOR_MESSAGE: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"send/ask: expected actor value",
+);
 
 fn format_nothing(depth: u64) -> LeafResult<String> {
     format_pending_value("nothing", depth)
@@ -535,7 +539,12 @@ impl NativeDebugLayout {
             }
             NativeDebugNode::Actor => {
                 let ordinal = values.actors.get(&bits).ok_or(INVALID_ACTOR)?;
-                format!("actor#{ordinal}")
+                let depth = values
+                    .structs
+                    .get(&bits)
+                    .ok_or(INVALID_ACTOR)?
+                    .pending_depth;
+                format_pending_value(&format!("actor#{ordinal}"), depth)?
             }
             NativeDebugNode::TypeConstruction => {
                 let builder = values.builders.get(&bits).ok_or(INVALID_CONSTRUCTION)?;
@@ -2547,6 +2556,33 @@ impl NativeValues {
         self.next_actor_ordinal = next;
         Ok(id)
     }
+    fn run_actor(&mut self, id: u64) -> LeafResult<u64> {
+        if !self.actors.contains_key(&id) {
+            return Err(INVALID_ACTOR);
+        }
+        let record = self.structs.get_mut(&id).ok_or(INVALID_ACTOR)?;
+        record.pending_depth = record.pending_depth.checked_add(1).ok_or(EXHAUSTED)?;
+        Ok(id)
+    }
+    fn join_actor(&mut self, id: u64) -> LeafResult<u64> {
+        if !self.actors.contains_key(&id) {
+            return Err(INVALID_ACTOR);
+        }
+        let record = self.structs.get_mut(&id).ok_or(INVALID_ACTOR)?;
+        record.pending_depth = record.pending_depth.saturating_sub(1);
+        Ok(id)
+    }
+    fn check_actor_message(&mut self, id: u64) -> LeafResult<u32> {
+        let ordinal = *self.actors.get(&id).ok_or(INVALID_ACTOR)?;
+        let depth = self.structs.get(&id).ok_or(INVALID_ACTOR)?.pending_depth;
+        if depth == 0 {
+            return Ok(0);
+        }
+        let actor = format_pending_value(&format!("actor#{ordinal}"), depth)?;
+        self.dynamic_failure_message =
+            Some(format!("send/ask: expected actor value, got {actor}").into_bytes());
+        Err(PENDING_ACTOR_MESSAGE)
+    }
     fn replace_actor_field(
         &mut self,
         id: u64,
@@ -4267,6 +4303,12 @@ leaves! {
         |s| Ok(s.struct_field(value, index)?.bits);
     ActorRegister, jett_rt_v1_actor_register, false, (value: u64 => I64), u64 => I64,
         |s| s.register_actor(value);
+    ActorRun, jett_rt_v1_actor_run, false, (value: u64 => I64), u64 => I64,
+        |s| s.run_actor(value);
+    ActorTaskJoin, jett_rt_v1_actor_task_join, false, (value: u64 => I64), u64 => I64,
+        |s| s.join_actor(value);
+    ActorMessageCheck, jett_rt_v1_actor_message_check, false, (value: u64 => I64), u32 => I32,
+        |s| s.check_actor_message(value);
     ActorReplace, jett_rt_v1_actor_replace, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
         |s| { if owned > 1 { return Err(INVALID_ACTOR); }
             s.replace_actor_field(value, index, bits, owned != 0) };

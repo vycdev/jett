@@ -1822,6 +1822,10 @@ impl Translator<'_, '_> {
                     let source = self.scalar(lowered, value.span)?;
                     let pending = self.leaf(NativeLeaf::RecordRun, &[source], true)?;
                     self.own_linear(pending)
+                } else if matches!(self.types.resolve(value.ty), Type::Actor(_)) {
+                    let source = self.scalar(lowered, value.span)?;
+                    let pending = self.leaf(NativeLeaf::ActorRun, &[source], true)?;
+                    Ok(LoweredValue::Scalar(pending))
                 } else {
                     Ok(lowered)
                 }
@@ -1880,6 +1884,10 @@ impl Translator<'_, '_> {
                     let joined = self.leaf(NativeLeaf::RecordTaskJoin, &[source], true)?;
                     let joined = self.own_linear(joined)?;
                     self.construct_sum_value(true, joined, expression.span)
+                } else if matches!(self.types.resolve(value.ty), Type::Actor(_)) {
+                    let source = self.scalar(result, value.span)?;
+                    let joined = self.leaf(NativeLeaf::ActorTaskJoin, &[source], true)?;
+                    self.construct_sum_value(true, LoweredValue::Scalar(joined), expression.span)
                 } else if value.ty == expression.ty {
                     Ok(result)
                 } else {
@@ -1940,6 +1948,7 @@ impl Translator<'_, '_> {
                 let captured = definition.capability_params.len() + definition.state_fields.len();
                 let lowered_actor = self.expression(actor)?;
                 let environment = self.scalar(lowered_actor, actor.span)?;
+                self.leaf(NativeLeaf::ActorMessageCheck, &[environment], true)?;
                 let result = self.call_with_environment(
                     *handler,
                     args,
