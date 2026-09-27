@@ -1081,6 +1081,50 @@ fn native_pending_index_and_count_intrinsics_match_interpreter_errors() {
 }
 
 #[test]
+fn native_pending_math_intrinsics_match_interpreter_errors() {
+    for name in [
+        "pending_math_abs_failure",
+        "pending_math_min_failure",
+        "pending_math_min_first_failure",
+        "pending_math_max_failure",
+        "pending_math_sqrt_failure",
+        "pending_math_floor_failure",
+        "pending_math_ceil_failure",
+        "pending_math_round_failure",
+        "pending_math_log_failure",
+        "pending_math_log2_failure",
+        "pending_math_log10_failure",
+        "pending_math_sin_failure",
+        "pending_math_cos_failure",
+        "pending_math_tan_failure",
+        "pending_math_pow_failure",
+        "pending_math_pow_exponent_failure",
+        "pending_math_clamp_failure",
+        "pending_math_clamp_upper_failure",
+        "pending_math_mod_failure",
+        "pending_math_gcd_failure",
+        "pending_math_lcm_failure",
+        "pending_math_factorial_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending math operands");
+        let directory = tempfile::tempdir().expect("isolated pending math directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary).expect("compile pending math case");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_pending_set_map_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_set_map_values.jett");

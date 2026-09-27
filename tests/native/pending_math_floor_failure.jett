@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    float64 value = math.floor(run 4.5)
+    trace value
+    return nothing

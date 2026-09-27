@@ -327,6 +327,9 @@ sort, sortedness, and both swap indexes.
 reject pending integer operands with interpreter diagnostics. The byte and
 string operations also reject a pending receiver. Other intrinsic consumers
 of pending values remain open.
+Scalar math intrinsics now reject pending numeric arguments before invoking
+native kernels, with differential cases spanning every argument-bearing scalar
+math intrinsic and each argument position used by the multi-argument forms.
 Primitive set elements now preserve pending depth through membership, updates,
 cloning, debug output, and iteration. Pending set containers fail at public set
 intrinsics. Native `for` rejects pending list, string, map, and set containers

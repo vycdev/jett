@@ -1448,6 +1448,30 @@ impl Translator<'_, '_> {
         )?;
         Ok(())
     }
+    fn reject_pending_scalars(
+        &mut self,
+        evaluated: &[LoweredValue],
+        message: &str,
+    ) -> Result<(), CodegenError> {
+        let zero = self.builder.ins().iconst(ir::types::I64, 0);
+        let mut depths = [zero; 3];
+        let mut has_task = false;
+        for (slot, value) in evaluated.iter().enumerate() {
+            if let LoweredValue::ScalarTask(_, depth) = value {
+                depths[slot] = *depth;
+                has_task = true;
+            }
+        }
+        if has_task {
+            let (pointer, length) = self.static_bytes(message)?;
+            self.leaf(
+                NativeLeaf::RejectPendingScalars,
+                &[depths[0], depths[1], depths[2], pointer, length],
+                true,
+            )?;
+        }
+        Ok(())
+    }
     pub(super) fn intrinsic(
         &mut self,
         id: IntrinsicId,
@@ -1821,6 +1845,35 @@ impl Translator<'_, '_> {
             )?));
         }
         if let Some(leaf) = crate::values::math_leaf(id, args.first().map(|a| a.ty)) {
+            let expected = match id {
+                IntrinsicId::MathKernelAbs
+                | IntrinsicId::MathAbs
+                | IntrinsicId::MathSqrt
+                | IntrinsicId::MathFloor
+                | IntrinsicId::MathCeil
+                | IntrinsicId::MathRound
+                | IntrinsicId::MathLog
+                | IntrinsicId::MathLog2
+                | IntrinsicId::MathLog10
+                | IntrinsicId::MathSin
+                | IntrinsicId::MathCos
+                | IntrinsicId::MathTan => Some("a numeric argument"),
+                IntrinsicId::MathKernelMin
+                | IntrinsicId::MathMin
+                | IntrinsicId::MathKernelMax
+                | IntrinsicId::MathMax => Some("two arguments of the same numeric type"),
+                IntrinsicId::MathPow => Some("numeric arguments"),
+                IntrinsicId::MathClamp => Some("three arguments of the same numeric type"),
+                IntrinsicId::MathMod | IntrinsicId::MathGcd | IntrinsicId::MathLcm => {
+                    Some("two int64 arguments")
+                }
+                IntrinsicId::MathFactorial => Some("an int64 argument"),
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                let message = format!("{} expects {expected}", id.canonical_name());
+                self.reject_pending_scalars(&evaluated, &message)?;
+            }
             let arguments = evaluated
                 .iter()
                 .map(|v| self.scalar(*v, span))

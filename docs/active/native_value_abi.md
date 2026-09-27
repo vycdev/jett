@@ -110,6 +110,8 @@ elements remain valid inputs to append and insert, and retain their depth.
 Native `range` checks all supplied integer operands before generating values.
 `bytes.get`, `bytes.slice`, `string.slice`, and `string.repeat` reject pending
 indexes or counts and pending receivers with their current interpreter errors.
+Math leaves use a shared pending-scalar check with the checked intrinsic name
+and interpreter's type-error wording before operating on numeric payload bits.
 Primitive sets likewise keep a sparse per-element pending-depth map. Add,
 remove, contains, clone, recursive debug formatting, and scalar iteration use
 that depth; string set membership compares both text and the string handle's

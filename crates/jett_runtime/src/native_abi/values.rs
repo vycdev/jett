@@ -79,6 +79,10 @@ const INVALID_LIST: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native list handle",
 );
+const INVALID_PENDING_SCALAR_CHECK: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"invalid native pending scalar check",
+);
 const INVALID_SET: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"invalid native set handle or element",
@@ -2175,6 +2179,22 @@ impl NativeValues {
             return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, message));
         }
         Ok(0)
+    }
+    fn reject_pending_scalars(
+        &mut self,
+        first_depth: u64,
+        second_depth: u64,
+        third_depth: u64,
+        message: &[u8],
+    ) -> LeafResult<u32> {
+        if first_depth == 0 && second_depth == 0 && third_depth == 0 {
+            return Ok(0);
+        }
+        self.dynamic_failure_message = Some(message.to_vec());
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"pending scalar intrinsic operand",
+        ))
     }
     fn new_set(&mut self, strings: u32) -> LeafResult<u64> {
         if strings > 1 {
@@ -5050,6 +5070,12 @@ leaves! {
         |s| s.range(start, end, step);
     CheckIndexCountArguments, jett_rt_v1_check_index_count_arguments, false, (value: u64 => I64, kind: u32 => I32, first_depth: u64 => I64, second_depth: u64 => I64, third_depth: u64 => I64), u32 => I32,
         |s| s.check_index_count_arguments(value, kind, first_depth, second_depth, third_depth);
+    RejectPendingScalars, jett_rt_v1_reject_pending_scalars, false, (first_depth: u64 => I64, second_depth: u64 => I64, third_depth: u64 => I64, message_pointer: u64 => I64, message_length: u64 => I64), u32 => I32,
+        |s| { if message_pointer == 0 { return Err(INVALID_PENDING_SCALAR_CHECK); }
+            let length = usize::try_from(message_length).map_err(|_| INVALID_PENDING_SCALAR_CHECK)?;
+            if length > isize::MAX as usize { return Err(INVALID_PENDING_SCALAR_CHECK); }
+            let message = unsafe { std::slice::from_raw_parts(message_pointer as *const u8, length) };
+            s.reject_pending_scalars(first_depth, second_depth, third_depth, message) };
     ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;

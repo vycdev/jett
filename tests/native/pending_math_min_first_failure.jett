@@ -1,0 +1,5 @@
+namespace app
+function main() returns nothing:
+    int64 value = math.min(run 3, 4)
+    trace value
+    return nothing
