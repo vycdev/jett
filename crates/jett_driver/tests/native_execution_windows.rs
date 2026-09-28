@@ -3466,6 +3466,23 @@ fn native_run_local_aggregate_reuse_matches_interpreter() {
 }
 
 #[test]
+fn native_run_local_builder_reuse_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/run_local_builder_reuse.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated run-local builder directory");
+    let binary = directory.path().join("run_local_builder_reuse.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile local builder run");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
 fn native_projected_string_iteration_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_string_iteration.jett");

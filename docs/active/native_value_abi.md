@@ -191,6 +191,10 @@ still-pending function with the interpreter's runtime error.
 preserves nested wrappers. `construct_put` and `construct_finish` reject a
 still-pending builder with the interpreter's source-value error before
 performing builder validation or construction.
+MIR also treats a builder as snapshotable: `run` of a local leaves the original
+builder usable, repeated handles can clone an optional builder payload, and a
+view argument remains tied to its pre-handler builder when a later argument
+rebinds the caller's local.
 
 Actor identities also carry pending depth in their registered record. Task
 `run` and `join` change that depth without allocating a second actor identity;

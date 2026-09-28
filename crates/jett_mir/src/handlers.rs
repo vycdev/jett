@@ -96,6 +96,7 @@ fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::Bool
             | Type::Bytes
             | Type::Nothing
+            | Type::TypeConstruction
             | Type::Function { .. } => true,
             Type::List(inner)
             | Type::Set(inner)
@@ -133,7 +134,6 @@ fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::Capability(_)
             | Type::Actor(_)
             | Type::Interface(_)
-            | Type::TypeConstruction
             | Type::Never
             | Type::Error => false,
         }

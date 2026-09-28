@@ -1379,3 +1379,10 @@ fixtures cover optional, result, list, map, and struct locals, comparing both
 original and pending debug output. Repeated handles on projected optional and
 result struct fields also match the interpreter. Other noncloneable task inputs
 and unexamined control-flow shapes remain open at the coarse 85% estimate.
+
+`TypeConstruction` builders are now included among cloneable MIR snapshots.
+The interpreter leaves a local builder readable after `run`, while native
+lowering previously moved it. Linked differential coverage checks the original
+and pending builder, repeated handles on an optional builder, and a borrowed
+builder call staged before a later handler rebinds its caller local. Other
+noncloneable runtime values and task semantics remain open at about 85%.
