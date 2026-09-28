@@ -177,6 +177,20 @@ fn stable_deferred_view(locals: &[Local], expression: &Expression) -> bool {
         .is_some_and(|local| local.id == id && !local.mutable)
 }
 
+fn snapshotable_local(types: &TypeInterner, expression: &Expression) -> bool {
+    matches!(expression.kind, ExpressionKind::Local(_))
+        && crate::move_values::is_linear(types, expression.ty)
+        && can_snapshot_view(types, expression.ty)
+}
+
+fn snapshot_local(expression: &Expression, lowered: Expression) -> Expression {
+    Expression {
+        kind: ExpressionKind::Clone(Box::new(lowered)),
+        ty: expression.ty,
+        span: expression.span,
+    }
+}
+
 impl Builder<'_> {
     fn refinement_predicate_input(
         &self,
@@ -278,19 +292,13 @@ impl Builder<'_> {
             return lowered;
         }
         if let ExpressionKind::Run(value) = &expression.kind {
-            let snapshot_local = matches!(value.kind, ExpressionKind::Local(_))
-                && crate::move_values::is_linear(self.types, value.ty)
-                && can_snapshot_view(self.types, value.ty);
-            if has_extractable_handle(value) || snapshot_local {
+            let needs_snapshot = snapshotable_local(self.types, value);
+            if has_extractable_handle(value) || needs_snapshot {
                 let mut lowered = expression.clone();
                 let source = self.lower_value(value);
                 // `run` does not consume a cloneable local in the interpreter.
-                let source = if snapshot_local {
-                    Expression {
-                        kind: ExpressionKind::Clone(Box::new(source)),
-                        ty: value.ty,
-                        span: value.span,
-                    }
+                let source = if needs_snapshot {
+                    snapshot_local(value, source)
                 } else {
                     source
                 };
@@ -306,17 +314,29 @@ impl Builder<'_> {
             return lowered;
         }
         if let ExpressionKind::Coarsen(value) = &expression.kind
-            && has_extractable_handle(value)
+            && (has_extractable_handle(value) || snapshotable_local(self.types, value))
         {
             let mut lowered = expression.clone();
-            lowered.kind = ExpressionKind::Coarsen(Box::new(self.lower_value(value)));
+            let source = self.lower_value(value);
+            let source = if snapshotable_local(self.types, value) {
+                snapshot_local(value, source)
+            } else {
+                source
+            };
+            lowered.kind = ExpressionKind::Coarsen(Box::new(source));
             return lowered;
         }
         if let ExpressionKind::Declassify(value) = &expression.kind
-            && has_extractable_handle(value)
+            && (has_extractable_handle(value) || snapshotable_local(self.types, value))
         {
             let mut lowered = expression.clone();
-            lowered.kind = ExpressionKind::Declassify(Box::new(self.lower_value(value)));
+            let source = self.lower_value(value);
+            let source = if snapshotable_local(self.types, value) {
+                snapshot_local(value, source)
+            } else {
+                source
+            };
+            lowered.kind = ExpressionKind::Declassify(Box::new(source));
             return lowered;
         }
         if let ExpressionKind::Field {
@@ -863,14 +883,8 @@ impl Builder<'_> {
         let mut value = self.lower_value(target);
         // A source handle leaves a local sum available for subsequent reads.
         // SumTake consumes only this snapshot, including on a view parameter.
-        if matches!(target.kind, ExpressionKind::Local(_))
-            && can_snapshot_view(self.types, target.ty)
-        {
-            value = Expression {
-                kind: ExpressionKind::Clone(Box::new(value)),
-                ty: target.ty,
-                span: target.span,
-            };
+        if snapshotable_local(self.types, target) {
+            value = snapshot_local(target, value);
         }
         let source = self.temporary(target.ty, span);
         self.push(

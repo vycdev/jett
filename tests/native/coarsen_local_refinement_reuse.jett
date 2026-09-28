@@ -1,0 +1,10 @@
+namespace app
+type NonEmptyNumbers = list[int64] where list.length(value) > 0
+function main() returns nothing:
+    NonEmptyNumbers checked = list(2, 3) handle error:
+        println(error)
+        return nothing
+    list[int64] raw = coarsen checked
+    trace checked
+    trace raw
+    return nothing

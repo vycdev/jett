@@ -429,7 +429,11 @@ checks its source `secret[T]` and destination `T`.
 Explicit `coarsen` likewise transfers the underlying value after the verifier
 walks the checked refinement ancestry to the requested base type. It creates
 no runtime wrapper and does not bypass the separate fallible validation needed
-to construct a refinement. Private crypto leaves borrow checked bytes and
+to construct a refinement. MIR snapshots a cloneable owned local before either
+transparent conversion, preserving the original refinement or secret value
+for a later read while the converted result owns its copy. Linked differential
+fixtures cover reuse after `coarsen` and repeated `declassify` of a secret list.
+Private crypto leaves borrow checked bytes and
 return owned digests; the interpreter and native runtime use
 the same SHA-256, SHA-512, MD5, and HMAC-SHA-256 kernels behind public `.jett`
 wrappers. The HMAC result retains its secret type in MIR and native ownership.

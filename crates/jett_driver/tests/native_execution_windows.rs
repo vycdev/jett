@@ -3483,6 +3483,31 @@ fn native_run_local_builder_reuse_matches_interpreter() {
 }
 
 #[test]
+fn native_transparent_local_reuse_matches_interpreter() {
+    for name in [
+        "coarsen_local_refinement_reuse",
+        "declassify_local_secret_reuse",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+        let directory = tempfile::tempdir().expect("isolated transparent conversion directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary)
+            .expect("compile transparent local conversion");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+        let debug = if expected.debug_output.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", expected.debug_output.join("\n"))
+        };
+        assert_eq!(actual.stderr, debug.as_bytes(), "{name}");
+    }
+}
+
+#[test]
 fn native_projected_string_iteration_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_string_iteration.jett");

@@ -1386,3 +1386,9 @@ lowering previously moved it. Linked differential coverage checks the original
 and pending builder, repeated handles on an optional builder, and a borrowed
 builder call staged before a later handler rebinds its caller local. Other
 noncloneable runtime values and task semantics remain open at about 85%.
+
+Native `coarsen` and `declassify` now snapshot cloneable owned locals before
+transferring the transparent representation. Differential fixtures reuse a
+refined list after `coarsen` and declassify a secret list twice, matching the
+interpreter's local-read behavior. Noncloneable conversion inputs and the
+matrix gaps above remain open; the broad estimate stays about 85%.
