@@ -277,12 +277,26 @@ impl Builder<'_> {
             lowered.kind = ExpressionKind::Clone(Box::new(self.lower_value(value)));
             return lowered;
         }
-        if let ExpressionKind::Run(value) = &expression.kind
-            && has_extractable_handle(value)
-        {
-            let mut lowered = expression.clone();
-            lowered.kind = ExpressionKind::Run(Box::new(self.lower_value(value)));
-            return lowered;
+        if let ExpressionKind::Run(value) = &expression.kind {
+            let snapshot_local = matches!(value.kind, ExpressionKind::Local(_))
+                && crate::move_values::is_linear(self.types, value.ty)
+                && can_snapshot_view(self.types, value.ty);
+            if has_extractable_handle(value) || snapshot_local {
+                let mut lowered = expression.clone();
+                let source = self.lower_value(value);
+                // `run` does not consume a cloneable local in the interpreter.
+                let source = if snapshot_local {
+                    Expression {
+                        kind: ExpressionKind::Clone(Box::new(source)),
+                        ty: value.ty,
+                        span: value.span,
+                    }
+                } else {
+                    source
+                };
+                lowered.kind = ExpressionKind::Run(Box::new(source));
+                return lowered;
+            }
         }
         if let ExpressionKind::Join(value) = &expression.kind
             && has_extractable_handle(value)

@@ -1,0 +1,18 @@
+namespace app
+struct Slot:
+    payload: optional[list[int64]]
+    outcome: result[int64, string]
+function inspect(view slot: Slot) returns int64:
+    list[int64] first = slot.payload handle:
+        default list.new[int64]()
+    list[int64] second = slot.payload handle:
+        default list.new[int64]()
+    int64 left = slot.outcome handle error:
+        default 0
+    int64 right = slot.outcome handle error:
+        default 0
+    return list.length[int64](view first) + list.length[int64](view second) + left + right
+function main() returns nothing:
+    Slot slot = Slot(payload: some(list(2, 3)), outcome: ok(7))
+    println(inspect(view slot), inspect(view slot))
+    return nothing

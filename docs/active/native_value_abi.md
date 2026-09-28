@@ -175,6 +175,10 @@ clone owned payloads before changing the outer depth, and native debug and
 aggregate equality inspect the wrapper. Joining a pending result returns its
 existing success or failure branch, as in the interpreter's sequential task
 simulation; joining a pending optional returns a result containing the optional.
+MIR snapshots a cloneable linear local before `run`, so the original optional,
+result, list, map, or record remains readable after the pending value is made.
+The task leaf then gives the pending value its own handle and depth; this is
+covered by linked interpreter/native traces of both values.
 
 Function descriptors use owned record handles, so task `run` and `join` retain
 pending depth while cloning captured environments. Debug formatting applies

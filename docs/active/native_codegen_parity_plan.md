@@ -1371,3 +1371,11 @@ results, owned list payloads, and a view parameter. They also cover direct and
 indirect calls that stage a struct-field collection view before a later
 handler rebinds the parent, plus nested projected map/list iteration. Other
 handler and collection shapes remain open; the coarse estimate remains 85%.
+
+Native `run` now snapshots cloneable local aggregate inputs before creating
+pending task values. The interpreter leaves the original local readable;
+native code previously moved it and rejected a later trace. Differential
+fixtures cover optional, result, list, map, and struct locals, comparing both
+original and pending debug output. Repeated handles on projected optional and
+result struct fields also match the interpreter. Other noncloneable task inputs
+and unexamined control-flow shapes remain open at the coarse 85% estimate.

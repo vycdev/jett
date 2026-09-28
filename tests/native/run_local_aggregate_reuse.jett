@@ -1,0 +1,25 @@
+namespace app
+struct Holder:
+    values: list[int64]
+function main() returns nothing:
+    optional[list[int64]] value = some(list(1, 2))
+    optional[list[int64]] pending = run value
+    trace value
+    trace pending
+    result[int64, string] outcome = ok(7)
+    result[int64, string] pending_outcome = run outcome
+    trace outcome
+    trace pending_outcome
+    list[int64] items = list(4, 6)
+    list[int64] pending_items = run items
+    trace items
+    trace pending_items
+    map[string, int64] scores = map("a": 3)
+    map[string, int64] pending_scores = run scores
+    trace scores
+    trace pending_scores
+    Holder holder = Holder(values: list(9))
+    Holder pending_holder = run holder
+    trace holder
+    trace pending_holder
+    return nothing
