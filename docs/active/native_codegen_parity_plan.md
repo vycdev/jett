@@ -1412,3 +1412,9 @@ spells a standard module prefix. Linked native/interpreter coverage calls
 same-namespace `validate` and `math` functions alongside `math.abs`, checking
 that native HIR selects the source functions for bare calls and the standard
 module for the dotted call. The broad estimate remains about 85%.
+
+Linked differential failures now cover pending lower and upper arguments to
+public `random.int64`. Its source wrapper compares the bounds before reaching
+the private bounded-random intrinsic; native and interpreter both reject that
+comparison with the same pending-value diagnostic. Pending capability inputs
+were already covered separately. The broad estimate remains about 85%.

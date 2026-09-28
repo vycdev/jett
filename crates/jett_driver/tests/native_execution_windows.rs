@@ -2111,6 +2111,8 @@ fn native_pending_scalar_operations_match_interpreter_errors() {
         "pending_scalar_or_right_failure",
         "pending_scalar_condition_failure",
         "pending_scalar_breakpoint_failure",
+        "pending_random_lower_bound_failure",
+        "pending_random_upper_bound_failure",
     ] {
         let fixture =
             Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));

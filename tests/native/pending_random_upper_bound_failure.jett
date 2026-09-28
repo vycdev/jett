@@ -1,0 +1,6 @@
+namespace app
+function main(rng: Random) returns nothing:
+    int64 upper = run 10
+    result[int64, string] sampled = random.int64(view rng, 0, upper)
+    trace sampled
+    return nothing
