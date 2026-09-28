@@ -1363,3 +1363,11 @@ evaluation. Pending JSON parse and string-serialization inputs retain the
 interpreter's errors. Linked differential fixtures cover the successful and
 failing paths. Other intrinsic operands and JSON shapes remain open, so the
 broad estimate remains about 85%.
+
+Cloneable local results and optionals now stay available after a native
+`handle` extraction. MIR snapshots a local sum before reading its tag and
+taking a payload. Linked differential cases reuse empty and present optionals,
+results, owned list payloads, and a view parameter. They also cover direct and
+indirect calls that stage a struct-field collection view before a later
+handler rebinds the parent, plus nested projected map/list iteration. Other
+handler and collection shapes remain open; the coarse estimate remains 85%.

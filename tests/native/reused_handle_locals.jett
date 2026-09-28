@@ -1,0 +1,34 @@
+namespace app
+function inspect_view(view source: optional[list[int64]]) returns int64:
+    list[int64] first = source handle:
+        default list.new[int64]()
+    list[int64] second = source handle:
+        default list.new[int64]()
+    return list.length[int64](view first) + list.length[int64](view second)
+function main() returns nothing:
+    optional[int64] missing = none
+    int64 first = missing handle:
+        default 1
+    int64 second = missing handle:
+        default 2
+    println(first, second)
+    optional[int64] present = some(7)
+    int64 third = present handle:
+        default 0
+    int64 fourth = present handle:
+        default 0
+    println(third, fourth)
+    result[int64, string] outcome = ok(5)
+    int64 fifth = outcome handle error:
+        default 0
+    int64 sixth = outcome handle error:
+        default 0
+    println(fifth, sixth)
+    optional[list[int64]] owned = some(list(4, 6))
+    println(inspect_view(view owned))
+    list[int64] first_list = owned handle:
+        default list.new[int64]()
+    list[int64] second_list = owned handle:
+        default list.new[int64]()
+    println(list.length[int64](view first_list), list.length[int64](view second_list))
+    return nothing

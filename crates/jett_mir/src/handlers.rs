@@ -846,7 +846,18 @@ impl Builder<'_> {
             return expression.clone();
         };
         let span = expression.span;
-        let value = self.lower_value(target);
+        let mut value = self.lower_value(target);
+        // A source handle leaves a local sum available for subsequent reads.
+        // SumTake consumes only this snapshot, including on a view parameter.
+        if matches!(target.kind, ExpressionKind::Local(_))
+            && can_snapshot_view(self.types, target.ty)
+        {
+            value = Expression {
+                kind: ExpressionKind::Clone(Box::new(value)),
+                ty: target.ty,
+                span: target.span,
+            };
+        }
         let source = self.temporary(target.ty, span);
         self.push(
             StatementKind::Let {

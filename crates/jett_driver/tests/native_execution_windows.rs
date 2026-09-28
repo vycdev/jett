@@ -3388,6 +3388,52 @@ fn native_projected_machine_sequences_match_interpreter() {
 }
 
 #[test]
+fn native_projected_nested_collections_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/projected_nested_collections.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated nested projection directory");
+    let binary = directory.path().join("projected_nested_collections.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile nested collection projection");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_nested_handle_projected_view_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_handle_projected_view.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "3 8\n10 13\n");
+    let directory = tempfile::tempdir().expect("isolated projected handler directory");
+    let binary = directory.path().join("nested_handle_projected_view.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile projected view before handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_reused_handle_locals_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/reused_handle_locals.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    assert_eq!(expected.stdout, "1 2\n7 7\n5 5\n4\n2 2\n");
+    let directory = tempfile::tempdir().expect("isolated reused handle directory");
+    let binary = directory.path().join("reused_handle_locals.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile reused local handles");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_projected_string_iteration_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_string_iteration.jett");

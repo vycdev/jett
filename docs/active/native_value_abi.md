@@ -458,9 +458,14 @@ Nested payloads work. Result/optional handlers inside direct-call arguments
 also lower through `view` wrappers; preceding owned arguments are staged in
 checked evaluation order before the handler's CFG branch. A native differential
 fixture checks present/default branches and named-argument side-effect order.
-Handlers nested inside other expression operands, refinement handlers, and
-match/aggregate lowering remain separate prerequisites and are still rejected
-by native validation rather than executed eagerly.
+Handling a cloneable local result or optional snapshots that local before
+SumTag and SumTake, because the source remains available to later handles.
+This includes view parameters and sums containing owned lists. Direct and
+indirect calls can stage a projected view before a later handler rebinds its
+parent; the callee reads the original projected value.
+The extracted CFG also covers many nested expression and refinement forms;
+unexamined handlers and sums containing noncloneable resources still require
+parity work.
 
 All original bytes_operations fixture functions execute in a supplemental
 native main, including binary conversion errors and borrowed observer aliases.

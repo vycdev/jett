@@ -1,0 +1,26 @@
+namespace app
+struct Item:
+    label: string
+    score: int64
+struct Store:
+    batches: map[string, list[Item]]
+    grid: list[list[Item]]
+function inspect(view store: Store) returns int64:
+    mutable int64 total = 0
+    for key, batch in view store.batches:
+        println(key)
+        for item in view batch:
+            println(item.label)
+            total = total + item.score
+    for row in view store.grid:
+        for item in view row:
+            total = total + item.score
+    return total + map.length[string, list[Item]](view store.batches) + list.length[list[Item]](view store.grid)
+function main() returns nothing:
+    list[Item] first = list(Item(label: "Ada", score: 2), Item(label: "Lin", score: 3))
+    list[Item] second = list(Item(label: "Mia", score: 5))
+    map[string, list[Item]] batches = map("first": first, "second": second)
+    list[list[Item]] grid = list(list(Item(label: "A", score: 7)), list(Item(label: "B", score: 11)))
+    Store store = Store(batches: batches, grid: grid)
+    println(inspect(view store), inspect(view store))
+    return nothing
