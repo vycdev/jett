@@ -4751,6 +4751,12 @@ duplicate declarations inside the merged namespace are still compile errors.
 This exception is not available to project files or vendored dependencies, and
 project code still cannot reopen a stdlib namespace such as `json`.
 
+A bare call to a declared same-namespace function resolves to that function
+even when its name is also a standard module prefix, such as `math` or
+`validate`. Dotted calls such as `math.abs(-4)` still resolve through the
+standard module. The module name itself cannot be redeclared as a project
+namespace.
+
 **Third-party namespace collisions:** If a vendored library declares `namespace auth` and your project also has `namespace auth`, this is a compile error. Since dependencies are vendored source files, you own the copy — rename the namespace in the vendored file (e.g. to `namespace authlib.auth`), then `use authlib.auth as auth` at the call site. Library authors should use prefixed namespaces (e.g. `namespace mylib.auth` instead of just `namespace auth`) to minimize collisions.
 
 #### Namespace Visibility And Exports

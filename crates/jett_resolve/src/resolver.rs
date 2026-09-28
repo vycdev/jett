@@ -1240,11 +1240,6 @@ impl Resolver {
             return;
         }
 
-        // Builtin module names (e.g., `math`) are always in scope as callee prefixes.
-        if is_builtin_module(name) {
-            return;
-        }
-
         if let Some(def_id) = self.lookup_local_non_root(name) {
             self.record_resolution(name, span, item_index, def_id, false);
             return;
@@ -1262,6 +1257,12 @@ impl Resolver {
         if let Some(def_id) = self.scope_table.lookup(self.current_scope, name) {
             let imported = self.direct_path_uses_import(name);
             self.record_resolution(name, span, item_index, def_id, imported);
+            return;
+        }
+
+        // A declared name wins over a builtin module prefix when used bare.
+        // Dotted calls still resolve their builtin prefix separately.
+        if is_builtin_module(name) {
             return;
         }
 
@@ -1890,6 +1891,24 @@ mod tests {
                 Some(namespace)
             );
         }
+    }
+
+    #[test]
+    fn source_function_named_like_builtin_prefix_resolves_as_function() {
+        let source = "namespace app\nfunction validate(value: int64) returns int64:\n    return value + 1\nfunction main() returns nothing:\n    println(validate(4))\n";
+        let result = resolve(&parse_module(source));
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+        let definition = def_by_name(&result, "app.validate");
+        let call_start = source.rfind("validate(4)").expect("source call") as u32;
+        assert_eq!(
+            result.resolutions.get(&sp(call_start, call_start + 8)),
+            Some(&definition.id)
+        );
     }
 
     #[test]

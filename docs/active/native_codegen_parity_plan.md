@@ -1406,3 +1406,9 @@ the handled failure branch. Linked differential fixtures cover a list
 refinement with both a nonempty and an empty source, plus a nested optional
 handler that supplies a refinement candidate. Other unexamined refinement
 sources and expression shapes remain open at about 85%.
+
+Resolver facts now retain a bare source-function call when its name also
+spells a standard module prefix. Linked native/interpreter coverage calls
+same-namespace `validate` and `math` functions alongside `math.abs`, checking
+that native HIR selects the source functions for bare calls and the standard
+module for the dotted call. The broad estimate remains about 85%.

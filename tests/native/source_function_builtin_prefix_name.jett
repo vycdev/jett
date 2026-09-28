@@ -1,0 +1,8 @@
+namespace app
+function validate(value: int64) returns int64:
+    return value + 1
+function math(value: int64) returns int64:
+    return value + 2
+function main() returns nothing:
+    println(validate(4), math(4), math.abs(-4))
+    return nothing

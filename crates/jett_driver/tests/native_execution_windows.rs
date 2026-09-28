@@ -3842,6 +3842,23 @@ fn native_view_function_values_match_interpreter() {
 }
 
 #[test]
+fn native_source_function_named_like_builtin_prefix_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/source_function_builtin_prefix_name.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated source function directory");
+    let binary = directory
+        .path()
+        .join("source_function_builtin_prefix_name.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile source function named like a builtin prefix");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_function_expression_calls_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/function_expression_calls.jett");
