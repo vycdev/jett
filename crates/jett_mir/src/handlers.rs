@@ -1022,6 +1022,13 @@ impl Builder<'_> {
         }
         let span = expression.span;
         let value = self.lower_value(target);
+        // Refinement validation reads a cloneable local without consuming the
+        // source value in the interpreter. Keep the candidate in its own owner.
+        let value = if snapshotable_local(self.types, target) {
+            snapshot_local(target, value)
+        } else {
+            value
+        };
         let source = self.temporary(target.ty, span);
         self.push(
             StatementKind::Let {

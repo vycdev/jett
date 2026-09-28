@@ -1399,3 +1399,10 @@ trace, list storage, and cleanup agree. Equality for this payload still hits
 the conservative native guard while the language rule in
 `docs/open_design/enum_payload_struct_equality.md` is unresolved. This narrows
 the enum payload gap without changing the broad 85% estimate.
+
+Native refinement validation now snapshots a cloneable owned local before
+testing its predicate, leaving the source readable after success and inside
+the handled failure branch. Linked differential fixtures cover a list
+refinement with both a nonempty and an empty source, plus a nested optional
+handler that supplies a refinement candidate. Other unexamined refinement
+sources and expression shapes remain open at about 85%.

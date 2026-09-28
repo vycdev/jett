@@ -443,7 +443,9 @@ predicate function per refinement ancestor. MIR calls them in base-first order
 with a clone of the candidate, branches on each result, and transfers the
 candidate into the refined output only after all predicates pass. A false
 result creates the interpreter's type-specific error string and enters the
-source failure block. Predicate evaluation failures and secret-backed or
+source failure block. When the candidate is a cloneable owned local, MIR
+snapshots it before validation so both success and handled failure can still
+read the original source. Predicate evaluation failures and secret-backed or
 already-refined inputs still require native parity work.
 
 ## Result and optional ownership and handlers

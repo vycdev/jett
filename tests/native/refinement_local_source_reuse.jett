@@ -1,0 +1,15 @@
+namespace app
+type NonEmptyNumbers = list[int64] where list.length(value) > 0
+function inspect_source(source: list[int64]) returns string:
+    NonEmptyNumbers checked = source handle error:
+        trace source
+        return error
+    trace source
+    trace checked
+    return "{list.length[int64](view source)}"
+function main() returns nothing:
+    list[int64] valid = list(2, 3)
+    list[int64] empty = list()
+    println(inspect_source(valid))
+    println(inspect_source(empty))
+    return nothing

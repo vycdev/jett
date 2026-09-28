@@ -3720,6 +3720,39 @@ fn native_enum_binary_nested_handle_matches_interpreter() {
 }
 
 #[test]
+fn native_refinement_local_source_reuse_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/refinement_local_source_reuse.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated refinement source directory");
+    let binary = directory.path().join("refinement_local_source_reuse.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile refinement from reusable local");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
+fn native_nested_refinement_handle_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/nested_refinement_handle.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated refinement handler directory");
+    let binary = directory.path().join("nested_refinement_handle.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("compile refinement candidate with a nested handler");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_refined_binary_nested_handle_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_refined_binary.jett");
