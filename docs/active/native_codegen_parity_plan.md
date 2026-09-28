@@ -1418,3 +1418,9 @@ public `random.int64`. Its source wrapper compares the bounds before reaching
 the private bounded-random intrinsic; native and interpreter both reject that
 comparison with the same pending-value diagnostic. Pending capability inputs
 were already covered separately. The broad estimate remains about 85%.
+
+Repeated `join` of copyable local string and `int64` task values now has linked
+native/interpreter coverage, including a later trace of the still-pending
+local. The checker rejects repeating `join` on an owned list task after its
+first consumption, so the test stays within the language's ownership rule.
+This narrows task-value coverage without changing the broad estimate.
