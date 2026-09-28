@@ -1703,6 +1703,47 @@ fn native_json_recursive_enum_matches_interpreter() {
 }
 
 #[test]
+fn native_pending_json_inputs_match_interpreter_errors() {
+    for name in [
+        "pending_json_parse_input_failure",
+        "pending_json_serialize_string_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("interpreter must reject pending JSON input");
+        let directory = tempfile::tempdir().expect("isolated pending JSON directory");
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary).expect("compile pending JSON input");
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn native_pending_scalar_formatting_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_scalar_formatting.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated pending formatting directory");
+    let binary = directory.path().join("pending_scalar_formatting.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile pending formatting");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
 fn native_pending_reflected_field_error_matches_interpreter() {
     for name in [
         "pending_reflected_field_failure",

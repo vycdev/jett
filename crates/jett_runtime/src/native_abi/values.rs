@@ -6007,6 +6007,8 @@ leaves! {
         |s| s.join_string(value);
     StringTaskFormat, jett_rt_v1_string_task_format, false, (value: u64 => I64), u64 => I64,
         |s| s.display_string(value);
+    ScalarTaskFormat, jett_rt_v1_scalar_task_format, false, (bits: u64 => I64, kind: u32 => I32, depth: u64 => I64), u64 => I64,
+        |s| { let inner = s.debug_value(bits, kind)?; s.insert(format_pending_value(&inner, depth)?) };
     NothingRun, jett_rt_v1_nothing_run, false, (depth: u64 => I64), u64 => I64,
         |_s| depth.checked_add(1).ok_or(EXHAUSTED);
     NothingJoin, jett_rt_v1_nothing_join, false, (depth: u64 => I64), u64 => I64,

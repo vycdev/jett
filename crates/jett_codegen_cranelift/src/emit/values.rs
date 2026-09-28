@@ -1369,6 +1369,14 @@ impl Translator<'_, '_> {
             let text = self.leaf(NativeLeaf::StringTaskFormat, &[source], true)?;
             return self.own(text);
         }
+        if let LoweredValue::ScalarTask(_, depth) = value {
+            let (bits, _) = self.payload_bits(value);
+            let kind = task_scalar_debug_kind(self.types, ty)?
+                .ok_or_else(|| self.unsupported(span, "pending scalar formatting"))?;
+            let kind = self.builder.ins().iconst(ir::types::I32, kind as i64);
+            let text = self.leaf(NativeLeaf::ScalarTaskFormat, &[bits, kind, depth], true)?;
+            return self.own(text);
+        }
         let value = self.scalar(value, span)?;
         let (leaf, value) = match kind {
             ScalarKind::SignedInteger(bits) => (

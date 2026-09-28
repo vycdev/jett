@@ -91,6 +91,11 @@ fixtures cover these boundaries, including nested pending wrappers. Reflected
 field reads restore pending depth from the validated struct, enum, or machine
 field slot; differential fixtures cover primitive reflected values. Pending
 scalar values in unexamined intrinsic operands need further parity work.
+Scalar string interpolation now formats pending depth together with the value
+bits, including nested pending values and all numeric and boolean widths.
+Primitive JSON serialization uses that formatting for numbers and booleans.
+A checked source helper serializes nonliteral `nothing` after evaluating its
+argument, including pending `nothing`.
 Direct unary and binary operators now reject pending primitive operands with the
 interpreter's error text after evaluating the operands in source order.
 Boolean `and` and `or` still skip an unevaluated right operand when the plain

@@ -1353,3 +1353,13 @@ maps, results, and optionals, including an exact-parse error inside a secret
 list. A recursive enum also roundtrips through serialize and parse. These
 cases match the interpreter and expand evidence for concrete JSON shapes;
 they do not close the remaining JSON row or change the broad 85% estimate.
+
+Native string interpolation now renders pending scalar operands with their
+nested `pending(...)` wrappers, matching the interpreter for representative
+signed, unsigned, boolean, and floating-point values. Primitive JSON
+serialization preserves that text for numeric and boolean inputs; a checked
+source helper also handles nonliteral `nothing` without dropping argument
+evaluation. Pending JSON parse and string-serialization inputs retain the
+interpreter's errors. Linked differential fixtures cover the successful and
+failing paths. Other intrinsic operands and JSON shapes remain open, so the
+broad estimate remains about 85%.

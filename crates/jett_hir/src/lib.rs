@@ -5220,6 +5220,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         value: &Expression,
         span: Span,
     ) -> Option<ExpressionKind> {
+        if matches!(self.parent.check.interner.resolve(ty), Type::Nothing) {
+            return Some(ExpressionKind::Call {
+                function: self.trusted_stdlib_function("json", "json_serialize_native_nothing")?,
+                args: vec![value.clone()],
+                evaluation_order: vec![0],
+            });
+        }
+        if matches!(self.parent.check.interner.resolve(ty), Type::Bool) {
+            return Some(ExpressionKind::StringInterpolation(vec![
+                StringSegment::Value(value.clone()),
+            ]));
+        }
         let (variant_name, payload) = match self.parent.check.interner.resolve(ty) {
             Type::String => (
                 "string_value",
@@ -5229,8 +5241,6 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     span,
                 }),
             ),
-            Type::Bool => ("bool_value", Some(value.clone())),
-            Type::Nothing if matches!(value.kind, ExpressionKind::Nothing) => ("null", None),
             Type::Int8
             | Type::Int16
             | Type::Int32
