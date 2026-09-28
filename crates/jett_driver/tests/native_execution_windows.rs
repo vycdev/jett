@@ -3109,6 +3109,23 @@ fn native_assertion_compiles_interpolated_failure_message() {
 }
 
 #[test]
+fn native_enum_struct_payload_matches_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/enum_struct_payload.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
+    let directory = tempfile::tempdir().expect("isolated enum payload directory");
+    let binary = directory.path().join("enum_struct_payload.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("compile enum struct payload");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+    );
+}
+
+#[test]
 fn native_enum_aggregate_equality_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/enum_aggregate_equality.jett");

@@ -1392,3 +1392,10 @@ transferring the transparent representation. Differential fixtures reuse a
 refined list after `coarsen` and declassify a secret list twice, matching the
 interpreter's local-read behavior. Noncloneable conversion inputs and the
 matrix gaps above remain open; the broad estimate stays about 85%.
+
+Linked native/interpreter coverage now exercises an enum payload containing a
+user struct with an owned list field: construction, borrowed match, clone,
+trace, list storage, and cleanup agree. Equality for this payload still hits
+the conservative native guard while the language rule in
+`docs/open_design/enum_payload_struct_equality.md` is unresolved. This narrows
+the enum payload gap without changing the broad 85% estimate.

@@ -666,7 +666,11 @@ scalar, string and recursive owned payloads, multiple bindings and an `other`
 arm. Equality borrows both enum operands, compares dense tags, then compares
 the selected variant's scalar payloads. Integer and boolean payloads compare
 their value bits, floating-point payloads use IEEE equality, and strings compare
-their text. Aggregate payload equality remains guarded.
+their text. A linked differential fixture also covers a user-struct payload
+with owned list fields through construction, borrowed matching, clone, trace,
+list storage, and cleanup. Aggregate payload equality remains guarded; enum
+equality over user structs awaits the rule in
+`docs/open_design/enum_payload_struct_equality.md`.
 
 Bitfield values use the same typed record storage for fields, including owned
 payload fields. Native construction, field projection, clone and cleanup match
