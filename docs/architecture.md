@@ -2799,6 +2799,9 @@ property inventories on both supported hosts. The `native_parity` example
 discovers those bodies from parsed source and includes their execution counts
 alongside lowering, object, main, and runtime-contract results. Its successful
 fixture-gate result is distinct from a complete native release audit.
+The CLI validates explicit build targets before loading source, accepting only
+the current supported host. CLI frontend validation and native driver artifact
+generation remain separate until runtime bundle packaging is integrated.
 
 One-line breakpoint snapshots use the current lexical function frame in both
 execution paths. The interpreter applies its name-lookup scope floor when

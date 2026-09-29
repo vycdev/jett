@@ -39,8 +39,8 @@ enum Command {
         #[arg(long)]
         agent: bool,
 
-        /// Target triple for cross-compilation
-        #[arg(long)]
+        /// Target triple (only the current supported native host is accepted)
+        #[arg(long, value_parser = parse_build_target)]
         target: Option<String>,
     },
 
@@ -135,6 +135,22 @@ enum Command {
 
     /// Start the Language Server Protocol server (for editor integration)
     Lsp,
+}
+
+fn parse_build_target(target: &str) -> Result<String, String> {
+    use jett_driver::native::{LINUX_GNU_NATIVE_TARGET, WINDOWS_MSVC_NATIVE_TARGET, host_target};
+    let host = host_target();
+    if target != host
+        || !matches!(
+            host.as_str(),
+            LINUX_GNU_NATIVE_TARGET | WINDOWS_MSVC_NATIVE_TARGET
+        )
+    {
+        return Err(format!(
+            "unsupported native target `{target}` on host `{host}`; cross-compilation is not supported (native hosts: {LINUX_GNU_NATIVE_TARGET}, {WINDOWS_MSVC_NATIVE_TARGET})"
+        ));
+    }
+    Ok(target.to_owned())
 }
 
 fn main() {

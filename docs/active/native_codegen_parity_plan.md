@@ -97,6 +97,12 @@ data layout, calling convention, object format, runtime library, linker, and
 host SDK. Cross-compilation is added only after all of those inputs are
 target-specific and tested.
 
+The CLI now validates an explicit `build --target` before reading source and
+accepts only the current supported native host (Linux GNU or Windows MSVC on
+x86-64). The existing CLI build command still performs frontend validation;
+executable generation currently uses the native driver API and explicit runtime
+bundle. Connecting packaged native artifacts to the CLI remains a release gate.
+
 ## Required Compiler Handoff
 
 Native code generation begins only after the checked-program, HIR, and MIR
