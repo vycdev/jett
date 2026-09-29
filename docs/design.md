@@ -69,7 +69,9 @@ must still see an alias as an alias, even when its underlying `TypeId` is a
 struct or collection. Inline function identities also carry their enclosing
 `comptime type` binding chain, so callbacks sharing a source body and signature
 remain distinct when reflected field types differ. Nested closures retain that
-lexical chain, while named function calls start their own.
+lexical chain, while named function calls start their own. Expression types
+inside each binding belong to its concrete expansion, including when captured
+by a closure; another field's expansion cannot determine arithmetic width.
 
 Named call arguments reach HIR only as a checked permutation into canonical
 parameter order. Struct construction likewise carries canonical field order

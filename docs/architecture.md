@@ -2870,6 +2870,11 @@ extraction, including unconditional and reflected-loop bindings. Evaluated
 closures preserve the same canonical chain; native materialization matches it
 and native symbol encoding uses its structural types rather than local TypeIds.
 Named calls isolate the chain and restore it on success or failure.
+The driver also exports recursive scoped expression maps from each checked
+`comptime type` expansion. Execution selects the bound type's scope, and
+closures retain that scope alongside their checked function. Scoped entries
+are removed from enclosing flat maps, and nested binding maps remain under
+their lexical parent. Conflicting matching scope maps fail explicitly.
 Generic body entries are excluded from the global fallback map. Compiler-owned
 facades may execute interpreter source instances without a checked map, while
 conflicting matching maps fail explicitly. The

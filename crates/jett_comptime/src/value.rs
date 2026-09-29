@@ -1,4 +1,4 @@
-use crate::checked_types::CheckedFunctionTypes;
+use crate::checked_types::{CheckedFunctionTypes, CheckedScopedTypes};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -9,6 +9,7 @@ use jett_types::ReflectionTypeInfo;
 /// Lexical generic context retained by an evaluated closure.
 #[derive(Debug, Clone, Default)]
 pub struct ClosureTypeContext {
+    pub checked_scope: Option<Arc<CheckedScopedTypes>>,
     pub scoped_type_bindings: Vec<(String, String)>,
     pub checked_function: Option<Arc<CheckedFunctionTypes>>,
     pub bindings: HashMap<String, TypeExpr>,

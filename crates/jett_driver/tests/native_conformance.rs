@@ -179,6 +179,28 @@ fn native_comptime_reflected_callbacks_match_interpreter() {
 }
 
 #[test]
+fn native_reflected_integer_wrapping_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/reflected_integer_wrapping.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("scoped integer wrapping oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "-128,128,-128\n-128,128,-128\n-128,128,-128\n-128,128,-128\n",
+            "0,0\n0,0\n-128\n128\n-128\n-128\n128\n-128\n0\n0\n0\n0\n",
+        )
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("reflected_integer_wrapping.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native scoped integer wrapping");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_reflection_expressions_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_reflection_expressions.jett");

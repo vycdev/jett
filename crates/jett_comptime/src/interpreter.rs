@@ -1,4 +1,6 @@
-use crate::checked_types::{CheckedExpressionTypes, CheckedFunctionTypes};
+use crate::checked_types::{
+    CheckedExpressionTypes, CheckedFunctionTypes, CheckedScopedTypes, select_scoped_types,
+};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -642,6 +644,7 @@ pub struct Interpreter {
     /// the driver after type checking.
     checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
     active_checked_function: Option<Arc<CheckedFunctionTypes>>,
+    active_checked_scope: Option<Arc<CheckedScopedTypes>>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
     explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
@@ -711,6 +714,7 @@ impl Interpreter {
             reflection_metadata: None,
             checked_expression_types: None,
             active_checked_function: None,
+            active_checked_scope: None,
             breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
             actor_instances: HashMap::new(),
@@ -1706,15 +1710,78 @@ impl Interpreter {
         }
     }
 
+    fn exec_comptime_type_bind(
+        &mut self,
+        bind: &jett_parser::ast::ComptimeTypeBindStmt,
+    ) -> Result<Option<Signal>, String> {
+        let bound_type_expr = if let Some(bound_type_expr) = comptime_type_info_binding(&bind.value)
+        {
+            self.substitute_type_expr(bound_type_expr)
+        } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
+            let source_ty = self.substitute_type_expr(source_ty);
+            self.checked_type_info_arg_types(&source_ty)
+                .unwrap_or_else(|| self.type_info_arg_types(&source_ty))
+                .get(index)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "`comptime type` type.arg index {index} is out of range for type '{}'",
+                        type_expr_display(&source_ty)
+                    )
+                })?
+        } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
+            self.bound_reflected_field_type(field_name)?
+        } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
+            self.bound_reflected_type_info_type(info_name)?
+        } else {
+            return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
+        };
+        let bound_type = self.concrete_type_display(&bound_type_expr);
+        let checked_scope = self.checked_scoped_types(bind.span, &bound_type)?;
+        let saved_checked_scope = std::mem::replace(&mut self.active_checked_scope, checked_scope);
+        self.scoped_type_bindings
+            .push((bind.name.name.clone(), bound_type));
+        let mut scope = HashMap::new();
+        scope.insert(bind.name.name.clone(), bound_type_expr);
+        self.type_arg_scopes.push(scope);
+        let result = self.exec_block_inner(&bind.body);
+        self.active_checked_scope = saved_checked_scope;
+        self.scoped_type_bindings.pop();
+        self.type_arg_scopes.pop();
+        result
+    }
+
     fn checked_expression_type(&self, span: Span) -> Option<&String> {
-        self.active_checked_function
+        self.active_checked_scope
             .as_ref()
             .and_then(|types| types.expressions.get(&span))
+            .or_else(|| {
+                self.active_checked_function
+                    .as_ref()
+                    .and_then(|types| types.expressions.get(&span))
+            })
             .or_else(|| {
                 self.checked_expression_types
                     .as_ref()
                     .and_then(|types| types.get(&span))
             })
+    }
+
+    fn checked_scoped_types(
+        &self,
+        span: Span,
+        bound_type: &str,
+    ) -> Result<Option<Arc<CheckedScopedTypes>>, String> {
+        let bindings = if let Some(scope) = &self.active_checked_scope {
+            &scope.bindings
+        } else if let Some(function) = &self.active_checked_function {
+            &function.bindings
+        } else if let Some(types) = &self.checked_expression_types {
+            &types.bindings
+        } else {
+            return Ok(None);
+        };
+        select_scoped_types(bindings, span, bound_type)
     }
 
     fn captured_type_arguments(&self, args: &[TypeExpr]) -> Vec<ClosureTypeArgument> {
@@ -2190,6 +2257,7 @@ impl Interpreter {
             .collect();
         Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                checked_scope: self.active_checked_scope.clone(),
                 scoped_type_bindings: self.scoped_type_bindings.clone(),
                 checked_function: self.active_checked_function.clone(),
                 bindings: self
@@ -3046,42 +3114,7 @@ impl Interpreter {
                 Ok(None)
             }
 
-            Stmt::ComptimeTypeBind(bind) => {
-                let bound_type_expr = if let Some(bound_type_expr) =
-                    comptime_type_info_binding(&bind.value)
-                {
-                    self.substitute_type_expr(bound_type_expr)
-                } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
-                    let source_ty = self.substitute_type_expr(source_ty);
-                    self.checked_type_info_arg_types(&source_ty)
-                        .unwrap_or_else(|| self.type_info_arg_types(&source_ty))
-                        .get(index)
-                        .cloned()
-                        .ok_or_else(|| {
-                            format!(
-                                "`comptime type` type.arg index {index} is out of range for type '{}'",
-                                type_expr_display(&source_ty)
-                            )
-                        })?
-                } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
-                    self.bound_reflected_field_type(field_name)?
-                } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
-                    self.bound_reflected_type_info_type(info_name)?
-                } else {
-                    return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
-                };
-                self.scoped_type_bindings.push((
-                    bind.name.name.clone(),
-                    self.concrete_type_display(&bound_type_expr),
-                ));
-                let mut scope = HashMap::new();
-                scope.insert(bind.name.name.clone(), bound_type_expr);
-                self.type_arg_scopes.push(scope);
-                let result = self.exec_block_inner(&bind.body);
-                self.scoped_type_bindings.pop();
-                self.type_arg_scopes.pop();
-                result
-            }
+            Stmt::ComptimeTypeBind(bind) => self.exec_comptime_type_bind(bind),
 
             Stmt::Assign(assign) => {
                 let val = match self.eval_expr_flow(&assign.value)? {
@@ -10608,6 +10641,7 @@ impl Interpreter {
             std::mem::replace(&mut self.active_checked_function, expression_types);
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
         let saved_scoped_types = std::mem::take(&mut self.scoped_type_bindings);
+        let saved_checked_scope = self.active_checked_scope.take();
         // Resolve arguments above in the caller, then keep its type bindings
         // out of the callee's lexical scope, including non-generic callees.
         let saved_type_scopes = std::mem::replace(&mut self.type_arg_scopes, vec![type_scope]);
@@ -10652,6 +10686,7 @@ impl Interpreter {
             self.pop_scope();
         }
         self.lexical_scope_floor = saved_scope_floor;
+        self.active_checked_scope = saved_checked_scope;
         self.scoped_type_bindings = saved_scoped_types;
         self.type_arg_scopes = saved_type_scopes;
         self.current_type_arguments = saved_type_arguments;
@@ -10841,6 +10876,8 @@ impl Interpreter {
                     &mut self.active_checked_function,
                     type_context.checked_function,
                 );
+                let saved_checked_scope =
+                    std::mem::replace(&mut self.active_checked_scope, type_context.checked_scope);
                 let saved_scoped_types = std::mem::replace(
                     &mut self.scoped_type_bindings,
                     type_context.scoped_type_bindings,
@@ -10887,6 +10924,7 @@ impl Interpreter {
                 self.lexical_scope_floor = saved_scope_floor;
                 self.current_function_trusted_stdlib = saved_trusted_stdlib;
                 self.current_namespace = saved_namespace;
+                self.active_checked_scope = saved_checked_scope;
                 self.scoped_type_bindings = saved_scoped_types;
                 self.type_arg_scopes = saved_type_scopes;
                 self.current_type_arguments = saved_type_arguments;
@@ -12781,6 +12819,66 @@ mod tests {
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(type_expr_display(&bindings[0].ty), "string");
+    }
+
+    #[test]
+    fn scoped_type_facts_restore_after_return_and_error() {
+        let mut interp = Interpreter::new();
+        let inner = Arc::new(CheckedScopedTypes {
+            bound_type: "int8".into(),
+            expressions: HashMap::from([(sp(), "int8".into())]),
+            ..Default::default()
+        });
+        let outer = Arc::new(CheckedScopedTypes {
+            bindings: HashMap::from([(sp(), vec![inner])]),
+            ..Default::default()
+        });
+        interp.active_checked_scope = Some(outer.clone());
+        interp
+            .type_arg_scopes
+            .push(HashMap::from([("Outer".into(), type_named("int64"))]));
+        interp.scoped_type_bindings = vec![("Outer".into(), "int64".into())];
+        for failing in [false, true] {
+            let body = if failing {
+                var("missing")
+            } else {
+                Expr::Binary(
+                    Box::new(Expr::IntLiteral(127, sp())),
+                    BinOp::Add,
+                    Box::new(Expr::IntLiteral(1, sp())),
+                    sp(),
+                )
+            };
+            let binding = ComptimeTypeBindStmt {
+                name: ident("Field"),
+                value: Expr::GenericCall(
+                    Box::new(field_access(var("type"), "info")),
+                    vec![type_named("int8")],
+                    Vec::new(),
+                    sp(),
+                ),
+                body: block(vec![return_stmt(body)]),
+                span: sp(),
+            };
+            let result = interp.exec_comptime_type_bind(&binding);
+            if failing {
+                assert!(result.unwrap_err().contains("missing"));
+            } else {
+                assert!(matches!(
+                    result.unwrap(),
+                    Some(Signal::Return(Value::Int64(-128)))
+                ));
+            }
+            assert!(Arc::ptr_eq(
+                interp.active_checked_scope.as_ref().unwrap(),
+                &outer
+            ));
+            assert_eq!(interp.type_arg_scopes.len(), 1);
+            assert_eq!(
+                interp.scoped_type_bindings,
+                vec![("Outer".into(), "int64".into())]
+            );
+        }
     }
 
     #[test]
@@ -16158,6 +16256,8 @@ mod tests {
             ..Default::default()
         });
         interp.active_checked_function = Some(caller_types.clone());
+        let caller_scope = Arc::new(CheckedScopedTypes::default());
+        interp.active_checked_scope = Some(caller_scope.clone());
         interp.scoped_type_bindings = vec![("Field".into(), "string".into())];
         let echo = func_def(
             "echo",
@@ -16184,6 +16284,10 @@ mod tests {
                 interp.scoped_type_bindings,
                 vec![("Field".into(), "string".into())]
             );
+            assert!(Arc::ptr_eq(
+                interp.active_checked_scope.as_ref().unwrap(),
+                &caller_scope
+            ));
             assert_eq!(interp.scopes.len(), 1);
             assert_eq!(interp.lexical_scope_floor, 0);
             assert_eq!(interp.type_arg_scopes.len(), 1);
@@ -16212,6 +16316,8 @@ mod tests {
             ..Default::default()
         });
         interp.active_checked_function = Some(caller_types.clone());
+        let caller_scope = Arc::new(CheckedScopedTypes::default());
+        interp.active_checked_scope = Some(caller_scope.clone());
         interp.scoped_type_bindings = vec![("Field".into(), "string".into())];
         interp
             .type_arg_scopes
@@ -16221,6 +16327,7 @@ mod tests {
         interp.current_function_trusted_stdlib = true;
         let closure = Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                checked_scope: None,
                 scoped_type_bindings: Vec::new(),
                 checked_function: None,
                 bindings: HashMap::from([("T".into(), type_named("int8"))]),
@@ -16254,6 +16361,10 @@ mod tests {
                 interp.scoped_type_bindings,
                 vec![("Field".into(), "string".into())]
             );
+            assert!(Arc::ptr_eq(
+                interp.active_checked_scope.as_ref().unwrap(),
+                &caller_scope
+            ));
             assert_eq!(interp.scopes.len(), 1);
             assert_eq!(interp.lexical_scope_floor, 0);
             assert_eq!(interp.type_arg_scopes.len(), 1);

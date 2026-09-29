@@ -1,4 +1,6 @@
-use jett_comptime::checked_types::{CheckedExpressionTypes, CheckedFunctionTypes};
+use jett_comptime::checked_types::{
+    CheckedExpressionTypes, CheckedFunctionTypes, CheckedScopedBindings, CheckedScopedTypes,
+};
 mod native_constants;
 mod native_property_cases;
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
@@ -3163,11 +3165,11 @@ fn expression_type_names(
     check_result: &CheckResult,
     resolve_result: &jett_resolve::ResolveResult,
 ) -> CheckedExpressionTypes {
-    let mut names = check_result
-        .type_map
-        .iter()
-        .map(|(span, ty_id)| (*span, check_result.interner.type_name(*ty_id)))
-        .collect::<HashMap<_, _>>();
+    let (mut names, bindings) = checked_body_type_names(
+        &check_result.type_map,
+        &check_result.comptime_type_bindings,
+        &check_result.interner,
+    );
     // Generic body facts belong only to their selected instance, even when
     // the checker has seen just one instance so far. Compiler-owned facades
     // can execute other interpreter source instances without checking them.
@@ -3175,14 +3177,21 @@ fn expression_type_names(
         for span in instance.type_map.keys() {
             names.remove(span);
         }
+        remove_scoped_expression_names(&mut names, &instance.comptime_type_bindings);
     }
     let mut functions: HashMap<Span, Vec<Arc<CheckedFunctionTypes>>> = HashMap::new();
     for instance in &check_result.generic_function_instantiations {
         let facts = &instance.specialization;
+        let (expressions, bindings) = checked_body_type_names(
+            &instance.type_map,
+            &instance.comptime_type_bindings,
+            &check_result.interner,
+        );
         functions
             .entry(resolve_result.scope_table.def(instance.definition).span)
             .or_default()
             .push(Arc::new(CheckedFunctionTypes {
+                bindings,
                 type_arguments: instance
                     .concrete_args
                     .iter()
@@ -3193,18 +3202,69 @@ fn expression_type_names(
                 type_info_primitives: facts.type_info_primitives.clone(),
                 type_kind_values: facts.type_kind_values.clone(),
                 type_primitive_values: facts.type_primitive_values.clone(),
-                expressions: Arc::new(
-                    instance
-                        .type_map
-                        .iter()
-                        .map(|(span, ty)| (*span, check_result.interner.type_name(*ty)))
-                        .collect(),
-                ),
+                expressions: Arc::new(expressions),
             }));
     }
     CheckedExpressionTypes {
+        bindings,
         expressions: names,
         functions,
+    }
+}
+
+fn checked_body_type_names(
+    types: &HashMap<Span, jett_types::TypeId>,
+    bindings: &HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
+    interner: &jett_types::TypeInterner,
+) -> (HashMap<Span, String>, CheckedScopedBindings) {
+    let mut expressions = types
+        .iter()
+        .map(|(span, ty)| (*span, interner.type_name(*ty)))
+        .collect();
+    remove_scoped_expression_names(&mut expressions, bindings);
+    // Legacy maps also contain descendant entries. Export each binding only
+    // under its lexical parent, never as a sibling with the last body's facts.
+    let nested = bindings
+        .values()
+        .flatten()
+        .flat_map(|binding| binding.body.comptime_type_bindings.keys().copied())
+        .collect::<HashSet<_>>();
+    let scopes = bindings
+        .iter()
+        .filter(|(span, _)| !nested.contains(span))
+        .map(|(span, candidates)| {
+            (
+                *span,
+                candidates
+                    .iter()
+                    .map(|binding| {
+                        let (expressions, bindings) = checked_body_type_names(
+                            &binding.body.type_map,
+                            &binding.body.comptime_type_bindings,
+                            interner,
+                        );
+                        Arc::new(CheckedScopedTypes {
+                            bound_type: interner.type_name(binding.bound_type),
+                            expressions,
+                            bindings,
+                        })
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    (expressions, scopes)
+}
+
+fn remove_scoped_expression_names(
+    expressions: &mut HashMap<Span, String>,
+    bindings: &HashMap<Span, Vec<jett_typecheck::CheckedComptimeTypeBinding>>,
+) {
+    for binding in bindings.values().flatten() {
+        for span in binding.body.type_map.keys() {
+            expressions.remove(span);
+        }
+        remove_scoped_expression_names(expressions, &binding.body.comptime_type_bindings);
     }
 }
 

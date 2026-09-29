@@ -81,12 +81,8 @@ This does **not** close the full interface gate. Still required:
 - Audit alias reflection identity within scoped reflected-loop bindings.
   Canonical scoped type chains now distinguish callbacks for different field
   types, including repeated types, nested bindings, and nested closures.
-- Preserve scoped expression facts in reflected-loop expansions. A record
-  with `int8` and `int64` fields, each holding 127, exposes the problem: adding
-  one through a scoped `Field` currently evaluates the narrow field using the
-  last expansion's width and rejects 128 instead of wrapping to -128. Also
-  audit interpreter source instances of compiler-owned facades that use
-  different native helpers.
+- Audit interpreter source instances of compiler-owned facades that use
+  different native helpers and lack checked source bodies.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
@@ -218,3 +214,13 @@ their own lexical chain; nested closures retain their defining chain. The
 `comptime_reflected_callbacks` differential fixture covers runtime and baked
 callbacks, repeated field types, a nested direct binding inside a generic
 reflected loop, and callbacks that produce another callback.
+
+Scoped expression facts now follow the checker's recursive `comptime type`
+body snapshots. Each binding selects facts for its concrete type; nested
+bindings remain under their parent, and flat fallback maps exclude their
+expression spans. Closures retain the selected scope through shared ownership,
+while named calls isolate it and restore it on return or failure. Conflicting
+matching scope facts fail rather than choosing an expansion by registration
+order. `reflected_integer_wrapping` checks signed and unsigned field widths
+through ordinary and generic functions, nested bindings, and runtime or baked
+callbacks, including repeated field types.

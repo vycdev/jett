@@ -9,12 +9,14 @@ use crate::value::{ClosureTypeArgument, Value};
 
 #[derive(Debug, Clone, Default)]
 pub struct CheckedExpressionTypes {
+    pub bindings: CheckedScopedBindings,
     pub expressions: HashMap<Span, String>,
     pub functions: HashMap<Span, Vec<Arc<CheckedFunctionTypes>>>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct CheckedFunctionTypes {
+    pub bindings: CheckedScopedBindings,
     pub type_arguments: Vec<String>,
     pub type_argument_reflections: Vec<ReflectionTypeInfo>,
     pub type_info_kinds: Vec<(usize, String)>,
@@ -22,6 +24,38 @@ pub struct CheckedFunctionTypes {
     pub type_kind_values: Vec<(usize, String)>,
     pub type_primitive_values: Vec<(usize, String)>,
     pub expressions: Arc<HashMap<Span, String>>,
+}
+
+/// Recursive checked facts for one concrete lexical type binding.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheckedScopedTypes {
+    pub bound_type: String,
+    pub expressions: HashMap<Span, String>,
+    pub bindings: CheckedScopedBindings,
+}
+
+pub type CheckedScopedBindings = HashMap<Span, Vec<Arc<CheckedScopedTypes>>>;
+
+pub(crate) fn select_scoped_types(
+    bindings: &CheckedScopedBindings,
+    span: Span,
+    bound_type: &str,
+) -> Result<Option<Arc<CheckedScopedTypes>>, String> {
+    let Some(candidates) = bindings.get(&span) else {
+        return Ok(None);
+    };
+    let mut matching = candidates
+        .iter()
+        .filter(|types| types.bound_type == bound_type);
+    let Some(selected) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.any(|other| other != selected) {
+        return Err(format!(
+            "scoped type `{bound_type}` has conflicting checked expression types"
+        ));
+    }
+    Ok(Some(selected.clone()))
 }
 
 impl CheckedExpressionTypes {
@@ -56,7 +90,9 @@ impl CheckedExpressionTypes {
         let selected = matching
             .next()
             .expect("matching candidate has maximum specificity");
-        if matching.any(|other| other.expressions != selected.expressions) {
+        if matching.any(|other| {
+            other.expressions != selected.expressions || other.bindings != selected.bindings
+        }) {
             return Err("generic invocation has conflicting checked expression types".into());
         }
         Ok(Some(selected.clone()))
@@ -142,6 +178,34 @@ fn variant<'a>(value: &'a Value, expected_type: &str) -> Option<&'a str> {
 mod tests {
     use super::*;
     use jett_common::FileId;
+
+    #[test]
+    fn conflicting_scoped_widths_are_rejected_in_either_registration_order() {
+        let span = Span::new(FileId::new(0), 1, 2);
+        let narrow = Arc::new(CheckedScopedTypes {
+            bound_type: "Record".into(),
+            expressions: HashMap::from([(span, "int8".into())]),
+            ..Default::default()
+        });
+        let wide = Arc::new(CheckedScopedTypes {
+            bound_type: "Record".into(),
+            expressions: HashMap::from([(span, "int64".into())]),
+            ..Default::default()
+        });
+        for candidates in [vec![narrow.clone(), wide.clone()], vec![wide, narrow]] {
+            let types = HashMap::from([(span, candidates)]);
+            assert!(
+                select_scoped_types(&types, span, "Record")
+                    .unwrap_err()
+                    .contains("conflicting")
+            );
+            assert!(
+                select_scoped_types(&types, span, "Other")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
 
     #[test]
     fn conflicting_checked_widths_are_rejected_in_either_registration_order() {
