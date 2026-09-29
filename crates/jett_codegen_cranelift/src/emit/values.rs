@@ -1537,6 +1537,37 @@ impl Translator<'_, '_> {
         let value = self.leaf(NativeLeaf::Literal, &[pointer, length], true)?;
         self.own(value)
     }
+    fn format_debug_value(
+        &mut self,
+        value: LoweredValue,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        if crate::values::is_formattable(self.types, representation_type(self.types, ty)) {
+            return self.format_value(value, ty, span);
+        }
+        let layout = super::debug::debug_layout(self.types, ty)
+            .ok_or_else(|| self.unsupported(span, "debug print value layout"))?;
+        let (layout_pointer, layout_length) = self.static_data(&layout)?;
+        let (label_pointer, label_length) = self.static_bytes("")?;
+        let text = self.literal("")?;
+        let text_handle = self.scalar(text, span)?;
+        let bits = self.payload_bits(value).0;
+        self.leaf(
+            NativeLeaf::DebugAppendAggregate,
+            &[
+                text_handle,
+                label_pointer,
+                label_length,
+                bits,
+                layout_pointer,
+                layout_length,
+            ],
+            true,
+        )?;
+        Ok(text)
+    }
+
     fn format_value(
         &mut self,
         value: LoweredValue,
@@ -1874,7 +1905,7 @@ impl Translator<'_, '_> {
         for &index in order {
             evaluated[index] = Some(self.argument(
                 &args[index],
-                jett_mir::move_values::intrinsic_borrows(id, index),
+                jett_mir::move_values::intrinsic_borrows(id, index, &args[index]),
             )?);
         }
         let evaluated = evaluated
@@ -2574,7 +2605,7 @@ impl Translator<'_, '_> {
                         let space = self.literal(" ")?;
                         output = self.concatenate(output, space, span)?;
                     }
-                    let text = self.format_value(value, arg.ty, arg.span)?;
+                    let text = self.format_debug_value(value, arg.ty, arg.span)?;
                     output = self.concatenate(output, text, span)?;
                 }
                 if id == IntrinsicId::Println {

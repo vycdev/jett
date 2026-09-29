@@ -60,6 +60,7 @@ The following decisions remain unresolved and prevent a full parity claim:
 - [Actor handles escaping comptime](../open_design/comptime_actor_values.md): reject escaping handles versus materializing a defined actor graph.
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
 - [Concrete-owner arguments in erased calls](../open_design/interface_same_owner_arguments.md): runtime validation versus rejecting unsafe erased calls statically.
+- [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
@@ -138,6 +139,15 @@ joined tasks, and explicit comptime results after source removal. Its pending
 operand companion requires matching diagnostics and exit 71 with owned locals
 on both operand sides and both profiles. The runtime leaf test also covers
 subnormal values and verifies that NaN results do not set runtime failure.
+
+The aggregate debug-print gate runs public values from five debug fixture
+families through `print`/`println` and compares complete native/interpreter
+output after source removal. It covers empty never-typed containers, absent
+sums, explicit views, pending values, concrete interface owners, and borrowed
+arguments spanning handlers. A terminal argument failure must produce no partial
+call output and exit 71 after cleanup. Runtime layout tests reject a fabricated
+inhabitant of an uninhabited debug node. These tests do not resolve the separate
+hidden-secret print policy above.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

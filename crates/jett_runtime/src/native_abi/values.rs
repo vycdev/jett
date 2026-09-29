@@ -269,6 +269,7 @@ pub enum NativeDebugTag {
     TypeConstruction,
     Redacted,
     Interface,
+    Uninhabited,
 }
 
 impl NativeDebugTag {
@@ -292,6 +293,7 @@ impl NativeDebugTag {
             15 => Self::TypeConstruction,
             16 => Self::Redacted,
             17 => Self::Interface,
+            18 => Self::Uninhabited,
             _ => return Err(INVALID_TRACE_LABEL),
         })
     }
@@ -573,6 +575,7 @@ enum NativeDebugNode {
     TypeConstruction,
     Redacted,
     Interface,
+    Uninhabited,
 }
 impl NativeDebugLayout {
     fn parse(bytes: &[u8]) -> LeafResult<Self> {
@@ -667,6 +670,7 @@ impl NativeDebugLayout {
                 NativeDebugTag::TypeConstruction => NativeDebugNode::TypeConstruction,
                 NativeDebugTag::Redacted => NativeDebugNode::Redacted,
                 NativeDebugTag::Interface => NativeDebugNode::Interface,
+                NativeDebugTag::Uninhabited => NativeDebugNode::Uninhabited,
             };
             if node.position != node_bytes.len() {
                 return Err(INVALID_TRACE_LABEL);
@@ -702,6 +706,7 @@ impl NativeDebugLayout {
         }
         let child = depth + 1;
         Ok(match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
+            NativeDebugNode::Uninhabited => return Err(INVALID_TRACE_LABEL),
             NativeDebugNode::Redacted => "[redacted]".to_owned(),
             NativeDebugNode::Interface => {
                 let field = values.struct_field(bits, 1)?;
@@ -1174,6 +1179,7 @@ impl NativeDebugLayout {
                 true
             }
             NativeDebugNode::Capability(_)
+            | NativeDebugNode::Uninhabited
             | NativeDebugNode::Redacted
             | NativeDebugNode::Interface
             | NativeDebugNode::Function
@@ -6779,6 +6785,51 @@ mod tests {
     }
 
     #[test]
+    fn uninhabited_debug_nodes_allow_empty_containers_but_reject_payloads() {
+        let mut values = NativeValues::default();
+        let mut list = vec![NativeDebugTag::List as u8];
+        list.extend_from_slice(&0_u32.to_le_bytes());
+        let mut optional = vec![NativeDebugTag::Optional as u8];
+        optional.extend_from_slice(&0_u32.to_le_bytes());
+        let nodes = [vec![NativeDebugTag::Uninhabited as u8], list, optional];
+        let list_bytes = function_debug_layout_bytes(&nodes, 1);
+        let optional_bytes = function_debug_layout_bytes(&nodes, 2);
+        let list_layout = NativeDebugLayout::parse(&list_bytes).unwrap();
+        let optional_layout = NativeDebugLayout::parse(&optional_bytes).unwrap();
+        let empty_list = values.new_list(false).unwrap();
+        let absent = values.sum(SUM_FAILURE, 0, false).unwrap();
+        let present = values.sum(SUM_SUCCESS, 0, false).unwrap();
+        let text = values.insert("before".to_owned()).unwrap();
+        assert_eq!(
+            list_layout.format_value(&values, empty_list, 1, 0),
+            Ok("list()".into())
+        );
+        assert_eq!(
+            optional_layout.format_value(&values, absent, 2, 0),
+            Ok("none".into())
+        );
+        assert_eq!(
+            optional_layout.format_value(&values, present, 2, 0),
+            Err(INVALID_TRACE_LABEL)
+        );
+        values
+            .lists
+            .get_mut(&empty_list)
+            .unwrap()
+            .elements
+            .push(Some(0));
+        assert_eq!(
+            values.debug_append_aggregate(text, "", empty_list, &list_bytes),
+            Err(INVALID_TRACE_LABEL)
+        );
+        assert_eq!(values.text(text), Ok("before"));
+        for handle in [empty_list, absent, present, text] {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
     fn special_debug_tags_are_additive_and_have_no_payload() {
         for (expected, tag) in [
             NativeDebugTag::Primitive,
@@ -6799,6 +6850,7 @@ mod tests {
             NativeDebugTag::TypeConstruction,
             NativeDebugTag::Redacted,
             NativeDebugTag::Interface,
+            NativeDebugTag::Uninhabited,
         ]
         .into_iter()
         .enumerate()
@@ -6807,7 +6859,7 @@ mod tests {
             assert_eq!(tag as u8, expected);
             assert_eq!(NativeDebugTag::from_raw(expected), Ok(tag));
         }
-        assert_eq!(NativeDebugTag::from_raw(18), Err(INVALID_TRACE_LABEL));
+        assert_eq!(NativeDebugTag::from_raw(19), Err(INVALID_TRACE_LABEL));
         let bytes = function_debug_layout_bytes(&[vec![13]], 0);
         let layout = NativeDebugLayout::parse(&bytes).unwrap();
         assert!(matches!(

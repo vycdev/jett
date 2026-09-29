@@ -699,7 +699,7 @@ fn visit(
                     temporaries,
                     types,
                     program,
-                    crate::move_values::intrinsic_borrows(*intrinsic, index),
+                    crate::move_values::intrinsic_borrows(*intrinsic, index, v),
                 )?;
             }
         }

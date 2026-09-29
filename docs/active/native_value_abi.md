@@ -9,6 +9,14 @@ results as ordinary floating values. Codegen promotes binary32 operands and
 demotes the result explicitly; both source widths retain the existing pending
 operand checks before entering this leaf.
 
+Aggregate debug printing reuses `DebugAppendAggregate` with an empty label and
+an owned temporary text buffer. Its value input stays borrowed, so printing
+does not transfer a viewed aggregate or builder into the runtime. Debug layout
+tag 18, `Uninhabited`, is additive: empty containers and inactive sum branches
+may refer to it, but formatting or comparing an actual payload through it fails.
+Existing tag numbers remain unchanged. Secret nodes retain conservative
+redaction pending the hidden-secret debug-print policy decision.
+
 Immutable UTF-8 strings use nonzero u64 context-associated handles. Zero is an
 uninitialized slot, never a language string. Each owning slot holds one reference.
 Literal creation, concatenation and formatting create one reference; retain

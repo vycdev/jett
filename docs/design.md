@@ -3419,6 +3419,14 @@ not a second output API. They may emit diagnostic text without a `Stdout`
 capability. They remain secret-output boundaries and their text cannot be read
 by Jett code or treated as a semantic program result.
 
+Non-release native debug printing supports the same public aggregate and opaque
+values as the interpreter, including empty containers and absent sums. Explicit
+`view` arguments remain borrowed; ordinary arguments retain their consumption
+rules. All arguments are evaluated before the call emits text, so a failing
+later argument cannot leave partial output from that call. The policy for
+secrets hidden by an interface or builder remains tracked in
+`open_design/debug_print_hidden_secrets.md`.
+
 The current interpreter shares their path with `Stdout.write`; separating debug
 events is pending. When the release/backend boundary is implemented, release
 builds must reject `print` and `println` with guidance to use `Stdout.write`;

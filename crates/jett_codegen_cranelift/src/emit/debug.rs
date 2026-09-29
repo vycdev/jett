@@ -23,6 +23,7 @@ enum DebugNode {
     TypeConstruction,
     Redacted,
     Interface,
+    Uninhabited,
     Alias(u32),
 }
 
@@ -98,7 +99,8 @@ impl DebugGraph<'_> {
                 Type::Refinement { base, .. } => DebugNode::Alias(self.node(base)?),
                 Type::Secret(_) => DebugNode::Redacted,
                 Type::Interface(_) => DebugNode::Interface,
-                Type::Never | Type::Resource(_) | Type::Error => return None,
+                Type::Never => DebugNode::Uninhabited,
+                Type::Resource(_) | Type::Error => return None,
                 Type::Int8
                 | Type::Int16
                 | Type::Int32
@@ -150,6 +152,7 @@ fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
         DebugNode::TypeConstruction => bytes.push(NativeDebugTag::TypeConstruction as u8),
         DebugNode::Redacted => bytes.push(NativeDebugTag::Redacted as u8),
         DebugNode::Interface => bytes.push(NativeDebugTag::Interface as u8),
+        DebugNode::Uninhabited => bytes.push(NativeDebugTag::Uninhabited as u8),
         DebugNode::List(child) => child_node(bytes, NativeDebugTag::List, child),
         DebugNode::Set(child) => child_node(bytes, NativeDebugTag::Set, child),
         DebugNode::Optional(child) => child_node(bytes, NativeDebugTag::Optional, child),

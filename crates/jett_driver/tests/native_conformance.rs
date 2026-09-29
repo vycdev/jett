@@ -4364,6 +4364,68 @@ fn native_actor_message_arguments_nested_handlers_match_interpreter() {
 }
 
 #[test]
+fn native_debug_print_argument_failure_produces_no_partial_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("print_failure.jett");
+    fs::write(&source, "namespace app\nfunction failed() returns int64:\n    string rejected = string.repeat(\"ab\", 9223372036854775807)\n    return string.char_count(rejected)\nfunction main() returns nothing:\n    println(list(\"held\"), failed())\n").unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+    assert!(expected.output.stdout.is_empty());
+    assert!(expected.message.contains("string.repeat"), "{expected:?}");
+    let binary = directory.path().join("print_failure.exe");
+    build_host_executable(&source, launcher(), &binary).unwrap();
+    fs::remove_file(&source).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert!(actual.stdout.is_empty());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
+fn native_debug_prints_aggregate_values_without_consuming_views() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native");
+    for name in [
+        "debug_print_values",
+        "debug_aggregates",
+        "debug_functions",
+        "debug_actor_values",
+        "debug_type_construction",
+    ] {
+        let original = fs::read_to_string(root.join(format!("{name}.jett"))).unwrap();
+        let source_text = original
+            .lines()
+            .filter_map(|line| {
+                let content = line.trim_start();
+                if content.starts_with("breakpoint ") {
+                    return None;
+                }
+                Some(if let Some(value) = content.strip_prefix("trace ") {
+                    format!(
+                        "{}println(view {value})",
+                        &line[..line.len() - content.len()]
+                    )
+                } else {
+                    line.to_owned()
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join(format!("{name}.jett"));
+        fs::write(&source, format!("{source_text}\n")).unwrap();
+        let expected = jett_driver::run_file_capture_output(&source).unwrap();
+        assert!(!expected.stdout.is_empty(), "{name}");
+        assert!(expected.debug_output.is_empty(), "{name}");
+        let binary = directory.path().join("print.exe");
+        build_host_executable(&source, launcher(), &binary).unwrap();
+        fs::remove_file(&source).unwrap();
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+        assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+    }
+}
+
+#[test]
 fn native_float_remainder_matches_interpreter_in_both_profiles() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/float_remainder.jett");

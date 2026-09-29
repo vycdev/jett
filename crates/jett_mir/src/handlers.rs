@@ -754,7 +754,7 @@ impl Builder<'_> {
         } = &expression.kind
             && args.iter().any(has_extractable_handle)
             && args.iter().enumerate().all(|(index, arg)| {
-                !crate::move_values::intrinsic_borrows(*intrinsic, index)
+                !crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
                     || can_snapshot_view(self.types, arg.ty)
                     || stable_deferred_view(&self.locals, arg)
             })
@@ -763,7 +763,7 @@ impl Builder<'_> {
                 .iter()
                 .enumerate()
                 .map(|(index, arg)| {
-                    if crate::move_values::intrinsic_borrows(*intrinsic, index)
+                    if crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
                         && crate::move_values::is_linear(self.types, arg.ty)
                         && !matches!(arg.kind, ExpressionKind::View(_))
                     {

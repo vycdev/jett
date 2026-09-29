@@ -90,7 +90,16 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
     )
 }
 
-pub fn intrinsic_borrows(id: IntrinsicId, index: usize) -> bool {
+pub fn intrinsic_borrows(id: IntrinsicId, index: usize, argument: &Expression) -> bool {
+    if matches!(id, IntrinsicId::Print | IntrinsicId::Println) {
+        let mut value = argument;
+        while let ExpressionKind::Coarsen(inner) | ExpressionKind::Declassify(inner) = &value.kind {
+            value = inner;
+        }
+        // Debug output accepts explicit views without taking their owner.
+        // Ordinary arguments retain their checked consumption behavior.
+        return matches!(value.kind, ExpressionKind::View(_));
+    }
     if matches!(
         id,
         IntrinsicId::TypeConstructVariantStart | IntrinsicId::TypeConstructMachineStart
@@ -550,7 +559,10 @@ impl Flow<'_> {
             } => {
                 let saved = self.loans.clone();
                 for &index in evaluation_order {
-                    self.expr(&args[index], intrinsic_borrows(*intrinsic, index))?;
+                    self.expr(
+                        &args[index],
+                        intrinsic_borrows(*intrinsic, index, &args[index]),
+                    )?;
                 }
                 self.loans = saved;
             }

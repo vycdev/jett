@@ -2809,6 +2809,18 @@ remainder operation as the interpreter. Binary32 operands widen exactly for the
 call, and the result rounds back to binary32 at the checked expression boundary.
 NaN and infinity outcomes remain floating values rather than runtime failures.
 
+Non-release `print` and `println` validate aggregate arguments through the native
+debug type graph and reuse `DebugAppendAggregate` to format a borrowed value into
+an owned temporary string. Primitive task formatting retains its existing path.
+MIR argument modes preserve explicit views (also through coarsening and
+declassification) without changing consumption of ordinary print arguments.
+Handler extraction, ownership planning, and emission use the same argument rule.
+Formatting starts only after every argument has evaluated successfully.
+An additive `Uninhabited` debug node describes never-typed children of empty
+containers and absent sums; attempting to format an actual value at that node
+fails without reading a payload. The typed formatter still redacts hidden
+secrets; interpreter parity for those print values awaits the recorded policy.
+
 Terminal runtime failure is a context-local first error, not `result.fail` data.
 Compiled calls test that channel before using a return value; failure edges release
 frame owners and propagate it to the launcher. Context destruction checks for leaked

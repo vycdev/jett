@@ -1651,3 +1651,17 @@ the established interpreter operation, including signed zero, NaN, infinity,
 and zero-divisor behavior. Pending operands still fail before arithmetic and
 follow ordinary owned-value cleanup. Linked tests compare debug and optimized
 execution, generic calls, explicit comptime results, and pending tasks.
+
+### Public aggregate debug printing
+
+`print` and `println` previously accepted aggregate arguments in the frontend
+but failed native signature validation. Native printing now uses the existing
+typed debug formatter for public containers, records, enums, machines, bitfields,
+function values, actors, capabilities, builders, and erased values. The shared
+ownership rule preserves explicit views while consuming ordinary arguments.
+Empty literal containers and absent sums have an explicit uninhabited layout
+child. Differential tests cover five debug fixture families, argument evaluation
+order, borrowed values across handlers, and cleanup without partial output after
+a later argument fails. Release rejection remains unchanged. Hidden-secret
+printing is a separate unresolved policy, recorded in
+`../open_design/debug_print_hidden_secrets.md`.

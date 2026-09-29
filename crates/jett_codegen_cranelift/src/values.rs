@@ -478,7 +478,12 @@ pub(crate) fn verify_intrinsic(
         IntrinsicId::StringFromFloat64 => (&[T::FLOAT64], T::STRING),
         IntrinsicId::StringFromBool => (&[T::BOOL], T::STRING),
         IntrinsicId::Print | IntrinsicId::Println => {
-            if result == T::NOTHING && args.iter().all(|a| is_formattable(types, a.ty)) {
+            if result == T::NOTHING
+                && args.iter().all(|a| {
+                    !jett_mir::move_values::is_secret(types, a.ty)
+                        && crate::emit::debug::debug_layout(types, a.ty).is_some()
+                })
+            {
                 return Ok(());
             }
             return Err("invalid native print signature".into());
