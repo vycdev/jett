@@ -7701,6 +7701,15 @@ primitive refinements dispatch to their own implementations through collections,
 callbacks, reflected fields, and explicit comptime evaluation. Transparent
 aliases use their canonical base identity. Arithmetic and formatting inspect the
 payload without losing identity when the value is stored or cloned.
+Collection and sum interface payloads retain their full type arguments, including
+interface arguments qualified by namespace. Converting a concrete collection
+changes its outer checked identity to the destination type while retaining the
+concrete identities of its elements. List and record refinements likewise keep
+their nominal implementation identity. Type aliases used for concrete method
+calls or method values resolve within their declaration namespace.
+Expected type context also passes through `run`: for example, initializing
+`result[int64, string]` with `run ok(17)` retains both declared result payload
+types in the checked body used by native lowering.
 Generic structs retain their concrete type arguments across interface erasure,
 including reflected construction and comptime evaluation. Typed observations
 therefore redact secret generic fields while keeping the base struct display name.

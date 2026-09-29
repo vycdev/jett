@@ -320,6 +320,43 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_collection_identity_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_collection_identity.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("collection interface oracle");
+    let mixed = "numbers:2\nwords:2\nsecrets:1\nnonempty:3\nnumber-map:1\nword-map:2\nnumber-set:1\nword-set:1\nmaybe-number:7\nmaybe-word:hello\nno-number\nno-word\nnumber-ok:9\nword-ok:yes\nnumber-fail:bad\nword-fail:11\n";
+    assert_eq!(
+        expected.stdout,
+        format!(
+            "{mixed}{mixed}numbers:2\nnumbers:2\nnumbers:2\nnumbers:2\nnumbers:2\ninterfaces:3\nnumbers:1\nnumbers:2\nwords:1\ninterfaces:3\ncounted:4\ncounted:4\nnumbers:3\nnumbers:3\nnumbers:4\nnumbers:4\n6\n2\n9\n17\n"
+        )
+    );
+    assert!(
+        expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("[redacted]"))
+    );
+    assert!(
+        !expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("hidden-collection-secret"))
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_collection_identity.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native collection interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_interface_primitive_identity_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_primitive_identity.jett");

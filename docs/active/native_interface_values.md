@@ -82,12 +82,12 @@ This does **not** close the full interface gate. Still required:
   different native helpers and lack checked source bodies.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
-- Preserve interface implementation identity for generic collection owners and
-  non-primitive refinement payloads. A checked probe implementing `Named` for
-  `list[int64]` and `list[string]` prints `numbers`, `words` natively but
-  `words`, `words` in the interpreter. Collection registrations and values still
-  collapse to their base names; primitive and generic struct metadata do not
-  close this remaining gate.
+- Preserve function-valued interface identity. A checked `Reader = function()
+  returns int64` implementation prints `read:7` natively, while the interpreter
+  fails with an undefined interface method because its runtime owner is only
+  `function`. Cover distinct signatures, captures, and comptime values.
+- Audit remaining nominal state payloads and non-primitive refinements beyond
+  the tested list/record shapes in runtime and comptime paths.
 
 Generic struct interface dispatch uses the concrete instantiated owner retained
 on the value. Implementations for `Box[int64]`, `Box[string]`, and
@@ -282,3 +282,29 @@ that retained name to a unique checked type instead of guessing from the carrier
 Primitive operations borrow the payload; container insertion and cloning keep
 the whole value. The broader fixture suite caught and pinned byte-list consumers
 that also need to inspect their element payloads.
+
+Collection identity implementation follows the same checked contract as the
+primitive fix: implementation owners use the full canonical type, and erased
+collections retain that identity. Concrete collection conversions retag the
+outer value for the destination type while preserving element identities;
+interface boundaries preserve the incoming identity. Register concrete owners
+explicitly so unrelated runtime collections need no extra wrapper. Collection
+operations and sum/aggregate projections inspect payload storage without changing
+stored element values. Non-primitive refinements with interface implementations
+must retain their nominal identity by the same mechanism.
+
+`interface_collection_identity` now covers distinct list/map/set/optional/result
+implementations, empty and failed sums, list and record refinements, nested
+collection conversion, typed insertion, loops, sorting, alias methods and method
+values, reflected collection fields, callbacks, cloning, pending values, and
+baked values. Secret element types survive erasure and remain redacted.
+
+The expanded regression exposed two checker handoff gaps. A namespace-local
+alias method must resolve its canonical owner before recording its source
+method target; otherwise valid calls and method values reach HIR without their
+checked target. A `run` initializer must preserve its expected type context;
+otherwise `run ok(17)` leaves a local with `result[int64, <never>]` while later
+uses carry the declared `result[int64, string]`. Dedicated checker tests pin
+both behaviors, including nested pending values, empty containers, and narrow
+integer literals. Interpreter registration also retains interface declarations
+for namespace qualification inside canonical collection type arguments.

@@ -8086,6 +8086,13 @@ impl<'a> TypeChecker<'a> {
         allow_refinement_handle: bool,
     ) -> TypeId {
         let ty = match expr {
+            Expr::Run(inner, _) => {
+                let saved_in_property_block = self.in_property_block;
+                self.in_property_block = false;
+                let ty = self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle);
+                self.in_property_block = saved_in_property_block;
+                ty
+            }
             Expr::IntLiteral(value, _)
                 if self.int_literal_matches_expected_type(*value, expected_ty) =>
             {
@@ -12619,7 +12626,8 @@ impl<'a> TypeChecker<'a> {
                     return method_ty;
                 }
             }
-            if let Some(type_id) = self.named_types.get(&base_ident.name).copied() {
+            let owner_name = self.resolved_symbol_name(&base_ident.name, owner_span);
+            if let Some(type_id) = self.named_types.get(&owner_name).copied() {
                 if matches!(self.interner.resolve(type_id), Type::Enum(_)) {
                     // Compiler-defined reflection enums have a named type but
                     // their type name is not a runtime value in `type_env`.
@@ -17520,6 +17528,69 @@ function describe() returns string:
             1,
             "the alias-qualified interface call must retain its concrete implementation target"
         );
+    }
+
+    #[test]
+    fn pending_sum_literals_retain_expected_payload_types() {
+        let source = r#"function values() returns nothing:
+    result[int64, string] success = run ok(17)
+    result[int64, string] failure = run fail("bad")
+    optional[int64] missing = run run none
+    list[int8] empty = run list()
+    int8 narrow = run 127
+    return nothing
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        for (expression, expected) in [
+            ("run ok(17)", "result[int64, string]"),
+            ("run fail(\"bad\")", "result[int64, string]"),
+            ("run run none", "optional[int64]"),
+            ("run list()", "list[int8]"),
+            ("run 127", "int8"),
+        ] {
+            let start = source.find(expression).unwrap();
+            let span = Span::new(
+                FileId::new(0),
+                start as u32,
+                (start + expression.len()) as u32,
+            );
+            assert_eq!(result.interner.type_name(result.type_map[&span]), expected);
+        }
+    }
+
+    #[test]
+    fn collection_alias_methods_export_call_and_value_targets() {
+        let source = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Numbers = list[int64]
+implement Named for Numbers:
+    function name(view self: Numbers) returns string:
+        return "numbers"
+function read(view values: Numbers) returns string:
+    return Numbers.name(view values)
+function reader() returns function(view Numbers) returns string:
+    return Numbers.name
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.method_calls.len(), 1, "{:?}", result.method_calls);
+        assert_eq!(result.method_values.len(), 2, "{:?}", result.method_values);
     }
 
     #[test]

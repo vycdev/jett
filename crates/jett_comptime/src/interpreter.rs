@@ -610,6 +610,10 @@ pub struct Interpreter {
     enums: HashMap<String, EnumDef>,
     /// Interface dotted name -> concrete runtime type -> concrete dotted function name.
     interface_methods: HashMap<String, HashMap<String, String>>,
+    /// Concrete implementation owners requiring identity across interface erasure.
+    interface_owners: HashSet<String>,
+    /// Interface names participate in canonical type argument qualification.
+    interfaces: HashSet<String>,
     /// Registered type alias base expressions.
     type_alias_bases: HashMap<String, TypeExpr>,
     /// Registered type aliases: name -> (base_type_name, optional constraint).
@@ -697,6 +701,8 @@ impl Interpreter {
             bitfields: HashMap::new(),
             enums: HashMap::new(),
             interface_methods: HashMap::new(),
+            interface_owners: HashSet::new(),
+            interfaces: HashSet::new(),
             type_alias_bases: HashMap::new(),
             type_aliases: HashMap::new(),
             machines: HashMap::new(),
@@ -867,7 +873,8 @@ impl Interpreter {
             Expr::Ident(ident) => self.get_variable(&ident.name),
             Expr::Paren(inner, _) | Expr::View(inner, _) => self.borrowed_struct_place(inner),
             Expr::FieldAccess(base, field, _) => {
-                let Value::Struct { fields, .. } = self.borrowed_struct_place(base)? else {
+                let Value::Struct { fields, .. } = self.borrowed_struct_place(base)?.payload()
+                else {
                     return None;
                 };
                 fields
@@ -1149,7 +1156,14 @@ impl Interpreter {
                 Item::TypeAlias(alias) => {
                     self.register_type_alias_in_namespace(current_namespace.as_deref(), alias);
                 }
-                Item::Interface(interface) => self.register_interface(interface),
+                Item::Interface(interface) => {
+                    if let Some(namespace) = current_namespace.as_deref() {
+                        self.interfaces
+                            .insert(format!("{namespace}.{}", interface.name.name));
+                    } else {
+                        self.register_interface(interface);
+                    }
+                }
                 Item::Implement(block) => {
                     self.register_implement_block_in_namespace(current_namespace.as_deref(), block)
                 }
@@ -1285,9 +1299,10 @@ impl Interpreter {
         }
     }
 
-    /// Register an interface declaration. Interfaces carry no runtime state,
-    /// but keeping the entry point makes module registration symmetric.
-    pub fn register_interface(&mut self, _interface: &InterfaceDecl) {}
+    /// Retain interface names so nested type arguments can be qualified.
+    pub fn register_interface(&mut self, interface: &InterfaceDecl) {
+        self.interfaces.insert(interface.name.name.clone());
+    }
 
     /// Register an `implement Interface for Type` block so interface-qualified
     /// calls can dispatch to the concrete method body at runtime.
@@ -1305,11 +1320,8 @@ impl Interpreter {
         let owner_type = self.concrete_type_expr(&owner_type, &mut HashSet::new());
         let concrete_owner = type_expr_display(&owner_type);
         let base_owner = concrete_owner.split('[').next().unwrap_or(&concrete_owner);
-        let owner_name = if self.structs.contains_key(base_owner) {
-            concrete_owner.clone()
-        } else {
-            type_expr_name(&owner_type)
-        };
+        let owner_name = concrete_owner.clone();
+        self.interface_owners.insert(owner_name.clone());
         let base_owner = if self.structs.contains_key(base_owner) {
             base_owner
         } else {
@@ -1644,10 +1656,10 @@ impl Interpreter {
     fn normalize_value_for_type(&self, ty: &TypeExpr, value: Value) -> Result<Value, String> {
         let name = self.concrete_type_display(ty);
         let value = self.normalize_value_for_type_name(&name, value)?;
-        Ok(self.retain_primitive_identity(&name, value))
+        Ok(self.retain_checked_identity(&name, value))
     }
 
-    fn retain_primitive_identity(&self, name: &str, value: Value) -> Value {
+    fn retain_checked_identity(&self, name: &str, value: Value) -> Value {
         if !matches!(
             self.primitive_base_type_name(name).as_ref(),
             "int8"
@@ -1665,10 +1677,10 @@ impl Interpreter {
                 | "bytes"
                 | "nothing"
         ) {
-            return value;
+            return self.retain_aggregate_identity(name, value);
         }
         if let Value::Pending(inner) = value {
-            return Value::Pending(Box::new(self.retain_primitive_identity(name, *inner)));
+            return Value::Pending(Box::new(self.retain_checked_identity(name, *inner)));
         }
         if !matches!(
             value.payload(),
@@ -1703,6 +1715,44 @@ impl Interpreter {
                 type_name: name,
                 value: Box::new(value),
             }
+        }
+    }
+
+    fn retain_aggregate_identity(&self, name: &str, value: Value) -> Value {
+        if !matches!(value, Value::Typed { .. } | Value::Pending(_))
+            && !self.interface_owners.contains(name)
+            && !self.type_aliases.contains_key(name)
+        {
+            return value;
+        }
+        let base = self.primitive_base_type_name(name);
+        let owner = base.split('[').next().unwrap_or(&base);
+        let is_concrete = matches!(owner, "list" | "map" | "set" | "optional" | "result")
+            || self.structs.contains_key(owner)
+            || self.enums.contains_key(owner)
+            || self.machines.contains_key(owner)
+            || self.bitfields.contains_key(owner);
+        // An interface destination retains the incoming concrete owner. A
+        // concrete conversion replaces it, including covariant containers.
+        if !is_concrete {
+            return value;
+        }
+        if let Value::Pending(inner) = value {
+            return Value::Pending(Box::new(self.retain_aggregate_identity(name, *inner)));
+        }
+        let canonical = Self::debug_type(name)
+            .map(|ty| self.concrete_type_display(&ty))
+            .unwrap_or_else(|| name.to_owned());
+        let value = value.into_payload();
+        if self.interface_owners.contains(&canonical)
+            && runtime_type_name(&value).as_deref() != Some(canonical.as_str())
+        {
+            Value::Typed {
+                type_name: canonical,
+                value: Box::new(value),
+            }
+        } else {
+            value
         }
     }
 
@@ -1912,7 +1962,7 @@ impl Interpreter {
         }
         let binding_type = if let Expr::Ident(ident) = binding_expr {
             self.get_variable_type(&ident.name)
-                .map(|ty| type_expr_name(&self.substitute_type_expr(ty)))
+                .map(|ty| self.concrete_type_display(ty))
         } else {
             None
         };
@@ -1935,7 +1985,7 @@ impl Interpreter {
         } else {
             self.normalize_value_for_type_name(type_name, value)
         }
-        .map(|value| self.retain_primitive_identity(type_name, value))
+        .map(|value| self.retain_checked_identity(type_name, value))
     }
 
     fn eval_expr_flow_inner(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
@@ -2036,7 +2086,7 @@ impl Interpreter {
                 let right = value_or_signal!(self, rhs);
                 if matches!(op, BinOp::Eq | BinOp::NotEq)
                     && matches!(
-                        (&left, &right),
+                        (left.payload(), right.payload()),
                         (Value::Struct { .. }, Value::Struct { .. })
                     )
                 {
@@ -2097,7 +2147,7 @@ impl Interpreter {
 
             Expr::Handle(target, bind_name, body, _) => {
                 let target_value = value_or_signal!(self, target);
-                match target_value {
+                match target_value.into_payload() {
                     Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
                     Value::ResultFail(error) => self.exec_handle_block(
                         bind_name.as_ref(),
@@ -2205,11 +2255,11 @@ impl Interpreter {
             // State check: `expr at state_name`
             Expr::At(expr, state_name, _) => {
                 let val = value_or_signal!(self, expr);
-                match val {
+                match val.into_payload() {
                     Value::Machine { state, .. } => {
                         Ok(ExprFlow::Value(Value::Bool(state == state_name.name)))
                     }
-                    _ => Err(format!("'at' requires a machine value, got {val}")),
+                    other => Err(format!("'at' requires a machine value, got {other}")),
                 }
             }
 
@@ -2242,9 +2292,9 @@ impl Interpreter {
             Expr::Join(inner, _) => {
                 let val = value_or_signal!(self, inner);
                 let result = match val {
-                    Value::Pending(inner_val) => match *inner_val {
+                    Value::Pending(inner_val) => match inner_val.payload() {
                         Value::ResultOk(_) | Value::ResultFail(_) => *inner_val,
-                        other => Value::ResultOk(Box::new(other)),
+                        _ => Value::ResultOk(inner_val),
                     },
                     Value::Nothing => {
                         Value::ResultFail(Box::new(Value::String("task was cancelled".to_string())))
@@ -2983,7 +3033,7 @@ impl Interpreter {
         handle: &PipelineStepHandle,
         error_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
-        match step_value {
+        match step_value.into_payload() {
             Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
             Value::ResultFail(error) => self.exec_handle_block(
                 handle.error_name.as_ref(),
@@ -3174,7 +3224,7 @@ impl Interpreter {
                                 ExprFlow::Value(value) => value,
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
-                            let flow = match target_value {
+                            let flow = match target_value.into_payload() {
                                 Value::ResultOk(value) | Value::OptionalSome(value) => self
                                     .finish_refinement_boundary(
                                         &type_name,
@@ -3301,7 +3351,7 @@ impl Interpreter {
                     ExprFlow::Value(value) => value,
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
-                match iterable {
+                match iterable.into_payload() {
                     Value::List(items) => {
                         for (index, item) in items.into_iter().enumerate() {
                             self.push_scope();
@@ -3503,7 +3553,7 @@ impl Interpreter {
                     ExprFlow::Value(value) => value,
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
                 };
-                let (variant_name, fields) = match &val {
+                let (variant_name, fields) = match val.payload() {
                     Value::Enum {
                         variant, fields, ..
                     } => (variant.clone(), fields.clone()),
@@ -3939,6 +3989,7 @@ impl Interpreter {
         bitfield: &BitfieldDef,
         value: &Value,
     ) -> Result<Vec<u8>, String> {
+        let value = value.payload();
         let Value::Struct {
             concrete_type: _,
             type_name,
@@ -4360,6 +4411,7 @@ impl Interpreter {
     }
 
     fn value_to_byte_list(&self, value: &Value) -> Result<Vec<u8>, String> {
+        let value = value.payload();
         match value {
             Value::Bytes(bytes) => Ok(bytes.clone()),
             Value::List(items) => items
@@ -4921,6 +4973,7 @@ impl Interpreter {
 
     fn type_name_is_registered(&self, name: &str) -> bool {
         self.structs.contains_key(name)
+            || self.interfaces.contains(name)
             || self.bitfields.contains_key(name)
             || self.enums.contains_key(name)
             || self.type_alias_bases.contains_key(name)
@@ -6976,6 +7029,7 @@ impl Interpreter {
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.field_value")?;
         let expected_owner = type_expr_display(owner_ty);
         Self::validate_field_metadata_owner(&metadata, &expected_owner, None, "type.field_value")?;
@@ -7070,6 +7124,7 @@ impl Interpreter {
         value: &Value,
         owner_ty: &TypeExpr,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let Value::Machine {
             type_name, state, ..
         } = value
@@ -7139,6 +7194,7 @@ impl Interpreter {
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
         let Value::Machine {
             type_name,
@@ -7260,6 +7316,7 @@ impl Interpreter {
     }
 
     fn reflected_variant_value(&self, value: &Value, owner_ty: &TypeExpr) -> Result<Value, String> {
+        let value = value.payload();
         let Value::Enum {
             type_name, variant, ..
         } = value
@@ -7318,6 +7375,7 @@ impl Interpreter {
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
     ) -> Result<Value, String> {
+        let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.variant_field_value")?;
         let Value::Enum {
             type_name,
@@ -9457,7 +9515,7 @@ impl Interpreter {
             }
             IntrinsicId::MapInsert if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Map(mut entries) => {
                         let key = args[1].clone();
                         let val = args[2].clone();
@@ -9473,7 +9531,7 @@ impl Interpreter {
             }
             IntrinsicId::MapRemove if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Map(mut entries) => {
                         entries.retain(|(k, _)| k != args[1].payload());
                         Some(Ok(Value::Map(entries)))
@@ -9507,7 +9565,7 @@ impl Interpreter {
             }
             IntrinsicId::SetAdd if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Set(mut items) => {
                         let val = args[1].clone();
                         if !items.contains(&val) {
@@ -9520,7 +9578,7 @@ impl Interpreter {
             }
             IntrinsicId::SetRemove if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match args[0].clone() {
+                match args[0].payload().clone() {
                     Value::Set(mut items) => {
                         items.retain(|v| v != args[1].payload());
                         Some(Ok(Value::Set(items)))
@@ -9550,11 +9608,11 @@ impl Interpreter {
                         let idx = usize::try_from(*idx).unwrap_or(usize::MAX);
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| {
-                            let va = match a {
+                            let va = match a.payload() {
                                 Value::List(l) => l.get(idx).map(|value| value.payload().clone()),
                                 _ => None,
                             };
-                            let vb = match b {
+                            let vb = match b.payload() {
                                 Value::List(l) => l.get(idx).map(|value| value.payload().clone()),
                                 _ => None,
                             };
@@ -10900,7 +10958,7 @@ impl Interpreter {
                         args.len()
                     )));
                 }
-                let items = match &args[0] {
+                let items = match args[0].payload() {
                     Value::List(v) => v.clone(),
                     _ => return Some(Err("list.__sort_by: first argument must be a list".into())),
                 };
@@ -10931,7 +10989,7 @@ impl Interpreter {
                         args.len()
                     )));
                 }
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => {
                         if items.is_empty() {
                             return Some(Ok(Value::Int64(0)));
@@ -10975,7 +11033,7 @@ impl Interpreter {
                         args.len()
                     )));
                 }
-                let items = match &args[0] {
+                let items = match args[0].payload() {
                     Value::List(v) => v.clone(),
                     _ => return Some(Err(format!("{name}: first argument must be a list"))),
                 };
@@ -11340,7 +11398,7 @@ impl Interpreter {
     }
 
     fn eval_value_field_access(&self, value: Value, field_name: &str) -> Result<ExprFlow, String> {
-        match value {
+        match value.into_payload() {
             Value::Struct {
                 concrete_type: _,
                 type_name,
@@ -11442,7 +11500,7 @@ impl Interpreter {
 
         // arg 0 is evaluated — it should be the current machine value
         let current_value = self.eval_expr(&args[0].value)?;
-        let current_state = match &current_value {
+        let current_state = match current_value.payload() {
             Value::Machine {
                 type_name, state, ..
             } => {

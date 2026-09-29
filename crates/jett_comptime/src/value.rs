@@ -33,7 +33,7 @@ pub struct ClosureTypeArgument {
 /// Runtime value for the compile-time interpreter.
 #[derive(Debug, Clone)]
 pub enum Value {
-    /// Checked concrete identity for a payload whose primitive carrier erases it.
+    /// Checked concrete identity for a payload whose storage carrier erases it.
     /// Arithmetic and formatting use the payload; interface dispatch uses the name.
     Typed {
         type_name: String,
@@ -140,7 +140,7 @@ impl Value {
         }
     }
 
-    /// Consume a value at a concrete primitive operation or conversion boundary.
+    /// Consume a value at a concrete operation or conversion boundary.
     pub fn into_payload(self) -> Self {
         match self {
             Self::Typed { value, .. } => value.into_payload(),
