@@ -502,3 +502,11 @@ generic and reflected scoped types, fields, returned values, and comptime
 formatting. A side-effecting receiver is evaluated once, view operands remain
 usable, and explicit primitive display implementations override the default
 formatter. See [display contexts](native_display_context.md).
+
+`interface_method_returns` checks dynamic methods returning interface values,
+interface lists, and captured callbacks returning interfaces. Distinct string,
+`int64`, and `int8` implementations retain their method owners, including
+wrapping narrow arithmetic inside a returned collection. Callback lists created
+at runtime and comptime preserve captures after the source receiver's scope
+ends. The accepted method signatures explicitly return the interface types;
+substituting concrete return types is rejected by the existing checker.

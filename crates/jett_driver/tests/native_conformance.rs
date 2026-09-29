@@ -342,6 +342,25 @@ fn native_interface_refined_interfaces_match_interpreter() {
 }
 
 #[test]
+fn native_interface_method_returns_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_method_returns.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("interface method return oracle");
+    assert_eq!(
+        expected.stdout,
+        "number:7\nnumber:7\nnumber:8\nnumber:7\ntext:hello\ntext:hello\ntext:hello!\ntext:hello\ntiny:127\ntiny:127\ntiny:-128\ntiny:127\nnumber:13\ntext:baked\ntiny:127\nnumber:13\ntext:baked\ntiny:127\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_method_returns.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native interface method returns");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_interface_display_contexts_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_display_contexts.jett");
