@@ -1012,8 +1012,24 @@ impl Interpreter {
 
     fn runtime_name(&self, name: &str) -> String {
         self.registry_name(&self.functions, name)
+            .or_else(|| self.type_alias_method_name(name))
             .or_else(|| self.expand_namespace_alias_name(name))
             .unwrap_or_else(|| name.to_string())
+    }
+
+    fn type_alias_method_name(&self, name: &str) -> Option<String> {
+        let (owner, method) = name.rsplit_once('.')?;
+        let alias = self.registry_name(&self.type_alias_bases, owner)?;
+        // Refinements have their own implementation identity.
+        if !matches!(self.type_aliases.get(&alias), Some(None)) {
+            return None;
+        }
+        let namespace = Self::type_name_namespace(&alias).or(self.current_namespace.as_deref());
+        let base =
+            self.substitute_type_expr_in_namespace(&self.type_alias_bases[&alias], namespace);
+        let owner = self.concrete_type_display(&base);
+        let method = format!("{owner}.{method}");
+        self.functions.contains_key(&method).then_some(method)
     }
 
     pub fn set_breakpoint_exclusions(&mut self, exclusions: Arc<HashMap<Span, HashSet<String>>>) {
@@ -1276,12 +1292,19 @@ impl Interpreter {
         block: &ImplementBlock,
     ) {
         let interface_name = block.interface_name.name.clone();
-        let local_owner_name = type_expr_name(&block.for_type);
-        let owner_name = namespace
-            .filter(|_| !local_owner_name.contains('.'))
-            .map(|namespace| format!("{namespace}.{local_owner_name}"))
-            .filter(|qualified| self.structs.contains_key(qualified))
-            .unwrap_or(local_owner_name);
+        let owner_type = self.substitute_type_expr_in_namespace(&block.for_type, namespace);
+        let concrete_owner = self.concrete_type_display(&owner_type);
+        let base_owner = concrete_owner.split('[').next().unwrap_or(&concrete_owner);
+        let owner_name = if self.structs.contains_key(base_owner) {
+            concrete_owner.clone()
+        } else {
+            type_expr_name(&owner_type)
+        };
+        let base_owner = if self.structs.contains_key(base_owner) {
+            base_owner
+        } else {
+            &owner_name
+        };
 
         for method in &block.methods {
             let concrete_name = format!("{}.{}", owner_name, method.name.name);
@@ -1297,7 +1320,7 @@ impl Interpreter {
                 method,
                 method.span.file.is_stdlib(),
             );
-            let has_inherent = self.structs.get(&owner_name).is_some_and(|owner| {
+            let has_inherent = self.structs.get(base_owner).is_some_and(|owner| {
                 owner
                     .methods
                     .iter()
@@ -1904,7 +1927,8 @@ impl Interpreter {
                 if !self.is_value_call_target(expr)
                     && let Some(name) = Self::dotted_expr_name(expr)
                 {
-                    if let Some(function) = self.registry_name(&self.functions, &name) {
+                    let function = self.runtime_name(&name);
+                    if self.functions.contains_key(&function) {
                         return Ok(ExprFlow::Value(Value::NamedFunction(function)));
                     }
                 }
@@ -11852,9 +11876,12 @@ fn runtime_type_name(value: &Value) -> Option<String> {
         Value::Nothing => Some("nothing".to_string()),
         Value::Capability(name) => Some(name.clone()),
         Value::TypeConstruction { .. } => Some("TypeConstruction".to_string()),
-        Value::Struct { type_name, .. }
-        | Value::Enum { type_name, .. }
-        | Value::Machine { type_name, .. } => Some(type_name.clone()),
+        Value::Struct {
+            type_name,
+            concrete_type,
+            ..
+        } => Some(concrete_type.as_ref().unwrap_or(type_name).clone()),
+        Value::Enum { type_name, .. } | Value::Machine { type_name, .. } => Some(type_name.clone()),
         Value::Error(_) => None,
         Value::Actor(_) => Some("actor".to_string()),
         Value::Pending(_) => Some("pending".to_string()),

@@ -137,6 +137,26 @@ fn run_bounded_with_env(
 }
 
 #[test]
+fn native_generic_interface_identity_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/generic_interface_identity.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("generic interface oracle");
+    assert_eq!(
+        expected.stdout,
+        "integer:17\ntext:hello\nsecret\ninteger:23\nsecret\ninteger:31\ninteger:31\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("generic_interface_identity.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("native generic interface identity");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_interface_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/interface_values.jett");

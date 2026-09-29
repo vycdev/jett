@@ -78,13 +78,24 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Comptime callback specializations whose evaluated values do not retain enough
-concrete metadata to select an unambiguous checked source identity.
+- Audit remaining comptime callback specialization keys, particularly
+  reflection-valued parameters and reflected-loop bindings. Generic type
+  arguments and their alias reflection metadata are retained.
 - Remaining comptime payload shapes and reflected interface fields. Generic
-  struct metadata is retained, but dispatch between multiple instantiations still
-  requires an interpreter identity audit.
+  struct metadata and exact implementation identity are retained.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
   identity rather than assuming every checked TypeId has a distinct runtime name.
+
+Generic struct interface dispatch uses the concrete instantiated owner retained
+on the value. Implementations for `Box[int64]`, `Box[string]`, and
+`Box[secret[string]]` must coexist without overwriting each other. Namespace
+qualification and transparent aliases normalize before matching. Concrete method
+aliases use the fully instantiated owner, including through a transparent type
+alias such as `type IntBox = Box[int64]`. An inherent method keeps its own source
+identity. A bare generic owner such as `Box.name` currently escapes checking with
+an error type and must receive a source diagnostic; it is not a concrete method
+identity. This checker diagnostic remains an open gate. Pending interface receivers retain the
+existing failure behavior until joined.
 
 Comptime callback materialization must reconstruct the evaluated source function
 with its own checked signature before adapting it to the expression's result

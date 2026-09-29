@@ -2859,6 +2859,9 @@ payload types; secret fields and pending wrappers remain part of the typed value
 Generic structs retain their concrete type arguments across interface erasure,
 including reflected construction and comptime evaluation. Typed observations
 therefore redact secret generic fields while keeping the base struct display name.
+Interface implementations use the full instantiated struct identity, so
+`Box[int64]` and `Box[string]` dispatch independently. Transparent type aliases
+retain that identity for concrete method calls and method values.
 Actor constructor parameters are retained before state initializers run; an
 initializer consuming its working parameter does not consume the actor's capture.
 
