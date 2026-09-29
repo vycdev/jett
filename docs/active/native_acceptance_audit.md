@@ -122,6 +122,14 @@ with the interpreter after source removal. Pool and shrink tests also check
 binary32 identity, negative zero, finite limits, and subnormal rounding; binary64
 values keep their original precision.
 
+`native_property_shrinking_preserves_generated_generic_interface_owners` checks
+canonical instantiated identities in generated records, including a transparent
+type argument alias and distinct implementations reached through interface lists.
+Its failure shrinks from three records to two records with zero-valued fields;
+losing the owner during field shrinking would instead introduce a dispatch error
+and wrongly accept a singleton. Native debug and optimized replay must match the
+interpreter's exact counterexample after source removal.
+
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical
 85% planning estimate is not a measured code-coverage or completion result.

@@ -5895,6 +5895,8 @@ an invalid input must not become a counterexample through its range error.
 Generated `float32` values and their shrink candidates retain binary32 precision
 and type identity. Counterexamples describe the rounded value actually executed,
 including when the value occurs inside an aggregate or refinement.
+Generated generic records retain their instantiated type through containers,
+interface erasure, and shrinking, just as records constructed by source code do.
 Refinement identities also survive shrinking, including inside aggregates.
 Candidates that fail a refinement predicate, or whose predicate evaluation fails,
 are rejected before executing the property. Native candidate validation calls

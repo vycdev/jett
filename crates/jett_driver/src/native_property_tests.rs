@@ -2,6 +2,70 @@
 use super::*;
 
 #[test]
+fn native_property_shrinking_preserves_generated_generic_interface_owners() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("generic-owners.jett");
+    let text = include_str!("../../../tests/native/property_generic_owners.jett");
+    fs::write(&source, text).unwrap();
+    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let mut changed = 0;
+    for function in &mut lowered.hir.functions {
+        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
+            continue;
+        }
+        for statement in &mut function.body.statements {
+            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
+                if let jett_hir::ExpressionKind::Binary { right, .. } = &mut condition.kind {
+                    assert_eq!(right.kind, jett_hir::ExpressionKind::Int(3));
+                    right.kind = jett_hir::ExpressionKind::Int(1);
+                    changed += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    fs::write(&source, text.replace("<= 3", "<= 1")).unwrap();
+    let oracle = crate::test_file(&source).unwrap();
+    assert_eq!(oracle.failed, 1);
+    assert_eq!(oracle.blocks[1].iterations, Some(3));
+    let expected = oracle.blocks[1].error.as_deref().unwrap();
+    assert_eq!(
+        expected,
+        "length sentinel (counterexample: records = list(app.Boxed(value: 0), app.Boxed(value: 0)), texts = list())"
+    );
+    fs::remove_file(&source).unwrap();
+    let launcher = launcher();
+    for optimize in [false, true] {
+        let result = property_runner::run_lowered(
+            &source,
+            &lowered,
+            &launcher,
+            NativePropertyOptions {
+                optimize,
+                ..NativePropertyOptions::default()
+            },
+        )
+        .unwrap();
+        let failure = result.failure.unwrap();
+        assert_eq!(result.trials, 3);
+        assert_eq!(failure.trial, 3);
+        assert_eq!(
+            format!(
+                "length sentinel (counterexample: {})",
+                failure.counterexample
+            ),
+            expected
+        );
+        assert!(result.stdout.is_empty());
+        assert_eq!(
+            result.stderr,
+            b"runtime error: property 'owners' trial 3: length sentinel\n"
+        );
+    }
+}
+
+#[test]
 fn native_property_shrinking_reports_the_executed_float32_input() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("float32-input.jett");

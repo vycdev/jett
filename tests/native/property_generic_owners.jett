@@ -1,0 +1,30 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Boxed[T]:
+    value: T
+type Tiny = int8
+implement Named for Boxed[Tiny]:
+    function name(view self: Boxed[Tiny]) returns string:
+        return "narrow"
+implement Named for Boxed[string]:
+    function name(view self: Boxed[string]) returns string:
+        return "text"
+function named(values: list[Named], expected: string) returns bool:
+    for value in values:
+        if Named.name(view value) != expected:
+            return false
+    return true
+function count(values: list[Boxed[Tiny]]) returns int64:
+    mutable int64 total = 0
+    for value in values:
+        total = total + 1
+    return total
+verify constructed_owner:
+    assert named(list(Boxed[Tiny](value: 7)), "narrow")
+property owners:
+    given records: list[Boxed[Tiny]]
+    given texts: list[Boxed[string]]
+    assert named(clone records, "narrow") "narrow owner sentinel"
+    assert named(texts, "text") "text owner sentinel"
+    assert count(records) <= 3 "length sentinel"

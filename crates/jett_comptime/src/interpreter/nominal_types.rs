@@ -2,7 +2,7 @@
 use super::{HashSet, Interpreter, TypeExpr, type_expr_display};
 
 impl Interpreter {
-    pub(super) fn concrete_type_display(&self, ty: &TypeExpr) -> String {
+    pub(crate) fn concrete_type_display(&self, ty: &TypeExpr) -> String {
         type_expr_display(&self.concrete_type_expr(ty, &mut HashSet::new()))
     }
 

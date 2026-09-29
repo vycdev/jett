@@ -758,7 +758,7 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             candidates
         }
         Value::Struct {
-            concrete_type: _,
+            concrete_type,
             type_name,
             fields,
         } if !fields.is_empty() => {
@@ -768,7 +768,7 @@ fn shrink_value(value: &Value) -> Vec<Value> {
                     let mut new_fields = fields.clone();
                     new_fields[i].1 = shrunk_field;
                     candidates.push(Value::Struct {
-                        concrete_type: None,
+                        concrete_type: concrete_type.clone(),
                         type_name: type_name.clone(),
                         fields: new_fields,
                     });
@@ -1919,6 +1919,13 @@ fn generate_generic_struct_values(
     bitfield_defs: &[PropertyBitfieldDef],
     type_alias_defs: &[PropertyTypeAliasDef],
 ) -> Vec<Value> {
+    let arguments = struct_def
+        .def
+        .type_params
+        .iter()
+        .map(|param| interp.concrete_type_display(&substitutions[&param.name]))
+        .collect::<Vec<_>>();
+    let concrete_type = format!("{}[{}]", struct_def.type_name, arguments.join(", "));
     let field_namespace = struct_def.namespace.as_deref();
     let substituted_fields: Vec<FieldDef> = struct_def
         .def
@@ -1934,7 +1941,7 @@ fn generate_generic_struct_values(
 
     if substituted_fields.is_empty() {
         return vec![Value::Struct {
-            concrete_type: None,
+            concrete_type: Some(concrete_type),
             type_name: struct_def.type_name.clone(),
             fields: vec![],
         }];
@@ -1967,7 +1974,7 @@ fn generate_generic_struct_values(
             })
             .collect();
         values.push(Value::Struct {
-            concrete_type: None,
+            concrete_type: Some(concrete_type.clone()),
             type_name: struct_def.type_name.clone(),
             fields,
         });
@@ -4159,6 +4166,48 @@ mod tests {
                 )
             }),
             "expected generic struct type arguments to resolve in the use-site namespace"
+        );
+    }
+
+    #[test]
+    fn property_generator_retains_generic_arguments_in_empty_structs() {
+        let mut interp = Interpreter::new();
+        let definitions = vec![PropertyStructDef {
+            type_name: "app.Empty".to_owned(),
+            namespace: Some("app".to_owned()),
+            def: generic_struct_def("Empty", vec!["First", "Second"], vec![]),
+        }];
+        let values = generate_values_for_type_in_namespace(
+            &mut interp,
+            &type_generic("Empty", vec![type_named("string"), type_named("int8")]),
+            Some("app"),
+            &[],
+            &definitions,
+            &[],
+            &[],
+        );
+        assert!(
+            matches!(values.as_slice(), [Value::Struct { concrete_type, fields, .. }]
+            if concrete_type.as_deref() == Some("app.Empty[string, int8]") && fields.is_empty())
+        );
+    }
+
+    #[test]
+    fn property_generated_generic_owners_survive_erasure_and_shrinking() {
+        let source = include_str!("../../../tests/native/property_generic_owners.jett");
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty());
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert!(results.iter().all(|result| result.passed), "{results:?}");
+        let parsed = jett_parser::parse(&source.replace("<= 3", "<= 1"), FileId::new(0));
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert!(results[0].passed);
+        assert_eq!(results[1].iterations, Some(3));
+        assert_eq!(
+            results[1].error.as_deref(),
+            Some(
+                "length sentinel (counterexample: records = list(app.Boxed(value: 0), app.Boxed(value: 0)), texts = list())"
+            )
         );
     }
 

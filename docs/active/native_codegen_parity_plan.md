@@ -1629,3 +1629,14 @@ payload. Shrinking preserves both, including when halving a subnormal requires
 another binary32 rounding. The binary64 pool and candidate order remain intact.
 The native regression compares the fourth-trial failure and exact rounded
 counterexample in debug and optimized modes after removing the source.
+
+### Generated generic record identity
+
+Property-generated generic records must carry the same instantiated owner as
+source-constructed records. The former pool retained only the base display name:
+a `list[Boxed[int8]]` passed as `list[Named]` could not dispatch `Named.name`, even
+though a source-constructed list passed. Generation now retains canonical generic
+arguments, and field shrinking preserves that identity. The regression covers
+two implementations, a transparent argument alias, list erasure, and shrinking
+that keeps two simplified records as the smallest failure. Debug and optimized
+native replay must match the interpreter after the source is removed.

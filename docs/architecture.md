@@ -2850,6 +2850,10 @@ width keep their existing representation and search order. Refined generated
 values likewise retain their canonical type names. `float32` pools carry a typed,
 binary32-rounded payload in the interpreter's `Float64` carrier; every shrink
 candidate is rounded back to binary32 before replay or counterexample formatting.
+Generic record pools retain `concrete_type` using the interpreter's canonical
+type formatter, including transparent alias normalization and declaration-ordered
+type arguments. Replacing a field during shrinking preserves this metadata;
+otherwise erasure of a nested record loses its checked implementation owner.
 The interpreter recursively checks these tags before executing a shrink candidate. Native candidate
 materialization resolves the exact checked predicate functions and emits the
 existing refinement handlers, including inherited and nested predicates. A

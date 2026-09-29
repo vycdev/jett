@@ -510,3 +510,11 @@ wrapping narrow arithmetic inside a returned collection. Callback lists created
 at runtime and comptime preserve captures after the source receiver's scope
 ends. The accepted method signatures explicitly return the interface types;
 substituting concrete return types is rejected by the existing checker.
+
+Property generation uses the same concrete generic owner metadata as ordinary
+record construction. A generated `list[Boxed[Tiny]]`, where `Tiny` aliases `int8`,
+must dispatch through the `Boxed[int8]` implementation after interface erasure.
+Shrinking a field preserves the record's instantiated identity. The
+`property_generic_owners` fixture and linked replay test distinguish narrow and
+string owners and require shrinking to preserve successful dispatch before the
+property's intended length assertion fails.
