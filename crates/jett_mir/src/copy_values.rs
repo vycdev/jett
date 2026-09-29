@@ -376,7 +376,7 @@ fn visit(
             ExpressionKind::BitfieldConstruct { .. } => true,
             ExpressionKind::Run(inner) => {
                 matches!(
-                    types.resolve(inner.ty),
+                    types.resolve(crate::move_values::representation_type(types, inner.ty)),
                     Type::Bytes
                         | Type::List(_)
                         | Type::Set(_)
@@ -439,12 +439,17 @@ fn visit(
             // Initial empty literal plus one concatenation per segment.
             *temporaries += 1 + segments.len();
         }
-        ExpressionKind::Run(value) if matches!(types.resolve(value.ty), Type::String) => {
+        ExpressionKind::Run(value)
+            if matches!(
+                types.resolve(crate::move_values::representation_type(types, value.ty)),
+                Type::String
+            ) =>
+        {
             *temporaries += 1;
         }
         ExpressionKind::Join(value)
             if matches!(
-                types.resolve(value.ty),
+                types.resolve(crate::move_values::representation_type(types, value.ty)),
                 Type::String
                     | Type::Bytes
                     | Type::List(_)
@@ -458,6 +463,7 @@ fn visit(
                     | Type::Machine(_)
                     | Type::MachineState { .. }
                     | Type::Function { .. }
+                    | Type::Interface(_)
                     | Type::TypeConstruction
             ) =>
         {
