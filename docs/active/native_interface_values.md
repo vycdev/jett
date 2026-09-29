@@ -81,6 +81,11 @@ This does **not** close the full interface gate. Still required:
 - Audit remaining comptime callback specialization keys, particularly
   reflection-valued parameters and reflected-loop bindings. Generic type
   arguments and their alias reflection metadata are retained.
+- Checked expression types inside generic bodies must follow the active
+  specialization, not the last type stored under a shared source span. A probe
+  with `make_bump[T]` returning `function(value: T) returns T: return value + 1`,
+  instantiated for `int8` and `int64`, currently raises an interpreter range
+  error for the narrow callback at 127 instead of wrapping to -128.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
@@ -164,3 +169,9 @@ capture environments with type-dependent calls, nested factories, and calls from
 a different generic context. Interpreter restoration also runs after argument
 normalization failure. Boxing the captured type context preserves the established
 stack budget for recursive JSON fixtures.
+
+Named function invocation resolves explicit type arguments in the caller, then
+executes in the callee's own type-parameter scope. A non-generic function sees
+its declaration's nominal types even when a generic caller uses the same type
+parameter name. Closures created by that callee capture only its lexical type
+bindings. Return and argument failures must restore the caller's type scope.

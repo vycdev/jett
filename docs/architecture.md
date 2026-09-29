@@ -2850,7 +2850,9 @@ their checked source signatures before conversion to the requested type. A final
 HIR conversion pass reuses existing adapters and lowers newly materialized
 conversions before ownership analysis. Generic closures carry their lexical type
 bindings, ordered enclosing type arguments, and alias reflection metadata so
-materialization can select the checked body even when signatures coincide. The
+materialization can select the checked body even when signatures coincide.
+Named calls resolve explicit type arguments in the caller before isolating the
+callee's type bindings. Both normal returns and failures restore the caller. The
 metadata is boxed to avoid inflating every interpreter value and recursive frame.
 Actor and closure construction use separate evaluator helpers so their temporary
 state does not enlarge every recursive expression frame. The nested JSON machine

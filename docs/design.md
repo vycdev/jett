@@ -7662,7 +7662,9 @@ and results. Container descriptors use linked addresses of checked generated
 adapters. Comptime callbacks materialize their checked source signatures before
 converting to the requested callback type; captures and pending state survive.
 Generic closures retain their enclosing type arguments and alias reflection
-metadata, and invocation restores their captured type bindings. Other reflection
+metadata, and invocation restores their captured type bindings. Named function
+calls resolve explicit type arguments in the caller, then execute using only the
+callee's own type bindings, so a generic caller cannot shadow its nominal types. Other reflection
 specialization keys and parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete

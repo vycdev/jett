@@ -10576,7 +10576,9 @@ impl Interpreter {
             .map(|param| type_scope[&param.name].clone())
             .collect();
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
-        self.type_arg_scopes.push(type_scope);
+        // Resolve arguments above in the caller, then keep its type bindings
+        // out of the callee's lexical scope, including non-generic callees.
+        let saved_type_scopes = std::mem::replace(&mut self.type_arg_scopes, vec![type_scope]);
 
         let saved_namespace = self.current_namespace.clone();
         let saved_trusted_stdlib = self.current_function_trusted_stdlib;
@@ -10618,7 +10620,7 @@ impl Interpreter {
             self.pop_scope();
         }
         self.lexical_scope_floor = saved_scope_floor;
-        self.type_arg_scopes.pop();
+        self.type_arg_scopes = saved_type_scopes;
         self.current_type_arguments = saved_type_arguments;
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
@@ -16099,6 +16101,43 @@ mod tests {
             interp.call_function("make_u64", Vec::new()).unwrap(),
             Value::Uint64(7)
         );
+    }
+
+    #[test]
+    fn named_function_type_context_restores_caller_after_argument_failure() {
+        let mut interp = Interpreter::new();
+        let echo = func_def(
+            "echo",
+            vec![("value", "int8")],
+            block(vec![return_stmt(var("value"))]),
+        );
+        interp.register_function_in_namespace(Some("callee"), &echo);
+        interp.type_arg_scopes = vec![HashMap::from([("T".into(), type_named("string"))])];
+        interp.current_type_arguments = vec![type_named("uint64")];
+        interp.current_namespace = Some("caller".into());
+        interp.current_function_trusted_stdlib = true;
+        for value in [128, 127] {
+            let result = interp.call_function("callee.echo", vec![Value::Int64(value)]);
+            if value == 128 {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("int8 value 128 is outside range")
+                );
+            } else {
+                assert_eq!(result.unwrap(), Value::Int64(127));
+            }
+            assert_eq!(interp.scopes.len(), 1);
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.type_arg_scopes.len(), 1);
+            assert_eq!(type_expr_display(&interp.type_arg_scopes[0]["T"]), "string");
+            assert_eq!(
+                type_expr_display(&interp.current_type_arguments[0]),
+                "uint64"
+            );
+            assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
+            assert!(interp.current_function_trusted_stdlib);
+        }
     }
 
     #[test]
