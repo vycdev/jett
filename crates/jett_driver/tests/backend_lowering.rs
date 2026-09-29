@@ -136,12 +136,23 @@ fn native_property_suite_embeds_checked_generated_trials() {
         .native_property_entry
         .expect("property fixture must have a native suite entry");
     let suite = &lowered.hir.functions[entry.index() as usize];
-    assert_eq!(suite.body.statements.len(), 200);
+    let calls = suite
+        .body
+        .statements
+        .iter()
+        .filter_map(|statement| match &statement.kind {
+            StatementKind::Expression(expression)
+                if matches!(expression.kind, ExpressionKind::Call { .. }) =>
+            {
+                Some(expression)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // Diagnostic context statements bracket each trial but are not trials.
+    assert_eq!(calls.len(), 200);
     assert_eq!(suite.identity.declaration.namespace, "alpha");
-    let StatementKind::Expression(first) = &suite.body.statements[0].kind else {
-        panic!("expected a generated property call");
-    };
-    let ExpressionKind::Call { function, args, .. } = &first.kind else {
+    let ExpressionKind::Call { function, args, .. } = &calls[0].kind else {
         panic!("expected a direct property call");
     };
     assert_eq!(
