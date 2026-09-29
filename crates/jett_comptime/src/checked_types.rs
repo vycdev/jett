@@ -10,7 +10,7 @@ use crate::value::{ClosureTypeArgument, Value};
 #[derive(Debug, Clone, Default)]
 pub struct CheckedExpressionTypes {
     pub expressions: HashMap<Span, String>,
-    pub functions: HashMap<Span, Vec<CheckedFunctionTypes>>,
+    pub functions: HashMap<Span, Vec<Arc<CheckedFunctionTypes>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -34,7 +34,7 @@ impl CheckedExpressionTypes {
         declaration: Span,
         types: &[ClosureTypeArgument],
         args: &[Value],
-    ) -> Result<Option<Arc<HashMap<Span, String>>>, String> {
+    ) -> Result<Option<Arc<CheckedFunctionTypes>>, String> {
         let Some(candidates) = self.functions.get(&declaration) else {
             return Ok(None);
         };
@@ -43,7 +43,7 @@ impl CheckedExpressionTypes {
             .filter(|candidate| candidate.matches(types, args));
         let Some(specificity) = matching
             .clone()
-            .map(CheckedFunctionTypes::specificity)
+            .map(|candidate| candidate.specificity())
             .max()
         else {
             // Compiler-owned facades can execute interpreter source bodies
@@ -59,7 +59,7 @@ impl CheckedExpressionTypes {
         if matching.any(|other| other.expressions != selected.expressions) {
             return Err("generic invocation has conflicting checked expression types".into());
         }
-        Ok(Some(selected.expressions.clone()))
+        Ok(Some(selected.clone()))
     }
 }
 
@@ -146,14 +146,14 @@ mod tests {
     #[test]
     fn conflicting_checked_widths_are_rejected_in_either_registration_order() {
         let span = Span::new(FileId::new(0), 1, 2);
-        let narrow = CheckedFunctionTypes {
+        let narrow = Arc::new(CheckedFunctionTypes {
             expressions: Arc::new(HashMap::from([(span, "int8".into())])),
             ..Default::default()
-        };
-        let wide = CheckedFunctionTypes {
+        });
+        let wide = Arc::new(CheckedFunctionTypes {
             expressions: Arc::new(HashMap::from([(span, "int64".into())])),
             ..Default::default()
-        };
+        });
         for candidates in [vec![narrow.clone(), wide.clone()], vec![wide, narrow]] {
             let types = CheckedExpressionTypes {
                 functions: HashMap::from([(span, candidates)]),

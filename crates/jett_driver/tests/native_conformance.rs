@@ -137,6 +137,25 @@ fn run_bounded_with_env(
 }
 
 #[test]
+fn native_comptime_reflection_callbacks_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/comptime_reflection_callbacks.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("reflection callback oracle");
+    assert_eq!(
+        expected.stdout,
+        "list:int64\nalias:int64\ntext:int64\ninteger:int64\nint64:int64\nstring:int64\nlist[int64]:int64\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("comptime_reflection_callbacks.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native reflection callbacks");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_integer_wrapping_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_integer_wrapping.jett");

@@ -1,4 +1,4 @@
-use crate::checked_types::CheckedExpressionTypes;
+use crate::checked_types::{CheckedExpressionTypes, CheckedFunctionTypes};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -640,7 +640,7 @@ pub struct Interpreter {
     /// Checked expression type names keyed by source span, when supplied by
     /// the driver after type checking.
     checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
-    active_expression_types: Option<Arc<HashMap<Span, String>>>,
+    active_checked_function: Option<Arc<CheckedFunctionTypes>>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
     explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
@@ -708,7 +708,7 @@ impl Interpreter {
             reflected_machine_state_scopes: Vec::new(),
             reflection_metadata: None,
             checked_expression_types: None,
-            active_expression_types: None,
+            active_checked_function: None,
             breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
             actor_instances: HashMap::new(),
@@ -1705,9 +1705,9 @@ impl Interpreter {
     }
 
     fn checked_expression_type(&self, span: Span) -> Option<&String> {
-        self.active_expression_types
+        self.active_checked_function
             .as_ref()
-            .and_then(|types| types.get(&span))
+            .and_then(|types| types.expressions.get(&span))
             .or_else(|| {
                 self.checked_expression_types
                     .as_ref()
@@ -2188,7 +2188,7 @@ impl Interpreter {
             .collect();
         Value::Function {
             type_context: Box::new(ClosureTypeContext {
-                expression_types: self.active_expression_types.clone(),
+                checked_function: self.active_checked_function.clone(),
                 bindings: self
                     .type_arg_scopes
                     .iter()
@@ -10597,7 +10597,7 @@ impl Interpreter {
             None => None,
         };
         let saved_expression_types =
-            std::mem::replace(&mut self.active_expression_types, expression_types);
+            std::mem::replace(&mut self.active_checked_function, expression_types);
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
         // Resolve arguments above in the caller, then keep its type bindings
         // out of the callee's lexical scope, including non-generic callees.
@@ -10645,7 +10645,7 @@ impl Interpreter {
         self.lexical_scope_floor = saved_scope_floor;
         self.type_arg_scopes = saved_type_scopes;
         self.current_type_arguments = saved_type_arguments;
-        self.active_expression_types = saved_expression_types;
+        self.active_checked_function = saved_expression_types;
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
         call_result
@@ -10828,8 +10828,8 @@ impl Interpreter {
                     ));
                 }
                 let saved_expression_types = std::mem::replace(
-                    &mut self.active_expression_types,
-                    type_context.expression_types,
+                    &mut self.active_checked_function,
+                    type_context.checked_function,
                 );
                 let saved_type_scopes =
                     std::mem::replace(&mut self.type_arg_scopes, vec![type_context.bindings]);
@@ -10875,7 +10875,7 @@ impl Interpreter {
                 self.current_namespace = saved_namespace;
                 self.type_arg_scopes = saved_type_scopes;
                 self.current_type_arguments = saved_type_arguments;
-                self.active_expression_types = saved_expression_types;
+                self.active_checked_function = saved_expression_types;
                 Ok(match result? {
                     Some(Signal::Return(v)) => v,
                     _ => Value::Nothing,
@@ -16135,11 +16135,14 @@ mod tests {
     #[test]
     fn named_function_type_context_restores_caller_after_argument_failure() {
         let mut interp = Interpreter::new();
-        let caller_types = Arc::new(HashMap::from([(
-            Span::new(FileId::new(0), 99, 100),
-            "uint64".into(),
-        )]));
-        interp.active_expression_types = Some(caller_types.clone());
+        let caller_types = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(
+                Span::new(FileId::new(0), 99, 100),
+                "uint64".into(),
+            )])),
+            ..Default::default()
+        });
+        interp.active_checked_function = Some(caller_types.clone());
         let echo = func_def(
             "echo",
             vec![("value", "int8")],
@@ -16172,7 +16175,7 @@ mod tests {
             assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
             assert!(interp.current_function_trusted_stdlib);
             assert!(Arc::ptr_eq(
-                interp.active_expression_types.as_ref().unwrap(),
+                interp.active_checked_function.as_ref().unwrap(),
                 &caller_types
             ));
         }
@@ -16181,11 +16184,14 @@ mod tests {
     #[test]
     fn closure_type_context_restores_caller_after_argument_failure() {
         let mut interp = Interpreter::new();
-        let caller_types = Arc::new(HashMap::from([(
-            Span::new(FileId::new(0), 99, 100),
-            "uint64".into(),
-        )]));
-        interp.active_expression_types = Some(caller_types.clone());
+        let caller_types = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(
+                Span::new(FileId::new(0), 99, 100),
+                "uint64".into(),
+            )])),
+            ..Default::default()
+        });
+        interp.active_checked_function = Some(caller_types.clone());
         interp
             .type_arg_scopes
             .push(HashMap::from([("T".into(), type_named("string"))]));
@@ -16194,7 +16200,7 @@ mod tests {
         interp.current_function_trusted_stdlib = true;
         let closure = Value::Function {
             type_context: Box::new(ClosureTypeContext {
-                expression_types: None,
+                checked_function: None,
                 bindings: HashMap::from([("T".into(), type_named("int8"))]),
                 arguments: Vec::new(),
             }),
@@ -16233,7 +16239,7 @@ mod tests {
             assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
             assert!(interp.current_function_trusted_stdlib);
             assert!(Arc::ptr_eq(
-                interp.active_expression_types.as_ref().unwrap(),
+                interp.active_checked_function.as_ref().unwrap(),
                 &caller_types
             ));
         }

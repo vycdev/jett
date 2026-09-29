@@ -3176,13 +3176,13 @@ fn expression_type_names(
             names.remove(span);
         }
     }
-    let mut functions: HashMap<Span, Vec<CheckedFunctionTypes>> = HashMap::new();
+    let mut functions: HashMap<Span, Vec<Arc<CheckedFunctionTypes>>> = HashMap::new();
     for instance in &check_result.generic_function_instantiations {
         let facts = &instance.specialization;
         functions
             .entry(resolve_result.scope_table.def(instance.definition).span)
             .or_default()
-            .push(CheckedFunctionTypes {
+            .push(Arc::new(CheckedFunctionTypes {
                 type_arguments: instance
                     .concrete_args
                     .iter()
@@ -3200,7 +3200,7 @@ fn expression_type_names(
                         .map(|(span, ty)| (*span, check_result.interner.type_name(*ty)))
                         .collect(),
                 ),
-            });
+            }));
     }
     CheckedExpressionTypes {
         expressions: names,

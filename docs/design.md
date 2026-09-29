@@ -7667,7 +7667,9 @@ calls resolve explicit type arguments in the caller, then execute using only the
 callee's own type bindings, so a generic caller cannot shadow its nominal types.
 Each checked generic body keeps its own expression types. Closures retain this
 map so fixed-width arithmetic uses the invoked specialization, including during
-explicit comptime evaluation. Other reflection
+explicit comptime evaluation. Reflection-valued parameters also remain part
+of a comptime closure's specialization identity, so callbacks with identical
+signatures and type arguments still select their own checked bodies. Other reflection
 specialization keys and parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete

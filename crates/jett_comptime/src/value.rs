@@ -1,4 +1,4 @@
-use jett_common::Span;
+use crate::checked_types::CheckedFunctionTypes;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use jett_types::ReflectionTypeInfo;
 /// Lexical generic context retained by an evaluated closure.
 #[derive(Debug, Clone, Default)]
 pub struct ClosureTypeContext {
-    pub expression_types: Option<Arc<HashMap<Span, String>>>,
+    pub checked_function: Option<Arc<CheckedFunctionTypes>>,
     pub bindings: HashMap<String, TypeExpr>,
     pub arguments: Vec<ClosureTypeArgument>,
 }

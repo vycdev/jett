@@ -78,9 +78,14 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Audit remaining comptime callback specialization keys, particularly
-  reflection-valued parameters and reflected-loop bindings. Generic type
-  arguments and their alias reflection metadata are retained.
+- Generic body checking still skips some reflection expression placements.
+  Eager checking fixes interpolation and closure bodies but exposes the existing
+  `generic_reflection_runtime_guard_deferral` fixture. Whether an invalid
+  `comptime type` lookup behind an ordinary runtime guard is diagnosed at
+  compile time or fails only when executed is pending a user decision.
+
+- Audit reflected-loop callback bindings. Generic type arguments, alias
+  reflection metadata, and reflection-valued parameter facts are retained.
 - Audit scoped expression facts in reflected-loop expansions and interpreter
   source instances of compiler-owned facades that use different native helpers.
 - Remaining comptime payload shapes and reflected interface fields. Generic
@@ -189,3 +194,11 @@ Generic spans are absent from the global fallback, including spans checked for
 only one concrete instance. Compiler-owned facade instances without matching
 source facts retain source interpretation without borrowing another instance's
 map. Conflicting matching maps are rejected in either registration order.
+
+Comptime closures retain the complete selected checked function context through
+shared ownership. Native materialization compares reflection-parameter facts as
+well as type arguments and alias metadata. The linked
+`comptime_reflection_callbacks` fixture distinguishes closures sharing one body,
+signature, and type arguments using `TypeKind`, `TypePrimitive`, and both kind
+and primitive facts from `TypeInfo` parameters. Captured ordinary values survive
+selection, and moving a reflection parameter before closure creation is valid.

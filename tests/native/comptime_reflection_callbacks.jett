@@ -1,0 +1,35 @@
+function kind_label(kind: TypeKind) returns string:
+    if kind == TypeKind.list_type:
+        return "list"
+    return "alias"
+function type_label[T]() returns string:
+    return type.name[T]()
+function make[T](kind: TypeKind) returns function() returns string:
+    string label = kind_label(kind)
+    return function() returns string: return "{label}:{type_label[T]()}"
+function primitive_label(primitive: TypePrimitive) returns string:
+    if primitive == TypePrimitive.string_type:
+        return "text"
+    return "integer"
+function make_primitive[T](primitive: TypePrimitive) returns function() returns string:
+    string label = primitive_label(primitive)
+    return function() returns string: return "{label}:{type_label[T]()}"
+function make_info[T](view info: TypeInfo) returns function() returns string:
+    string label = info.type_name
+    return function() returns string: return "{label}:{type_label[T]()}"
+function main() returns nothing:
+    function() returns string listed = comptime make[int64](TypeKind.list_type)
+    function() returns string aliased = comptime make[int64](TypeKind.alias_type)
+    println(listed())
+    println(aliased())
+    function() returns string textual = comptime make_primitive[int64](TypePrimitive.string_type)
+    function() returns string integer = comptime make_primitive[int64](TypePrimitive.int64_type)
+    function() returns string int_info = comptime make_info[int64](view type.info[int64]())
+    function() returns string string_info = comptime make_info[int64](view type.info[string]())
+    function() returns string list_info = comptime make_info[int64](view type.info[list[int64]]())
+    println(textual())
+    println(integer())
+    println(int_info())
+    println(string_info())
+    println(list_info())
+    return nothing

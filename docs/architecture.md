@@ -2855,7 +2855,9 @@ Named calls resolve explicit type arguments in the caller before isolating the
 callee's type bindings. Both normal returns and failures restore the caller.
 The driver retains expression maps by generic declaration and checked
 specialization, including alias reflection and reflection-valued parameters.
-An invocation selects its map; a closure captures it through shared ownership.
+An invocation selects its checked function context; a closure retains the whole
+context through shared ownership. Native materialization matches reflection
+parameter facts alongside concrete type arguments and alias metadata.
 Generic body entries are excluded from the global fallback map. Compiler-owned
 facades may execute interpreter source instances without a checked map, while
 conflicting matching maps fail explicitly. The

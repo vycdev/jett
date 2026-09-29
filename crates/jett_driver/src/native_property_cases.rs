@@ -151,7 +151,7 @@ pub(super) struct FunctionValueCandidate {
     return_type: TypeId,
     id: FunctionId,
     type_arguments: Vec<TypeId>,
-    type_argument_reflections: Vec<jett_types::ReflectionTypeInfo>,
+    specialization: jett_typecheck::CheckedGenericSpecialization,
 }
 
 impl FunctionValueCandidate {
@@ -162,13 +162,33 @@ impl FunctionValueCandidate {
                 .iter()
                 .zip(&context.arguments)
                 .all(|(ty, actual)| types.type_name(*ty) == actual.canonical_name)
-            && (self.type_argument_reflections.is_empty()
-                || (self.type_argument_reflections.len() == context.arguments.len()
+            && (self.specialization.type_argument_reflections.is_empty()
+                || (self.specialization.type_argument_reflections.len() == context.arguments.len()
                     && self
+                        .specialization
                         .type_argument_reflections
                         .iter()
                         .zip(&context.arguments)
                         .all(|(expected, actual)| actual.reflection.as_ref() == Some(expected))))
+            && self.matches_reflection_parameters(context)
+    }
+
+    fn matches_reflection_parameters(&self, context: &ClosureTypeContext) -> bool {
+        let expected = &self.specialization;
+        match &context.checked_function {
+            Some(actual) => {
+                expected.type_info_kinds == actual.type_info_kinds
+                    && expected.type_info_primitives == actual.type_info_primitives
+                    && expected.type_kind_values == actual.type_kind_values
+                    && expected.type_primitive_values == actual.type_primitive_values
+            }
+            None => {
+                expected.type_info_kinds.is_empty()
+                    && expected.type_info_primitives.is_empty()
+                    && expected.type_kind_values.is_empty()
+                    && expected.type_primitive_values.is_empty()
+            }
+        }
     }
 }
 
@@ -196,11 +216,7 @@ pub(super) fn function_value_candidates(
             };
             FunctionValueCandidate {
                 type_arguments: function.identity.type_arguments.clone(),
-                type_argument_reflections: function
-                    .identity
-                    .specialization
-                    .type_argument_reflections
-                    .clone(),
+                specialization: function.identity.specialization.clone(),
                 source_name,
                 kind: declaration.kind,
                 body_span: function.body.span,
