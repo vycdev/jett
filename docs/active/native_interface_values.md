@@ -480,3 +480,12 @@ Validation for this change passed 616 compiler-phase tests, all 583 frontend
 fixtures, 30 native interface/comptime/refinement tests, and workspace
 documentation tests. Actor handles escaping comptime and the remaining semantic
 audit still prevent a full native parity claim.
+
+`interface_refined_actors` covers actor-backed refinements and inherited
+refinements with distinct interface implementations. Cloning, coarsening, direct
+and reflected record storage, and nested pending handles preserve the original
+actor's mutable state. Erased pending handles retain the exposed refinement
+for dispatch after joining, while a fresh pending actor still fails a rejected
+refinement constructor. A scalar-returning computation uses a refined actor
+internally at runtime and comptime; no actor handle escapes evaluation.
+Exact stdout and traces match, including actor identity through reconstruction.

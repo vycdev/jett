@@ -342,6 +342,30 @@ fn native_interface_refined_interfaces_match_interpreter() {
 }
 
 #[test]
+fn native_interface_refined_actors_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_refined_actors.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("refined actor interface oracle");
+    assert_eq!(
+        expected.stdout,
+        "counter selected again\n3\n3\nselected 5\ncounter\nselected\nagain\nselected\n7\n7\nselected\nrefinement type constraint failed for 'app.Rejected'\n3 3\n"
+    );
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert_eq!(
+        debug,
+        "trace copied: app.Holder = app.Holder(worker: pending(pending(actor#0)))\ntrace later: app.Named = pending(pending(actor#0))\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_refined_actors.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native refined actors");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(actual.stderr, debug.as_bytes());
+}
+
+#[test]
 fn native_refinement_declaration_contexts_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/refinement_declaration_contexts.jett");
