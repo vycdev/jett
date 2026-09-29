@@ -65,6 +65,13 @@ pub(super) fn append_property_suite(
                     "generated property cases disagree with checked parameters or iteration order",
                 ));
             }
+            statements.push(property_case_context(
+                Some(jett_hir::NativePropertyCase {
+                    name: property.name.name.clone(),
+                    trial: case.iteration as u64 + 1,
+                }),
+                property.span,
+            ));
             let mut context = ValueContext {
                 types,
                 reflection,
@@ -93,6 +100,7 @@ pub(super) fn append_property_suite(
                 }),
                 span: property.span,
             });
+            statements.push(property_case_context(None, property.span));
             count += 1;
         }
         if count != PROPERTY_DEFAULT_ITERATIONS {
@@ -135,6 +143,17 @@ pub(super) fn append_property_suite(
         span,
     });
     Ok(Some(id))
+}
+
+fn property_case_context(case: Option<jett_hir::NativePropertyCase>, span: Span) -> Statement {
+    Statement {
+        kind: StatementKind::Expression(Expression {
+            kind: ExpressionKind::PropertyCaseContext(case),
+            ty: TypeInterner::NOTHING,
+            span,
+        }),
+        span,
+    }
 }
 
 fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {

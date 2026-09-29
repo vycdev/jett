@@ -1858,3 +1858,14 @@ mod tests {
         ));
     }
 }
+
+#[cfg(all(
+    test,
+    target_arch = "x86_64",
+    any(
+        all(target_os = "windows", target_env = "msvc"),
+        all(target_os = "linux", target_env = "gnu")
+    )
+))]
+#[path = "native_property_tests.rs"]
+mod property_tests;

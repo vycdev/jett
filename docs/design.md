@@ -5877,6 +5877,14 @@ property clamp:
 
 The `verify` block checks 5 specific cases at compile time. The `property` block checks its assertions against 10,000 generated `(value, low, high)` triples. Generation can exercise integer boundaries, negative numbers, extreme ranges, and invalid combinations like `low > high`; a passing run establishes no guarantee about untested triples.
 
+The current native property-suite implementation reuses the interpreter's 100
+deterministic trials per property. A terminal failure in an emitted suite
+identifies the property name and one-based trial number before the original
+runtime error. This diagnostic metadata contains no generated argument values.
+Normal builds still reject failing properties during frontend validation, with
+the frontend's shrunk counterexample. Shrinking a failure encountered only in
+native execution remains unimplemented.
+
 #### Property Tests with Capability Mocks
 
 Effectful helpers keep their ordinary capability signatures in tests. A

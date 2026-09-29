@@ -2518,6 +2518,17 @@ impl Verifier<'_> {
                 }
             }
             ExpressionKind::RuntimeFailure(_) => Ok(()),
+            ExpressionKind::PropertyCaseContext(case) => {
+                if expression.ty == TypeInterner::NOTHING
+                    && case
+                        .as_ref()
+                        .is_none_or(|case| !case.name.is_empty() && case.trial > 0)
+                {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "property case context"))
+                }
+            }
             ExpressionKind::RefinementValidated(value) => {
                 self.expression(function, value)?;
                 let mut current = expression.ty;

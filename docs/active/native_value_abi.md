@@ -870,8 +870,13 @@ entry that calls the primary file's top-level verify functions in declaration
 order, stopping on terminal failure. A separate property suite embeds the
 existing deterministic `given` samples as typed HIR constructions and calls
 each checked property body 100 times. The interpreter chooses inputs, while
-the emitted code executes the property body. Native counterexample shrinking
-and case-specific failure diagnostics remain follow-up work.
+the emitted code executes the property body. Compiler-owned HIR marks each case
+with its property name and one-based trial number before constructing inputs,
+then clears the context after the body returns. `PropertyCaseSet` copies this
+diagnostic prefix into runtime context storage; `PropertyCaseClear` removes it.
+Neither operation retains a Jett value. Terminal failure copies prepend this
+context without changing caught predicate errors or the static v1 result.
+Native counterexample shrinking remains follow-up work.
 
 Evidence includes existing generic_struct and explicit_struct_equality fixture
 bodies executed with supplemental mains, nested owners and early returns,

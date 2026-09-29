@@ -664,6 +664,7 @@ impl Flow<'_> {
             | ExpressionKind::String(_)
             | ExpressionKind::FunctionRef(_)
             | ExpressionKind::Nothing
+            | ExpressionKind::PropertyCaseContext(_)
             | ExpressionKind::RuntimeFailure(_) => {}
             _ => return Err("expression needs explicit native ownership lowering".into()),
         }

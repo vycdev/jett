@@ -418,6 +418,7 @@ impl BackendTypeValidator<'_> {
             | ExpressionKind::String(_)
             | ExpressionKind::Bool(_)
             | ExpressionKind::Nothing
+            | ExpressionKind::PropertyCaseContext(_)
             | ExpressionKind::RuntimeFailure(_)
             | ExpressionKind::Local(_)
             | ExpressionKind::FunctionRef(_)

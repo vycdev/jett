@@ -65,8 +65,8 @@ The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
 Passing its growing regression suite does not remove those audit obligations.
 
-Native property failure shrinking and case-specific diagnostics remain open in
-the accepted plan. Normal native builds already run frontend verify/property
+Native property failure shrinking remains open in the accepted plan. Normal
+native builds already run frontend verify/property
 checks before emission; a source-level failed property cannot be silently
 bypassed to claim native failure coverage.
 `native_builds_preserve_shrunk_property_diagnostics_and_existing_artifacts`
@@ -75,8 +75,17 @@ trial, shrinks both scalar and list inputs, and retains the exact E9000 message
 and property-name span in ordinary program, verify-suite, and property-suite
 builds. All three preserve an existing output artifact. The comparison also
 checks the structured `test_file` result, including the trial count.
-This verifies frontend diagnostic handoff; it does not establish shrinking or
-case-specific diagnostics for a failure encountered by an emitted native suite.
+This verifies frontend diagnostic handoff; it does not establish native shrinking.
+`native::property_tests::native_property_failure_identifies_the_trial_and_cleans_owned_values`
+then changes a checked assertion only in test-owned MIR to exercise a failure
+that the frontend did not encounter. Both debug and optimized linked suites
+report the second property's name, trial 4, and original assertion text, with
+successful owned-value cleanup. A failure injected after a successful suite
+checks that the compiled calls cleared their context. Runtime ABI tests cover
+context clearing,
+repeated/undersized failure copies, and caught predicate errors. This supplies
+case-specific diagnostics without skipping frontend validation or disclosing
+argument values; native shrinking is still unresolved.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

@@ -2833,8 +2833,12 @@ alongside lowering, object, main, and runtime-contract results. Its successful
 fixture-gate result is distinct from a complete native release audit.
 All native builder modes retain frontend property failure diagnostics, including
 shrunk counterexamples and the property-name source span, before any native
-emission or output publication. A linked-suite failure diagnostic is a separate
-runtime concern; frontend shrinking does not supply native runtime shrinking.
+emission or output publication. Generated suite HIR sets compiler-owned property
+name and one-based trial context before materializing each case, then clears it
+after the call. The runtime copies that metadata independently of Jett value
+handles. Only terminal failure copies prepend it; errors caught during
+refinement checking retain their original text. Normal failure cleanup still
+runs. Frontend shrinking does not supply native runtime shrinking.
 The CLI validates explicit build targets before loading source, accepting only
 the current supported host. Native `build` invokes the driver object and link stages and publishes an
 executable atomically. `build --check` retains frontend-only validation. The

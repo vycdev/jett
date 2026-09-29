@@ -258,6 +258,7 @@ impl Baker<'_> {
             | E::String(_)
             | E::Bool(_)
             | E::Nothing
+            | E::PropertyCaseContext(_)
             | E::RuntimeFailure(_)
             | E::OptionalNone
             | E::Local(_)

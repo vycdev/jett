@@ -870,6 +870,7 @@ impl FunctionValidator<'_, '_> {
             | hir::ExpressionKind::String(_)
             | hir::ExpressionKind::Bool(_)
             | hir::ExpressionKind::Nothing
+            | hir::ExpressionKind::PropertyCaseContext(_)
             | hir::ExpressionKind::RuntimeFailure(_)
             | hir::ExpressionKind::OptionalNone => {}
         }

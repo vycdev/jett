@@ -307,6 +307,7 @@ impl Extractor<'_> {
             | ExpressionKind::String(_)
             | ExpressionKind::Bool(_)
             | ExpressionKind::Nothing
+            | ExpressionKind::PropertyCaseContext(_)
             | ExpressionKind::RuntimeFailure(_)
             | ExpressionKind::Local(_)
             | ExpressionKind::FunctionRef(_)
@@ -456,6 +457,7 @@ fn expression_uses_local(expression: &Expression, target: u32) -> bool {
         | ExpressionKind::String(_)
         | ExpressionKind::Bool(_)
         | ExpressionKind::Nothing
+        | ExpressionKind::PropertyCaseContext(_)
         | ExpressionKind::RuntimeFailure(_)
         | ExpressionKind::FunctionRef(_)
         | ExpressionKind::OptionalNone => false,

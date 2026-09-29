@@ -1404,6 +1404,8 @@ pub(super) struct NativeValues {
     bytes_destroyed: u64,
     failure: Option<Failure>,
     dynamic_failure_message: Option<Vec<u8>>,
+    // Diagnostic bytes only; this metadata retains no owned Jett values.
+    property_case_context: Option<Vec<u8>>,
     pub(super) cleanup_failed: bool,
     stdout: Option<u64>,
     clock: Option<u64>,
@@ -6184,6 +6186,10 @@ leaves! {
             let value = match bits { 0 => "false", 1 => "true", _ => return Err(INVALID_TRACE_LABEL) };
             let value = format_pending_value(value, depth)?;
             s.insert(format!("refinement constraint for '{name}' must return bool, got {value}")) };
+    PropertyCaseSet, jett_rt_v1_property_case_set, false, (message: u64 => I64), u32 => I32,
+        |s| { s.property_case_context = Some(s.text(message)?.as_bytes().to_vec()); Ok(0) };
+    PropertyCaseClear, jett_rt_v1_property_case_clear, false, (), u32 => I32,
+        |s| { s.property_case_context = None; Ok(0) };
     AssertFail, jett_rt_v1_assert_fail, false, (), u32 => I32,
         |_s| Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"assertion failed"));
     AssertFailMessage, jett_rt_v1_assert_fail_message, false, (message: u64 => I64), u32 => I32,
@@ -6536,7 +6542,8 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure(
 
 /// Copy the current terminal failure message into caller-owned storage.
 /// A null buffer with zero capacity queries the required byte length. Unlike
-/// `jett_rt_v1_value_failure`, this also returns dynamically produced messages.
+/// `jett_rt_v1_value_failure`, this also returns dynamically produced messages
+/// and the active compiler-generated property/trial prefix.
 ///
 /// # Safety
 /// `context` must be a live context. `out_result` and `out_length` must be
@@ -6589,9 +6596,22 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure_copy(
             .as_deref()
             .or_else(|| state.values.failure.map(|(_, message)| message))
             .unwrap_or_default();
-        let length = match u64::try_from(message.len()) {
-            Ok(length) => length,
-            Err(_) => {
+        let prefix = if state.values.failure.is_some() {
+            state
+                .values
+                .property_case_context
+                .as_deref()
+                .unwrap_or_default()
+        } else {
+            &[]
+        };
+        let length = match prefix
+            .len()
+            .checked_add(message.len())
+            .and_then(|n| u64::try_from(n).ok())
+        {
+            Some(length) => length,
+            None => {
                 return JettRuntimeResultV1::failure(
                     JettRuntimeStatusV1::RESOURCE_EXHAUSTED,
                     EXHAUSTED.1,
@@ -6603,13 +6623,19 @@ pub unsafe extern "C" fn jett_rt_v1_value_failure_copy(
         if buffer.is_null() && capacity == 0 {
             return JettRuntimeResultV1::ok();
         }
-        if capacity < message.len() {
+        if (capacity as u64) < length {
             return JettRuntimeResultV1::failure(INVALID_FAILURE_COPY.0, INVALID_FAILURE_COPY.1);
+        }
+        if !prefix.is_empty() {
+            // SAFETY: the checked capacity includes both prefix and message.
+            unsafe { ptr::copy_nonoverlapping(prefix.as_ptr(), buffer, prefix.len()) };
         }
         if !message.is_empty() {
             // SAFETY: the caller provides a nonoverlapping writable buffer of
             // at least `capacity` bytes, checked against the message length.
-            unsafe { ptr::copy_nonoverlapping(message.as_ptr(), buffer, message.len()) };
+            unsafe {
+                ptr::copy_nonoverlapping(message.as_ptr(), buffer.add(prefix.len()), message.len())
+            };
         }
         JettRuntimeResultV1::ok()
     })
@@ -8080,6 +8106,95 @@ mod tests {
             assert_eq!(context.count(), 0);
         }
         context.destroy(JettRuntimeStatusV1::OK);
+    }
+    #[test]
+    fn native_property_context_decorates_only_terminal_failure_copies() {
+        for clear in [false, true] {
+            let context = Context::new();
+            let label = context.text("property 'target' trial 4: ");
+            unsafe {
+                assert_eq!(jett_rt_v1_property_case_set(context.pointer(), label), 0);
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), label), 0);
+                // Handled refinement failures retain their original message, and
+                // a successful copy query has no diagnostic merely for being in a trial.
+                assert_ne!(jett_rt_v1_assert_fail(context.pointer()), 0);
+                let captured =
+                    jett_rt_v1_failure_take_prefixed_text(context.pointer(), ptr::null(), 0);
+                let expected = context.text("assertion failed");
+                assert_eq!(
+                    jett_rt_v1_string_equal(context.pointer(), captured, expected),
+                    1
+                );
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), captured), 0);
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), expected), 0);
+                let mut length = 99;
+                let mut result = MaybeUninit::uninit();
+                assert_eq!(
+                    jett_rt_v1_value_failure_copy(
+                        context.pointer(),
+                        ptr::null_mut(),
+                        0,
+                        &mut length,
+                        result.as_mut_ptr()
+                    ),
+                    JettRuntimeStatusV1::OK
+                );
+                assert_eq!(length, 0);
+                if clear {
+                    assert_eq!(jett_rt_v1_property_case_clear(context.pointer()), 0);
+                }
+                let message = context.text("backend 🧪");
+                assert_ne!(
+                    jett_rt_v1_assert_fail_message(context.pointer(), message),
+                    0
+                );
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), message), 0);
+                let expected = if clear {
+                    "backend 🧪"
+                } else {
+                    "property 'target' trial 4: backend 🧪"
+                };
+                for _ in 0..2 {
+                    assert_eq!(
+                        jett_rt_v1_value_failure_copy(
+                            context.pointer(),
+                            ptr::null_mut(),
+                            0,
+                            &mut length,
+                            result.as_mut_ptr()
+                        ),
+                        JettRuntimeStatusV1::OK
+                    );
+                    assert_eq!(length, expected.len() as u64);
+                    let mut short = [0x7f; 2];
+                    assert_eq!(
+                        jett_rt_v1_value_failure_copy(
+                            context.pointer(),
+                            short.as_mut_ptr(),
+                            2,
+                            &mut length,
+                            result.as_mut_ptr()
+                        ),
+                        JettRuntimeStatusV1::INVALID_ARGUMENT
+                    );
+                    assert_eq!(short, [0x7f; 2]);
+                    let mut copied = vec![0; length as usize];
+                    assert_eq!(
+                        jett_rt_v1_value_failure_copy(
+                            context.pointer(),
+                            copied.as_mut_ptr(),
+                            length,
+                            &mut length,
+                            result.as_mut_ptr()
+                        ),
+                        JettRuntimeStatusV1::OK
+                    );
+                    assert_eq!(copied, expected.as_bytes());
+                }
+                assert_eq!(context.count(), 0);
+            }
+            context.destroy(JettRuntimeStatusV1::OK);
+        }
     }
     #[test]
     fn native_assert_failure_copies_dynamic_message_without_changing_v1_static_result() {

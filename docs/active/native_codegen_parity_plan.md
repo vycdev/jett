@@ -32,8 +32,8 @@ count toward the 182-fixture lowering obligation. They do not enter the
 links and executes every checked top-level `verify` body in each of 155
 fixtures as a separate execution gate. A native property suite uses the
 interpreter's established deterministic `given` pools as test inputs, then
-executes the checked property bodies as native code. Native failure-case
-shrinking and diagnostics remain follow-up work.
+executes the checked property bodies as native code. Native terminal failures identify the property and trial number; native
+failure-case shrinking remains follow-up work.
 
 Compile-fail fixtures remain frontend contracts. Native work must not change
 their diagnostics, but rejected programs do not enter a backend denominator.
@@ -1272,7 +1272,10 @@ inline callbacks remain reachable through their parent bodies, rather than
 becoming independent zero-argument tests. The native property runner embeds
 the existing generator's typed cases into a separate suite entry. All 18
 property bodies across three run-pass fixtures execute 100 native trials each;
-failure-case shrinking and case-specific diagnostics are still pending.
+terminal failures now identify the property and one-based trial number. A
+backend-injected assertion failure tests the fourth trial of the second
+property through linked debug and optimized objects, including cleanup of owned
+inputs. Native failure-case shrinking remains pending.
 
 Direct bitfield constructors now route checked dynamic widths through the
 existing reflected construction validator, preserving the interpreter's

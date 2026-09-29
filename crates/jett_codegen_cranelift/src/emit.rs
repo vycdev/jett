@@ -2033,6 +2033,17 @@ impl Translator<'_, '_> {
                     true,
                 )?))
             }
+            ExpressionKind::PropertyCaseContext(case) => {
+                if let Some(case) = case {
+                    let lowered =
+                        self.literal(&format!("property '{}' trial {}: ", case.name, case.trial))?;
+                    let handle = self.scalar(lowered, expression.span)?;
+                    self.leaf(NativeLeaf::PropertyCaseSet, &[handle], true)?;
+                } else {
+                    self.leaf(NativeLeaf::PropertyCaseClear, &[], true)?;
+                }
+                Ok(self.nothing())
+            }
             ExpressionKind::RuntimeFailure(message) => {
                 let lowered = self.literal(message)?;
                 let handle = self.scalar(lowered, expression.span)?;

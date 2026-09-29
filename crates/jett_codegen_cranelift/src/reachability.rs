@@ -372,6 +372,7 @@ fn collect_expression_references(
         | ExpressionKind::String(_)
         | ExpressionKind::Bool(_)
         | ExpressionKind::Nothing
+        | ExpressionKind::PropertyCaseContext(_)
         | ExpressionKind::RuntimeFailure(_)
         | ExpressionKind::Local(_)
         | ExpressionKind::OptionalNone => {}

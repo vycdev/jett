@@ -296,6 +296,14 @@ pub struct Expression {
     pub span: Span,
 }
 
+/// Compiler-generated identity of a deterministic native property trial.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativePropertyCase {
+    pub name: String,
+    /// One-based trial number.
+    pub trial: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExpressionKind {
     Int(i128),
@@ -422,6 +430,9 @@ pub enum ExpressionKind {
     InterfaceType(Box<Expression>),
     /// Compiler-owned terminal runtime failure with an already checked result type.
     RuntimeFailure(String),
+    /// Set or clear diagnostic context around a generated property call.
+    /// This has no source-level spelling and evaluates to nothing.
+    PropertyCaseContext(Option<NativePropertyCase>),
     StateIs {
         value: Box<Expression>,
         state: StateId,
@@ -1043,6 +1054,7 @@ impl Validator<'_> {
             | ExpressionKind::String(_)
             | ExpressionKind::Bool(_)
             | ExpressionKind::Nothing
+            | ExpressionKind::PropertyCaseContext(_)
             | ExpressionKind::RuntimeFailure(_)
             | ExpressionKind::OptionalNone => {}
         }

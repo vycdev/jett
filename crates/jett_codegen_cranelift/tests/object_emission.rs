@@ -42,6 +42,40 @@ fn lower_source(source: &str) -> (Program, TypeInterner) {
 }
 
 #[test]
+fn rejects_malformed_property_case_metadata_before_emission() {
+    for (name, trial, ty) in [
+        ("", 1, TypeInterner::NOTHING),
+        ("property", 0, TypeInterner::NOTHING),
+        ("property", 1, TypeInterner::INT64),
+    ] {
+        let (mut program, types) =
+            lower_source("function main() returns nothing:\n    return nothing\n");
+        let function = &mut program.functions[0];
+        function.blocks[0].statements.insert(
+            0,
+            jett_mir::Statement {
+                kind: jett_mir::StatementKind::Evaluate(jett_hir::Expression {
+                    kind: jett_hir::ExpressionKind::PropertyCaseContext(Some(
+                        jett_hir::NativePropertyCase {
+                            name: name.to_owned(),
+                            trial,
+                        },
+                    )),
+                    ty,
+                    span: function.span,
+                }),
+                span: function.span,
+            },
+        );
+        let error = emit_host_object(&program, &types).expect_err("invalid case metadata");
+        assert!(
+            error.to_string().contains("property case context"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn emits_function_debug_descriptors_with_source_labels() {
     let (program, types) = lower_source(
         r#"namespace display

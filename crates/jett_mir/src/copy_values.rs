@@ -403,7 +403,7 @@ fn visit(
         ExpressionKind::FunctionAdapter { .. } | ExpressionKind::InterfaceCoerce { .. } => {
             *temporaries += 3;
         }
-        ExpressionKind::RuntimeFailure(_) => {
+        ExpressionKind::RuntimeFailure(_) | ExpressionKind::PropertyCaseContext(Some(_)) => {
             *temporaries += 1;
         }
         ExpressionKind::String(_)
@@ -508,6 +508,7 @@ fn visit(
         | ExpressionKind::String(_)
         | ExpressionKind::FunctionRef(_)
         | ExpressionKind::Nothing
+        | ExpressionKind::PropertyCaseContext(_)
         | ExpressionKind::RuntimeFailure(_) => {}
         ExpressionKind::Binary { left, right, .. } => {
             visit(left, reads, temporaries, types, program, false)?;
