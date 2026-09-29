@@ -238,6 +238,10 @@ fn collect_expression_references(
 ) {
     match &expression.kind {
         ExpressionKind::FunctionRef(function) => references.push((*function, expression.span)),
+        ExpressionKind::FunctionAdapter { value, function } => {
+            references.push((*function, expression.span));
+            collect_expression_references(value, references);
+        }
         ExpressionKind::ClosureRef { function, .. } => {
             references.push((*function, expression.span));
         }

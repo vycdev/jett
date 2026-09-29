@@ -561,13 +561,13 @@ impl Flow<'_> {
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value) => self.expr(value, false)?,
             ExpressionKind::InterfaceType(value) => self.expr(value, true)?,
-            ExpressionKind::InterfaceCoerce(value) => {
-                let borrowed = matches!(
-                    self.types
-                        .resolve(representation_type(self.types, value.ty)),
-                    Type::Interface(_)
-                );
-                self.expr(value, borrowed)?;
+            ExpressionKind::FunctionAdapter { value, .. } => self.expr(value, false)?,
+            ExpressionKind::InterfaceCoerce(inner) => {
+                let source = representation_type(self.types, inner.ty);
+                let target = representation_type(self.types, value.ty);
+                let unbox =
+                    matches!(self.types.resolve(source), Type::Interface(_)) && source != target;
+                self.expr(inner, borrowed || unbox)?;
             }
             ExpressionKind::OptionalNone => {}
             ExpressionKind::StructConstruct {

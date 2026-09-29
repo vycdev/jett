@@ -451,6 +451,12 @@ fn never_value_compatible(types: &TypeInterner, expected: TypeId, actual: TypeId
 }
 
 fn interface_conversion_shape(types: &TypeInterner, source: TypeId, target: TypeId) -> bool {
+    if jett_mir::move_values::is_secret(types, source)
+        && !jett_mir::move_values::is_secret(types, target)
+        && !matches!(types.resolve(target), Type::Interface(_))
+    {
+        return false;
+    }
     let source = jett_mir::move_values::representation_type(types, source);
     let target = jett_mir::move_values::representation_type(types, target);
     if source == target || source == TypeInterner::NEVER {
@@ -1163,6 +1169,57 @@ impl Verifier<'_> {
                     expression.ty,
                     "local expression type does not match local metadata",
                 )
+            }
+            ExpressionKind::FunctionAdapter {
+                value,
+                function: target,
+            } => {
+                self.expression(function, value)?;
+                let callee = self
+                    .program
+                    .functions
+                    .get(target.index() as usize)
+                    .filter(|callee| callee.id == *target)
+                    .ok_or_else(|| {
+                        self.contract_error(
+                            function,
+                            expression.span,
+                            "function adapter target is absent",
+                        )
+                    })?;
+                let Type::Function {
+                    params,
+                    view_params,
+                    return_type,
+                } = self.types.resolve(expression.ty)
+                else {
+                    return Err(self.expression_kind_error(
+                        function,
+                        expression,
+                        "function adapter",
+                    ));
+                };
+                if !matches!(self.types.resolve(value.ty), Type::Function { .. })
+                    || callee.capture_count != 1
+                    || callee.params.len() != params.len() + 1
+                    || callee.params[0].ty != value.ty
+                    || callee.params[0].mode != jett_mir::ParamMode::Owned
+                    || callee.return_type != *return_type
+                    || params.len() != view_params.len()
+                    || callee.params[1..]
+                        .iter()
+                        .zip(params.iter().zip(view_params))
+                        .any(|(actual, (ty, view))| {
+                            actual.ty != *ty || (actual.mode == jett_mir::ParamMode::View) != *view
+                        })
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "function adapter signature mismatch",
+                    ));
+                }
+                Ok(())
             }
             ExpressionKind::FunctionRef(target) => {
                 let Some(callee) = self

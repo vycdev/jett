@@ -3399,6 +3399,66 @@ impl NativeValues {
         Ok(cloned)
     }
 
+    fn function_adapter(&mut self, source: u64, code: u64) -> LeafResult<u64> {
+        if code == 0 {
+            return Err(INVALID_FUNCTION);
+        }
+        self.function_debug_label(source)?;
+        let depth = self.owned_pending_depth(source)?;
+        let label = self.struct_field(source, NATIVE_FUNCTION_LABEL_FIELD)?.bits;
+        let output = self.new_struct(NATIVE_FUNCTION_FIELD_COUNT)?;
+        let result = (|| {
+            self.structs
+                .get_mut(&output)
+                .ok_or(INVALID_FUNCTION)?
+                .fields[NATIVE_FUNCTION_CODE_FIELD as usize] = Some(NativeField {
+                bits: code,
+                owned: false,
+                pending_depth: 0,
+            });
+            // One captured function and its scalar-depth slot use the same
+            // environment layout as ordinary extracted closures.
+            let environment = self.new_struct(2)?;
+            self.structs
+                .get_mut(&output)
+                .ok_or(INVALID_FUNCTION)?
+                .fields[NATIVE_FUNCTION_ENVIRONMENT_FIELD as usize] = Some(NativeField {
+                bits: environment,
+                owned: true,
+                pending_depth: 0,
+            });
+            let captured = self.clone_with_pending_depth(source, 0)?;
+            self.structs
+                .get_mut(&environment)
+                .ok_or(INVALID_FUNCTION)?
+                .fields = vec![
+                Some(NativeField {
+                    bits: captured,
+                    owned: true,
+                    pending_depth: 0,
+                }),
+                Some(NativeField {
+                    bits: 0,
+                    owned: false,
+                    pending_depth: 0,
+                }),
+            ];
+            let label = self.clone_value(label)?;
+            let descriptor = self.structs.get_mut(&output).ok_or(INVALID_FUNCTION)?;
+            descriptor.fields[NATIVE_FUNCTION_LABEL_FIELD as usize] = Some(NativeField {
+                bits: label,
+                owned: true,
+                pending_depth: 0,
+            });
+            descriptor.pending_depth = depth;
+            Ok(output)
+        })();
+        if result.is_err() {
+            let _ = self.drop_value(output);
+        }
+        result
+    }
+
     fn interface_box(
         &mut self,
         concrete: u64,
@@ -5493,6 +5553,8 @@ leaves! {
             let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
             let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
             s.builder_finish(builder, owner) };
+    FunctionAdapter, jett_rt_v1_function_adapter, false, (source: u64 => I64, code: u64 => I64), u64 => I64,
+        |s| s.function_adapter(source, code);
     InterfaceConvert, jett_rt_v1_interface_convert, false, (value: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u64 => I64,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
             if length > isize::MAX as usize || layout.is_null() { return Err(INVALID_STRUCT); }
@@ -6730,6 +6792,48 @@ mod tests {
             public.format_pending_at("[redacted]", 2, 0),
             Ok("pending(pending([redacted]))".to_owned())
         );
+    }
+
+    #[test]
+    fn function_adapters_preserve_labels_and_pending_depth_without_mutating_source() {
+        let mut values = NativeValues::default();
+        let original = debug_function_descriptor(&mut values, "function(callback)", true);
+        let pending = values.run_record(original).unwrap();
+        let adapted = values.function_adapter(pending, 123).unwrap();
+        let joined = values.join_record(adapted).unwrap();
+        assert_eq!(
+            values.function_debug_label(adapted).unwrap(),
+            "function(callback)"
+        );
+        assert_eq!(values.owned_pending_depth(pending), Ok(1));
+        assert_eq!(values.owned_pending_depth(adapted), Ok(1));
+        assert_eq!(values.owned_pending_depth(joined), Ok(0));
+        let environment = values
+            .struct_field(joined, NATIVE_FUNCTION_ENVIRONMENT_FIELD)
+            .unwrap()
+            .bits;
+        let captured = values.struct_field(environment, 0).unwrap().bits;
+        assert_eq!(values.owned_pending_depth(captured), Ok(0));
+        for handle in [original, pending, adapted, joined] {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn function_adapter_allocation_failures_release_partial_environments() {
+        for budget in 0..4 {
+            let mut values = NativeValues::default();
+            let source = debug_function_descriptor(&mut values, "function(callback)", true);
+            values.allocation_budget = Some(budget);
+            assert_eq!(values.function_adapter(source, 123), Err(EXHAUSTED));
+            assert_eq!(
+                values.function_debug_label(source).unwrap(),
+                "function(callback)"
+            );
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
     }
 
     #[test]

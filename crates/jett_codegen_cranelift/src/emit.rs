@@ -1998,7 +1998,32 @@ impl Translator<'_, '_> {
                 args,
                 evaluation_order,
             } => self.call(*function, args, evaluation_order, expression),
-            ExpressionKind::InterfaceCoerce(value) => self.interface_coerce(value, expression.ty),
+            ExpressionKind::FunctionAdapter { value, function } => {
+                let lowered = self.expression(value)?;
+                let source = self.scalar(lowered, value.span)?;
+                let declared = self.declarations.get(*function).ok_or_else(|| {
+                    contract_error(
+                        self.symbol,
+                        expression.span,
+                        "function adapter is not reachable",
+                    )
+                })?;
+                let reference = self
+                    .module
+                    .declare_func_in_func(declared.native_id, self.builder.func);
+                let pointer_type = self.module.target_config().pointer_type();
+                let address = self.builder.ins().func_addr(pointer_type, reference);
+                let address = if pointer_type == ir::types::I64 {
+                    address
+                } else {
+                    self.builder.ins().uextend(ir::types::I64, address)
+                };
+                let adapted = self.leaf(NativeLeaf::FunctionAdapter, &[source, address], true)?;
+                self.own(adapted)
+            }
+            ExpressionKind::InterfaceCoerce(value) => {
+                self.interface_coerce(value, expression.ty, false)
+            }
             ExpressionKind::InterfaceType(value) => {
                 let lowered = self.argument(value, true)?;
                 let handle = self.scalar(lowered, value.span)?;

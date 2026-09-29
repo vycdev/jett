@@ -400,7 +400,7 @@ fn visit(
     // accumulate until full-expression cleanup; even short-circuit alternatives
     // receive distinct slots during emission. View/clone add no ownership.
     match &value.kind {
-        ExpressionKind::InterfaceCoerce(_) => {
+        ExpressionKind::FunctionAdapter { .. } | ExpressionKind::InterfaceCoerce(_) => {
             *temporaries += 3;
         }
         ExpressionKind::RuntimeFailure(_) => {
@@ -575,6 +575,7 @@ fn visit(
         ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
+        | ExpressionKind::FunctionAdapter { value, .. }
         | ExpressionKind::InterfaceCoerce(value)
         | ExpressionKind::InterfaceType(value)
         | ExpressionKind::Run(value)

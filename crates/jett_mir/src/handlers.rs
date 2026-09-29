@@ -9,7 +9,7 @@ fn has_extractable_handle(expression: &Expression) -> bool {
             kind: HandleKind::Result | HandleKind::Optional | HandleKind::Refinement { .. },
             ..
         } => true,
-        ExpressionKind::View(value) => has_extractable_handle(value),
+        ExpressionKind::View(value) | ExpressionKind::FunctionAdapter { value, .. } => has_extractable_handle(value),
         ExpressionKind::Clone(value) => has_extractable_handle(value),
         ExpressionKind::Run(value) | ExpressionKind::Join(value) => has_extractable_handle(value),
         ExpressionKind::Coarsen(value) | ExpressionKind::Declassify(value)
@@ -281,6 +281,14 @@ impl Builder<'_> {
     }
 
     pub(super) fn lower_value(&mut self, expression: &Expression) -> Expression {
+        if let ExpressionKind::FunctionAdapter { value, function } = &expression.kind {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::FunctionAdapter {
+                value: Box::new(self.lower_value(value)),
+                function: *function,
+            };
+            return lowered;
+        }
         if let ExpressionKind::InterfaceCoerce(value) | ExpressionKind::InterfaceType(value) =
             &expression.kind
         {

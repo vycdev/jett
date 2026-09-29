@@ -394,6 +394,11 @@ pub enum ExpressionKind {
     RefinementValidated(Box<Expression>),
     /// Explicit conversion at an interface-compatible typed boundary.
     InterfaceCoerce(Box<Expression>),
+    /// A checked signature adapter retaining its source function descriptor.
+    FunctionAdapter {
+        value: Box<Expression>,
+        function: FunctionId,
+    },
     /// Concrete implementation identity of an erased interface value.
     InterfaceType(Box<Expression>),
     /// Compiler-owned terminal runtime failure with an already checked result type.
@@ -756,6 +761,7 @@ impl Validator<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::FunctionAdapter { value, .. }
             | ExpressionKind::InterfaceCoerce(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
@@ -2443,7 +2449,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     .get(&decl.name.span)
                     .copied()
                     .filter(|ty| {
-                        interface_values::contains_interface(&self.parent.check.interner, *ty)
+                        interface_values::contains_erased_boundary(&self.parent.check.interner, *ty)
+                            || self
+                                .expression_types
+                                .get(&decl.value.span())
+                                .is_some_and(|actual| {
+                                    interface_values::contains_erased_boundary(
+                                        &self.parent.check.interner,
+                                        *actual,
+                                    )
+                                })
                     })
                     .or_else(|| self.expression_types.get(&decl.value.span()).copied())
                     .or_else(|| self.parent.check.definition_types.get(&definition).copied())

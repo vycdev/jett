@@ -210,7 +210,52 @@ function comptime_values() returns nothing:
         return nothing
     println(show(view ready))
     return nothing
+function adapted_return(view item: Named) returns User:
+    return User(label: Named.name(view item))
+struct ReaderHolder:
+    reader: function(view User) returns string
+function make_reader(prefix: string) returns function(view Named) returns string:
+    return function(view item: Named) returns string: return "{prefix}:{Named.name(view item)}"
+function invoke_reader(reader: function(view User) returns string) returns string:
+    User input = User(label: "higher-order")
+    return reader(view input)
+function stored_adapters() returns nothing:
+    ReaderHolder holder = ReaderHolder(reader: show)
+    User input = User(label: "stored-adapter")
+    println(holder.reader(view input))
+    function(view User) returns string captured = make_reader("captured")
+    println(captured(view input))
+    trace captured
+    function(function(view Named) returns string) returns string higher = invoke_reader
+    println(higher(show))
+    return nothing
+function adapter_values() returns nothing:
+    function(view User) returns string reader = show
+    function(view User) returns Named transformer = adapted_return
+    User input = User(label: "adapted")
+    println(reader(view input))
+    Named transformed = transformer(view input)
+    println(show(view transformed))
+    trace reader
+    trace transformer
+    function(view Named) returns string original = run show
+    function(view User) returns string pending = original
+    trace pending
+    function(view User) returns string ready = join pending handle error:
+        return nothing
+    println(ready(view input))
+    return nothing
+function secret_callback(value: secret[int64]) returns secret[int64]:
+    return value
+function secret_adapter() returns nothing:
+    function(int64) returns secret[int64] callback = secret_callback
+    secret[int64] value = callback(42)
+    trace value
+    return nothing
 function main() returns nothing:
+    secret_adapter()
+    stored_adapters()
+    adapter_values()
     comptime_values()
     empty_conversions()
     collection_conversions()

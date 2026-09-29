@@ -69,17 +69,18 @@ impl Translator<'_, '_> {
         &mut self,
         expression: &Expression,
         target: TypeId,
+        borrowed: bool,
     ) -> Result<LoweredValue, CodegenError> {
         let source = representation_type(self.types, expression.ty);
         let target_representation = representation_type(self.types, target);
         if source == target_representation {
-            return self.expression(expression);
+            return self.argument(expression, borrowed);
         }
         if matches!(
             self.types.resolve(target_representation),
             Type::Interface(_)
         ) {
-            let value = self.expression(expression)?;
+            let value = self.argument(expression, borrowed)?;
             let depth = if source == TypeInterner::NOTHING {
                 self.scalar(value, expression.span)?
             } else {
@@ -137,7 +138,7 @@ impl Translator<'_, '_> {
             interface_conversion(self.types, expression.ty, target).ok_or_else(|| {
                 self.unsupported(expression.span, "nested interface-compatible conversion")
             })?;
-        let value = self.expression(expression)?;
+        let value = self.argument(expression, borrowed)?;
         let value = self.scalar(value, expression.span)?;
         let (layout, length) = self.static_data(&conversion.encode())?;
         let output = self.leaf(NativeLeaf::InterfaceConvert, &[value, layout, length], true)?;
@@ -1126,6 +1127,9 @@ impl Translator<'_, '_> {
         expression: &Expression,
         borrowed: bool,
     ) -> Result<LoweredValue, CodegenError> {
+        if borrowed && let ExpressionKind::InterfaceCoerce(inner) = &expression.kind {
+            return self.interface_coerce(inner, expression.ty, true);
+        }
         if borrowed
             && (is_linear(self.types, expression.ty) || is_function(self.types, expression.ty))
         {

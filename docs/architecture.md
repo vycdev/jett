@@ -2840,8 +2840,11 @@ checker records interface slots separately from concrete method bodies, includin
 generic and reflected body facts. Interface values remain move-only, with explicit
 cloning, borrowing, pending depth, and recursive secret redaction preserved.
 Existing lists, maps, optionals, and results convert recursively across compatible
-interface boundaries while preserving ownership and pending depth. Function
-signature adapters and other parity edges remain open; see
+interface boundaries while preserving ownership and pending depth.
+The checker compares function parameter types contravariantly, return types
+covariantly, and view modes exactly. Generated native adapters retain source
+callbacks, preserving captures, debug names, and pending depth. Nested container
+adapters and other parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.

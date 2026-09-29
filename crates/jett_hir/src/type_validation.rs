@@ -188,6 +188,7 @@ impl BackendTypeValidator<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::FunctionAdapter { value, .. }
             | ExpressionKind::InterfaceCoerce(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)

@@ -156,6 +156,7 @@ impl Baker<'_> {
             | E::Declassify(value)
             | E::Coarsen(value)
             | E::RefinementValidated(value)
+            | E::FunctionAdapter { value, .. }
             | E::InterfaceCoerce(value)
             | E::InterfaceType(value)
             | E::StateIs { value, .. }

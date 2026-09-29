@@ -237,6 +237,27 @@ fn rejects_secret_lifted_calls_with_untainted_mir_results() {
 }
 
 #[test]
+fn interface_coercion_cannot_remove_secret_call_result_taint() {
+    let source = "function identity(value: int64) returns int64:\n    return value\nfunction caller(value: secret[int64]) returns secret[int64]:\n    return identity(value)\n";
+    let (mut program, types) = lower_source(source);
+    let caller = program
+        .functions
+        .iter_mut()
+        .find(|function| function.identity.declaration.name == "caller")
+        .unwrap();
+    caller.return_type = TypeInterner::INT64;
+    let value = returned_call_mut(caller);
+    value.kind = jett_hir::ExpressionKind::InterfaceCoerce(Box::new(value.clone()));
+    value.ty = TypeInterner::INT64;
+    let error = emit_host_object(&program, &types)
+        .expect_err("interface coercion cannot declassify a secret");
+    assert!(
+        matches!(error, CodegenError::InvalidMirContract { ref message, .. } if message.contains("interface conversion")),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn rejects_secret_lifting_with_mismatched_argument_types() {
     for callee in ["callback", "factory()"] {
         for parameter in ["int64", "Positive"] {

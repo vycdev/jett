@@ -211,33 +211,48 @@ impl Lowerer<'_> {
     }
 }
 
-pub(super) fn contains_interface(types: &TypeInterner, ty: TypeId) -> bool {
+pub(super) fn contains_erased_boundary(types: &TypeInterner, ty: TypeId) -> bool {
     match types.resolve(ty) {
         Type::Interface(_) => true,
         Type::List(inner)
         | Type::Set(inner)
         | Type::Optional(inner)
         | Type::Secret(inner)
-        | Type::Refinement { base: inner, .. } => contains_interface(types, *inner),
+        | Type::Refinement { base: inner, .. } => contains_erased_boundary(types, *inner),
         Type::Map(a, b) | Type::Result(a, b) => {
-            contains_interface(types, *a) || contains_interface(types, *b)
+            contains_erased_boundary(types, *a) || contains_erased_boundary(types, *b)
         }
-        Type::Function {
-            params,
-            return_type,
-            ..
-        } => {
-            params.iter().any(|ty| contains_interface(types, *ty))
-                || contains_interface(types, *return_type)
-        }
+        Type::Function { .. } => true,
         _ => false,
+    }
+}
+
+fn representation_type(types: &TypeInterner, mut ty: TypeId) -> TypeId {
+    while let Type::Secret(inner) | Type::Refinement { base: inner, .. } = types.resolve(ty) {
+        ty = *inner;
+    }
+    ty
+}
+
+fn is_secret(types: &TypeInterner, mut ty: TypeId) -> bool {
+    loop {
+        match types.resolve(ty) {
+            Type::Secret(_) => return true,
+            Type::Refinement { base, .. } => ty = *base,
+            _ => return false,
+        }
     }
 }
 
 fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
     if value.ty == expected
         || value.ty == TypeInterner::NEVER
-        || !(contains_interface(types, expected) || contains_interface(types, value.ty))
+        // Pure calls retain secret arguments so their result stays tainted.
+        || (is_secret(types, value.ty) && !is_secret(types, expected)
+            && !matches!(types.resolve(expected), Type::Interface(_)))
+        || !(contains_erased_boundary(types, expected)
+            || contains_erased_boundary(types, value.ty)
+            || representation_type(types, expected) == representation_type(types, value.ty))
     {
         return;
     }
@@ -251,12 +266,19 @@ fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
 }
 
 pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
-    let signatures = program
+    let mut signatures = program
         .functions
         .iter()
         .map(|function| function.params.iter().map(|param| param.ty).collect())
         .collect::<Vec<Vec<_>>>();
-    for function in &mut program.functions {
+    let adapters = std::cell::RefCell::new(Adapters {
+        next: program.functions.len() as u32,
+        ids: HashMap::new(),
+        pending: Vec::new(),
+    });
+    let mut index = 0;
+    while index < program.functions.len() {
+        let function = &mut program.functions[index];
         let locals = function
             .locals
             .iter()
@@ -267,8 +289,137 @@ pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
             signatures: &signatures,
             locals: &locals,
             return_type: function.return_type,
+            identity: &function.identity,
+            adapters: &adapters,
         };
         pass.block(&mut function.body, None);
+        let pending = std::mem::take(&mut adapters.borrow_mut().pending);
+        signatures.extend(pending.iter().map(|function| {
+            function
+                .params
+                .iter()
+                .map(|param| param.ty)
+                .collect::<Vec<_>>()
+        }));
+        program.functions.extend(pending);
+        index += 1;
+    }
+}
+
+struct Adapters {
+    next: u32,
+    ids: HashMap<(TypeId, TypeId), FunctionId>,
+    pending: Vec<Function>,
+}
+
+impl Adapters {
+    fn function(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        types: &TypeInterner,
+        identity: &FunctionIdentity,
+        span: Span,
+    ) -> Option<FunctionId> {
+        if let Some(id) = self.ids.get(&(source, target)) {
+            return Some(*id);
+        }
+        let Type::Function {
+            return_type: source_return,
+            ..
+        } = types.resolve(source)
+        else {
+            return None;
+        };
+        let Type::Function {
+            params: target_params,
+            view_params,
+            return_type,
+        } = types.resolve(target)
+        else {
+            return None;
+        };
+        let id = FunctionId(self.next);
+        self.next += 1;
+        let mut params = vec![Param {
+            local: LocalId(0),
+            name: "$source".into(),
+            ty: source,
+            mode: ParamMode::Owned,
+            mutable: false,
+            span,
+        }];
+        params.extend(target_params.iter().zip(view_params).enumerate().map(
+            |(index, (ty, view))| Param {
+                local: LocalId(index as u32 + 1),
+                name: format!("$argument{index}"),
+                ty: *ty,
+                mode: if *view {
+                    ParamMode::View
+                } else {
+                    ParamMode::Owned
+                },
+                mutable: false,
+                span,
+            },
+        ));
+        let locals = params
+            .iter()
+            .map(|param| Local {
+                id: param.local,
+                name: param.name.clone(),
+                ty: param.ty,
+                debug_ty: param.ty,
+                debug_type_name: None,
+                mutable: false,
+                span,
+            })
+            .collect();
+        let args = params[1..]
+            .iter()
+            .map(|param| Expression {
+                kind: ExpressionKind::Local(param.local),
+                ty: param.ty,
+                span,
+            })
+            .collect::<Vec<_>>();
+        let value = Expression {
+            kind: ExpressionKind::IndirectCall {
+                callee: Box::new(Expression {
+                    kind: ExpressionKind::Local(LocalId(0)),
+                    ty: source,
+                    span,
+                }),
+                evaluation_order: (0..args.len()).collect(),
+                args,
+            },
+            ty: *source_return,
+            span,
+        };
+        let mut identity = identity.clone();
+        identity.declaration.name =
+            format!("$interface.adapter.{}.{}", source.index(), target.index());
+        identity.declaration.kind = DeclarationKind::Function;
+        self.pending.push(Function {
+            id,
+            identity,
+            debug_kind: FunctionDebugKind::Inline,
+            source_definition: None,
+            params,
+            capture_count: 1,
+            return_type: *return_type,
+            locals,
+            body: Block {
+                statements: vec![Statement {
+                    kind: StatementKind::Return(Some(value)),
+                    span,
+                }],
+                span,
+            },
+            span,
+        });
+        self.ids.insert((source, target), id);
+        Some(id)
     }
 }
 
@@ -277,12 +428,32 @@ struct Coercions<'a> {
     signatures: &'a [Vec<TypeId>],
     locals: &'a [TypeId],
     return_type: TypeId,
+    identity: &'a FunctionIdentity,
+    adapters: &'a std::cell::RefCell<Adapters>,
 }
 
 impl Coercions<'_> {
     fn expected(&self, value: &mut Expression, expected: TypeId, handled: Option<TypeId>) {
         self.expression(value, handled);
         coerce(value, expected, self.types);
+        self.adapt(value);
+    }
+    fn adapt(&self, expression: &mut Expression) {
+        let ExpressionKind::InterfaceCoerce(value) = &expression.kind else {
+            return;
+        };
+        if let Some(function) = self.adapters.borrow_mut().function(
+            value.ty,
+            expression.ty,
+            self.types,
+            self.identity,
+            expression.span,
+        ) {
+            expression.kind = ExpressionKind::FunctionAdapter {
+                value: value.clone(),
+                function,
+            };
+        }
     }
     fn block(&self, block: &mut Block, handled: Option<TypeId>) {
         for statement in &mut block.statements {
@@ -460,6 +631,7 @@ impl Coercions<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::FunctionAdapter { value, .. }
             | ExpressionKind::InterfaceCoerce(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
@@ -531,5 +703,6 @@ impl Coercions<'_> {
             }
             _ => {}
         }
+        self.adapt(expression);
     }
 }

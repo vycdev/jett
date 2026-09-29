@@ -3269,7 +3269,7 @@ impl<'a> TypeChecker<'a> {
                     && expected_params
                         .iter()
                         .zip(got_params.iter())
-                        .all(|(expected, got)| self.types_compatible(*expected, *got))
+                        .all(|(expected, got)| self.types_compatible(*got, *expected))
                     && self.types_compatible(*expected_return, *got_return)
             }
             // This compatibility is intentionally one-way. Crossing a bare
@@ -18276,6 +18276,44 @@ function invoke() returns int64:
             assert_eq!(params, &vec![definition.owner_type]);
             assert_eq!(view_params, &vec![true]);
             assert_eq!(*return_type, TypeInterner::INT64);
+        }
+    }
+
+    #[test]
+    fn callback_parameters_are_contravariant_and_returns_are_covariant() {
+        let prefix = r#"interface Named:
+    function name(view self: Named) returns string
+struct User:
+    label: string
+implement Named for User:
+    function name(view self: User) returns string:
+        return self.label
+function general(view item: Named) returns User:
+    return User(label: Named.name(view item))
+function narrow(view item: User) returns Named:
+    return clone item
+"#;
+        let safe = format!(
+            "{prefix}function main() returns nothing:\n    function(view User) returns Named callback = general\n    return nothing\n"
+        );
+        assert!(
+            check_source_errors(&safe).is_empty(),
+            "{:?}",
+            check_source_errors(&safe)
+        );
+        for declaration in [
+            "function(view Named) returns Named callback = narrow",
+            "function(view User) returns User callback = narrow",
+            "function(User) returns Named callback = general",
+        ] {
+            let source = format!(
+                "{prefix}function main() returns nothing:\n    {declaration}\n    return nothing\n"
+            );
+            let errors = check_source_errors(&source);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 311),
+                "{declaration}: {errors:?}"
+            );
         }
     }
 

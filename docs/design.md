@@ -7652,8 +7652,12 @@ checker records interface slots separately from concrete method bodies, includin
 generic and reflected body facts. Interface values remain move-only, with explicit
 cloning, borrowing, pending depth, and recursive secret redaction preserved.
 Existing lists, maps, optionals, and results convert recursively across compatible
-interface boundaries while preserving ownership and pending depth. Function
-signature adapters and other parity edges remain open; see
+interface boundaries while preserving ownership and pending depth.
+Function parameters are contravariant and returns are covariant, with exact view
+modes: a callback accepting every `Named` can accept `User` inputs, while one
+accepting only `User` cannot serve a caller allowed to pass any `Named`.
+Native signature adapters preserve the source callback's captures, debug name,
+and pending depth. Nested container adapters and other parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.

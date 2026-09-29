@@ -68,7 +68,8 @@ wrappers. Ambiguous erased generic metadata still fails closed.
 
 This does **not** close the full interface gate. Still required:
 
-- Compatible function signature adapters (including nested container boundaries).
+- Function adapters inside whole-container conversions and erased comptime
+  callback values whose evaluated descriptor has a different checked signature.
 - Remaining comptime payload shapes, reflected construction, and concrete
   generic identity/debug metadata after erasure.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
@@ -83,10 +84,13 @@ compiler-owned capture storage, not implicit source-level copying of interfaces.
 
 ## Callback compatibility decision
 
-The checker currently compares function parameter types covariantly: it accepts
+The checker previously compared function parameter types covariantly: it accepted
 `function(User)` as `function(Named)`. Calling the resulting value with another
 implementation can expose interpreter behavior for a value that violates the
 callee's checked nominal type. The user selected safe callback substitution:
 compare parameters contravariantly and returns covariantly. Reject unsafe
-parameter widening, accept safe narrowing, and generate native adapters for
-representation changes at accepted boundaries.
+parameter widening and accept safe narrowing. Native adapters now preserve
+borrowed/owned arguments, covariant returns, captured closures, stored callbacks,
+higher-order callback parameters, debug names, and pending depth. A context-owned
+adapter descriptor retains the original function and invokes a generated typed
+body; no interpreter or source-name lookup participates in native execution.
