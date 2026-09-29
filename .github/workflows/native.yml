@@ -40,7 +40,7 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal
       - run: rustup override set 1.97.1
       - name: Check compiler and native conformance
-        run: cargo test --locked --workspace --target ${{ matrix.target }}
+        run: cargo test --locked --workspace --no-fail-fast --target ${{ matrix.target }}
       - name: Package release compiler and both runtime profiles
         run: python tools/package_native.py --output dist/package
       - name: Check installed compiler

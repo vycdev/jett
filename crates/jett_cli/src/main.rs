@@ -1776,7 +1776,11 @@ mod tests {
         std::fs::remove_dir_all(&root).expect("temporary query directory should be removed");
 
         assert!(rendered.contains("labels[1]{code,message,file,line,column,end_line,end_column}:"));
-        assert!(rendered.contains(&escape_toon_scalar(&support_file.display().to_string())));
+        let support_path = support_file.display().to_string().replace('\\', "/");
+        assert!(
+            rendered.contains(&escape_toon_scalar(&support_path)),
+            "{rendered}"
+        );
         assert!(!rendered.contains("labels[0]"));
     }
 
