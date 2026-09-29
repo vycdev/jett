@@ -16,6 +16,54 @@ fn append_builder_debug_layout(
     Ok(())
 }
 
+fn interface_conversion(
+    types: &TypeInterner,
+    source: TypeId,
+    target: TypeId,
+) -> Option<jett_runtime::native_abi::values::interface_conversion::NativeInterfaceConversion> {
+    use jett_runtime::native_abi::values::interface_conversion::NativeInterfaceConversion as C;
+    let source_rep = representation_type(types, source);
+    let target_rep = representation_type(types, target);
+    let owned = |ty| is_copy_owned(types, ty) || is_linear(types, ty);
+    if source_rep == target_rep || source == TypeInterner::NEVER {
+        return Some(C::Copy {
+            owned: owned(target),
+        });
+    }
+    Some(
+        match (types.resolve(source_rep), types.resolve(target_rep)) {
+            (_, Type::Interface(_)) => C::Box {
+                concrete: source.index() as u64,
+                owned: owned(source),
+                nothing: source_rep == TypeInterner::NOTHING,
+                layout: debug::debug_layout(types, source)?,
+            },
+            (Type::Interface(_), _) => C::Unbox {
+                concrete: target.index() as u64,
+                owned: owned(target),
+                nothing: target_rep == TypeInterner::NOTHING,
+            },
+            (Type::List(a), Type::List(b)) => {
+                C::List(Box::new(interface_conversion(types, *a, *b)?))
+            }
+            (Type::Optional(a), Type::Optional(b)) => {
+                C::Optional(Box::new(interface_conversion(types, *a, *b)?))
+            }
+            (Type::Result(a, b), Type::Result(c, d)) => C::Result(
+                Box::new(interface_conversion(types, *a, *c)?),
+                Box::new(interface_conversion(types, *b, *d)?),
+            ),
+            (Type::Map(ak, av), Type::Map(bk, bv)) if ak == bk || *ak == TypeInterner::NEVER => {
+                C::Map(
+                    Box::new(interface_conversion(types, *av, *bv)?),
+                    is_string(types, *bk),
+                )
+            }
+            _ => return None,
+        },
+    )
+}
+
 impl Translator<'_, '_> {
     pub(super) fn interface_coerce(
         &mut self,
@@ -85,7 +133,15 @@ impl Translator<'_, '_> {
             }
             return Ok(unpacked);
         }
-        Err(self.unsupported(expression.span, "nested interface-compatible conversion"))
+        let conversion =
+            interface_conversion(self.types, expression.ty, target).ok_or_else(|| {
+                self.unsupported(expression.span, "nested interface-compatible conversion")
+            })?;
+        let value = self.expression(expression)?;
+        let value = self.scalar(value, expression.span)?;
+        let (layout, length) = self.static_data(&conversion.encode())?;
+        let output = self.leaf(NativeLeaf::InterfaceConvert, &[value, layout, length], true)?;
+        self.own_linear(output)
     }
 
     pub(super) fn leaf(

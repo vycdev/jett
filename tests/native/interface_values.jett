@@ -141,7 +141,59 @@ function moved_values() returns nothing:
     println(show(view moved))
     println(show(view original))
     return nothing
+function collection_conversions() returns nothing:
+    list[User] users = list(User(label: "converted-list"))
+    list[Named] items = users
+    for item in items:
+        println(show(view item))
+    optional[Group] group = some(Group(label: "converted-optional"))
+    optional[Named] maybe = group
+    Named found = maybe handle:
+        return nothing
+    println(show(view found))
+    result[User, Group] success = ok(User(label: "converted-result"))
+    result[Named, Named] converted = success
+    Named value = converted handle error:
+        return nothing
+    println(show(view value))
+    map[string, User] records = map("key": User(label: "converted-map"))
+    map[string, Named] mapped = records
+    trace mapped
+    return nothing
+function nested_collection_conversions() returns nothing:
+    list[list[User]] records = list(list(User(label: "nested")))
+    list[list[Named]] converted = records
+    trace converted
+    list[User] pending = run list(User(label: "pending-list"))
+    list[Named] erased = pending
+    trace erased
+    list[Named] ready = join erased handle error:
+        return nothing
+    for item in ready:
+        println(show(view item))
+    result[User, Group] failed = fail(Group(label: "converted-error"))
+    result[Named, Named] failure = failed
+    trace failure
+    optional[User] missing = none
+    optional[Named] empty = missing
+    trace empty
+    return nothing
+function empty_names() returns list[Named]:
+    return list()
+function empty_map() returns map[string, Named]:
+    return map()
+function empty_conversions() returns nothing:
+    list[Named] empty = empty_names()
+    list[Named] filled = list.append[Named](empty, User(label: "after-empty"))
+    trace filled
+    map[string, Named] entries = empty_map()
+    map[string, Named] inserted = map.insert[string, Named](entries, "key", Group(label: "after-empty-map"))
+    trace inserted
+    return nothing
 function main() returns nothing:
+    empty_conversions()
+    collection_conversions()
+    nested_collection_conversions()
     moved_values()
     callback_values()
     primitive_values()

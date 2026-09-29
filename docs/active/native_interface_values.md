@@ -58,11 +58,14 @@ Linked differential coverage includes primitive and nominal payloads, mixed list
 literals, record/enum/machine fields, actor state and messages, parameters and
 returns, explicit clones, nested pending values, typed callbacks, generic bodies,
 consumed-binding snapshots and reassignment, and terminal dispatch failure.
+Existing list/map/optional/result values convert through compiler-described trees,
+including nested containers, pending payloads, empty values, and later insertion.
+Allocation-failure tests verify cleanup of partial lists, maps, sums, and boxes;
+malformed conversion descriptors fail before touching source storage.
 
 This does **not** close the full interface gate. Still required:
 
-- Whole existing list/map/optional/result conversion across interface-compatible
-  element types, and compatible function signature adapters.
+- Compatible function signature adapters (including nested container boundaries).
 - Explicit comptime materialization of erased values, reflected construction,
   and concrete generic identity/debug metadata after erasure.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime

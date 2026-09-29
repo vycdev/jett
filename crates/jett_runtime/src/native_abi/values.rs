@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod interface_conversion;
+
 pub type NativeHandle = u64;
 type Failure = (JettRuntimeStatusV1, &'static [u8]);
 type LeafResult<T> = Result<T, Failure>;
@@ -5491,6 +5493,14 @@ leaves! {
             let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
             let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
             s.builder_finish(builder, owner) };
+    InterfaceConvert, jett_rt_v1_interface_convert, false, (value: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize || layout.is_null() { return Err(INVALID_STRUCT); }
+            let bytes = unsafe { std::slice::from_raw_parts(layout, length) };
+            let conversion = interface_conversion::NativeInterfaceConversion::parse(bytes)?;
+            let field = conversion.convert(s, NativeField { bits: value, owned: true, pending_depth: 0 })?;
+            if !field.owned { return Err(INVALID_STRUCT); }
+            Ok(field.bits) };
     InterfaceBox, jett_rt_v1_interface_box, false, (concrete: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u64 => I64,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
             if owned > 1 || length > isize::MAX as usize || (length != 0 && layout.is_null()) { return Err(INVALID_STRUCT); }
@@ -6767,6 +6777,121 @@ mod tests {
             values.drop_value(original).unwrap();
             assert!(values.is_empty());
         }
+    }
+
+    #[test]
+    fn nested_interface_conversion_failures_release_partial_containers() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let boxed = C::Box {
+            concrete: 9,
+            owned: true,
+            nothing: false,
+            layout: function_debug_layout_bytes(&[vec![NativeDebugTag::Redacted as u8]], 0),
+        };
+        let conversion = C::List(Box::new(boxed.clone()));
+        assert_eq!(C::parse(&conversion.encode()), Ok(conversion.clone()));
+        for budget in 0..7 {
+            let mut values = NativeValues::default();
+            let a = values.insert("first".into()).unwrap();
+            let b = values.insert("second".into()).unwrap();
+            let source = values.new_list(true).unwrap();
+            values.lists.get_mut(&source).unwrap().elements = vec![Some(a), Some(b)];
+            values.allocation_budget = Some(budget);
+            assert_eq!(
+                conversion
+                    .convert(
+                        &mut values,
+                        NativeField {
+                            bits: source,
+                            owned: true,
+                            pending_depth: 0
+                        }
+                    )
+                    .map(|field| field.bits),
+                Err(EXHAUSTED)
+            );
+            assert_eq!(values.strings.len(), 2);
+            assert_eq!(values.lists.len(), 1);
+            assert!(values.structs.is_empty());
+            assert!(values.bytes.is_empty());
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
+        let mapped = C::Map(Box::new(boxed.clone()), true);
+        for budget in [1, 4] {
+            let mut values = NativeValues::default();
+            let source = values.new_map(1, 1).unwrap();
+            for name in ["first", "second"] {
+                let key = values.insert(format!("key-{name}")).unwrap();
+                let value = values.insert(name.into()).unwrap();
+                values
+                    .maps
+                    .get_mut(&source)
+                    .unwrap()
+                    .entries
+                    .push(Some(NativeMapEntry {
+                        key,
+                        value,
+                        key_pending_depth: 0,
+                        value_pending_depth: 0,
+                        key_taken: false,
+                    }));
+            }
+            values.allocation_budget = Some(budget);
+            assert_eq!(
+                mapped
+                    .convert(
+                        &mut values,
+                        NativeField {
+                            bits: source,
+                            owned: true,
+                            pending_depth: 0
+                        }
+                    )
+                    .map(|field| field.bits),
+                Err(EXHAUSTED)
+            );
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
+        let sum_conversion = C::Optional(Box::new(boxed));
+        let mut values = NativeValues::default();
+        let payload = values.insert("payload".into()).unwrap();
+        let source = values.sum(SUM_SUCCESS, payload, true).unwrap();
+        values.allocation_budget = Some(3);
+        assert_eq!(
+            sum_conversion
+                .convert(
+                    &mut values,
+                    NativeField {
+                        bits: source,
+                        owned: true,
+                        pending_depth: 0
+                    }
+                )
+                .map(|field| field.bits),
+            Err(EXHAUSTED)
+        );
+        values.drop_value(source).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn interface_conversion_descriptors_reject_truncated_or_extra_bytes() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let conversion = C::Result(
+            Box::new(C::List(Box::new(C::Copy { owned: true }))),
+            Box::new(C::Copy { owned: false }),
+        );
+        let bytes = conversion.encode();
+        for end in 0..bytes.len() {
+            assert!(C::parse(&bytes[..end]).is_err());
+        }
+        let mut extra = bytes.clone();
+        extra.push(0);
+        assert!(C::parse(&extra).is_err());
+        assert!(C::parse(&[0, 2]).is_err());
+        assert_eq!(C::parse(&bytes), Ok(conversion));
     }
 
     #[test]

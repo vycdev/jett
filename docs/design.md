@@ -7651,8 +7651,10 @@ literals use typed native boxes and compiler-generated dispatch functions. The
 checker records interface slots separately from concrete method bodies, including
 generic and reflected body facts. Interface values remain move-only, with explicit
 cloning, borrowing, pending depth, and recursive secret redaction preserved.
-Whole-container and function-signature conversions remain open parity work; see
-`active/native_interface_values.md` for the representation and remaining gates.
+Existing lists, maps, optionals, and results convert recursively across compatible
+interface boundaries while preserving ownership and pending depth. Function
+signature adapters and other parity edges remain open; see
+`active/native_interface_values.md` for the remaining gates.
 Actor constructor parameters are retained before state initializers run; an
 initializer consuming its working parameter does not consume the actor's capture.
 
