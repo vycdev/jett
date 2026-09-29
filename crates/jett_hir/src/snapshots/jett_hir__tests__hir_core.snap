@@ -9,6 +9,7 @@ Program {
                 0,
             ),
             identity: FunctionIdentity {
+                scoped_type_bindings: [],
                 declaration: DeclarationId {
                     origin: Project,
                     namespace: "app",
@@ -209,6 +210,7 @@ Program {
                 1,
             ),
             identity: FunctionIdentity {
+                scoped_type_bindings: [],
                 declaration: DeclarationId {
                     origin: Project,
                     namespace: "app",

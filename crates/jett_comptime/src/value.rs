@@ -9,6 +9,7 @@ use jett_types::ReflectionTypeInfo;
 /// Lexical generic context retained by an evaluated closure.
 #[derive(Debug, Clone, Default)]
 pub struct ClosureTypeContext {
+    pub scoped_type_bindings: Vec<(String, String)>,
     pub checked_function: Option<Arc<CheckedFunctionTypes>>,
     pub bindings: HashMap<String, TypeExpr>,
     pub arguments: Vec<ClosureTypeArgument>,

@@ -66,7 +66,10 @@ facts distinct when canonical type interning intentionally gives them the same
 Scoped types bound by `comptime type` keep their source reflection kind as well
 as their canonical type. A nested generic call or static `type.kind_tag` branch
 must still see an alias as an alias, even when its underlying `TypeId` is a
-struct or collection.
+struct or collection. Inline function identities also carry their enclosing
+`comptime type` binding chain, so callbacks sharing a source body and signature
+remain distinct when reflected field types differ. Nested closures retain that
+lexical chain, while named function calls start their own.
 
 Named call arguments reach HIR only as a checked permutation into canonical
 parameter order. Struct construction likewise carries canonical field order

@@ -104,6 +104,7 @@ impl Extractor<'_> {
 
     fn expression(&mut self, expression: &mut Expression, parent: &ParentInfo<'_>) {
         if let ExpressionKind::InlineFunction {
+            scoped_type_bindings,
             params,
             view_params,
             local_floor,
@@ -192,6 +193,7 @@ impl Extractor<'_> {
                             _ => DeclarationKind::Function,
                         },
                     },
+                    scoped_type_bindings: scoped_type_bindings.clone(),
                     type_arguments: parent.identity.type_arguments.clone(),
                     specialization: parent.identity.specialization.clone(),
                 },

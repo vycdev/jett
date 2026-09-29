@@ -156,6 +156,29 @@ fn native_comptime_reflection_callbacks_match_interpreter() {
 }
 
 #[test]
+fn native_comptime_reflected_callbacks_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/comptime_reflected_callbacks.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("reflected loop callback oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "plain\nnumber:int64\nplain\ntext:string\nplain\nrepeated:int64\n",
+            "plain\nnumber:int64\nplain\ntext:string\nplain\nrepeated:int64\n",
+            "int64:bool\nstring:bool\nint64:bool\n",
+        )
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("comptime_reflected_callbacks.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native reflected callbacks");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_reflection_expressions_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_reflection_expressions.jett");

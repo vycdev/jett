@@ -97,6 +97,18 @@ pub fn symbol_name(
         push_component(&mut canonical, primitive);
     }
 
+    if !identity.scoped_type_bindings.is_empty() {
+        push_category(
+            &mut canonical,
+            "scoped-type-bindings",
+            identity.scoped_type_bindings.len(),
+        );
+        for (name, ty) in &identity.scoped_type_bindings {
+            push_component(&mut canonical, name);
+            push_component(&mut canonical, &canonical_type(*ty, types)?);
+        }
+    }
+
     let digest = Sha256::digest(canonical.as_bytes());
     let mut symbol = String::from("jett_v0_");
     for byte in digest {

@@ -78,10 +78,15 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Audit reflected-loop callback bindings. Generic type arguments, alias
-  reflection metadata, and reflection-valued parameter facts are retained.
-- Audit scoped expression facts in reflected-loop expansions and interpreter
-  source instances of compiler-owned facades that use different native helpers.
+- Audit alias reflection identity within scoped reflected-loop bindings.
+  Canonical scoped type chains now distinguish callbacks for different field
+  types, including repeated types, nested bindings, and nested closures.
+- Preserve scoped expression facts in reflected-loop expansions. A record
+  with `int8` and `int64` fields, each holding 127, exposes the problem: adding
+  one through a scoped `Field` currently evaluates the narrow field using the
+  last expansion's width and rejects 128 instead of wrapping to -128. Also
+  audit interpreter source instances of compiler-owned facades that use
+  different native helpers.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
@@ -204,3 +209,12 @@ compile-time error for invalid `comptime type` bindings behind runtime guards;
 `generic_reflection_runtime_guard_deferral` is now a compile-fail fixture.
 `generic_reflection_body_type_error` rejects a mismatched generic return type,
 and `generic_reflection_expressions` compares interpreter and native output.
+
+Reflected-loop callbacks now carry their lexical `comptime type` binding chain
+through inline HIR identity, evaluated closures, and native symbol encoding.
+Previously a list of baked callbacks returning `type.name[Field]()` for different
+record fields failed native materialization as ambiguous. Named calls start
+their own lexical chain; nested closures retain their defining chain. The
+`comptime_reflected_callbacks` differential fixture covers runtime and baked
+callbacks, repeated field types, a nested direct binding inside a generic
+reflected loop, and callbacks that produce another callback.

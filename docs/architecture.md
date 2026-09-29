@@ -2864,7 +2864,12 @@ The driver retains expression maps by generic declaration and checked
 specialization, including alias reflection and reflection-valued parameters.
 An invocation selects its checked function context; a closure retains the whole
 context through shared ownership. Native materialization matches reflection
-parameter facts alongside concrete type arguments and alias metadata.
+parameter facts alongside concrete type arguments and alias metadata. HIR
+inline functions retain their enclosing scoped type binding chain through
+extraction, including unconditional and reflected-loop bindings. Evaluated
+closures preserve the same canonical chain; native materialization matches it
+and native symbol encoding uses its structural types rather than local TypeIds.
+Named calls isolate the chain and restore it on success or failure.
 Generic body entries are excluded from the global fallback map. Compiler-owned
 facades may execute interpreter source instances without a checked map, while
 conflicting matching maps fail explicitly. The

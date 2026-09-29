@@ -71,6 +71,13 @@ impl BackendTypeValidator<'_> {
                 format!("function `{function_name}` type argument {index}"),
             );
         }
+        for (name, ty) in &function.identity.scoped_type_bindings {
+            self.type_id(
+                *ty,
+                function.span,
+                format!("function `{function_name}` scoped type `{name}`"),
+            );
+        }
         for parameter in &function.params {
             self.type_id(
                 parameter.ty,
@@ -357,7 +364,20 @@ impl BackendTypeValidator<'_> {
                 }
             }
             ExpressionKind::StateIs { value, .. } => self.expression(value, function_name),
-            ExpressionKind::InlineFunction { body, .. } => self.block(body, function_name),
+            ExpressionKind::InlineFunction {
+                scoped_type_bindings,
+                body,
+                ..
+            } => {
+                for (name, ty) in scoped_type_bindings {
+                    self.type_id(
+                        *ty,
+                        expression.span,
+                        format!("function `{function_name}` inline scoped type `{name}`"),
+                    );
+                }
+                self.block(body, function_name);
+            }
             ExpressionKind::ActorSpawn { args, .. } => {
                 for argument in args {
                     self.expression(argument, function_name);
@@ -663,6 +683,7 @@ mod tests {
                         name: "main".to_string(),
                         kind: DeclarationKind::Function,
                     },
+                    scoped_type_bindings: Vec::new(),
                     type_arguments: Vec::new(),
                     specialization: Default::default(),
                 },

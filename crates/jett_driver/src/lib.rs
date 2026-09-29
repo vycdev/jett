@@ -3335,6 +3335,7 @@ fn append_native_verify_suite(
                 name: format!("__native_verify_suite:{}", span.start),
                 kind: jett_hir::DeclarationKind::Verify,
             },
+            scoped_type_bindings: Vec::new(),
             type_arguments: Vec::new(),
             specialization: jett_typecheck::CheckedGenericSpecialization::default(),
         },

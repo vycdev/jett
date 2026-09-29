@@ -119,13 +119,16 @@ pub enum DeclarationKind {
     RefinementPredicate,
 }
 
-/// One concrete in-memory function identity. Type arguments and checked
-/// reflection-visible specialization facts form identity after
-/// monomorphization. Both are empty for an ordinary function. Raw `TypeId`s
+/// One concrete in-memory function identity. Type arguments, checked
+/// reflection-visible specialization facts, and lexical comptime type bindings
+/// form identity after monomorphization. All are empty for an ordinary named
+/// function. Raw `TypeId`s
 /// are session-local; persistent artifacts must encode their canonical
 /// structural type identities and this specialization discriminator instead.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionIdentity {
+    /// Lexical comptime type bindings, in enclosing-to-inner order.
+    pub scoped_type_bindings: Vec<(String, TypeId)>,
     pub declaration: DeclarationId,
     pub type_arguments: Vec<TypeId>,
     pub specialization: CheckedGenericSpecialization,
@@ -415,6 +418,7 @@ pub enum ExpressionKind {
     Join(Box<Expression>),
     Cancel(Box<Expression>),
     InlineFunction {
+        scoped_type_bindings: Vec<(String, TypeId)>,
         params: Vec<LocalId>,
         view_params: Vec<LocalId>,
         /// First local allocated inside this closure. Earlier locals are captures.
@@ -952,6 +956,7 @@ impl Validator<'_> {
                 view_params,
                 local_floor,
                 body,
+                ..
             } => {
                 if *local_floor as usize > self.local_count {
                     self.error(
@@ -1516,6 +1521,7 @@ impl<'a> Lowerer<'a> {
                     name: format!("{}:{}", name.name, span.start),
                     kind,
                 },
+                scoped_type_bindings: Vec::new(),
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
@@ -1764,6 +1770,7 @@ impl<'a> Lowerer<'a> {
                     name,
                     kind,
                 },
+                scoped_type_bindings: Vec::new(),
                 type_arguments: concrete_args,
                 specialization,
             },
@@ -1966,6 +1973,7 @@ impl<'a> Lowerer<'a> {
                     name: source.actor.name.name.clone(),
                     kind: DeclarationKind::ActorConstructor,
                 },
+                scoped_type_bindings: Vec::new(),
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
@@ -2188,6 +2196,7 @@ impl<'a> Lowerer<'a> {
                     name: format!("{}.{}", source.actor.name.name, source.handler.name.name),
                     kind: DeclarationKind::ActorHandler,
                 },
+                scoped_type_bindings: Vec::new(),
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
@@ -2265,6 +2274,7 @@ impl<'a> Lowerer<'a> {
                     name: source.alias.name.name.clone(),
                     kind: DeclarationKind::RefinementPredicate,
                 },
+                scoped_type_bindings: Vec::new(),
                 type_arguments: Vec::new(),
                 specialization: CheckedGenericSpecialization::default(),
             },
@@ -2341,6 +2351,7 @@ struct BodyLowerer<'lowerer, 'program> {
     local_ids: HashMap<DefId, LocalId>,
     locals: Vec<Local>,
     visible_bindings: Vec<HashMap<String, LocalId>>,
+    scoped_type_bindings: Vec<(String, TypeId)>,
 }
 
 impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
@@ -2384,6 +2395,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             local_ids: HashMap::new(),
             locals: Vec::new(),
             visible_bindings: vec![HashMap::new()],
+            scoped_type_bindings: Vec::new(),
         }
     }
 
@@ -2773,7 +2785,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .next()
                 .expect("single checked binding exists");
             return Some(StatementKind::Scope(
-                self.lower_block_with_checked_facts(&binding.body, checked.body),
+                self.lower_bound_type_body(binding, checked),
             ));
         }
 
@@ -2837,10 +2849,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 iteration_index,
                 bound_type: checked.bound_type,
                 canonical_identity: info.canonical_identity(),
-                body: self.lower_block_with_checked_facts(&binding.body, checked.body),
+                body: self.lower_bound_type_body(binding, checked),
             });
         }
         Some(StatementKind::ReflectedTypeDispatch { type_info, arms })
+    }
+
+    fn lower_bound_type_body(
+        &mut self,
+        binding: &ast::ComptimeTypeBindStmt,
+        checked: CheckedComptimeTypeBinding,
+    ) -> Block {
+        self.scoped_type_bindings
+            .push((binding.name.name.clone(), checked.bound_type));
+        let body = self.lower_block_with_checked_facts(&binding.body, checked.body);
+        self.scoped_type_bindings.pop();
+        body
     }
 
     fn lower_block_with_checked_facts(
@@ -3263,6 +3287,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 let body = self.lower_block(body);
                 self.visible_bindings.pop();
                 ExpressionKind::InlineFunction {
+                    scoped_type_bindings: self.scoped_type_bindings.clone(),
                     params: lowered_params,
                     view_params,
                     local_floor,

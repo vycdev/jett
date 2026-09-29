@@ -120,6 +120,7 @@ pub(super) fn append_property_suite(
                 name: format!("__native_property_suite:{}", span.start),
                 kind: DeclarationKind::Property,
             },
+            scoped_type_bindings: Vec::new(),
             type_arguments: Vec::new(),
             specialization: jett_typecheck::CheckedGenericSpecialization::default(),
         },
@@ -142,6 +143,7 @@ fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {
 }
 
 pub(super) struct FunctionValueCandidate {
+    scoped_type_bindings: Vec<(String, TypeId)>,
     source_name: Option<String>,
     kind: DeclarationKind,
     body_span: Span,
@@ -156,7 +158,15 @@ pub(super) struct FunctionValueCandidate {
 
 impl FunctionValueCandidate {
     fn matches_type_context(&self, context: &ClosureTypeContext, types: &TypeInterner) -> bool {
-        self.type_arguments.len() == context.arguments.len()
+        self.scoped_type_bindings.len() == context.scoped_type_bindings.len()
+            && self
+                .scoped_type_bindings
+                .iter()
+                .zip(&context.scoped_type_bindings)
+                .all(|((name, ty), (actual_name, actual_type))| {
+                    name == actual_name && types.type_name(*ty) == *actual_type
+                })
+            && self.type_arguments.len() == context.arguments.len()
             && self
                 .type_arguments
                 .iter()
@@ -215,6 +225,7 @@ pub(super) fn function_value_candidates(
                 FunctionDebugKind::Inline => None,
             };
             FunctionValueCandidate {
+                scoped_type_bindings: function.identity.scoped_type_bindings.clone(),
                 type_arguments: function.identity.type_arguments.clone(),
                 specialization: function.identity.specialization.clone(),
                 source_name,

@@ -618,6 +618,7 @@ pub struct Interpreter {
     actor_defs: HashMap<String, ActorDef>,
     /// Active generic type argument substitutions for interpreted generic functions.
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
+    scoped_type_bindings: Vec<(String, String)>,
     /// Ordered arguments of the lexical function, retained by nested closures.
     current_type_arguments: Vec<TypeExpr>,
     /// Namespace of the qualified function body currently executing.
@@ -698,6 +699,7 @@ impl Interpreter {
             machines: HashMap::new(),
             actor_defs: HashMap::new(),
             type_arg_scopes: Vec::new(),
+            scoped_type_bindings: Vec::new(),
             current_type_arguments: Vec::new(),
             current_namespace: None,
             lexical_scope_floor: 0,
@@ -2188,6 +2190,7 @@ impl Interpreter {
             .collect();
         Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                scoped_type_bindings: self.scoped_type_bindings.clone(),
                 checked_function: self.active_checked_function.clone(),
                 bindings: self
                     .type_arg_scopes
@@ -3067,10 +3070,15 @@ impl Interpreter {
                 } else {
                     return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
                 };
+                self.scoped_type_bindings.push((
+                    bind.name.name.clone(),
+                    self.concrete_type_display(&bound_type_expr),
+                ));
                 let mut scope = HashMap::new();
                 scope.insert(bind.name.name.clone(), bound_type_expr);
                 self.type_arg_scopes.push(scope);
                 let result = self.exec_block_inner(&bind.body);
+                self.scoped_type_bindings.pop();
                 self.type_arg_scopes.pop();
                 result
             }
@@ -10599,6 +10607,7 @@ impl Interpreter {
         let saved_expression_types =
             std::mem::replace(&mut self.active_checked_function, expression_types);
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
+        let saved_scoped_types = std::mem::take(&mut self.scoped_type_bindings);
         // Resolve arguments above in the caller, then keep its type bindings
         // out of the callee's lexical scope, including non-generic callees.
         let saved_type_scopes = std::mem::replace(&mut self.type_arg_scopes, vec![type_scope]);
@@ -10643,6 +10652,7 @@ impl Interpreter {
             self.pop_scope();
         }
         self.lexical_scope_floor = saved_scope_floor;
+        self.scoped_type_bindings = saved_scoped_types;
         self.type_arg_scopes = saved_type_scopes;
         self.current_type_arguments = saved_type_arguments;
         self.active_checked_function = saved_expression_types;
@@ -10831,6 +10841,10 @@ impl Interpreter {
                     &mut self.active_checked_function,
                     type_context.checked_function,
                 );
+                let saved_scoped_types = std::mem::replace(
+                    &mut self.scoped_type_bindings,
+                    type_context.scoped_type_bindings,
+                );
                 let saved_type_scopes =
                     std::mem::replace(&mut self.type_arg_scopes, vec![type_context.bindings]);
                 let saved_type_arguments = std::mem::replace(
@@ -10873,6 +10887,7 @@ impl Interpreter {
                 self.lexical_scope_floor = saved_scope_floor;
                 self.current_function_trusted_stdlib = saved_trusted_stdlib;
                 self.current_namespace = saved_namespace;
+                self.scoped_type_bindings = saved_scoped_types;
                 self.type_arg_scopes = saved_type_scopes;
                 self.current_type_arguments = saved_type_arguments;
                 self.active_checked_function = saved_expression_types;
@@ -16143,6 +16158,7 @@ mod tests {
             ..Default::default()
         });
         interp.active_checked_function = Some(caller_types.clone());
+        interp.scoped_type_bindings = vec![("Field".into(), "string".into())];
         let echo = func_def(
             "echo",
             vec![("value", "int8")],
@@ -16164,6 +16180,10 @@ mod tests {
             } else {
                 assert_eq!(result.unwrap(), Value::Int64(127));
             }
+            assert_eq!(
+                interp.scoped_type_bindings,
+                vec![("Field".into(), "string".into())]
+            );
             assert_eq!(interp.scopes.len(), 1);
             assert_eq!(interp.lexical_scope_floor, 0);
             assert_eq!(interp.type_arg_scopes.len(), 1);
@@ -16192,6 +16212,7 @@ mod tests {
             ..Default::default()
         });
         interp.active_checked_function = Some(caller_types.clone());
+        interp.scoped_type_bindings = vec![("Field".into(), "string".into())];
         interp
             .type_arg_scopes
             .push(HashMap::from([("T".into(), type_named("string"))]));
@@ -16200,6 +16221,7 @@ mod tests {
         interp.current_function_trusted_stdlib = true;
         let closure = Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                scoped_type_bindings: Vec::new(),
                 checked_function: None,
                 bindings: HashMap::from([("T".into(), type_named("int8"))]),
                 arguments: Vec::new(),
@@ -16228,6 +16250,10 @@ mod tests {
             } else {
                 assert_eq!(result.unwrap(), Value::Int64(127));
             }
+            assert_eq!(
+                interp.scoped_type_bindings,
+                vec![("Field".into(), "string".into())]
+            );
             assert_eq!(interp.scopes.len(), 1);
             assert_eq!(interp.lexical_scope_floor, 0);
             assert_eq!(interp.type_arg_scopes.len(), 1);

@@ -1042,11 +1042,13 @@ fn symbols_use_structural_types_instead_of_session_local_type_ids() {
     };
     let first = FunctionIdentity {
         declaration: declaration.clone(),
+        scoped_type_bindings: Vec::new(),
         type_arguments: vec![first_argument],
         specialization: CheckedGenericSpecialization::default(),
     };
     let second = FunctionIdentity {
         declaration,
+        scoped_type_bindings: Vec::new(),
         type_arguments: vec![second_argument],
         specialization: CheckedGenericSpecialization::default(),
     };
@@ -1059,8 +1061,27 @@ fn symbols_use_structural_types_instead_of_session_local_type_ids() {
         "jett_v0_e2a99a2b07c19f4355c2c76e50f4ff613045299da68e13af7a842a035e453591"
     );
 
+    let mut first_scoped = first.clone();
+    first_scoped.scoped_type_bindings = vec![("Field".into(), first_argument)];
+    let mut second_scoped = second.clone();
+    second_scoped.scoped_type_bindings = vec![("Field".into(), second_argument)];
+    assert_eq!(
+        symbol_name(&first_scoped, &first_types).unwrap(),
+        symbol_name(&second_scoped, &second_types).unwrap(),
+    );
+    assert_ne!(
+        symbol_name(&first_scoped, &first_types).unwrap(),
+        first_symbol
+    );
+    second_scoped.scoped_type_bindings[0].1 = TypeInterner::STRING;
+    assert_ne!(
+        symbol_name(&first_scoped, &first_types).unwrap(),
+        symbol_name(&second_scoped, &second_types).unwrap(),
+    );
+
     let specialized = FunctionIdentity {
         declaration: second.declaration.clone(),
+        scoped_type_bindings: Vec::new(),
         type_arguments: second.type_arguments.clone(),
         specialization: CheckedGenericSpecialization {
             type_argument_kinds: vec!["alias".to_string()],

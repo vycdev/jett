@@ -194,6 +194,7 @@ impl Lowerer<'_> {
                         name: format!("$interface.dispatch.{name}"),
                         kind: DeclarationKind::Method,
                     },
+                    scoped_type_bindings: Vec::new(),
                     type_arguments: Vec::new(),
                     specialization: CheckedGenericSpecialization::default(),
                 },
