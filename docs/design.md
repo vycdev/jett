@@ -6350,6 +6350,12 @@ examples.
 
 #### Conditional Breakpoints
 
+The one-line `breakpoint hit` snapshot reports the current function's lexical
+bindings: parameters, closure captures, and active nested scopes. Same-named
+bindings in distinct functions remain separate. It does not flatten caller frames into that
+snapshot. The interactive protocol addresses other frames explicitly by frame
+identity. Captured bindings retain their declared types in debug output.
+
 `breakpoint` optionally takes a condition expression. It only pauses when the condition is true:
 
 ```

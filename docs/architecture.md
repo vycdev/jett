@@ -2800,6 +2800,12 @@ discovers those bodies from parsed source and includes their execution counts
 alongside lowering, object, main, and runtime-contract results. Its successful
 fixture-gate result is distinct from a complete native release audit.
 
+One-line breakpoint snapshots use the current lexical function frame in both
+execution paths. The interpreter applies its name-lookup scope floor when
+collecting bindings and preserves closure capture type metadata; native code
+uses the checked HIR snapshot. Caller bindings are never merged into a callee's
+snapshot. Nested-scope locals disappear when their scope exits.
+
 The full native parity gate is still incomplete: the current object count is
 recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See

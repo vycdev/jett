@@ -1,0 +1,33 @@
+namespace test
+
+function leaf(value: int64) returns nothing:
+    breakpoint
+    if value > 0:
+        string nested = "leaf"
+        breakpoint
+    breakpoint
+    return nothing
+
+function invoke(callback: function(int64) returns nothing) returns nothing:
+    string caller = "indirect caller"
+    callback(2)
+    breakpoint
+    return nothing
+
+function make_snapshot(seed: uint8) returns function(int64) returns nothing:
+    string label = "captured"
+    return function(value: int64) returns nothing:
+        breakpoint
+        leaf(value)
+        breakpoint
+        return nothing
+
+function main() returns nothing:
+    string caller = "main caller"
+    int64 value = 99
+    leaf(1)
+    invoke(leaf)
+    function(int64) returns nothing snapshot = make_snapshot(7)
+    snapshot(3)
+    breakpoint
+    return nothing

@@ -1010,7 +1010,15 @@ impl Interpreter {
 
     fn hit_breakpoint(&mut self) {
         let mut bindings = BTreeMap::new();
-        for (scope, type_scope) in self.scopes.iter().zip(self.variable_type_scopes.iter()) {
+        for (index, (scope, type_scope)) in self
+            .scopes
+            .iter()
+            .zip(self.variable_type_scopes.iter())
+            .enumerate()
+        {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
             for (name, value) in scope {
                 bindings.insert(name.clone(), (value.clone(), type_scope.get(name).cloned()));
             }
@@ -2082,10 +2090,18 @@ impl Interpreter {
                         captures.insert(name.clone(), value.clone());
                     }
                 }
+                let capture_types = captures
+                    .keys()
+                    .filter_map(|name| {
+                        self.get_variable_type(name)
+                            .map(|ty| (name.clone(), ty.clone()))
+                    })
+                    .collect();
                 Ok(ExprFlow::Value(Value::Function {
                     params: params.clone(),
                     body: body.clone(),
                     captures,
+                    capture_types,
                     namespace_aliases: self.visible_namespace_aliases(),
                     namespace: self.current_namespace.clone(),
                 }))
@@ -10581,6 +10597,7 @@ impl Interpreter {
                 params,
                 body,
                 captures,
+                capture_types,
                 namespace_aliases,
                 namespace,
             } => {
@@ -10603,7 +10620,11 @@ impl Interpreter {
                 self.lexical_scope_floor = scope_depth;
                 self.push_scope();
                 for (name, value) in &captures {
-                    self.set_variable(name, value.clone());
+                    if let Some(ty) = capture_types.get(name) {
+                        self.set_variable_with_type(name, value.clone(), ty.clone());
+                    } else {
+                        self.set_variable(name, value.clone());
+                    }
                 }
                 for (name, target) in namespace_aliases {
                     self.set_namespace_alias(name, target);
@@ -15870,6 +15891,7 @@ mod tests {
             }],
             body: block(vec![return_stmt(var("value"))]),
             captures: HashMap::new(),
+            capture_types: HashMap::new(),
             namespace_aliases: HashMap::new(),
             namespace: None,
         };

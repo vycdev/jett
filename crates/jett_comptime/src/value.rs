@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use jett_parser::ast::{Block, Param};
+use jett_parser::ast::{Block, Param, TypeExpr};
 
 /// Runtime value for the compile-time interpreter.
 #[derive(Debug, Clone)]
@@ -73,6 +73,7 @@ pub enum Value {
         params: Vec<Param>,
         body: Block,
         captures: HashMap<String, Value>,
+        capture_types: HashMap<String, TypeExpr>,
         namespace_aliases: HashMap<String, String>,
         namespace: Option<String>,
     },

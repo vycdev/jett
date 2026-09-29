@@ -2890,6 +2890,45 @@ fn native_debug_statements_match_interpreter_output() {
 }
 
 #[test]
+fn native_breakpoints_preserve_lexical_frames_and_capture_types() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/breakpoint_lexical_frames.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert_eq!(expected.debug_output.len(), 13);
+    assert_eq!(
+        &expected.debug_output[..3],
+        [
+            "breakpoint hit: value: int64 = 1",
+            "breakpoint hit: nested: string = leaf, value: int64 = 1",
+            "breakpoint hit: value: int64 = 1",
+        ]
+    );
+    assert_eq!(
+        expected.debug_output[7],
+        "breakpoint hit: label: string = captured, seed: uint8 = 7, value: int64 = 3"
+    );
+    assert_eq!(expected.debug_output[11], expected.debug_output[7]);
+    assert_eq!(
+        expected
+            .debug_output
+            .iter()
+            .filter(|line| line.contains("caller:"))
+            .count(),
+        2
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("breakpoint_frames.exe");
+    build_host_executable(&fixture, launcher(), &binary).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_type_construction_debug_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/debug_type_construction.jett");
