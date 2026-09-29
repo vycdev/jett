@@ -103,25 +103,32 @@ impl NativeInterfaceConversion {
                 _ => Err(INVALID_STRUCT),
             }
         }
-        fn node(bytes: &mut &[u8], depth: usize) -> LeafResult<NativeInterfaceConversion> {
-            if depth >= 128 {
-                return Err(INVALID_STRUCT);
-            }
-            use NativeInterfaceConversion as C;
-            Ok(match take(bytes, 1)?[0] {
+        use NativeInterfaceConversion as C;
+        enum Parent {
+            List,
+            Optional,
+            Map(bool),
+            ResultOk,
+            ResultError(C),
+        }
+        let mut remaining = bytes;
+        let mut parents = Vec::new();
+        loop {
+            let mut value = match take(&mut remaining, 1)?[0] {
                 0 => C::Copy {
-                    owned: flag(bytes)?,
+                    owned: flag(&mut remaining)?,
                 },
                 tag @ (1 | 2) => {
-                    let owned = flag(bytes)?;
-                    let nothing = flag(bytes)?;
+                    let owned = flag(&mut remaining)?;
+                    let nothing = flag(&mut remaining)?;
                     if owned && nothing {
                         return Err(INVALID_STRUCT);
                     }
-                    let concrete = number(bytes)?;
+                    let concrete = number(&mut remaining)?;
                     if tag == 1 {
-                        let length = usize::try_from(number(bytes)?).map_err(|_| INVALID_STRUCT)?;
-                        let layout = take(bytes, length)?.to_vec();
+                        let length =
+                            usize::try_from(number(&mut remaining)?).map_err(|_| INVALID_STRUCT)?;
+                        let layout = take(&mut remaining, length)?.to_vec();
                         NativeDebugLayout::parse(&layout)?;
                         C::Box {
                             concrete,
@@ -137,33 +144,52 @@ impl NativeInterfaceConversion {
                         }
                     }
                 }
-                3 => C::List(Box::new(node(bytes, depth + 1)?)),
-                4 => C::Optional(Box::new(node(bytes, depth + 1)?)),
-                5 => C::Result(
-                    Box::new(node(bytes, depth + 1)?),
-                    Box::new(node(bytes, depth + 1)?),
-                ),
+                3 => {
+                    parents.push(Parent::List);
+                    continue;
+                }
+                4 => {
+                    parents.push(Parent::Optional);
+                    continue;
+                }
+                5 => {
+                    parents.push(Parent::ResultOk);
+                    continue;
+                }
                 6 => {
-                    let strings = flag(bytes)?;
-                    C::Map(Box::new(node(bytes, depth + 1)?), strings)
+                    parents.push(Parent::Map(flag(&mut remaining)?));
+                    continue;
                 }
                 7 => {
-                    let code = number(bytes)?;
+                    let code = number(&mut remaining)?;
                     if code == 0 {
                         return Err(INVALID_STRUCT);
                     }
                     C::FunctionAdapter { code }
                 }
                 _ => return Err(INVALID_STRUCT),
-            })
+            };
+            loop {
+                value = match parents.pop() {
+                    Some(Parent::List) => C::List(Box::new(value)),
+                    Some(Parent::Optional) => C::Optional(Box::new(value)),
+                    Some(Parent::Map(strings)) => C::Map(Box::new(value), strings),
+                    Some(Parent::ResultOk) => {
+                        parents.push(Parent::ResultError(value));
+                        break;
+                    }
+                    Some(Parent::ResultError(ok)) => C::Result(Box::new(ok), Box::new(value)),
+                    None => {
+                        if !remaining.is_empty() {
+                            return Err(INVALID_STRUCT);
+                        }
+                        return Ok(value);
+                    }
+                };
+            }
         }
-        let mut remaining = bytes;
-        let result = node(&mut remaining, 0)?;
-        if !remaining.is_empty() {
-            return Err(INVALID_STRUCT);
-        }
-        Ok(result)
     }
+
     fn owned(&self) -> bool {
         match self {
             Self::Copy { owned } | Self::Unbox { owned, .. } => *owned,

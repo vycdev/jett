@@ -4180,6 +4180,36 @@ fn native_enum_struct_payload_matches_interpreter() {
 }
 
 #[test]
+fn native_deep_interface_conversion_matches_interpreter_in_both_profiles() {
+    // Keep frontend recursion separate from the linked program's runtime stack.
+    std::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(|| {
+        let concrete = format!("{}User{}", "list[".repeat(130), "]".repeat(130));
+        let element = format!("{}Named{}", "list[".repeat(129), "]".repeat(129));
+        let source_text = format!("namespace app\ninterface Named:\n    function name(view self: Named) returns string\nstruct User:\n    value: string\nimplement Named for User:\n    function name(view self: User) returns string:\n        return self.value\ntype Concrete = {concrete}\ntype Element = {element}\ntype Erased = list[Element]\nfunction main(stdout: Stdout) returns nothing:\n    Concrete values = list()\n    Erased converted = values\n    Stdout.write(view stdout, \"{{list.length[Element](view converted)}}\\n\")\n");
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("deep_conversion.jett");
+        fs::write(&source, source_text).unwrap();
+        let expected = jett_driver::run_file_capture_output(&source).unwrap();
+        assert_eq!(expected.stdout, "0\n");
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory.path().join(format!("conversion_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source, launcher(), &binary, jett_driver::BuildOptions { release },
+            ).unwrap();
+            binaries.push(binary);
+        }
+        fs::remove_file(&source).unwrap();
+        for binary in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert!(actual.status.success(), "{actual:?}");
+            assert_eq!(actual.stdout, expected.stdout.as_bytes());
+            assert!(actual.stderr.is_empty(), "{actual:?}");
+        }
+    }).unwrap().join().unwrap();
+}
+
+#[test]
 fn native_deep_reflection_dispatch_matches_interpreter_in_both_profiles() {
     // Give the frontend's recursive type walks enough stack for this source.
     // Linked programs still run in separate processes with ordinary stacks.

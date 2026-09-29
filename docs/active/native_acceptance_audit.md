@@ -165,6 +165,13 @@ and through a named alias, comparing exact reflected names/kinds in debug and
 release binaries after source removal. Runtime identity tests cover 4,096 alias
 levels with alias preservation and erasure, shared metadata, cycles, and
 malformed alias arguments. These replace the former 64-level identity cutoff.
+The deep-interface conversion gate compiles 130 nested list types in debug and
+release, removes source, and checks the converted empty container against the
+interpreter. Runtime tests additionally convert populated 130-level lists,
+inspect the boxed leaf's identity and payload, and inject allocation failures
+at outer, middle, and innermost construction boundaries. Every failed conversion
+preserves its source and retires partial owners. Truncated and extra descriptor
+bytes are rejected before conversion.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

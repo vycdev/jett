@@ -1709,3 +1709,12 @@ limit, retaining the existing identity encoding and alias preservation/erasure
 modes. Linked debug/release tests cover both direct and aliased deep fields;
 runtime tests cover 4,096 alias levels, shared subtrees, cycles, and malformed
 arguments. This changes no language binding or specialization rule.
+
+### Deep interface conversion descriptors
+
+An empty list with 130 nested concrete element types converted successfully to
+the corresponding interface types in the interpreter but failed native descriptor
+parsing. Parsing now uses an explicit parent stack instead of a 128-level cutoff,
+with the same encoding and validation. Linked debug/release tests cover the
+accepted empty-container source; runtime tests cover populated deep conversions,
+the boxed leaf identity, allocation-failure rollback, truncation, and extra bytes.

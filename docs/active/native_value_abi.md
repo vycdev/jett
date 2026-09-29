@@ -932,6 +932,10 @@ conversion tree. Its callback leaf (tag 7) contains an eight-byte linked functio
 address. Object emission clears the placeholder function ID and writes a native
 function relocation at the recorded byte offset. The host linker resolves it;
 the runtime never interprets a function ID or looks up source declarations.
+Descriptor parsing uses an explicit parent stack in place of the former
+128-level recursion cutoff. Its wire encoding, result branch order, ownership
+flags, and leaf validation remain unchanged. A descriptor must consume exactly
+the supplied bytes before any value conversion begins.
 
 Each converted callback owns an adapter descriptor retaining its original
 function, captures, debug label, and pending depth. Container allocation failure

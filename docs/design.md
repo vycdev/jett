@@ -7750,6 +7750,8 @@ generic and reflected body facts. Interface values remain move-only, with explic
 cloning, borrowing, pending depth, and recursive secret redaction preserved.
 Existing lists, maps, optionals, and results convert recursively across compatible
 interface boundaries while preserving ownership and pending depth.
+Supported finite nesting retains that conversion behavior for empty and populated
+containers; a native descriptor-depth cutoff must not reject a checked conversion.
 Function parameters are contravariant and returns are covariant, with exact view
 modes: a callback accepting every `Named` can accept `User` inputs, while one
 accepting only `User` cannot serve a caller allowed to pass any `Named`.

@@ -2945,6 +2945,11 @@ generic and reflected body facts. Interface values remain move-only, with explic
 cloning, borrowing, pending depth, and recursive secret redaction preserved.
 Existing lists, maps, optionals, and results convert recursively across compatible
 interface boundaries while preserving ownership and pending depth.
+The runtime parses the finite compiler-owned conversion descriptor with a parent
+stack, retaining list/optional/map child order and both result branches. A checked
+conversion is not rejected because its descriptor exceeds 128 nested nodes,
+including when the source container is empty. Truncated descriptors, invalid
+flags, null callback addresses, and trailing bytes still fail before conversion.
 The checker compares function parameter types contravariantly, return types
 covariantly, and view modes exactly. Generated native adapters retain source
 callbacks, preserving captures, debug names, and pending depth, including callbacks

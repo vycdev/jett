@@ -6619,6 +6619,71 @@ mod tests {
     }
 
     #[test]
+    fn deep_interface_conversion_descriptors_preserve_values_and_cleanup() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let mut primitive = vec![NativeDebugTag::Primitive as u8];
+        primitive.extend_from_slice(&(NativeSortKind::Int64 as u32).to_le_bytes());
+        let mut conversion = C::Box {
+            concrete: 9,
+            owned: false,
+            nothing: false,
+            layout: function_debug_layout_bytes(&[primitive], 0),
+        };
+        for _ in 0..130 {
+            conversion = C::List(Box::new(conversion));
+        }
+        let encoded = conversion.encode();
+        let parsed = C::parse(&encoded).unwrap();
+        assert_eq!(parsed, conversion);
+        for end in 0..encoded.len() {
+            assert!(C::parse(&encoded[..end]).is_err());
+        }
+        let mut extra = encoded.clone();
+        extra.push(0);
+        assert!(C::parse(&extra).is_err());
+        for budget in [Some(0), Some(64), Some(129), Some(130), Some(131), None] {
+            let mut values = NativeValues::default();
+            let mut source = 7;
+            for depth in 0..130 {
+                let list = values.new_list(depth != 0).unwrap();
+                values
+                    .lists
+                    .get_mut(&list)
+                    .unwrap()
+                    .elements
+                    .push(Some(source));
+                source = list;
+            }
+            values.allocation_budget = budget;
+            let converted = parsed.convert(
+                &mut values,
+                NativeField {
+                    bits: source,
+                    owned: true,
+                    pending_depth: 0,
+                },
+            );
+            if budget.is_some() {
+                assert_eq!(converted.map(|field| field.bits), Err(EXHAUSTED));
+                assert_eq!(values.lists.len(), 130);
+                assert!(values.structs.is_empty());
+                assert!(values.bytes.is_empty());
+            } else {
+                let converted = converted.unwrap();
+                let mut payload = converted.bits;
+                for _ in 0..130 {
+                    payload = values.lists[&payload].elements[0].unwrap();
+                }
+                assert_eq!(values.struct_field(payload, 0).unwrap().bits, 9);
+                assert_eq!(values.struct_field(payload, 1).unwrap().bits, 7);
+                values.drop_value(converted.bits).unwrap();
+            }
+            values.drop_value(source).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
     fn nested_interface_conversion_failures_release_partial_containers() {
         use interface_conversion::NativeInterfaceConversion as C;
         let boxed = C::Box {
