@@ -4241,6 +4241,42 @@ fn native_projected_machine_sequences_match_interpreter() {
 }
 
 #[test]
+fn native_temporary_projected_views_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/temporary_projected_views.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("temporary view oracle");
+    assert_eq!(
+        expected.stdout,
+        "make:list\nAda\nLin\nmake:set\ntag\nmake:map\nrow owned 7\nmake:string\n🚀\ne\n\u{301}\nmake:record\nAda\nLin\nrow owned\n11\nmake:direct\nmissing:direct\nAda:fallback:2\nmake:indirect\nmissing:indirect\nAda:fallback:2\nmake:early\nmissing:early\nreturned\nmake:break\nAda\nmake:continue\nLin\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("temporary_projected_views.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native temporary views");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
+fn native_temporary_projected_view_failure_cleans_owners() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/temporary_projected_view_failure.jett");
+    let expected = jett_driver::run_file_capture_outcome(&fixture)
+        .expect_err("later argument fails after borrowing the temporary owner");
+    assert_eq!(expected.output.stdout, "owner\nargument\n");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory
+        .path()
+        .join("temporary_projected_view_failure.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native temporary view failure");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
 fn native_projected_nested_collections_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_nested_collections.jett");

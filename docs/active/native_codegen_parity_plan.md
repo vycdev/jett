@@ -309,6 +309,17 @@ lexical reflected type-binding chain, including nested callback bodies. The
 context fix and its differential regression coverage are recorded in
 [native comptime contexts](native_comptime_context.md).
 
+`temporary_projected_views` extends the borrowed-field audit to owners returned
+as temporary values. It covers nested list, set, map, Unicode string, and record
+fields; direct and indirect calls whose later argument runs a fallback handler;
+early returns from that handler; and loop `break`/`continue` cleanup. Exact output
+pins single receiver evaluation and ordering, and the native launcher must exit
+successfully without cleanup diagnostics.
+`temporary_projected_view_failure` requires the original runtime error and
+successful cleanup when a later indirect-call argument fails after borrowing
+the nested temporary field; both the temporary owner and the failing argument's
+owned collection must be released.
+
 `tests/native_parity.json` is the machine-checked fixture inventory. The table
 below records implementation coverage; a row is complete only when its native
 object, linked execution, and differential behavior gates all pass. Typed
