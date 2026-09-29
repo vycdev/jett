@@ -286,92 +286,8 @@ pub(super) fn value_expression(
         (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
         (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
         (Type::Nothing, Value::Nothing) => ExpressionKind::Nothing,
-        (
-            Type::Function {
-                params,
-                view_params,
-                return_type,
-            },
-            Value::NamedFunction(name),
-        ) => {
-            let mut matches = context.functions.iter().filter(|function| {
-                matches!(
-                    function.kind,
-                    DeclarationKind::Function | DeclarationKind::Method
-                ) && function.source_name.as_ref() == Some(name)
-                    && function.params == *params
-                    && function.view_params == *view_params
-                    && function.return_type == *return_type
-                    && function.captures.is_empty()
-            });
-            let function = matches
-                .next()
-                .ok_or_else(|| format!("checked function value `{name}` is absent"))?;
-            if matches.next().is_some() {
-                return Err(format!("checked function value `{name}` is ambiguous"));
-            }
-            ExpressionKind::FunctionRef(function.id)
-        }
-        (
-            Type::Function {
-                params,
-                view_params,
-                return_type,
-            },
-            Value::Function { body, captures, .. },
-        ) => {
-            let mut matches = context.functions.iter().filter(|function| {
-                function.source_name.is_none()
-                    && function.body_span == body.span
-                    && function.params == *params
-                    && function.view_params == *view_params
-                    && function.return_type == *return_type
-                    && function
-                        .captures
-                        .iter()
-                        .all(|(name, _)| captures.contains_key(name))
-            });
-            let function = matches
-                .next()
-                .ok_or("checked inline function value is absent")?;
-            if matches.next().is_some() {
-                return Err("checked inline function value is ambiguous".into());
-            }
-            let function_id = function.id;
-            let capture_types = function.captures.clone();
-            if capture_types.is_empty() {
-                ExpressionKind::FunctionRef(function_id)
-            } else {
-                let mut capture_locals = Vec::with_capacity(capture_types.len());
-                for (name, capture_type) in capture_types {
-                    let captured = captures
-                        .get(&name)
-                        .ok_or_else(|| format!("checked closure capture `{name}` is absent"))?;
-                    let expression = value_expression(captured, capture_type, span, context)?;
-                    let id = LocalId::new(context.locals.len() as u32);
-                    context.locals.push(Local {
-                        id,
-                        name: format!("__native_baked_capture_{}", id.index()),
-                        ty: capture_type,
-                        debug_ty: capture_type,
-                        debug_type_name: None,
-                        mutable: false,
-                        span,
-                    });
-                    context.bindings.push(Statement {
-                        kind: StatementKind::Let {
-                            local: id,
-                            value: expression,
-                        },
-                        span,
-                    });
-                    capture_locals.push(id);
-                }
-                ExpressionKind::ClosureRef {
-                    function: function_id,
-                    captures: capture_locals,
-                }
-            }
+        (Type::Function { .. }, Value::NamedFunction(_) | Value::Function { .. }) => {
+            return function_value_expression(value, ty, span, context);
         }
         (Type::Bytes, Value::Bytes(bytes)) => return bytes_expression(bytes, span, types),
         (Type::List(element), Value::List(values)) => ExpressionKind::ListConstruct {
@@ -561,6 +477,120 @@ pub(super) fn value_expression(
         }
     };
     Ok(Expression { kind, ty, span })
+}
+
+fn function_value_expression(
+    value: &Value,
+    expected: TypeId,
+    span: Span,
+    context: &mut ValueContext<'_>,
+) -> Result<Expression, String> {
+    let candidates = context
+        .functions
+        .iter()
+        .filter(|function| match value {
+            Value::NamedFunction(name) => {
+                matches!(
+                    function.kind,
+                    DeclarationKind::Function | DeclarationKind::Method
+                ) && function.source_name.as_ref() == Some(name)
+                    && function.captures.is_empty()
+            }
+            Value::Function { body, captures, .. } => {
+                function.source_name.is_none()
+                    && function.body_span == body.span
+                    && function
+                        .captures
+                        .iter()
+                        .all(|(name, _)| captures.contains_key(name))
+            }
+            _ => false,
+        })
+        .collect::<Vec<_>>();
+    let signature = |function: &FunctionValueCandidate| Type::Function {
+        params: function.params.clone(),
+        view_params: function.view_params.clone(),
+        return_type: function.return_type,
+    };
+    let exact = candidates
+        .iter()
+        .copied()
+        .filter(|function| context.types.resolve(expected) == &signature(function))
+        .collect::<Vec<_>>();
+    // Generic values may have several checked specializations. Preserve exact
+    // selection; otherwise use only an unambiguous evaluated source identity.
+    let matches = if exact.is_empty() {
+        &candidates
+    } else {
+        &exact
+    };
+    let label = match value {
+        Value::NamedFunction(name) => format!("function value `{name}`"),
+        _ => "inline function value".into(),
+    };
+    let function = match matches.as_slice() {
+        [] => return Err(format!("checked {label} is absent")),
+        [function] => *function,
+        _ => return Err(format!("checked {label} is ambiguous")),
+    };
+    let source_signature = signature(function);
+    let source_type = context
+        .types
+        .type_ids()
+        .find(|ty| context.types.resolve(*ty) == &source_signature)
+        .ok_or_else(|| format!("checked {label} signature is absent"))?;
+    let function_id = function.id;
+    let capture_types = function.captures.clone();
+    let mut capture_locals = Vec::with_capacity(capture_types.len());
+    for (name, capture_type) in capture_types {
+        let Value::Function { captures, .. } = value else {
+            return Err("named function unexpectedly requires captures".into());
+        };
+        let captured = captures
+            .get(&name)
+            .ok_or_else(|| format!("checked closure capture `{name}` is absent"))?;
+        let expression = value_expression(captured, capture_type, span, context)?;
+        let id = LocalId::new(context.locals.len() as u32);
+        context.locals.push(Local {
+            id,
+            name: format!("__native_baked_capture_{}", id.index()),
+            ty: capture_type,
+            debug_ty: capture_type,
+            debug_type_name: None,
+            mutable: false,
+            span,
+        });
+        context.bindings.push(Statement {
+            kind: StatementKind::Let {
+                local: id,
+                value: expression,
+            },
+            span,
+        });
+        capture_locals.push(id);
+    }
+    let kind = if capture_locals.is_empty() {
+        ExpressionKind::FunctionRef(function_id)
+    } else {
+        ExpressionKind::ClosureRef {
+            function: function_id,
+            captures: capture_locals,
+        }
+    };
+    let source = Expression {
+        kind,
+        ty: source_type,
+        span,
+    };
+    if source_type == expected {
+        Ok(source)
+    } else {
+        Ok(Expression {
+            kind: ExpressionKind::interface_coerce(Box::new(source)),
+            ty: expected,
+            span,
+        })
+    }
 }
 
 fn set_expression(

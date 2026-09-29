@@ -26,6 +26,7 @@ mod inline_functions;
 mod interface_values;
 mod type_validation;
 
+pub use interface_values::complete_value_conversions;
 pub use type_validation::validate_backend_types;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -6192,6 +6193,47 @@ mod tests {
         } else {
             lower(&parsed.module, &resolved, &checked, &origins).expect("HIR lowering failed")
         }
+    }
+
+    #[test]
+    fn completing_generated_value_conversions_reuses_existing_adapters() {
+        let file = FileId::new(0);
+        let source = "type Source = function(secret[int64]) returns secret[int64]\ntype Target = function(int64) returns secret[int64]\nfunction secret_identity(value: secret[int64]) returns secret[int64]:\n    return value\nfunction callback() returns Target:\n    return secret_identity\nfunction convert(items: list[Source]) returns list[Target]:\n    return items\n";
+        let parsed = jett_parser::parse(source, file);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            !checked
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == Severity::Error),
+            "{:?}",
+            checked.diagnostics
+        );
+        let mut program = lower(
+            &parsed.module,
+            &resolved,
+            &checked,
+            &HashMap::from([(file, SourceOrigin::Project)]),
+        )
+        .unwrap();
+        let initial = program.clone();
+        assert_eq!(
+            program
+                .functions
+                .iter()
+                .filter(|function| function
+                    .identity
+                    .declaration
+                    .name
+                    .starts_with("$interface.adapter."))
+                .count(),
+            1
+        );
+        complete_value_conversions(&mut program, &checked.interner).unwrap();
+        complete_value_conversions(&mut program, &checked.interner).unwrap();
+        assert_eq!(program, initial);
     }
 
     #[test]

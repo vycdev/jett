@@ -2845,9 +2845,11 @@ The checker compares function parameter types contravariantly, return types
 covariantly, and view modes exactly. Generated native adapters retain source
 callbacks, preserving captures, debug names, and pending depth, including callbacks
 inside existing lists, maps, optionals, and results. Container descriptors use
-linked addresses of checked generated adapters. Comptime callback materialization
-and other parity edges remain open; see `active/native_interface_values.md` for
-the remaining gates.
+linked addresses of checked generated adapters. Comptime callbacks materialize
+their checked source signatures before conversion to the requested type. A final
+HIR conversion pass reuses existing adapters and lowers newly materialized
+conversions before ownership analysis. Ambiguous erased specializations and other
+parity edges remain open; see `active/native_interface_values.md`.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
 Generic structs retain their concrete type arguments across interface erasure,

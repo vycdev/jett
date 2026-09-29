@@ -273,7 +273,34 @@ pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
         .collect::<Vec<Vec<_>>>();
     let adapters = std::cell::RefCell::new(Adapters {
         next: program.functions.len() as u32,
-        ids: HashMap::new(),
+        ids: program
+            .functions
+            .iter()
+            .filter_map(|function| {
+                if !function
+                    .identity
+                    .declaration
+                    .name
+                    .starts_with("$interface.adapter.")
+                    || function.capture_count != 1
+                    || function.params.is_empty()
+                {
+                    return None;
+                }
+                let signature = Type::Function {
+                    params: function.params[1..].iter().map(|param| param.ty).collect(),
+                    view_params: function.params[1..]
+                        .iter()
+                        .map(|param| param.mode == ParamMode::View)
+                        .collect(),
+                    return_type: function.return_type,
+                };
+                let target = types
+                    .type_ids()
+                    .find(|ty| types.resolve(*ty) == &signature)?;
+                Some(((function.params[0].ty, target), function.id))
+            })
+            .collect(),
         pending: Vec::new(),
     });
     let mut index = 0;
@@ -304,6 +331,27 @@ pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
         program.functions.extend(pending);
         index += 1;
     }
+}
+
+/// Complete checked conversions introduced by generated values, such as explicit
+/// comptime results and property inputs. Existing adapters are reused, and every
+/// new adapter body passes through the same conversion and validation pipeline.
+pub fn complete_value_conversions(
+    program: &mut Program,
+    types: &TypeInterner,
+) -> Result<(), Vec<LowerError>> {
+    coerce_program(program, types);
+    validate(program)
+        .and_then(|()| validate_backend_types(program, types))
+        .map_err(|errors| {
+            errors
+                .into_iter()
+                .map(|error| LowerError {
+                    span: error.span,
+                    message: error.message,
+                })
+                .collect()
+        })
 }
 
 struct Adapters {

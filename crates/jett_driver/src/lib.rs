@@ -2867,6 +2867,8 @@ fn lower_file_for_backend_inner(
         None
     };
     let program_entry = lowered_program_entry(&hir, source_program_entry)?;
+    jett_hir::complete_value_conversions(&mut hir, &check_result.interner)
+        .map_err(BackendLoweringError::Hir)?;
     let mir = jett_mir::lower(&hir, &check_result.interner).map_err(BackendLoweringError::Mir)?;
     jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;
 

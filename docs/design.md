@@ -7659,8 +7659,10 @@ accepting only `User` cannot serve a caller allowed to pass any `Named`.
 Native signature adapters preserve the source callback's captures, debug name,
 and pending depth, including callbacks inside existing lists, maps, optionals,
 and results. Container descriptors use linked addresses of checked generated
-adapters. Comptime callback materialization and other parity edges remain open;
-see `active/native_interface_values.md` for the remaining gates.
+adapters. Comptime callbacks materialize their checked source signatures before
+converting to the requested callback type; captures and pending state survive.
+Ambiguous erased specializations and other parity edges remain open; see
+`active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
 Generic structs retain their concrete type arguments across interface erasure,

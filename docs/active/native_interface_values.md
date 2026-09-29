@@ -78,13 +78,23 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Erased comptime callback values whose evaluated descriptor has a different
-  checked signature.
+- Comptime callback specializations whose evaluated values do not retain enough
+  concrete metadata to select an unambiguous checked source identity.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata is retained, but dispatch between multiple instantiations still
   requires an interpreter identity audit.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
   identity rather than assuming every checked TypeId has a distinct runtime name.
+
+Comptime callback materialization must reconstruct the evaluated source function
+with its own checked signature before adapting it to the expression's result
+type. Re-labeling the source descriptor with the target signature is invalid.
+Exact signature selection remains authoritative for specialized candidates; when
+erasure leaves only one source candidate, materialize that candidate and retain
+the conversion explicitly. Ambiguous source identity must fail closed rather
+than pick an arbitrary specialization. Generated materialization conversions
+must run through the same HIR adapter pass before ownership lowering, reusing
+existing adapters and processing newly generated adapter bodies.
 
 Actor constructor parity follows the interpreter's existing two environments:
 constructor parameters remain captured by the actor, while state initializers
@@ -120,3 +130,10 @@ and containers, empty insertion, and adapters whose own parameters need nested
 container conversion. Runtime tests walk every allocation failure through list,
 map, and optional callback conversion; object tests reject missing or mismatched
 adapter metadata and require native data relocations to reachable adapter bodies.
+
+Comptime callback materialization now retains an unambiguous source function's
+checked signature and applies explicit adapters afterward. Linked regressions
+cover named choices, captured closures, callbacks in lists and records, pending
+callbacks, covariant returns, and secret parameters/results. Completing generated
+conversions is idempotent and shares already emitted adapters, avoiding duplicate
+native symbols when comptime evaluation recreates an existing conversion.

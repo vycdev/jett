@@ -337,6 +337,46 @@ function callback_nested_adapters() returns nothing:
     function(list[Reader]) returns string adapted = first_reader
     println(adapted(list(make_reader("higher"))))
     return nothing
+function static_reader(named: bool) returns UserReader:
+    if named:
+        return show
+    return make_reader("baked-capture")
+function static_callback_list() returns list[UserReader]:
+    list[Reader] readers = list(show, make_reader("baked-list"))
+    return readers
+function static_callback_holder() returns ReaderHolder:
+    return ReaderHolder(reader: make_reader("baked-holder"))
+function static_pending_reader() returns UserReader:
+    return run show
+function static_factory() returns function(view User) returns Named:
+    return adapted_return
+function static_secret_callback() returns function(int64) returns secret[int64]:
+    return secret_callback
+function comptime_callback_adapters() returns nothing:
+    User input = User(label: "comptime-adapter")
+    UserReader named = comptime static_reader(true)
+    UserReader captured = comptime static_reader(false)
+    println(named(view input))
+    println(captured(view input))
+    trace captured
+    list[UserReader] readers = comptime static_callback_list()
+    for callback in readers:
+        println(callback(view input))
+    ReaderHolder holder = comptime static_callback_holder()
+    println(holder.reader(view input))
+    UserReader pending = comptime static_pending_reader()
+    trace pending
+    UserReader ready = join pending handle error:
+        return nothing
+    println(ready(view input))
+    function(view User) returns Named factory = comptime static_factory()
+    Named produced = factory(view input)
+    println(show(view produced))
+    function(int64) returns secret[int64] hidden = comptime static_secret_callback()
+    secret[int64] hidden_value = hidden(73)
+    trace hidden_value
+    comptime static_reader(true)
+    return nothing
 type Token = secret[string]
 struct Box[T]:
     item: T
@@ -384,6 +424,7 @@ function generic_values() returns nothing:
     trace plain
     return nothing
 function main() returns nothing:
+    comptime_callback_adapters()
     callback_list_conversions()
     callback_sum_conversions()
     callback_map_conversions()
