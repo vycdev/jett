@@ -1,0 +1,73 @@
+namespace decoy
+export function name(view value: string) returns string:
+    return "decoy:{value}"
+namespace domain
+function accept(value: int64) returns bool:
+    return value > 0
+export type Positive = int64 where accept(value)
+export type Bigger = Positive where value > 2
+export struct T:
+    count: int64
+export type CheckedRecord = T where value.count > 0 and (comptime type.name[T]()) == "domain.T"
+export interface Named:
+    function name(view self: Named) returns string
+implement Named for string:
+    function name(view self: string) returns string:
+        return "text:{self}"
+export type Selected = Named where Named.name(view value) == "text:value"
+implement Named for Selected:
+    function name(view self: Selected) returns string:
+        Named base = coarsen clone self
+        return "selected:{Named.name(view base)}"
+export type Again = Selected where Named.name(view value) == "text:value"
+implement Named for Again:
+    function name(view self: Again) returns string:
+        Selected parent = coarsen clone self
+        return "again:{Named.name(view parent)}"
+export function make() returns result[Selected, string]:
+    Named source = "value"
+    Selected selected = source handle error:
+        return fail(error)
+    return ok(selected)
+namespace app
+function interface_values() returns nothing:
+    use domain
+    use decoy as Named
+    domain.Selected live = domain.make() handle error:
+        return println(error)
+    domain.Selected baked = comptime domain.make() handle error:
+        return println(error)
+    println(domain.Named.name(view live))
+    println(domain.Named.name(view baked))
+    domain.Again again = clone live handle error:
+        return println(error)
+    println(domain.Named.name(view again))
+    println(Named.name(view "alias"))
+    return nothing
+function generic[T](number: int64) returns nothing:
+    use domain
+    function(int64) returns bool accept = function(value: int64) returns bool:
+        return value < 0
+    comptime type Bound = type.info[list[T]]():
+        domain.Positive positive = number handle error:
+            println("rejected:{type.name[T]()}:{type.name[Bound]()}:{error}")
+            println(accept(1))
+            return nothing
+        println(type.name[T](), type.name[Bound](), coarsen positive, accept(1))
+        domain.T source = domain.T(count: coarsen positive)
+        domain.CheckedRecord checked = source handle error:
+            return println(error)
+        domain.T restored = coarsen checked
+        println(restored.count)
+        domain.Bigger bigger = number handle error:
+            println("bigger-rejected:{type.name[T]()}:{type.name[Bound]()}:{error}")
+            println(accept(1))
+            return nothing
+        println("bigger:{coarsen bigger}:{type.name[T]()}")
+    return nothing
+function main() returns nothing:
+    interface_values()
+    generic[string](7)
+    generic[int8](0)
+    generic[bool](2)
+    return nothing

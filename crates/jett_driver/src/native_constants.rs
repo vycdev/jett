@@ -153,12 +153,17 @@ impl Baker<'_> {
     }
 
     fn expression(&mut self, expr: &mut Expression) {
-        if let E::Comptime { bindings, .. } = &expr.kind {
+        if let E::Comptime {
+            bindings,
+            source_span,
+            ..
+        } = &expr.kind
+        {
             let mut context = self.context.clone();
             if !bindings.is_empty() {
                 context.scoped_type_bindings = scoped_bindings(bindings, self.types);
             }
-            match self.values.get(expr.span, &context) {
+            match self.values.get(*source_span, &context) {
                 Some(value) => match value_expression(
                     value,
                     expr.ty,

@@ -831,6 +831,15 @@ explicit validated-refinement expression. An already-refined input skips its
 validated ancestors. A secret-backed input is unwrapped only for the checked
 predicate call. Direct struct constructors use the same predicate path for
 refined fields. Predicate runtime failures remain a future slice.
+Predicate functions retain their declaration namespace. Interpreter validation
+uses the same context: caller locals, namespace aliases, generic arguments,
+scoped type bindings, and per-function checked maps are isolated until validation
+returns. Predicate `value` has the fully coarsened base type with the outer
+secret wrapper removed, matching the checker and native predicate parameter.
+Inherited interface refinements therefore dispatch through that base inside
+their predicates. Both successful and rejected boundaries restore caller context.
+Explicit comptime HIR retains its original source span for evaluated-value lookup,
+independently of an enclosing expression span widened by parentheses.
 Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
 lexical evaluation order after type checking has authorized them. The shared
 registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,

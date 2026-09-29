@@ -3,7 +3,7 @@ type Label = string
 struct T:
     count: int64
 function label[T]() returns string:
-    return comptime "{type.name[T]()}:{type.kind[T]()}"
+    return ((comptime "{type.name[T]()}:{type.kind[T]()}"))
 function forward[T]() returns string:
     return comptime label[T]()
 function callback[T]() returns function() returns string:
@@ -11,7 +11,7 @@ function callback[T]() returns function() returns string:
 function nested[T]() returns string:
     comptime type Outer = type.info[list[T]]():
         comptime type Inner = type.arg[Outer](0):
-            return comptime type.name[Inner]()
+            return (comptime type.name[Inner]())
 function scoped_callback[T]() returns function() returns string:
     comptime type Bound = type.info[T]():
         return function() returns string: return comptime type.name[Bound]()

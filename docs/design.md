@@ -538,6 +538,13 @@ type and `handle` requirement.
 
 **Refinement type constraints must be self-contained.** The `where` clause can only reference `value` (the value being constrained) and call pure functions with literal or constant arguments. Constraints cannot take external parameters — there is no `type Password[min: int64] = string where string.char_count(value) > min`. This keeps `[]` unambiguous: it always means generics, never parameterized constraints.
 
+Constraint names resolve in the refinement's declaration namespace, including
+private pure helpers and type names. Caller locals, namespace aliases, generic
+arguments, and scoped type bindings cannot change their meaning. The constraint's
+`value` has the fully coarsened base type, with an outer `secret` wrapper removed
+for validation; inherited interface refinements dispatch through that base.
+Validation preserves the caller's context whether the constraint passes or fails.
+
 **For parameterized validation, use functions.** If validation rules depend on runtime values (e.g., a minimum password length from config), write a regular function that returns `result[T, string]`:
 
 ```

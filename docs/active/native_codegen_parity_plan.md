@@ -309,6 +309,12 @@ lexical reflected type-binding chain, including nested callback bodies. The
 context fix and its differential regression coverage are recorded in
 [native comptime contexts](native_comptime_context.md).
 
+Refinement predicates now evaluate in their declaration context, isolated from
+caller aliases, locals, and generic/scoped type bindings. Their input has the
+same fully coarsened base type in both execution paths. The regression also
+pins original comptime source identity through parentheses; see
+[refinement declaration contexts](native_refinement_context.md).
+
 `temporary_projected_views` extends the borrowed-field audit to owners returned
 as temporary values. It covers nested list, set, map, Unicode string, and record
 fields; direct and indirect calls whose later argument runs a fallback handler;

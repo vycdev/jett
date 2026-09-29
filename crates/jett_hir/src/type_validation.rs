@@ -183,7 +183,9 @@ impl BackendTypeValidator<'_> {
             format!("function `{function_name}` expression result"),
         );
         match &expression.kind {
-            ExpressionKind::Comptime { value, bindings } => {
+            ExpressionKind::Comptime {
+                value, bindings, ..
+            } => {
                 for binding in bindings {
                     self.type_id(
                         binding.ty,
@@ -749,6 +751,7 @@ mod tests {
         let statement = Statement {
             kind: StatementKind::Expression(Expression {
                 kind: ExpressionKind::Comptime {
+                    source_span: span,
                     value: Box::new(Expression {
                         kind: ExpressionKind::Int(7),
                         ty: TypeInterner::INT64,

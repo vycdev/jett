@@ -1423,22 +1423,63 @@ impl Interpreter {
             return Ok(());
         }
 
+        if !self.type_aliases.contains_key(&type_name) {
+            return Ok(());
+        }
+
+        // Predicates use declaration facts, never the validating caller's
+        // lexical names or checked generic/reflection specialization.
+        let saved_namespace = std::mem::replace(
+            &mut self.current_namespace,
+            Self::type_name_namespace(&type_name).map(str::to_owned),
+        );
+        let saved_floor = std::mem::replace(&mut self.lexical_scope_floor, self.scopes.len());
+        let saved_arguments = std::mem::take(&mut self.current_type_arguments);
+        let saved_type_scopes = std::mem::take(&mut self.type_arg_scopes);
+        let saved_bindings = std::mem::take(&mut self.scoped_type_bindings);
+        let saved_function = self.active_checked_function.take();
+        let saved_scope = self.active_checked_scope.take();
+        let saved_trusted = self.current_function_trusted_stdlib;
+        self.current_function_trusted_stdlib = self
+            .type_aliases
+            .get(&type_name)
+            .and_then(Option::as_ref)
+            .is_some_and(|definition| definition.constraint.span().file.is_stdlib());
+
+        let result = self.check_refinement_in_declaration(&type_name, value);
+
+        self.current_function_trusted_stdlib = saved_trusted;
+        self.active_checked_scope = saved_scope;
+        self.active_checked_function = saved_function;
+        self.scoped_type_bindings = saved_bindings;
+        self.type_arg_scopes = saved_type_scopes;
+        self.current_type_arguments = saved_arguments;
+        self.lexical_scope_floor = saved_floor;
+        self.current_namespace = saved_namespace;
+        result
+    }
+
+    fn check_refinement_in_declaration(
+        &mut self,
+        type_name: &str,
+        value: &Value,
+    ) -> Result<(), String> {
         // A predicate's `value` has the base type. Rechecking a value that
         // already carries an interface-backed refinement must not dispatch
         // through that refinement again while validating its own predicate.
         let coarsened = self
             .interfaces
-            .contains(self.primitive_base_type_name(&type_name).as_ref())
+            .contains(self.primitive_base_type_name(type_name).as_ref())
             .then(|| self.coarsen_interface_value(value.clone()));
         let value = coarsened.as_ref().unwrap_or(value);
 
         let constraint_value_ty = self
             .type_alias_bases
-            .get(&type_name)
+            .get(type_name)
             .cloned()
             .map(|base_ty| {
                 let namespace =
-                    Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
+                    Self::type_name_namespace(type_name).or(self.current_namespace.as_deref());
                 self.substitute_type_expr_in_namespace(&base_ty, namespace)
             });
         if let Some(base_ty) = &constraint_value_ty {
@@ -1446,7 +1487,7 @@ impl Interpreter {
             self.check_refinement(&base_type_name, value)?;
         }
 
-        let def = match self.type_aliases.get(&type_name) {
+        let def = match self.type_aliases.get(type_name) {
             Some(Some(def)) => def.clone(),
             Some(None) => return Ok(()), // simple alias, no constraint
             None => return Ok(()),       // not a known type alias
@@ -1454,7 +1495,16 @@ impl Interpreter {
 
         self.push_scope();
         if let Some(base_ty) = constraint_value_ty {
-            self.set_variable_with_type("value", value.clone(), base_ty);
+            let predicate_ty = self.inference_base_type(&base_ty);
+            let predicate_ty = match predicate_ty {
+                TypeExpr::Generic(name, mut args, _)
+                    if name.name == "secret" && args.len() == 1 =>
+                {
+                    args.remove(0)
+                }
+                ty => ty,
+            };
+            self.set_variable_with_type("value", value.clone(), predicate_ty);
         } else {
             self.set_variable("value", value.clone());
         }

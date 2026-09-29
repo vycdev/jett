@@ -342,6 +342,26 @@ fn native_interface_refined_interfaces_match_interpreter() {
 }
 
 #[test]
+fn native_refinement_declaration_contexts_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/refinement_declaration_contexts.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture)
+        .expect("refinement declaration context oracle");
+    assert_eq!(
+        expected.stdout,
+        "selected:text:value\nselected:text:value\nagain:selected:text:value\ndecoy:alias\nstring list[string] 7 false\n7\nbigger:7:string\nrejected:int8:list[int8]:refinement type constraint failed for 'domain.Positive'\nfalse\nbool list[bool] 2 false\n2\nbigger-rejected:bool:list[bool]:refinement type constraint failed for 'domain.Bigger'\nfalse\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("refinement_declaration_contexts.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("native refinement declaration contexts");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_contextual_comptime_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/contextual_comptime_values.jett");

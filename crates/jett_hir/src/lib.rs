@@ -401,6 +401,8 @@ pub enum ExpressionKind {
     Comptime {
         value: Box<Expression>,
         bindings: Vec<ScopedTypeBinding>,
+        /// Stable lookup identity, even when parentheses widen the expression span.
+        source_span: Span,
     },
     Declassify(Box<Expression>),
     Coarsen(Box<Expression>),
@@ -3194,9 +3196,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     lowered
                 });
             }
-            Expr::Comptime(value, _) => ExpressionKind::Comptime {
+            Expr::Comptime(value, source_span) => ExpressionKind::Comptime {
                 value: Box::new(self.lower_expression(value)?),
                 bindings: self.scoped_type_bindings.clone(),
+                source_span: *source_span,
             },
             Expr::Declassify(value, _) => {
                 ExpressionKind::Declassify(Box::new(self.lower_expression(value)?))
