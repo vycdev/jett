@@ -563,7 +563,11 @@ pub(super) fn value_expression(
                 span,
             });
             return Ok(Expression {
-                kind: ExpressionKind::Local(local),
+                kind: ExpressionKind::Clone(Box::new(Expression {
+                    kind: ExpressionKind::Local(local),
+                    ty,
+                    span,
+                })),
                 ty,
                 span,
             });

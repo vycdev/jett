@@ -7700,6 +7700,8 @@ or state, and provided fields. Programs can clone, store, erase, join, and finis
 them at runtime. Baking a partially filled builder does not validate or finish
 it: missing fields, refinement predicates, and bitfield widths retain their
 ordinary `type.construct_finish` checks.
+Each runtime evaluation of a baked owned value yields an independent value,
+including when the expression appears inside a loop.
 Primitive interface values retain their checked concrete identity even when
 runtime storage shares a wider carrier. Integer widths, `float32`, and nominal
 primitive refinements dispatch to their own implementations through collections,

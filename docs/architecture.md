@@ -2930,7 +2930,9 @@ and parameter view modes before interpreting generic type arguments.
 Machine owners retain checked state qualification, including flow narrowing
 inside state guards. Native materialization constructs the exact state and binds
 it at the requested bare machine type when widening is required, so subsequent
-erasure and refinement validation see the correct owner. Enum, machine, and
+erasure and refinement validation see the correct owner. That generated constant
+local is cloned at each use so repeated evaluation does not consume its seed.
+Enum, machine, and
 bitfield refinements retain nominal identity without changing their payloads.
 Expected type context also passes through `run`: for example, initializing
 `result[int64, string]` with `run ok(17)` retains both declared result payload

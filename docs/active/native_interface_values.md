@@ -359,3 +359,8 @@ in a different order from the declaration. Missing-field, refinement, and width
 errors remain deferred to runtime finish. Source reflection operands are
 exported separately from canonical metadata; equivalent aliases compare by
 their checked type ID without discarding the builder's source owner name.
+
+Generated locals holding baked bare-machine values are constant seeds. Each
+evaluation clones its seed so an expression inside a runtime loop creates an
+independent owned value on every iteration. Moving the seed consumed it after
+the first iteration and incorrectly failed native ownership validation.

@@ -1,0 +1,38 @@
+namespace app
+machine Session:
+    states:
+        active(count: int64)
+    transitions:
+        active to active
+function make() returns Session:
+    return Session(active, 7)
+struct Holder:
+    session: Session
+function builder() returns TypeConstruction:
+    mutable TypeConstruction value = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        value = type.construct_put[Holder, Session](value, view field, make()) handle error:
+            return type.construct_start[Holder]()
+    return value
+function describe(view value: Session) returns string:
+    if value at active:
+        return "active:{value.count}"
+    return "unexpected"
+interface Named:
+    function name(view self: Named) returns string
+implement Named for Session:
+    function name(view self: Session) returns string:
+        return describe(view self)
+function main() returns nothing:
+    for index in range(0, 3):
+        Session value = comptime make()
+        println(describe(view value))
+        Holder holder = comptime Holder(session: make())
+        println(describe(view holder.session))
+        Named erased = comptime make()
+        println(Named.name(view erased))
+        TypeConstruction stored = comptime builder()
+        Holder built = type.construct_finish[Holder](stored) handle error:
+            return nothing
+        println(describe(view built.session))
+    return nothing
