@@ -81,6 +81,9 @@ This does **not** close the full interface gate. Still required:
 - Resolve equality of erased interface values; the checker accepts it without
   a uniform runtime contract. See
   [interface value equality](../open_design/interface_value_equality.md).
+- Resolve erased calls whose non-receiver arguments require the implementation's
+  concrete owner. See
+  [same-owner arguments](../open_design/interface_same_owner_arguments.md).
 - Audit interpreter source instances of compiler-owned facades that use
   different native helpers and lack checked source bodies.
 - Audit remaining comptime combinations; reflected interface fields and lists
