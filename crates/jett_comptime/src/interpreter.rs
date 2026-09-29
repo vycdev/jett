@@ -2018,78 +2018,7 @@ impl Interpreter {
                 self.eval_expr_flow(inner)
             }
 
-            Expr::Spawn(inner, _) => {
-                // `spawn ActorType(cap1: val1, ...)` — create a new actor instance.
-                let (source_actor_name, args) = match inner.as_ref() {
-                    Expr::Call(callee, args, _) => match callee.as_ref() {
-                        Expr::Ident(ident) => (ident.name.clone(), args),
-                        Expr::FieldAccess(_, _, _) => {
-                            let name = Self::dotted_expr_name(callee)
-                                .ok_or_else(|| "spawn: expected actor type name".to_string())?;
-                            (name, args)
-                        }
-                        _ => return Err("spawn: expected actor type name".to_string()),
-                    },
-                    _ => return Err("spawn: expected call expression".to_string()),
-                };
-                let actor_name = self
-                    .registry_name(&self.actor_defs, &source_actor_name)
-                    .unwrap_or(source_actor_name);
-
-                let actor_def = self
-                    .actor_defs
-                    .get(&actor_name)
-                    .ok_or_else(|| format!("unknown actor type '{actor_name}'"))?
-                    .clone();
-
-                // Evaluate capability args.
-                let mut capabilities = HashMap::new();
-                let parameter_indices =
-                    Self::actor_argument_parameters(args, &actor_def.capability_params)?;
-                for (arg, index) in args.iter().zip(parameter_indices) {
-                    let param = &actor_def.capability_params[index];
-                    let val = value_or_signal!(self, &arg.value);
-                    let param_ty = self.substitute_type_expr(&param.ty);
-                    let val = self.normalize_value_for_type(&param_ty, val)?;
-                    capabilities.insert(param.name.name.clone(), val);
-                }
-
-                // Evaluate state field initializers in a temp scope with capabilities in scope.
-                self.push_scope();
-                for (name, val) in &capabilities {
-                    if let Some(param) = actor_def
-                        .capability_params
-                        .iter()
-                        .find(|param| param.name.name == *name)
-                    {
-                        let param_ty = self.substitute_type_expr(&param.ty);
-                        self.set_variable_with_type(name, val.clone(), param_ty);
-                    } else {
-                        self.set_variable(name, val.clone());
-                    }
-                }
-                let mut state = HashMap::new();
-                for field in &actor_def.state_fields {
-                    let val = value_or_signal!(self, &field.value);
-                    let field_ty = self.substitute_type_expr(&field.ty);
-                    let val = self.normalize_value_for_type(&field_ty, val)?;
-                    state.insert(field.name.name.clone(), val);
-                }
-                self.pop_scope();
-
-                let id = self.next_actor_id;
-                self.next_actor_id += 1;
-                self.actor_instances.insert(
-                    id,
-                    ActorInstance {
-                        type_name: actor_name.clone(),
-                        state,
-                        capabilities,
-                    },
-                );
-
-                Ok(ExprFlow::Value(Value::Actor(id)))
-            }
+            Expr::Spawn(inner, _) => self.eval_spawn_flow(inner),
 
             Expr::Send(inner, _) => {
                 self.eval_actor_message(inner, false)?;
@@ -2133,48 +2062,7 @@ impl Interpreter {
             }
 
             Expr::InlineFn(params, _return_type, body, _) => {
-                // Capture the current environment (all visible variables) for closure semantics.
-                let mut captures = HashMap::new();
-                for (index, scope) in self.scopes.iter().enumerate() {
-                    if index != 0 && index < self.lexical_scope_floor {
-                        continue;
-                    }
-                    for (name, value) in scope {
-                        captures.insert(name.clone(), value.clone());
-                    }
-                }
-                let capture_types = captures
-                    .keys()
-                    .filter_map(|name| {
-                        self.get_variable_type(name)
-                            .map(|ty| (name.clone(), ty.clone()))
-                    })
-                    .collect();
-                Ok(ExprFlow::Value(Value::Function {
-                    type_context: Box::new(ClosureTypeContext {
-                        bindings: self
-                            .type_arg_scopes
-                            .iter()
-                            .flat_map(|scope| scope.iter())
-                            .map(|(name, ty)| (name.clone(), self.substitute_type_expr(ty)))
-                            .collect(),
-                        arguments: self
-                            .current_type_arguments
-                            .iter()
-                            .map(|ty| ClosureTypeArgument {
-                                ty: ty.clone(),
-                                canonical_name: self.concrete_type_display(ty),
-                                reflection: self.checked_type_info(ty).cloned(),
-                            })
-                            .collect(),
-                    }),
-                    params: params.clone(),
-                    body: body.clone(),
-                    captures,
-                    capture_types,
-                    namespace_aliases: self.visible_namespace_aliases(),
-                    namespace: self.current_namespace.clone(),
-                }))
+                Ok(ExprFlow::Value(self.capture_closure(params, body)))
             }
 
             // Unsupported expressions produce a clear error.
@@ -2182,6 +2070,124 @@ impl Interpreter {
                 "unsupported expression in comptime: {:?}",
                 std::mem::discriminant(expr)
             )),
+        }
+    }
+
+    fn eval_spawn_flow(&mut self, inner: &Expr) -> Result<ExprFlow, String> {
+        // `spawn ActorType(cap1: val1, ...)` — create a new actor instance.
+        let (source_actor_name, args) = match inner {
+            Expr::Call(callee, args, _) => match callee.as_ref() {
+                Expr::Ident(ident) => (ident.name.clone(), args),
+                Expr::FieldAccess(_, _, _) => {
+                    let name = Self::dotted_expr_name(callee)
+                        .ok_or_else(|| "spawn: expected actor type name".to_string())?;
+                    (name, args)
+                }
+                _ => return Err("spawn: expected actor type name".to_string()),
+            },
+            _ => return Err("spawn: expected call expression".to_string()),
+        };
+        let actor_name = self
+            .registry_name(&self.actor_defs, &source_actor_name)
+            .unwrap_or(source_actor_name);
+
+        let actor_def = self
+            .actor_defs
+            .get(&actor_name)
+            .ok_or_else(|| format!("unknown actor type '{actor_name}'"))?
+            .clone();
+
+        // Evaluate capability args.
+        let mut capabilities = HashMap::new();
+        let parameter_indices =
+            Self::actor_argument_parameters(args, &actor_def.capability_params)?;
+        for (arg, index) in args.iter().zip(parameter_indices) {
+            let param = &actor_def.capability_params[index];
+            let val = value_or_signal!(self, &arg.value);
+            let param_ty = self.substitute_type_expr(&param.ty);
+            let val = self.normalize_value_for_type(&param_ty, val)?;
+            capabilities.insert(param.name.name.clone(), val);
+        }
+
+        // Evaluate state field initializers in a temp scope with capabilities in scope.
+        self.push_scope();
+        for (name, val) in &capabilities {
+            if let Some(param) = actor_def
+                .capability_params
+                .iter()
+                .find(|param| param.name.name == *name)
+            {
+                let param_ty = self.substitute_type_expr(&param.ty);
+                self.set_variable_with_type(name, val.clone(), param_ty);
+            } else {
+                self.set_variable(name, val.clone());
+            }
+        }
+        let mut state = HashMap::new();
+        for field in &actor_def.state_fields {
+            let val = value_or_signal!(self, &field.value);
+            let field_ty = self.substitute_type_expr(&field.ty);
+            let val = self.normalize_value_for_type(&field_ty, val)?;
+            state.insert(field.name.name.clone(), val);
+        }
+        self.pop_scope();
+
+        let id = self.next_actor_id;
+        self.next_actor_id += 1;
+        self.actor_instances.insert(
+            id,
+            ActorInstance {
+                type_name: actor_name.clone(),
+                state,
+                capabilities,
+            },
+        );
+
+        Ok(ExprFlow::Value(Value::Actor(id)))
+    }
+
+    fn capture_closure(&self, params: &[Param], body: &Block) -> Value {
+        // Capture the current environment (all visible variables) for closure semantics.
+        let mut captures = HashMap::new();
+        for (index, scope) in self.scopes.iter().enumerate() {
+            if index != 0 && index < self.lexical_scope_floor {
+                continue;
+            }
+            for (name, value) in scope {
+                captures.insert(name.clone(), value.clone());
+            }
+        }
+        let capture_types = captures
+            .keys()
+            .filter_map(|name| {
+                self.get_variable_type(name)
+                    .map(|ty| (name.clone(), ty.clone()))
+            })
+            .collect();
+        Value::Function {
+            type_context: Box::new(ClosureTypeContext {
+                bindings: self
+                    .type_arg_scopes
+                    .iter()
+                    .flat_map(|scope| scope.iter())
+                    .map(|(name, ty)| (name.clone(), self.substitute_type_expr(ty)))
+                    .collect(),
+                arguments: self
+                    .current_type_arguments
+                    .iter()
+                    .map(|ty| ClosureTypeArgument {
+                        ty: ty.clone(),
+                        canonical_name: self.concrete_type_display(ty),
+                        reflection: self.checked_type_info(ty).cloned(),
+                    })
+                    .collect(),
+            }),
+            params: params.to_vec(),
+            body: body.clone(),
+            captures,
+            capture_types,
+            namespace_aliases: self.visible_namespace_aliases(),
+            namespace: self.current_namespace.clone(),
         }
     }
 

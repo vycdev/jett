@@ -2852,6 +2852,9 @@ conversions before ownership analysis. Generic closures carry their lexical type
 bindings, ordered enclosing type arguments, and alias reflection metadata so
 materialization can select the checked body even when signatures coincide. The
 metadata is boxed to avoid inflating every interpreter value and recursive frame.
+Actor and closure construction use separate evaluator helpers so their temporary
+state does not enlarge every recursive expression frame. The nested JSON machine
+conformance test exercises this path under the existing runtime stack limit.
 Other reflection specialization keys and parity edges remain open; see
 `active/native_interface_values.md`.
 Explicit comptime interface values materialize from unambiguous checked concrete
