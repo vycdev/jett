@@ -1830,7 +1830,34 @@ impl<'a> Lowerer<'a> {
             });
             fields.push((local, *ty, param.span));
         }
-        let mut statements = Vec::with_capacity(source.actor.state_fields.len() + 1);
+        let mut statements = Vec::with_capacity(fields.len() + source.actor.state_fields.len() + 1);
+        // The interpreter retains constructor arguments in the actor and gives
+        // state initializers a separate working environment. Preserve that
+        // capture before any initializer consumes its parameter binding.
+        for (local, ty, span) in &mut fields {
+            let original = *local;
+            let captured = LocalId(body_lowerer.locals.len() as u32);
+            let mut metadata = body_lowerer.locals[original.index() as usize].clone();
+            metadata.id = captured;
+            metadata.name = format!("$actor.capture.{}", original.index());
+            body_lowerer.locals.push(metadata);
+            statements.push(Statement {
+                kind: StatementKind::Let {
+                    local: captured,
+                    value: Expression {
+                        kind: ExpressionKind::Clone(Box::new(Expression {
+                            kind: ExpressionKind::Local(original),
+                            ty: *ty,
+                            span: *span,
+                        })),
+                        ty: *ty,
+                        span: *span,
+                    },
+                },
+                span: *span,
+            });
+            *local = captured;
+        }
         for (field, (_, ty)) in source
             .actor
             .state_fields
@@ -7768,7 +7795,7 @@ function main() returns nothing:
         assert_eq!(constructor.params[0].name, "seed");
         assert_eq!(constructor.params[1].name, "step");
         assert!(matches!(
-            constructor.body.statements[0].kind,
+            constructor.body.statements[constructor.params.len()].kind,
             StatementKind::Let {
                 value: Expression {
                     kind: ExpressionKind::Local(_),

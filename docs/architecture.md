@@ -2841,6 +2841,8 @@ generic and reflected body facts. Interface values remain move-only, with explic
 cloning, borrowing, pending depth, and recursive secret redaction preserved.
 Whole-container and function-signature conversions remain open parity work; see
 `active/native_interface_values.md` for the representation and remaining gates.
+Actor constructor parameters are retained before state initializers run; an
+initializer consuming its working parameter does not consume the actor's capture.
 
 The full native parity gate is still incomplete: the current object count is
 recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main

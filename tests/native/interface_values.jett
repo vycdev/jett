@@ -51,11 +51,13 @@ machine Session:
     transitions:
         opened to closed
 actor Catalog(initial: Named):
-    mutable Named item = clone initial
+    mutable Named item = initial
     receive replace(value: Named):
         item = value
     receive read responds string:
         respond show(view item)
+    receive original responds string:
+        respond show(view initial)
 function state_values() returns nothing:
     Session at opened started = Session(opened, User(label: "session"))
     println(show(view started.item))
@@ -65,6 +67,7 @@ function state_values() returns nothing:
     println(ask catalog.read)
     send catalog.replace(Group(label: "message"))
     println(ask catalog.read)
+    println(ask catalog.original)
     return nothing
 function primitive_values() returns nothing:
     Named empty = run nothing

@@ -67,6 +67,10 @@ This does **not** close the full interface gate. Still required:
   and concrete generic identity/debug metadata after erasure.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
   identity rather than assuming every checked TypeId has a distinct runtime name.
-- Actor constructors currently retain their parameters as fields. An accepted
-  state initializer that consumes a move-only parameter without `clone` can
-  conflict with the generated final capture; this needs a semantic parity fix.
+
+Actor constructor parity follows the interpreter's existing two environments:
+constructor parameters remain captured by the actor, while state initializers
+receive independent working values. Native lowering must establish retained
+copies before evaluating initializers, so an initializer may consume its working
+binding without invalidating the later generated actor allocation. This is
+compiler-owned capture storage, not implicit source-level copying of interfaces.
