@@ -2912,6 +2912,13 @@ changes its outer checked identity to the destination type while retaining the
 concrete identities of its elements. List and record refinements likewise keep
 their nominal implementation identity. Type aliases used for concrete method
 calls or method values resolve within their declaration namespace.
+Function interface values use the same retained type metadata, with the full
+checked signature as their concrete owner. Calling one unwraps its payload;
+dispatch and comptime materialization use its exposed signature. Callback
+conversion replaces that signature without replacing the evaluated source body
+or closure context, allowing native materialization to reconstruct the source
+and its required adapter. Type-name parsing preserves nested function signatures
+and parameter view modes before interpreting generic type arguments.
 Expected type context also passes through `run`: for example, initializing
 `result[int64, string]` with `run ok(17)` retains both declared result payload
 types in the checked body used by native lowering.

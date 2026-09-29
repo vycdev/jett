@@ -7707,6 +7707,11 @@ changes its outer checked identity to the destination type while retaining the
 concrete identities of its elements. List and record refinements likewise keep
 their nominal implementation identity. Type aliases used for concrete method
 calls or method values resolve within their declaration namespace.
+Function interface values retain their checked signature, including parameter
+view modes and result types. A safe callback conversion changes this exposed
+signature while preserving the original function body, captures, and generic
+context. Interface dispatch uses the exposed signature; invoking the callback
+still executes its source body, including after explicit comptime evaluation.
 Expected type context also passes through `run`: for example, initializing
 `result[int64, string]` with `run ok(17)` retains both declared result payload
 types in the checked body used by native lowering.

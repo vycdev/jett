@@ -82,10 +82,6 @@ This does **not** close the full interface gate. Still required:
   different native helpers and lack checked source bodies.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
-- Preserve function-valued interface identity. A checked `Reader = function()
-  returns int64` implementation prints `read:7` natively, while the interpreter
-  fails with an undefined interface method because its runtime owner is only
-  `function`. Cover distinct signatures, captures, and comptime values.
 - Audit remaining nominal state payloads and non-primitive refinements beyond
   the tested list/record shapes in runtime and comptime paths.
 
@@ -308,3 +304,20 @@ uses carry the declared `result[int64, string]`. Dedicated checker tests pin
 both behaviors, including nested pending values, empty containers, and narrow
 integer literals. Interpreter registration also retains interface declarations
 for namespace qualification inside canonical collection type arguments.
+
+Function interface identity follows the checked function signature, including
+parameter view modes and the result type. Runtime and baked callbacks must retain
+that signature across erasure without losing their evaluated source declaration,
+captures, or generic context. A checked function conversion changes the exposed
+signature while preserving the source body used by the adapter. Calling the
+value unwraps identity metadata and invokes that body; interface dispatch uses
+the retained signature. Canonical type parsing must preserve nested function and
+container arguments rather than treating a whole signature as an identifier.
+
+`interface_function_identity` covers distinct scalar widths, string and list
+returns, owned and view parameters, nested function parameters, named functions,
+captured closures, and generic closure specializations. Runtime and baked mixed
+interface lists, cloning, pending functions, reflected function fields, and
+contravariant parameter/covariant return adapters retain the exposed signature
+and evaluated source body. Its native stdout and trace output match the
+interpreter, including explicit comptime erasure after a callback conversion.

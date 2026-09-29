@@ -1,0 +1,155 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Reader = function() returns int64
+type Words = function() returns string
+type Items = function() returns list[int64]
+type Borrowed = function(view string) returns string
+type Owned = function(string) returns string
+type Nested = function(function() returns int64) returns int64
+type Small = function() returns int8
+implement Named for Reader:
+    function name(view self: Reader) returns string:
+        return "reader:{self()}"
+implement Named for Words:
+    function name(view self: Words) returns string:
+        return "words:{self()}"
+implement Named for Items:
+    function name(view self: Items) returns string:
+        list[int64] values = self()
+        return "items:{list.length[int64](view values)}"
+implement Named for Borrowed:
+    function name(view self: Borrowed) returns string:
+        string argument = "borrowed"
+        return self(view argument)
+implement Named for Owned:
+    function name(view self: Owned) returns string:
+        return self("owned")
+function seven() returns int64:
+    return 7
+implement Named for Nested:
+    function name(view self: Nested) returns string:
+        return "nested:{self(seven)}"
+implement Named for Small:
+    function name(view self: Small) returns string:
+        return "small:{self()}"
+function captured[T](value: T) returns function() returns T:
+    return function() returns T:
+        return clone value
+function read() returns Reader:
+    int64 captured = 11
+    return function() returns int64:
+        return captured
+function words() returns string:
+    return "hello"
+function items() returns list[int64]:
+    return list(1, 2, 3)
+function borrowed(view value: string) returns string:
+    return clone value
+function owned(value: string) returns string:
+    return value
+function nested(value: Reader) returns int64:
+    return value() + 1
+function mixed() returns list[Named]:
+    Small small = captured[int8](17)
+    Reader wide = captured[int64](19)
+    return list(seven, read(), words, items, borrowed, owned, nested, small, wide)
+function show(view value: Named) returns string:
+    return Named.name(view value)
+struct Holder:
+    callback: Reader
+function reflected() returns Named:
+    Holder source = Holder(callback: read())
+    mutable TypeConstruction builder = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Holder, Field](view source, view field)
+            builder = type.construct_put[Holder, Field](builder, view field, value) handle error:
+                return seven
+    Holder built = type.construct_finish[Holder](builder) handle error:
+        return seven
+    return built.callback
+struct Label:
+    text: string
+implement Named for Label:
+    function name(view self: Label) returns string:
+        return self.text
+type Broad = function(view Named) returns string
+type Narrow = function(view Label) returns string
+implement Named for Broad:
+    function name(view self: Broad) returns string:
+        Label value = Label(text: "broad")
+        return self(view value)
+implement Named for Narrow:
+    function name(view self: Narrow) returns string:
+        Label value = Label(text: "narrow")
+        return self(view value)
+function broad() returns Broad:
+    int64 captured = 13
+    return function(view value: Named) returns string:
+        return "{Named.name(view value)}:{captured}"
+function narrowed() returns Narrow:
+    return broad()
+type LabelFactory = function() returns Label
+type NamedFactory = function() returns Named
+implement Named for LabelFactory:
+    function name(view self: LabelFactory) returns string:
+        Label value = self()
+        return "label-factory:{value.text}"
+implement Named for NamedFactory:
+    function name(view self: NamedFactory) returns string:
+        Named value = self()
+        return "named-factory:{Named.name(view value)}"
+function label_factory() returns LabelFactory:
+    return function() returns Label:
+        return Label(text: "made")
+function erased_factory() returns NamedFactory:
+    return label_factory()
+function factories() returns nothing:
+    LabelFactory original = label_factory()
+    NamedFactory converted = erased_factory()
+    NamedFactory baked = comptime erased_factory()
+    println(show(view original))
+    println(show(view converted))
+    println(show(view baked))
+    Named erased = comptime erased_factory()
+    println(show(view erased))
+    Named called = baked()
+    println(show(view called))
+    return nothing
+function main() returns nothing:
+    for value in mixed():
+        println(show(view value))
+    list[Named] baked = comptime mixed()
+    trace baked
+    for value in baked:
+        println(show(view value))
+    Named direct = read()
+    Named copied = clone direct
+    println(show(view copied))
+    Reader live = read()
+    Reader frozen = comptime read()
+    println(live())
+    println(frozen())
+    Reader later = run read()
+    Reader ready = join later handle error:
+        return nothing
+    println(show(view ready))
+    Named reflected_value = reflected()
+    Named reflected_baked = comptime reflected()
+    println(show(view reflected_value))
+    println(show(view reflected_baked))
+    Broad wide = broad()
+    Narrow narrow = narrowed()
+    Narrow baked_narrow = comptime narrowed()
+    println(show(view wide))
+    println(show(view narrow))
+    println(show(view baked_narrow))
+    Label label = Label(text: "called")
+    println(narrow(view label))
+    println(baked_narrow(view label))
+    Named erased_narrow = comptime narrowed()
+    println(show(view erased_narrow))
+    trace erased_narrow
+    factories()
+    return nothing

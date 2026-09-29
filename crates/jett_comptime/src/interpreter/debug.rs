@@ -160,6 +160,21 @@ impl Interpreter {
         if let Some(inner) = name.strip_prefix("view ") {
             return Some(TypeExpr::View(Box::new(Self::debug_type(inner)?), span));
         }
+        if let Some((params, result)) = Self::split_function_type_display(name) {
+            let params = if params.is_empty() {
+                Vec::new()
+            } else {
+                Self::split_type_display_args(params)
+                    .into_iter()
+                    .map(|param| Self::debug_type(param.trim()))
+                    .collect::<Option<Vec<_>>>()?
+            };
+            return Some(TypeExpr::Function(
+                params,
+                Box::new(Self::debug_type(result)?),
+                span,
+            ));
+        }
         if let Some((owner, args)) = Self::split_generic_type_display(name) {
             let args = Self::split_type_display_args(args)
                 .into_iter()

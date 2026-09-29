@@ -1727,7 +1727,8 @@ impl Interpreter {
         }
         let base = self.primitive_base_type_name(name);
         let owner = base.split('[').next().unwrap_or(&base);
-        let is_concrete = matches!(owner, "list" | "map" | "set" | "optional" | "result")
+        let is_concrete = base.starts_with("function(")
+            || matches!(owner, "list" | "map" | "set" | "optional" | "result")
             || self.structs.contains_key(owner)
             || self.enums.contains_key(owner)
             || self.machines.contains_key(owner)
@@ -2747,6 +2748,27 @@ impl Interpreter {
     }
 
     fn simple_type_expr_from_name(type_name: &str, span: Span) -> Option<TypeExpr> {
+        if let Some(inner) = type_name.strip_prefix("view ") {
+            return Some(TypeExpr::View(
+                Box::new(Self::simple_type_expr_from_name(inner, span)?),
+                span,
+            ));
+        }
+        if let Some((params, result)) = Self::split_function_type_display(type_name) {
+            let params = if params.is_empty() {
+                Vec::new()
+            } else {
+                Self::split_type_display_args(params)
+                    .into_iter()
+                    .map(|param| Self::simple_type_expr_from_name(param.trim(), span))
+                    .collect::<Option<Vec<_>>>()?
+            };
+            return Some(TypeExpr::Function(
+                params,
+                Box::new(Self::simple_type_expr_from_name(result, span)?),
+                span,
+            ));
+        }
         if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
             let args = Self::split_type_display_args(args)
                 .into_iter()
@@ -6359,6 +6381,25 @@ impl Interpreter {
 
     fn reflection_type_name_matches_expr(&self, actual: &str, expected: &TypeExpr) -> bool {
         self.reflection_compare_type_name(actual) == self.reflection_compare_type_expr(expected)
+    }
+
+    fn split_function_type_display(type_name: &str) -> Option<(&str, &str)> {
+        let rest = type_name.strip_prefix("function(")?;
+        let mut depth = 1;
+        for (index, ch) in rest.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let result = rest[index + 1..].strip_prefix(" returns ")?;
+                        return (!result.is_empty()).then_some((&rest[..index], result));
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     fn split_generic_type_display(type_name: &str) -> Option<(&str, &str)> {
@@ -10798,7 +10839,10 @@ impl Interpreter {
     ) -> Result<Value, String> {
         // Check if the name refers to a variable holding a function value (closure).
         if let Some(fn_val) = self.get_variable(name).cloned() {
-            if matches!(fn_val, Value::Function { .. } | Value::NamedFunction(_)) {
+            if matches!(
+                fn_val.payload(),
+                Value::Function { .. } | Value::NamedFunction(_)
+            ) {
                 return self.call_fn_value(fn_val, args);
             }
         }
@@ -11070,7 +11114,7 @@ impl Interpreter {
 
     /// Call a `Value::Function` (inline function) with the given arguments.
     fn call_fn_value(&mut self, fn_val: Value, args: Vec<Value>) -> Result<Value, String> {
-        match fn_val {
+        match fn_val.into_payload() {
             Value::NamedFunction(name) => {
                 self.call_registered_function_with_type_args(&name, &[], args)
             }

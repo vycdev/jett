@@ -320,6 +320,31 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_function_identity_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_function_identity.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("function interface oracle");
+    let mixed = "reader:7\nreader:11\nwords:hello\nitems:3\nborrowed\nowned\nnested:8\nsmall:17\nreader:19\n";
+    assert_eq!(
+        expected.stdout,
+        format!(
+            "{mixed}{mixed}reader:11\n11\n11\nreader:11\nreader:11\nreader:11\nbroad:13\nnarrow:13\nnarrow:13\ncalled:13\ncalled:13\nnarrow:13\nlabel-factory:made\nnamed-factory:made\nnamed-factory:made\nnamed-factory:made\nmade\n"
+        )
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_function_identity.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native function interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_interface_collection_identity_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_collection_identity.jett");
