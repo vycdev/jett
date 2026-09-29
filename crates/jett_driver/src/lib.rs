@@ -33,7 +33,7 @@ use std::thread;
 
 pub mod native;
 
-const RUNTIME_STACK_SIZE: usize = 8 * 1024 * 1024;
+const RUNTIME_STACK_SIZE: usize = jett_comptime::INTERPRETER_STACK_SIZE;
 
 struct DiscoveredModules {
     modules: Vec<Module>,

@@ -2927,6 +2927,10 @@ conversion replaces that signature without replacing the evaluated source body
 or closure context, allowing native materialization to reconstruct the source
 and its required adapter. Type-name parsing preserves nested function signatures
 and parameter view modes before interpreting generic type arguments.
+Explicit comptime evaluation runs on a scoped worker with the same 8 MiB stack
+budget as reference execution, independent of the compiler caller's thread.
+Modules without explicit expressions skip worker creation. Worker creation
+failures become compilation diagnostics; evaluation never moves to runtime.
 Machine owners retain checked state qualification, including flow narrowing
 inside state guards. Native materialization constructs the exact state and binds
 it at the requested bare machine type when widening is required, so subsequent

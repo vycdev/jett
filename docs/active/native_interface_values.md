@@ -84,6 +84,9 @@ This does **not** close the full interface gate. Still required:
   struct metadata and exact implementation identity are retained.
 - Audit remaining non-primitive refinements beyond the tested list, record,
   enum, machine, and bitfield shapes in runtime and comptime paths.
+- Preserve nominal actor owners through interface erasure. A checked probe
+  with implementations for two actor types works natively but the interpreter
+  currently dispatches both from the unqualified runtime carrier `actor`.
 
 Generic struct interface dispatch uses the concrete instantiated owner retained
 on the value. Implementations for `Box[int64]`, `Box[string]`, and
@@ -364,3 +367,17 @@ Generated locals holding baked bare-machine values are constant seeds. Each
 evaluation clones its seed so an expression inside a runtime loop creates an
 independent owned value on every iteration. Moving the seed consumed it after
 the first iteration and incorrectly failed native ownership validation.
+
+The facade identity audit includes JSON parsing and round trips through numeric,
+collection, refinement, generic record, enum, bitfield, and machine helpers, plus
+the compiler-owned math facades. Its nested explicit comptime calls expose a
+caller-stack dependency: native compilation on a normal Rust test thread can
+overflow even when the same program builds from the CLI. Explicit evaluation
+must use the existing 8 MiB interpreter stack budget on its own scoped worker,
+without increasing that budget or moving any evaluation to runtime. Modules
+without explicit comptime expressions need no evaluation worker.
+
+`interface_facade_identity` now matches native stdout and recursive secret
+redaction for runtime and baked JSON parser results, enum/bitfield/machine JSON
+round trips, and math facade results. It passes from the ordinary native test
+thread after explicit evaluation adopts the shared interpreter stack budget.

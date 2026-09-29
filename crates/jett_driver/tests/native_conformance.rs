@@ -320,6 +320,41 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_facade_identity_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_facade_identity.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("facade interface oracle");
+    let mixed = "small:7\nwide:7\nfloat32:1.5\nfloat64:1.5\nsmall-list:2\nwide-list:2\npositive:9\nsmall-box:11\nsecret-box\nevent:13\nheader:15\nsession:17\nactive:19\n";
+    let math = "wide:3\nfloat64:3.5\nwide:5\nfloat64:6\n";
+    assert_eq!(
+        expected.stdout,
+        format!("{mixed}{mixed}small:21\nsmall:23\n{math}{math}")
+    );
+    assert!(
+        expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("[redacted]"))
+    );
+    assert!(
+        !expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("hidden-json-interface"))
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_facade_identity.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native facade interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_interface_nominal_identity_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_nominal_identity.jett");

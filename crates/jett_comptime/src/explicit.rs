@@ -24,7 +24,48 @@ pub fn evaluate_explicit_comptime_expressions(
 ) -> (HashMap<Span, Value>, Vec<Diagnostic>) {
     let mut expressions = Vec::new();
     collect_module_expressions(module, &mut expressions);
+    let Some((_, _, _, span)) = expressions.first() else {
+        return (HashMap::new(), Vec::new());
+    };
+    let span = *span;
+    // Compiler callers may have a smaller stack than reference execution.
+    // Keep required comptime evaluation on the same fixed interpreter budget.
+    std::thread::scope(|scope| {
+        match std::thread::Builder::new()
+            .name("jett-comptime".into())
+            .stack_size(crate::INTERPRETER_STACK_SIZE)
+            .spawn_scoped(scope, move || {
+                evaluate_collected_expressions(
+                    module,
+                    expressions,
+                    reflection_metadata,
+                    checked_expression_types,
+                    breakpoint_exclusions,
+                )
+            }) {
+            Ok(handle) => match handle.join() {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            },
+            Err(error) => (
+                HashMap::new(),
+                vec![Diagnostic::error(
+                    9001,
+                    format!("cannot create comptime evaluation worker: {error}"),
+                    span,
+                )],
+            ),
+        }
+    })
+}
 
+fn evaluate_collected_expressions(
+    module: &Module,
+    expressions: Vec<CollectedExpression<'_>>,
+    reflection_metadata: Arc<ReflectionMetadata>,
+    checked_expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+) -> (HashMap<Span, Value>, Vec<Diagnostic>) {
     let mut interpreter = Interpreter::new();
     interpreter.set_reflection_metadata(reflection_metadata);
     interpreter.set_checked_expression_types(checked_expression_types);
