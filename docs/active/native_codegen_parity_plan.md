@@ -1618,3 +1618,14 @@ path, so validation does not add observable predicate calls to normal suites.
 Predicate chains use declaration identities and the existing handler ordering,
 including refinements inside aggregates. No property body or native predicate
 falls back to the interpreter.
+
+### Binary32 property input fidelity
+
+The shared property pool previously stored `3.14` as a binary64 value even for
+`float32` givens. Execution rounded it at a typed boundary, but counterexample
+formatting reported the original carrier instead of the executed input.
+Generated binary32 values now retain their primitive identity and rounded
+payload. Shrinking preserves both, including when halving a subnormal requires
+another binary32 rounding. The binary64 pool and candidate order remain intact.
+The native regression compares the fourth-trial failure and exact rounded
+counterexample in debug and optimized modes after removing the source.

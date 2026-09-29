@@ -572,9 +572,16 @@ fn shrink_value(value: &Value) -> Vec<Value> {
         }
         Value::Typed { type_name, value } => shrink_value(value)
             .into_iter()
-            .map(|candidate| Value::Typed {
-                type_name: type_name.clone(),
-                value: Box::new(candidate),
+            .map(|candidate| {
+                if type_name == "float32" {
+                    if let Value::Float64(number) = candidate {
+                        return property_float32_value(number);
+                    }
+                }
+                Value::Typed {
+                    type_name: type_name.clone(),
+                    value: Box::new(candidate),
+                }
             })
             .collect(),
         Value::Int64(n) => {
@@ -1044,14 +1051,21 @@ fn generate_uint64_values() -> Vec<Value> {
     ])
 }
 
-fn generate_float_values() -> Vec<Value> {
-    vec![
-        Value::Float64(0.0),
-        Value::Float64(1.0),
-        Value::Float64(-1.0),
-        Value::Float64(3.14),
-        Value::Float64(-0.0),
-    ]
+fn generate_float_values(type_name: &str) -> Vec<Value> {
+    [0.0, 1.0, -1.0, 3.14, -0.0]
+        .into_iter()
+        .map(|number| match type_name {
+            "float32" => property_float32_value(number),
+            _ => Value::Float64(number),
+        })
+        .collect()
+}
+
+fn property_float32_value(number: f64) -> Value {
+    Value::Typed {
+        type_name: "float32".to_owned(),
+        value: Box::new(Value::Float64(f64::from(number as f32))),
+    }
 }
 
 fn generate_values_for_type_in_namespace(
@@ -1093,7 +1107,7 @@ fn generate_values_for_type_in_namespace(
                 Value::String("123".to_string()),
             ],
             "bool" => vec![Value::Bool(true), Value::Bool(false)],
-            "float32" | "float64" => generate_float_values(),
+            "float32" | "float64" => generate_float_values(&ident.name),
             "bytes" => vec![
                 Value::Bytes(Vec::new()),
                 Value::Bytes(vec![0]),
@@ -3610,7 +3624,8 @@ mod tests {
         assert!(
             float32_values
                 .iter()
-                .all(|value| matches!(value, Value::Float64(_)))
+                .all(|value| matches!(value, Value::Typed { type_name, value }
+                    if type_name == "float32" && matches!(value.as_ref(), Value::Float64(_))))
         );
     }
 
@@ -4144,6 +4159,43 @@ mod tests {
                 )
             }),
             "expected generic struct type arguments to resolve in the use-site namespace"
+        );
+    }
+
+    #[test]
+    fn property_float32_inputs_and_shrink_candidates_keep_binary32_precision() {
+        let pool = generate_values_for_type(&type_named("float32"));
+        assert_eq!(*pool[3].payload(), Value::Float64(f64::from(3.14_f32)));
+        assert_ne!(*pool[3].payload(), Value::Float64(3.14));
+        assert!(matches!(pool[4].payload(), Value::Float64(number)
+            if number.to_bits() == (-0.0_f64).to_bits()));
+        for number in [3.14_f32, f32::MAX, f32::MIN, f32::from_bits(3)] {
+            let value = property_float32_value(f64::from(number));
+            for candidate in shrink_value(&value) {
+                let Value::Typed { type_name, value } = candidate else {
+                    panic!("lost binary32 type identity");
+                };
+                assert_eq!(type_name, "float32");
+                let Value::Float64(number) = *value else {
+                    panic!("lost float payload");
+                };
+                assert_eq!(number.to_bits(), f64::from(number as f32).to_bits());
+            }
+        }
+        let parsed = jett_parser::parse(
+            "property domain:\n    given number: float32\n    assert number <= 3.0 \"float32 sentinel\"\n",
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty());
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert_eq!(results[0].iterations, Some(4));
+        assert_eq!(
+            results[0].error.as_deref(),
+            Some("float32 sentinel (counterexample: number = 3.140000104904175)"),
+        );
+        assert_eq!(
+            generate_values_for_type(&type_named("float64"))[3],
+            Value::Float64(3.14),
         );
     }
 

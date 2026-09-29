@@ -115,6 +115,13 @@ tests cover nested container and sum shapes. Further failing-input combinations
 remain part of the semantic audit; successful inventory counts alone do not
 prove every shrink candidate can be replayed.
 
+`native_property_shrinking_reports_the_executed_float32_input` pins binary32
+counterexample fidelity: a generated `3.14` input is stored and reported as its
+actual rounded value, `3.140000104904175`. Debug and optimized native replay agree
+with the interpreter after source removal. Pool and shrink tests also check
+binary32 identity, negative zero, finite limits, and subnormal rounding; binary64
+values keep their original precision.
+
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical
 85% planning estimate is not a measured code-coverage or completion result.

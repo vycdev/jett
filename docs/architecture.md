@@ -2847,8 +2847,10 @@ The shared shrinker preserves that identity and rejects out-of-range candidates
 before either execution backend runs them. These tags survive list/set/map,
 sum, enum, and struct payload shrinking; integer carriers at their full 64-bit
 width keep their existing representation and search order. Refined generated
-values likewise retain their canonical type names. The interpreter recursively
-checks these tags before executing a shrink candidate. Native candidate
+values likewise retain their canonical type names. `float32` pools carry a typed,
+binary32-rounded payload in the interpreter's `Float64` carrier; every shrink
+candidate is rounded back to binary32 before replay or counterexample formatting.
+The interpreter recursively checks these tags before executing a shrink candidate. Native candidate
 materialization resolves the exact checked predicate functions and emits the
 existing refinement handlers, including inherited and nested predicates. A
 rejected candidate clears its diagnostic context and returns without calling

@@ -2,6 +2,70 @@
 use super::*;
 
 #[test]
+fn native_property_shrinking_reports_the_executed_float32_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("float32-input.jett");
+    let text = "namespace app\nproperty domain:\n    given number: float32\n    assert number <= 4.0 \"float32 sentinel\"\n";
+    fs::write(&source, text).unwrap();
+    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let mut changed = 0;
+    for function in &mut lowered.hir.functions {
+        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
+            continue;
+        }
+        for statement in &mut function.body.statements {
+            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
+                if let jett_hir::ExpressionKind::Binary { right, .. } = &mut condition.kind {
+                    assert_eq!(right.kind, jett_hir::ExpressionKind::Float(4.0));
+                    right.kind = jett_hir::ExpressionKind::Float(3.0);
+                    changed += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    fs::write(&source, text.replace("<= 4.0", "<= 3.0")).unwrap();
+    let oracle = crate::test_file(&source).unwrap();
+    assert_eq!(oracle.failed, 1);
+    assert_eq!(oracle.blocks[0].iterations, Some(4));
+    let expected = oracle.blocks[0].error.as_deref().unwrap();
+    assert_eq!(
+        expected,
+        "float32 sentinel (counterexample: number = 3.140000104904175)"
+    );
+    fs::remove_file(&source).unwrap();
+    let launcher = launcher();
+    for optimize in [false, true] {
+        let result = property_runner::run_lowered(
+            &source,
+            &lowered,
+            &launcher,
+            NativePropertyOptions {
+                optimize,
+                ..NativePropertyOptions::default()
+            },
+        )
+        .unwrap();
+        let failure = result.failure.unwrap();
+        assert_eq!(result.trials, 4);
+        assert_eq!(failure.trial, 4);
+        assert_eq!(
+            format!(
+                "float32 sentinel (counterexample: {})",
+                failure.counterexample
+            ),
+            expected
+        );
+        assert!(result.stdout.is_empty());
+        assert_eq!(
+            result.stderr,
+            b"runtime error: property 'domain' trial 4: float32 sentinel\n"
+        );
+    }
+}
+
+#[test]
 fn native_property_shrinking_checks_refinement_chains_and_nested_predicates() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("refined-inputs.jett");
