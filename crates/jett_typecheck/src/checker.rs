@@ -61,6 +61,7 @@ pub struct CheckedGenericFunctionInstantiation {
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Concrete source-defined method targets selected in this body.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
     /// Concrete source-defined methods selected as function values in this body.
     pub method_values: HashMap<Span, CheckedMethodValue>,
     /// Concrete struct construction targets selected in this body.
@@ -118,6 +119,7 @@ pub struct CheckedBodyFacts {
     pub intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
     pub method_values: HashMap<Span, CheckedMethodValue>,
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
@@ -182,6 +184,14 @@ pub struct CheckedMethodCall {
     pub source_span: Span,
 }
 
+/// Checked interface slot selected when the receiver has an erased interface type.
+/// The concrete body is selected from checked implementations at runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedInterfaceCall {
+    pub interface_type: TypeId,
+    pub method_index: usize,
+}
+
 /// The concrete source-defined method selected for a function-value expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedMethodValue {
@@ -227,6 +237,7 @@ pub struct CheckResult {
     pub method_definitions: Vec<CheckedMethodDefinition>,
     /// Concrete source-defined method targets, keyed by call span.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
+    pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
     /// Concrete source-defined method values, keyed by expression span.
     pub method_values: HashMap<Span, CheckedMethodValue>,
     /// Source method bodies selected by concrete owner/member lookup. This
@@ -313,6 +324,7 @@ pub fn check_with_options(
         call_argument_orders: checker.call_argument_orders,
         method_definitions: checker.method_definitions,
         method_calls: checker.method_calls,
+        interface_calls: checker.interface_calls,
         method_values: checker.method_values,
         method_value_definitions,
         struct_constructions: checker.struct_constructions,
@@ -407,6 +419,7 @@ struct ActiveGenericInstantiation {
     intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
+    interface_calls: HashMap<Span, CheckedInterfaceCall>,
     method_values: HashMap<Span, CheckedMethodValue>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
@@ -579,6 +592,7 @@ struct TypeChecker<'a> {
     interface_method_definitions: HashMap<(TypeId, TypeId, String), usize>,
     /// Checked method calls outside generic bodies.
     method_calls: HashMap<Span, CheckedMethodCall>,
+    interface_calls: HashMap<Span, CheckedInterfaceCall>,
     /// Checked source method values outside generic bodies.
     method_values: HashMap<Span, CheckedMethodValue>,
     /// Checked struct constructions outside generic bodies.
@@ -679,6 +693,7 @@ impl<'a> TypeChecker<'a> {
             method_definitions_by_owner: HashMap::new(),
             interface_method_definitions: HashMap::new(),
             method_calls: HashMap::new(),
+            interface_calls: HashMap::new(),
             method_values: HashMap::new(),
             struct_constructions: HashMap::new(),
             pipeline_step_call_types: HashMap::new(),
@@ -6344,6 +6359,7 @@ impl<'a> TypeChecker<'a> {
                         intrinsic_reflection_arguments: HashMap::new(),
                         call_argument_orders: HashMap::new(),
                         method_calls: HashMap::new(),
+                        interface_calls: HashMap::new(),
                         method_values: HashMap::new(),
                         struct_constructions: HashMap::new(),
                         pipeline_step_call_types: HashMap::new(),
@@ -6388,6 +6404,7 @@ impl<'a> TypeChecker<'a> {
                     intrinsic_reflection_arguments: HashMap::new(),
                     call_argument_orders: HashMap::new(),
                     method_calls: HashMap::new(),
+                    interface_calls: HashMap::new(),
                     method_values: HashMap::new(),
                     struct_constructions: HashMap::new(),
                     pipeline_step_call_types: HashMap::new(),
@@ -6421,6 +6438,7 @@ impl<'a> TypeChecker<'a> {
                     .call_argument_orders
                     .extend(active.call_argument_orders);
                 entry.method_calls.extend(active.method_calls);
+                entry.interface_calls.extend(active.interface_calls);
                 entry.method_values.extend(active.method_values);
                 entry
                     .struct_constructions
@@ -6668,6 +6686,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.intrinsic_reflection_arguments, owner);
             Self::clear_facts_in_span(&mut active.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut active.method_calls, owner);
+            Self::clear_facts_in_span(&mut active.interface_calls, owner);
             Self::clear_facts_in_span(&mut active.method_values, owner);
             Self::clear_facts_in_span(&mut active.struct_constructions, owner);
             Self::clear_facts_in_span(&mut active.pipeline_step_call_types, owner);
@@ -6680,6 +6699,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut self.intrinsic_reflection_arguments, owner);
             Self::clear_facts_in_span(&mut self.call_argument_orders, owner);
             Self::clear_facts_in_span(&mut self.method_calls, owner);
+            Self::clear_facts_in_span(&mut self.interface_calls, owner);
             Self::clear_facts_in_span(&mut self.method_values, owner);
             Self::clear_facts_in_span(&mut self.struct_constructions, owner);
             Self::clear_facts_in_span(&mut self.pipeline_step_call_types, owner);
@@ -6704,6 +6724,7 @@ impl<'a> TypeChecker<'a> {
                 ),
                 call_argument_orders: Self::facts_in_span(&active.call_argument_orders, owner),
                 method_calls: Self::facts_in_span(&active.method_calls, owner),
+                interface_calls: Self::facts_in_span(&active.interface_calls, owner),
                 method_values: Self::facts_in_span(&active.method_values, owner),
                 struct_constructions: Self::facts_in_span(&active.struct_constructions, owner),
                 pipeline_step_call_types: Self::facts_in_span(
@@ -6726,6 +6747,7 @@ impl<'a> TypeChecker<'a> {
             ),
             call_argument_orders: Self::facts_in_span(&self.call_argument_orders, owner),
             method_calls: Self::facts_in_span(&self.method_calls, owner),
+            interface_calls: Self::facts_in_span(&self.interface_calls, owner),
             method_values: Self::facts_in_span(&self.method_values, owner),
             struct_constructions: Self::facts_in_span(&self.struct_constructions, owner),
             pipeline_step_call_types: Self::facts_in_span(&self.pipeline_step_call_types, owner),
@@ -12663,6 +12685,26 @@ impl<'a> TypeChecker<'a> {
         let Expr::FieldAccess(_, field, _) = callee else {
             return;
         };
+        if checked_arg_types.first() == Some(&declared_owner)
+            && let Type::Interface(id) = self.interner.resolve(declared_owner)
+            && let Some(method_index) = self
+                .interner
+                .resolve_interface(*id)
+                .methods
+                .iter()
+                .position(|method| method.name == field.name)
+        {
+            let call = CheckedInterfaceCall {
+                interface_type: declared_owner,
+                method_index,
+            };
+            if let Some(active) = self.active_generic_instantiations.last_mut() {
+                active.interface_calls.insert(span, call);
+            } else {
+                self.interface_calls.insert(span, call);
+            }
+            return;
+        }
         let definition_index = match self.interner.resolve(declared_owner) {
             Type::Interface(_) => checked_arg_types.first().and_then(|owner_type| {
                 self.interface_method_definitions
@@ -18083,6 +18125,58 @@ function main() returns string:
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn erased_interface_calls_keep_checked_slots_across_generic_specialization() {
+        let result = check_source_result(
+            "\
+interface Speaker:
+    function speak(view self: Speaker) returns string
+struct Dog:
+    name: string
+implement Speaker for Dog:
+    function speak(view self: Dog) returns string:
+        return self.name
+function describe(view value: Speaker) returns string:
+    return Speaker.speak(view value)
+function repeat[T](view value: Speaker, ignored: T) returns string:
+    return Speaker.speak(view value)
+function main() returns nothing:
+    Dog dog = Dog(name: \"woof\")
+    println(describe(view dog))
+    println(repeat[int64](view dog, 1))
+    println(repeat[string](view dog, \"x\"))
+    return nothing
+",
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.interface_calls.len(), 1);
+        let call = result.interface_calls.values().next().unwrap();
+        let Type::Interface(id) = result.interner.resolve(call.interface_type) else {
+            panic!("dispatch owner must be a checked interface");
+        };
+        assert_eq!(
+            result.interner.resolve_interface(*id).methods[call.method_index].name,
+            "speak"
+        );
+        let specialized = result
+            .generic_function_instantiations
+            .iter()
+            .filter(|body| !body.interface_calls.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(specialized.len(), 2);
+        for body in specialized {
+            assert_eq!(body.interface_calls.len(), 1);
+            assert_eq!(body.interface_calls.values().next(), Some(call));
+        }
     }
 
     #[test]

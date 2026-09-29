@@ -446,7 +446,7 @@ fn main() -> ExitCode {
     let report = json!({"complete":false,"fixture_gates_complete":fixture_gates_complete,
         "target":native::host_target(),"counts":counts,"fixtures":rows,
         "suite_blocks":{"verify":suite_blocks[0],"property":suite_blocks[1]},
-        "pending_release_gates":["move-only resource finalizer instrumentation","capability-effect differential oracles","clean Windows MSVC distribution"]});
+        "pending_release_gates":["interface-typed values and dynamic dispatch", "full semantic audit", "clean Linux GNU and Windows MSVC distribution"]});
     fs::write(&args[1], serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     println!("{counts}");
     // Successful fixture gates do not certify the outstanding release gates.

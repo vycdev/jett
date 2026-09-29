@@ -13,8 +13,8 @@ use jett_resolve::{DefId, DefKind, ResolveResult};
 use jett_typecheck::{
     CheckResult, CheckedBodyFacts, CheckedCallArgumentOrder, CheckedComptimeTypeBinding,
     CheckedComptimeTypeSelection, CheckedGenericCall, CheckedGenericFunctionInstantiation,
-    CheckedGenericSpecialization, CheckedMethodCall, CheckedMethodDefinition, CheckedMethodValue,
-    CheckedStaticSelection, CheckedStructConstruction,
+    CheckedGenericSpecialization, CheckedInterfaceCall, CheckedMethodCall, CheckedMethodDefinition,
+    CheckedMethodValue, CheckedStaticSelection, CheckedStructConstruction,
 };
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
@@ -1406,6 +1406,7 @@ impl<'a> Lowerer<'a> {
             self.check.intrinsic_reflection_arguments.clone(),
             self.check.call_argument_orders.clone(),
             self.check.method_calls.clone(),
+            self.check.interface_calls.clone(),
             self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
@@ -1489,6 +1490,7 @@ impl<'a> Lowerer<'a> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            interface_calls,
             method_values,
             struct_constructions,
             pipeline_step_call_types,
@@ -1508,6 +1510,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.intrinsic_reflection_arguments.clone(),
                 instantiation.call_argument_orders.clone(),
                 instantiation.method_calls.clone(),
+                instantiation.interface_calls.clone(),
                 instantiation.method_values.clone(),
                 instantiation.struct_constructions.clone(),
                 instantiation.pipeline_step_call_types.clone(),
@@ -1528,6 +1531,7 @@ impl<'a> Lowerer<'a> {
                 self.check.intrinsic_reflection_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
+                self.check.interface_calls.clone(),
                 self.check.method_values.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
@@ -1576,6 +1580,7 @@ impl<'a> Lowerer<'a> {
                 self.check.intrinsic_reflection_arguments.clone(),
                 self.check.call_argument_orders.clone(),
                 self.check.method_calls.clone(),
+                self.check.interface_calls.clone(),
                 self.check.method_values.clone(),
                 self.check.struct_constructions.clone(),
                 self.check.pipeline_step_call_types.clone(),
@@ -1605,6 +1610,7 @@ impl<'a> Lowerer<'a> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            interface_calls,
             method_values,
             struct_constructions,
             pipeline_step_call_types,
@@ -1761,6 +1767,7 @@ impl<'a> Lowerer<'a> {
             self.check.intrinsic_reflection_arguments.clone(),
             self.check.call_argument_orders.clone(),
             self.check.method_calls.clone(),
+            self.check.interface_calls.clone(),
             self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
@@ -1945,6 +1952,7 @@ impl<'a> Lowerer<'a> {
         let intrinsic_reflection_arguments = self.check.intrinsic_reflection_arguments.clone();
         let call_argument_orders = self.check.call_argument_orders.clone();
         let method_calls = self.check.method_calls.clone();
+        let interface_calls = self.check.interface_calls.clone();
         let method_values = self.check.method_values.clone();
         let struct_constructions = self.check.struct_constructions.clone();
         let pipeline_step_call_types = self.check.pipeline_step_call_types.clone();
@@ -1962,6 +1970,7 @@ impl<'a> Lowerer<'a> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            interface_calls,
             method_values,
             struct_constructions,
             pipeline_step_call_types,
@@ -2140,6 +2149,7 @@ impl<'a> Lowerer<'a> {
             self.check.intrinsic_reflection_arguments.clone(),
             self.check.call_argument_orders.clone(),
             self.check.method_calls.clone(),
+            self.check.interface_calls.clone(),
             self.check.method_values.clone(),
             self.check.struct_constructions.clone(),
             self.check.pipeline_step_call_types.clone(),
@@ -2231,6 +2241,7 @@ struct BodyLowerer<'lowerer, 'program> {
     intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
     call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     method_calls: HashMap<Span, CheckedMethodCall>,
+    interface_calls: HashMap<Span, CheckedInterfaceCall>,
     method_values: HashMap<Span, CheckedMethodValue>,
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     pipeline_step_call_types: HashMap<Span, TypeId>,
@@ -2255,6 +2266,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         intrinsic_reflection_arguments: HashMap<Span, Vec<ReflectionTypeInfo>>,
         call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
         method_calls: HashMap<Span, CheckedMethodCall>,
+        interface_calls: HashMap<Span, CheckedInterfaceCall>,
         method_values: HashMap<Span, CheckedMethodValue>,
         struct_constructions: HashMap<Span, CheckedStructConstruction>,
         pipeline_step_call_types: HashMap<Span, TypeId>,
@@ -2272,6 +2284,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            interface_calls,
             method_values,
             struct_constructions,
             pipeline_step_call_types,
@@ -2742,6 +2755,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             intrinsic_reflection_arguments,
             call_argument_orders,
             method_calls,
+            interface_calls,
             method_values,
             struct_constructions,
             pipeline_step_call_types,
@@ -2763,6 +2777,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let saved_call_argument_orders =
             std::mem::replace(&mut self.call_argument_orders, call_argument_orders);
         let saved_method_calls = std::mem::replace(&mut self.method_calls, method_calls);
+        let saved_interface_calls = std::mem::replace(&mut self.interface_calls, interface_calls);
         let saved_method_values = std::mem::replace(&mut self.method_values, method_values);
         let saved_struct_constructions =
             std::mem::replace(&mut self.struct_constructions, struct_constructions);
@@ -2789,6 +2804,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.intrinsic_reflection_arguments = saved_intrinsic_reflection_arguments;
         self.call_argument_orders = saved_call_argument_orders;
         self.method_calls = saved_method_calls;
+        self.interface_calls = saved_interface_calls;
         self.method_values = saved_method_values;
         self.struct_constructions = saved_struct_constructions;
         self.pipeline_step_call_types = saved_pipeline_step_call_types;
@@ -3409,6 +3425,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         call_span: Span,
         has_explicit_type_arguments: bool,
     ) -> Option<ExpressionKind> {
+        if self.interface_calls.contains_key(&call_span) {
+            self.parent.error(
+                call_span,
+                "checked dynamic interface dispatch is not lowered yet",
+            );
+            return None;
+        }
         // Call checking treats parentheses as transparent when selecting a
         // declaration, intrinsic, or function-value signature. Its checked
         // callee type and definition therefore belong to the inner expression.

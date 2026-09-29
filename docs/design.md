@@ -7646,6 +7646,12 @@ ABI, CRT, profile, and required system libraries. The compiler never invokes
 Cargo and preserves existing output on a failed build. Stdlib lookup prefers
 `JETT_STDLIB_DIR`, then installed `lib/jett/stdlib`, then the development tree.
 
+Interface-typed runtime parameters, returns, and stored values are accepted by
+the interpreter but remain a native gap. The checker now records dynamic
+interface slots separately from concrete method bodies, including generic and
+reflected body facts. See `active/native_interface_values.md` for the native
+representation and dispatch handoff.
+
 The full native parity gate is still incomplete: the current object count is
 recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See
