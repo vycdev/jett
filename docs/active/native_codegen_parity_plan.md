@@ -289,6 +289,10 @@ runtime-context cleanup; cleanup failure cannot count as a matching entry error.
 The suite also includes the exhaustive verify and property execution gates,
 plus failure probes that prevent a failed
 source assertion in a later body from publishing a native executable.
+The property diagnostic regression also requires the exact shrunk counterexample,
+diagnostic code, source span, and preservation of existing output artifacts for
+program, verify-suite, and property-suite builds. This is the required frontend
+validation path; native suite-level failure shrinking remains open.
 The `native_parity` example also discovers top-level verify/property bodies
 from parsed source and reports their fixture and body denominators. Its exit
 status and `fixture_gates_complete` field certify those fixture gates only;

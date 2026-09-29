@@ -68,10 +68,15 @@ Passing its growing regression suite does not remove those audit obligations.
 Native property failure shrinking and case-specific diagnostics remain open in
 the accepted plan. Normal native builds already run frontend verify/property
 checks before emission; a source-level failed property cannot be silently
-bypassed to claim native failure coverage. Completion must either implement the
-remaining native suite behavior under that policy or establish, from the actual
-public execution contract, which diagnostics are supplied by the required
-frontend stage. Passing properties alone do not resolve this requirement.
+bypassed to claim native failure coverage.
+`native_builds_preserve_shrunk_property_diagnostics_and_existing_artifacts`
+pins that public pre-emission contract: a property fails on its fourth generated
+trial, shrinks both scalar and list inputs, and retains the exact E9000 message
+and property-name span in ordinary program, verify-suite, and property-suite
+builds. All three preserve an existing output artifact. The comparison also
+checks the structured `test_file` result, including the trial count.
+This verifies frontend diagnostic handoff; it does not establish shrinking or
+case-specific diagnostics for a failure encountered by an emitted native suite.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

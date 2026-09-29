@@ -879,6 +879,95 @@ fn native_suites_reject_failing_source_assertions() {
 }
 
 #[test]
+fn native_builds_preserve_shrunk_property_diagnostics_and_existing_artifacts() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("property_failure.jett");
+    let text = r#"namespace app
+function main() returns nothing:
+    return nothing
+verify first:
+    assert true
+property first_property:
+    given n: int8
+    assert n == n
+property shrunk_failure:
+    given number: int8
+    given items: list[int64]
+    assert number < 2 "native property sentinel"
+"#;
+    fs::write(&source, text).unwrap();
+    let tested = jett_driver::test_file(&source).expect("checked property failure");
+    assert_eq!((tested.total, tested.passed, tested.failed), (3, 2, 1));
+    let failure = tested.blocks.iter().find(|block| !block.passed).unwrap();
+    assert_eq!(failure.name, "shrunk_failure");
+    assert!(failure.is_property);
+    assert_eq!(failure.iterations, Some(4));
+    assert_eq!(failure.line, 9);
+    assert_eq!(
+        failure.error.as_deref(),
+        Some("native property sentinel (counterexample: number = 2, items = list())")
+    );
+
+    let checked = jett_driver::build_file(&source);
+    assert!(checked.has_errors);
+    let diagnostics = |result: &jett_driver::BuildResult| {
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.code(),
+                    diagnostic.span,
+                    diagnostic.message.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = diagnostics(&checked);
+    assert_eq!(expected.len(), 1);
+    assert_eq!(expected[0].0, 9000);
+    assert_eq!(
+        &text[expected[0].1.start as usize..expected[0].1.end as usize],
+        "shrunk_failure"
+    );
+    assert_eq!(
+        expected[0].2,
+        format!(
+            "comptime verify failed in 'shrunk_failure': {}",
+            failure.error.as_ref().unwrap()
+        )
+    );
+
+    for mode in ["program", "verify", "property"] {
+        let binary = directory.path().join(format!("{mode}.exe"));
+        fs::write(&binary, b"existing output sentinel").unwrap();
+        let result = match mode {
+            "program" => build_host_executable(&source, launcher(), &binary),
+            "verify" => build_host_verify_suite_executable(&source, launcher(), &binary),
+            "property" => build_host_property_suite_executable(&source, launcher(), &binary),
+            _ => unreachable!(),
+        };
+        let error = result.expect_err("a failed property must prevent native publication");
+        let jett_driver::native::NativeBuildError::Lowering {
+            source: lowering, ..
+        } = error
+        else {
+            panic!("{mode}: expected frontend rejection, got {error}");
+        };
+        let jett_driver::BackendLoweringError::Build(native) = *lowering else {
+            panic!("{mode}: expected property diagnostics before HIR");
+        };
+        assert_eq!(diagnostics(&native), expected, "{mode}");
+        assert_eq!(
+            fs::read(&binary).unwrap(),
+            b"existing output sentinel",
+            "{mode}"
+        );
+    }
+}
+
+#[test]
 fn native_opaque_capability_values_match_interpreter() {
     for capability in ["Stderr", "Stdin", "Filesystem", "Network", "Process", "Log"] {
         let directory = tempfile::tempdir().unwrap();
