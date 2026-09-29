@@ -396,3 +396,17 @@ builders, runtime and baked refined builder erasure, and capability refinements.
 Builder completion explicitly coarsens the refinement as required by the checked
 intrinsic signature. MIR extracts reconstruction handlers through
 `RefinementValidated` so baked refined builders remain ordinary native values.
+
+Machine state field types follow ordinary declaration-site name resolution,
+including namespace qualification, visibility, and declaration order. The
+resolver must visit them just as it visits struct and enum fields; otherwise
+an interface field accepted at the root fails inside a namespace before native
+lowering. Reflected fields preserve erased owners through builder round trips,
+including stored lists, secrets, and explicit comptime construction.
+
+`interface_reflected_fields` checks direct interface fields and interface lists
+in records, enum payloads, and machine states. It compares ordinary round trips,
+fully baked results, and baked builders completed at runtime; all preserve
+integer-width dispatch and recursively redact secret elements. Resolver tests
+also pin nested field type qualification and reject private or forward field
+type references.

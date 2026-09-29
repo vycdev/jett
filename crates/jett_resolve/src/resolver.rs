@@ -609,6 +609,13 @@ impl Resolver {
                 Item::Enum(enm) => {
                     self.resolve_enum(enm, index);
                 }
+                Item::Machine(machine) => {
+                    for state in &machine.states {
+                        for field in &state.fields {
+                            self.resolve_type_expr(&field.ty, index);
+                        }
+                    }
+                }
                 Item::VarDecl(v) => {
                     self.resolve_global_constant_initializer(v, index);
                 }
@@ -621,7 +628,7 @@ impl Resolver {
                 Item::Actor(actor) => {
                     self.resolve_actor(actor, index);
                 }
-                // Namespace and Enum declarations have no bodies to walk.
+                // Remaining declarations have no references to walk.
                 _ => {}
             }
         }
@@ -2717,6 +2724,64 @@ function main() returns int64:
             result.resolutions.contains_key(&x_span),
             "usage of x should be resolved"
         );
+    }
+
+    #[test]
+    fn machine_fields_resolve_namespaced_types() {
+        let module = parse_module(
+            "namespace app\ninterface Named:\n    function name(view self: Named) returns string\nmachine Session:\n    states:\n        empty\n        active(item: Named, items: list[Named])\n    transitions:\n        empty to active\n",
+        );
+        let result = resolve(&module);
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let Item::Machine(machine) = module.items.last().unwrap() else {
+            panic!("expected machine");
+        };
+        let TypeExpr::Named(item) = &machine.states[1].fields[0].ty else {
+            panic!("expected named field type");
+        };
+        let id = result
+            .resolutions
+            .get(&item.span)
+            .expect("resolved machine field");
+        assert_eq!(result.scope_table.def(*id).name, "app.Named");
+        let TypeExpr::Generic(_, arguments, _) = &machine.states[1].fields[1].ty else {
+            panic!("expected list field type");
+        };
+        let TypeExpr::Named(item) = &arguments[0] else {
+            panic!("expected named element type");
+        };
+        assert_eq!(result.resolutions.get(&item.span), Some(id));
+    }
+
+    #[test]
+    fn machine_fields_enforce_visibility_and_declaration_order() {
+        for (source, code) in [
+            (
+                "machine Session:\n    states:\n        empty\n        active(item: Later)\n    transitions:\n        empty to active\nstruct Later:\n    count: int64\n",
+                205,
+            ),
+            (
+                "namespace api\nstruct Hidden:\n    count: int64\nnamespace app\nmachine Session:\n    states:\n        empty\n        active(item: api.Hidden)\n    transitions:\n        empty to active\n",
+                207,
+            ),
+        ] {
+            let result = resolve(&parse_module(source));
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.severity == Severity::Error && d.code.code() == code),
+                "expected E{code}, got {:?}",
+                result.diagnostics
+            );
+        }
     }
 
     // ---- Test: no forward reference enforcement ----

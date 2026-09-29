@@ -320,6 +320,40 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_reflected_fields_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_reflected_fields.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("reflected interface oracle");
+    assert_eq!(
+        expected.stdout,
+        "small:7\nsmall:7\nwide:9\nsecret\n".repeat(9)
+    );
+    assert!(
+        expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("[redacted]"))
+    );
+    assert!(
+        !expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("hidden-reflected-interface"))
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_reflected_fields.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native reflected interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_interface_opaque_identity_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_opaque_identity.jett");

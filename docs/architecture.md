@@ -2943,6 +2943,11 @@ dispatch reads the underlying actor ID. Construction-builder and capability
 refinements likewise retain their nominal implementation owner. MIR handler
 extraction traverses validated refinement wrappers, including reconstruction
 operations nested inside baked builders.
+Machine state field type references pass through the same resolver traversal as
+struct and enum fields, retaining declaration-site namespaces, visibility checks,
+and declaration order before checked layouts and reflection metadata are built.
+Reflected interface fields and lists retain their erased owners through record,
+enum, and machine builders, including baked builders and completed values.
 Expected type context also passes through `run`: for example, initializing
 `result[int64, string]` with `run ok(17)` retains both declared result payload
 types in the checked body used by native lowering.
