@@ -7695,6 +7695,12 @@ specialization keys and parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
+Primitive interface values retain their checked concrete identity even when
+runtime storage shares a wider carrier. Integer widths, `float32`, and nominal
+primitive refinements dispatch to their own implementations through collections,
+callbacks, reflected fields, and explicit comptime evaluation. Transparent
+aliases use their canonical base identity. Arithmetic and formatting inspect the
+payload without losing identity when the value is stored or cloned.
 Generic structs retain their concrete type arguments across interface erasure,
 including reflected construction and comptime evaluation. Typed observations
 therefore redact secret generic fields while keeping the base struct display name.

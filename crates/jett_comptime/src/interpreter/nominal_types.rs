@@ -6,7 +6,11 @@ impl Interpreter {
         type_expr_display(&self.concrete_type_expr(ty, &mut HashSet::new()))
     }
 
-    fn concrete_type_expr(&self, ty: &TypeExpr, aliases: &mut HashSet<String>) -> TypeExpr {
+    pub(super) fn concrete_type_expr(
+        &self,
+        ty: &TypeExpr,
+        aliases: &mut HashSet<String>,
+    ) -> TypeExpr {
         let ty = self.substitute_type_expr(ty);
         match ty {
             TypeExpr::Named(ref ident)

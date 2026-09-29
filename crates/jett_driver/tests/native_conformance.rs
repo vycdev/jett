@@ -320,6 +320,31 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_primitive_identity_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_primitive_identity.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("primitive interface oracle");
+    let mixed = "int8:7\nint64:7\nuint8:9\nuint64:9\nfloat32\nfloat64\nint16:15\nint32:31\nuint16:16\nuint32:32\npositive:7\nnonempty:yes\nstring:yes\n";
+    assert_eq!(
+        expected.stdout,
+        format!(
+            "{mixed}{mixed}int8:7\nint8:7\npositive:7\nint8:8\nint8:8\nint8:7\nint8:7\nint8:11\nint8:11\nint8:11\nint8:11\nint8:12\nint8:13\nint8:7\nint8:7\n"
+        )
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_primitive_identity.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native primitive interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_interface_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/interface_values.jett");

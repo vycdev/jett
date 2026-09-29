@@ -33,6 +33,12 @@ pub struct ClosureTypeArgument {
 /// Runtime value for the compile-time interpreter.
 #[derive(Debug, Clone)]
 pub enum Value {
+    /// Checked concrete identity for a payload whose primitive carrier erases it.
+    /// Arithmetic and formatting use the payload; interface dispatch uses the name.
+    Typed {
+        type_name: String,
+        value: Box<Value>,
+    },
     /// 64-bit signed integer.
     Int64(i64),
     /// 64-bit unsigned integer.
@@ -112,9 +118,40 @@ pub enum Value {
     },
 }
 
+impl Value {
+    pub(crate) fn primitive_carrier_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Int64(_) => Some("int64"),
+            Self::Uint64(_) => Some("uint64"),
+            Self::Float64(_) => Some("float64"),
+            Self::String(_) => Some("string"),
+            Self::Bool(_) => Some("bool"),
+            Self::Bytes(_) => Some("bytes"),
+            Self::Nothing => Some("nothing"),
+            _ => None,
+        }
+    }
+
+    /// Borrow storage without discarding the identity retained by its owner.
+    pub fn payload(&self) -> &Self {
+        match self {
+            Self::Typed { value, .. } => value.payload(),
+            value => value,
+        }
+    }
+
+    /// Consume a value at a concrete primitive operation or conversion boundary.
+    pub fn into_payload(self) -> Self {
+        match self {
+            Self::Typed { value, .. } => value.into_payload(),
+            value => value,
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
+        match (self.payload(), other.payload()) {
             (Value::Int64(a), Value::Int64(b)) => a == b,
             (Value::Uint64(a), Value::Uint64(b)) => a == b,
             (Value::Float64(a), Value::Float64(b)) => a == b,
@@ -194,6 +231,7 @@ impl PartialEq for Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Value::Typed { value, .. } => value.fmt(f),
             Value::Int64(n) => write!(f, "{n}"),
             Value::Uint64(n) => write!(f, "{n}"),
             Value::Float64(n) => write!(f, "{n}"),

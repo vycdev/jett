@@ -155,7 +155,7 @@ impl Interpreter {
         }
     }
 
-    fn debug_type(name: &str) -> Option<TypeExpr> {
+    pub(super) fn debug_type(name: &str) -> Option<TypeExpr> {
         let span = Span::new(FileId::new(0), 0, 0);
         if let Some(inner) = name.strip_prefix("view ") {
             return Some(TypeExpr::View(Box::new(Self::debug_type(inner)?), span));
@@ -270,6 +270,10 @@ impl Interpreter {
             _ => &[],
         };
         match value {
+            Value::Typed { type_name, value } => {
+                let concrete = Self::debug_type(type_name);
+                self.format_debug_value(value, concrete.as_ref().or(ty.as_ref()))
+            }
             Value::Pending(inner) => {
                 format!("pending({})", self.format_debug_value(inner, ty.as_ref()))
             }

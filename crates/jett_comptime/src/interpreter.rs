@@ -1302,7 +1302,8 @@ impl Interpreter {
     ) {
         let interface_name = block.interface_name.name.clone();
         let owner_type = self.substitute_type_expr_in_namespace(&block.for_type, namespace);
-        let concrete_owner = self.concrete_type_display(&owner_type);
+        let owner_type = self.concrete_type_expr(&owner_type, &mut HashSet::new());
+        let concrete_owner = type_expr_display(&owner_type);
         let base_owner = concrete_owner.split('[').next().unwrap_or(&concrete_owner);
         let owner_name = if self.structs.contains_key(base_owner) {
             concrete_owner.clone()
@@ -1468,6 +1469,27 @@ impl Interpreter {
         value: Value,
     ) -> Result<Value, String> {
         let primitive_type_name = self.primitive_base_type_name(type_name);
+        let value = if matches!(
+            primitive_type_name.as_ref(),
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "float32"
+                | "float64"
+                | "bool"
+                | "string"
+                | "bytes"
+                | "nothing"
+        ) {
+            value.into_payload()
+        } else {
+            value
+        };
         match primitive_type_name.as_ref() {
             // Value::Float64 is an f64 carrier, not permission to retain f64
             // precision in a checked float32 expression or typed boundary.
@@ -1620,7 +1642,68 @@ impl Interpreter {
     }
 
     fn normalize_value_for_type(&self, ty: &TypeExpr, value: Value) -> Result<Value, String> {
-        self.normalize_value_for_type_name(&type_expr_name(ty), value)
+        let name = self.concrete_type_display(ty);
+        let value = self.normalize_value_for_type_name(&name, value)?;
+        Ok(self.retain_primitive_identity(&name, value))
+    }
+
+    fn retain_primitive_identity(&self, name: &str, value: Value) -> Value {
+        if !matches!(
+            self.primitive_base_type_name(name).as_ref(),
+            "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "float32"
+                | "float64"
+                | "bool"
+                | "string"
+                | "bytes"
+                | "nothing"
+        ) {
+            return value;
+        }
+        if let Value::Pending(inner) = value {
+            return Value::Pending(Box::new(self.retain_primitive_identity(name, *inner)));
+        }
+        if !matches!(
+            value.payload(),
+            Value::Int64(_)
+                | Value::Uint64(_)
+                | Value::Float64(_)
+                | Value::Bool(_)
+                | Value::String(_)
+                | Value::Bytes(_)
+                | Value::Nothing
+        ) {
+            return value;
+        }
+        if value.primitive_carrier_name() == Some(name) {
+            return value;
+        }
+        let name = if matches!(
+            name,
+            "int8" | "int16" | "int32" | "uint8" | "uint16" | "uint32" | "float32"
+        ) {
+            name.to_owned()
+        } else {
+            Self::debug_type(name)
+                .map(|ty| self.concrete_type_display(&ty))
+                .unwrap_or_else(|| name.to_owned())
+        };
+        let value = value.into_payload();
+        if value.primitive_carrier_name() == Some(name.as_str()) {
+            value
+        } else {
+            Value::Typed {
+                type_name: name,
+                value: Box::new(value),
+            }
+        }
     }
 
     fn type_name_has_refinement(&self, type_name: &str) -> bool {
@@ -1848,10 +1931,11 @@ impl Interpreter {
                 _
             ) | Expr::Unary(UnaryOp::Neg, _, _)
         ) {
-            self.wrap_integer_value_for_type_name(type_name, value)
+            self.wrap_integer_value_for_type_name(type_name, value.into_payload())
         } else {
             self.normalize_value_for_type_name(type_name, value)
         }
+        .map(|value| self.retain_primitive_identity(type_name, value))
     }
 
     fn eval_expr_flow_inner(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
@@ -1934,14 +2018,14 @@ impl Interpreter {
                 // Short-circuit for logical operators
                 match op {
                     BinOp::And => {
-                        if let Value::Bool(false) = left {
+                        if let Value::Bool(false) = left.payload() {
                             return Ok(ExprFlow::Value(Value::Bool(false)));
                         }
                         let right = value_or_signal!(self, rhs);
                         return Ok(ExprFlow::Value(eval_binary_op(&left, *op, &right)?));
                     }
                     BinOp::Or => {
-                        if let Value::Bool(true) = left {
+                        if let Value::Bool(true) = left.payload() {
                             return Ok(ExprFlow::Value(Value::Bool(true)));
                         }
                         let right = value_or_signal!(self, rhs);
@@ -1978,7 +2062,7 @@ impl Interpreter {
             Expr::Unary(op, operand, _) => match op {
                 UnaryOp::Not => {
                     let val = value_or_signal!(self, operand);
-                    match val {
+                    match val.into_payload() {
                         Value::Bool(b) => Ok(ExprFlow::Value(Value::Bool(!b))),
                         _ => Err("'not' requires a boolean operand".to_string()),
                     }
@@ -2316,7 +2400,7 @@ impl Interpreter {
         }
 
         let val = value_or_signal!(self, operand);
-        match val {
+        match val.into_payload() {
             Value::Int64(n) => Ok(ExprFlow::Value(Value::Int64(n.wrapping_neg()))),
             Value::Float64(n) => Ok(ExprFlow::Value(Value::Float64(-n))),
             _ => Err("unary '-' requires a numeric operand".to_string()),
@@ -4214,7 +4298,7 @@ impl Interpreter {
             ));
         }
 
-        let numeric = match value {
+        let numeric = match value.payload() {
             Value::Int64(int_value) if *int_value >= 0 => *int_value as u64,
             Value::Int64(int_value) => {
                 return Err(format!(
@@ -4280,7 +4364,7 @@ impl Interpreter {
             Value::Bytes(bytes) => Ok(bytes.clone()),
             Value::List(items) => items
                 .iter()
-                .map(|item| match item {
+                .map(|item| match item.payload() {
                     Value::Int64(value) if (0..=255).contains(value) => Ok(*value as u8),
                     Value::Int64(value) => Err(format!("byte value out of range: {}", value)),
                     other => Err(format!("payload expects list[uint8], found {}", other)),
@@ -8957,7 +9041,7 @@ impl Interpreter {
 
             IntrinsicId::SecretCompare => {
                 require_args!(name, 2, args);
-                let equal = match (&args[0], &args[1]) {
+                let equal = match (args[0].payload(), args[1].payload()) {
                     (Value::String(lhs), Value::String(rhs)) => {
                         constant_time_secret_bytes_equal(lhs.as_bytes(), rhs.as_bytes())
                     }
@@ -8976,7 +9060,7 @@ impl Interpreter {
             // -- Random operations (stdlib/random.jett) -----------------------
             IntrinsicId::RandomBounded if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::Nothing, Value::Int64(lower), Value::Int64(upper)) => {
                         if lower >= upper {
                             return Some(Err(
@@ -9022,7 +9106,7 @@ impl Interpreter {
             // -- Private string kernels (stdlib/string.jett) ------------------
             IntrinsicId::StringCharCount if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Int64(string_grapheme_count(s) as i64))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -9030,7 +9114,7 @@ impl Interpreter {
 
             IntrinsicId::StringTrim if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.trim().to_string()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -9038,7 +9122,7 @@ impl Interpreter {
 
             IntrinsicId::StringUpper if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.to_uppercase()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -9046,7 +9130,7 @@ impl Interpreter {
 
             IntrinsicId::StringLower if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.to_lowercase()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -9054,7 +9138,7 @@ impl Interpreter {
 
             IntrinsicId::StringReplace if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::String(s), Value::String(from), Value::String(to)) => {
                         let replaced = string_split_grapheme_matches(s, from).join(to);
                         Some(Ok(Value::String(replaced)))
@@ -9065,7 +9149,7 @@ impl Interpreter {
 
             IntrinsicId::StringSplit if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(s), Value::String(delim)) => {
                         let parts: Vec<Value> = string_split_grapheme_matches(s, delim)
                             .into_iter()
@@ -9079,7 +9163,7 @@ impl Interpreter {
 
             IntrinsicId::StringJoin if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::String(sep)) => {
                         let strs: Result<Vec<String>, String> = items
                             .iter()
@@ -9099,7 +9183,7 @@ impl Interpreter {
 
             IntrinsicId::StringSlice if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::String(s), Value::Int64(start), Value::Int64(end)) => {
                         let graphemes = string_graphemes(s);
                         let len = graphemes.len() as i64;
@@ -9116,7 +9200,7 @@ impl Interpreter {
 
             IntrinsicId::StringRepeat if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(s), Value::Int64(n)) => {
                         Some(repeat_string_checked(s, *n).map(Value::String))
                     }
@@ -9127,14 +9211,14 @@ impl Interpreter {
             // -- Type conversions (stdlib/string.jett, stdlib/int64.jett) -----
             IntrinsicId::StringFromInt64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Int64(n) => Some(Ok(Value::String(n.to_string()))),
                     _ => Some(Err(format!("{name} expects an int64 argument"))),
                 }
             }
             IntrinsicId::StringFromUint64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Uint64(n) => Some(Ok(Value::String(n.to_string()))),
                     Value::Int64(n) if *n >= 0 => Some(Ok(Value::String(n.to_string()))),
                     _ => Some(Err(format!("{name} expects a uint64 argument"))),
@@ -9143,7 +9227,7 @@ impl Interpreter {
 
             IntrinsicId::StringSlugify if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let slug: String = s
                             .to_lowercase()
@@ -9163,7 +9247,7 @@ impl Interpreter {
             // -- int64 / float64 conversions ----------------------------------
             IntrinsicId::Int64FromFloat64 => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n)
                         if n.is_finite()
                             && n.fract() == 0.0
@@ -9181,7 +9265,7 @@ impl Interpreter {
             }
             IntrinsicId::Int64FromString => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match s.parse::<i64>() {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Int64(n))))),
                         Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -9193,7 +9277,7 @@ impl Interpreter {
             }
             IntrinsicId::Uint64FromString => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match s.parse::<u64>() {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Uint64(n))))),
                         Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -9207,14 +9291,14 @@ impl Interpreter {
             // -- float64 conversions ------------------------------------------
             IntrinsicId::Float32FromFloat64 => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(value) => Some(Ok(Value::Float64((*value as f32) as f64))),
                     _ => Some(Err(format!("{name} expects a float64 argument"))),
                 }
             }
             IntrinsicId::Float64FromInt64 => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Int64(n) => {
                         let converted = *n as f64;
                         if converted as i128 == i128::from(*n) {
@@ -9231,7 +9315,7 @@ impl Interpreter {
             }
             IntrinsicId::Float64FromString => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match s.parse::<f64>() {
                         Ok(n) => Some(Ok(Value::ResultOk(Box::new(Value::Float64(n))))),
                         Err(_) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -9245,14 +9329,14 @@ impl Interpreter {
             // -- Additional string conversions --------------------------------
             IntrinsicId::StringFromFloat64 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::String(format!("{n}")))),
                     _ => Some(Err(format!("{name} expects a float64 argument"))),
                 }
             }
             IntrinsicId::StringFromBool if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bool(b) => Some(Ok(Value::String(format!("{b}")))),
                     _ => Some(Err(format!("{name} expects a bool argument"))),
                 }
@@ -9278,7 +9362,7 @@ impl Interpreter {
 
             IntrinsicId::ListLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => Some(Ok(Value::Int64(items.len() as i64))),
                     _ => Some(Err(format!("{name} expects a list argument"))),
                 }
@@ -9286,7 +9370,7 @@ impl Interpreter {
 
             IntrinsicId::ListAppend if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => {
                         let mut new_list = items.clone();
                         new_list.push(args[1].clone());
@@ -9298,7 +9382,7 @@ impl Interpreter {
 
             IntrinsicId::ListGetClone if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Ok(Value::OptionalNone));
@@ -9315,10 +9399,10 @@ impl Interpreter {
 
             IntrinsicId::ListSort if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => {
                         let mut sorted = items.clone();
-                        sorted.sort_by(|a, b| match (a, b) {
+                        sorted.sort_by(|a, b| match (a.payload(), b.payload()) {
                             (Value::Int64(x), Value::Int64(y)) => x.cmp(y),
                             (Value::Uint64(x), Value::Uint64(y)) => x.cmp(y),
                             (Value::Float64(x), Value::Float64(y)) => {
@@ -9340,16 +9424,16 @@ impl Interpreter {
             }
             IntrinsicId::MapLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Map(entries) => Some(Ok(Value::Int64(entries.len() as i64))),
                     _ => Some(Err(format!("{name} expects a map argument"))),
                 }
             }
             IntrinsicId::MapHas if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Map(entries) => {
-                        let found = entries.iter().any(|(k, _)| k == &args[1]);
+                        let found = entries.iter().any(|(k, _)| k == args[1].payload());
                         Some(Ok(Value::Bool(found)))
                     }
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
@@ -9357,11 +9441,11 @@ impl Interpreter {
             }
             IntrinsicId::MapGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Map(entries) => {
                         let val = entries
                             .iter()
-                            .find(|(k, _)| k == &args[1])
+                            .find(|(k, _)| k == args[1].payload())
                             .map(|(_, v)| v.clone());
                         Some(Ok(match val {
                             Some(v) => Value::OptionalSome(Box::new(v)),
@@ -9391,7 +9475,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Map(mut entries) => {
-                        entries.retain(|(k, _)| k != &args[1]);
+                        entries.retain(|(k, _)| k != args[1].payload());
                         Some(Ok(Value::Map(entries)))
                     }
                     _ => Some(Err(format!("{name} expects a map as first argument"))),
@@ -9399,7 +9483,7 @@ impl Interpreter {
             }
             IntrinsicId::MapFromLists if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(keys), Value::List(values)) => {
                         let mut entries = Vec::new();
                         for (key, value) in keys.iter().zip(values.iter()) {
@@ -9438,7 +9522,7 @@ impl Interpreter {
                 require_args!(name, 2, args);
                 match args[0].clone() {
                     Value::Set(mut items) => {
-                        items.retain(|v| v != &args[1]);
+                        items.retain(|v| v != args[1].payload());
                         Some(Ok(Value::Set(items)))
                     }
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
@@ -9446,14 +9530,14 @@ impl Interpreter {
             }
             IntrinsicId::SetContains if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match &args[0] {
-                    Value::Set(items) => Some(Ok(Value::Bool(items.contains(&args[1])))),
+                match args[0].payload() {
+                    Value::Set(items) => Some(Ok(Value::Bool(items.contains(args[1].payload())))),
                     _ => Some(Err(format!("{name} expects a set as first argument"))),
                 }
             }
             IntrinsicId::SetLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Set(items) => Some(Ok(Value::Int64(items.len() as i64))),
                     _ => Some(Err(format!("{name} expects a set argument"))),
                 }
@@ -9461,17 +9545,17 @@ impl Interpreter {
 
             IntrinsicId::ListSortByIndex if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(idx)) => {
                         let idx = usize::try_from(*idx).unwrap_or(usize::MAX);
                         let mut sorted = items.clone();
                         sorted.sort_by(|a, b| {
                             let va = match a {
-                                Value::List(l) => l.get(idx).cloned(),
+                                Value::List(l) => l.get(idx).map(|value| value.payload().clone()),
                                 _ => None,
                             };
                             let vb = match b {
-                                Value::List(l) => l.get(idx).cloned(),
+                                Value::List(l) => l.get(idx).map(|value| value.payload().clone()),
                                 _ => None,
                             };
                             match (va, vb) {
@@ -9495,16 +9579,19 @@ impl Interpreter {
 
             IntrinsicId::ListIsSorted if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) => {
-                        let sorted = items.windows(2).all(|w| match (&w[0], &w[1]) {
-                            (Value::Int64(a), Value::Int64(b)) => a <= b,
-                            (Value::Uint64(a), Value::Uint64(b)) => a <= b,
-                            (Value::Float64(a), Value::Float64(b)) => a <= b,
-                            (Value::String(a), Value::String(b)) => a <= b,
-                            (Value::Bool(a), Value::Bool(b)) => a <= b,
-                            _ => true,
-                        });
+                        let sorted =
+                            items
+                                .windows(2)
+                                .all(|w| match (w[0].payload(), w[1].payload()) {
+                                    (Value::Int64(a), Value::Int64(b)) => a <= b,
+                                    (Value::Uint64(a), Value::Uint64(b)) => a <= b,
+                                    (Value::Float64(a), Value::Float64(b)) => a <= b,
+                                    (Value::String(a), Value::String(b)) => a <= b,
+                                    (Value::Bool(a), Value::Bool(b)) => a <= b,
+                                    _ => true,
+                                });
                         Some(Ok(Value::Bool(sorted)))
                     }
                     _ => Some(Err(format!("{name} expects a list argument"))),
@@ -9514,7 +9601,7 @@ impl Interpreter {
             // -- Private math kernels (stdlib/math.jett) ----------------------
             IntrinsicId::MathKernelAbs if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Int64(n) => Some(Ok(Value::Int64(n.wrapping_abs()))),
                     Value::Float64(n) => Some(Ok(Value::Float64(n.abs()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9523,7 +9610,7 @@ impl Interpreter {
 
             IntrinsicId::MathKernelMin if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.min(b)))),
                     (Value::Float64(a), Value::Float64(b)) => Some(Ok(Value::Float64(a.min(*b)))),
                     _ => Some(Err(format!(
@@ -9534,7 +9621,7 @@ impl Interpreter {
 
             IntrinsicId::MathKernelMax if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => Some(Ok(Value::Int64(*a.max(b)))),
                     (Value::Float64(a), Value::Float64(b)) => Some(Ok(Value::Float64(a.max(*b)))),
                     _ => Some(Err(format!(
@@ -9545,7 +9632,7 @@ impl Interpreter {
 
             IntrinsicId::MathSqrt if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sqrt()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).sqrt()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9554,7 +9641,7 @@ impl Interpreter {
 
             IntrinsicId::MathPow if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Float64(base), Value::Float64(exp)) => {
                         Some(Ok(Value::Float64(base.powf(*exp))))
                     }
@@ -9576,7 +9663,7 @@ impl Interpreter {
 
             IntrinsicId::MathFloor if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.floor()))),
                     Value::Int64(n) => Some(Ok(Value::Int64(*n))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9585,7 +9672,7 @@ impl Interpreter {
 
             IntrinsicId::MathCeil if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ceil()))),
                     Value::Int64(n) => Some(Ok(Value::Int64(*n))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9594,7 +9681,7 @@ impl Interpreter {
 
             IntrinsicId::MathRound if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.round()))),
                     Value::Int64(n) => Some(Ok(Value::Int64(*n))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9603,7 +9690,7 @@ impl Interpreter {
 
             IntrinsicId::MathClamp if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::Int64(v), Value::Int64(lo), Value::Int64(hi)) => {
                         Some(Ok(Value::Int64((*v).clamp(*lo, *hi))))
                     }
@@ -9626,7 +9713,7 @@ impl Interpreter {
 
             IntrinsicId::MathLog if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.ln()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).ln()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9635,7 +9722,7 @@ impl Interpreter {
 
             IntrinsicId::MathLog2 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log2()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).log2()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9644,7 +9731,7 @@ impl Interpreter {
 
             IntrinsicId::MathLog10 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.log10()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).log10()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9653,11 +9740,11 @@ impl Interpreter {
 
             IntrinsicId::MathAverage if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) if !items.is_empty() => {
                         let numbers: Result<Vec<f64>, String> = items
                             .iter()
-                            .map(|value| match value {
+                            .map(|value| match value.payload() {
                                 Value::Int64(n) => Ok(*n as f64),
                                 Value::Uint64(n) => Ok(*n as f64),
                                 Value::Float64(n) => Ok(*n),
@@ -9675,11 +9762,11 @@ impl Interpreter {
 
             IntrinsicId::MathMedian if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(items) if !items.is_empty() => {
                         let nums: Result<Vec<f64>, String> = items
                             .iter()
-                            .map(|value| match value {
+                            .map(|value| match value.payload() {
                                 Value::Int64(n) => Ok(*n as f64),
                                 Value::Uint64(n) => Ok(*n as f64),
                                 Value::Float64(n) => Ok(*n),
@@ -9717,7 +9804,7 @@ impl Interpreter {
             }
             IntrinsicId::MathSin if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.sin()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).sin()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9725,7 +9812,7 @@ impl Interpreter {
             }
             IntrinsicId::MathCos if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.cos()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).cos()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9733,7 +9820,7 @@ impl Interpreter {
             }
             IntrinsicId::MathTan if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Float64(n) => Some(Ok(Value::Float64(n.tan()))),
                     Value::Int64(n) => Some(Ok(Value::Float64((*n as f64).tan()))),
                     _ => Some(Err(format!("{name} expects a numeric argument"))),
@@ -9741,7 +9828,7 @@ impl Interpreter {
             }
             IntrinsicId::MathMod if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => {
                         if *b == 0 {
                             Some(Err("math.mod: division by zero".to_string()))
@@ -9754,7 +9841,7 @@ impl Interpreter {
             }
             IntrinsicId::MathGcd if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => {
                         let (mut x, mut y) = (a.unsigned_abs(), b.unsigned_abs());
                         while y != 0 {
@@ -9769,7 +9856,7 @@ impl Interpreter {
             }
             IntrinsicId::MathLcm if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Int64(a), Value::Int64(b)) => {
                         if *a == 0 || *b == 0 {
                             Some(Ok(Value::Int64(0)))
@@ -9791,7 +9878,7 @@ impl Interpreter {
             }
             IntrinsicId::MathFactorial if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Int64(n) => {
                         if *n < 0 {
                             Some(Err(
@@ -9810,7 +9897,7 @@ impl Interpreter {
             }
             IntrinsicId::ListInsertAt if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Err(format!("{name}: index {index} out of bounds")));
@@ -9830,7 +9917,7 @@ impl Interpreter {
             }
             IntrinsicId::ListRemoveAt if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::List(items), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Err(format!("{name}: index {index} out of bounds")));
@@ -9848,7 +9935,7 @@ impl Interpreter {
             }
             IntrinsicId::ListSwap if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::List(items), Value::Int64(i), Value::Int64(j)) => {
                         let (Some(a), Some(b)) =
                             (usize::try_from(*i).ok(), usize::try_from(*j).ok())
@@ -9869,7 +9956,7 @@ impl Interpreter {
 
             IntrinsicId::StringTrimStart if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.trim_start().to_string()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -9877,7 +9964,7 @@ impl Interpreter {
 
             IntrinsicId::StringTrimEnd if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(s.trim_end().to_string()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -9886,7 +9973,7 @@ impl Interpreter {
             // Private string segmentation kernels yield list[string].
             IntrinsicId::StringChars if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let chars: Vec<Value> = string_graphemes(s)
                             .into_iter()
@@ -9900,7 +9987,7 @@ impl Interpreter {
 
             IntrinsicId::StringWords if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let words: Vec<Value> = s
                             .split_whitespace()
@@ -9914,7 +10001,7 @@ impl Interpreter {
 
             IntrinsicId::StringLines if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let mut lines = Vec::new();
                         let bytes = s.as_bytes();
@@ -9953,7 +10040,7 @@ impl Interpreter {
 
             IntrinsicId::StringIndexOf if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(haystack), Value::String(needle)) => {
                         let result = match string_find_grapheme_match(haystack, needle) {
                             Some((_, _, index)) => {
@@ -9968,7 +10055,7 @@ impl Interpreter {
             }
             IntrinsicId::StringCount if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::String(haystack), Value::String(needle)) => {
                         let count = string_count_grapheme_matches(haystack, needle) as i64;
                         Some(Ok(Value::Int64(count)))
@@ -9978,7 +10065,7 @@ impl Interpreter {
             }
             IntrinsicId::StringToUpperFirst if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let graphemes = string_graphemes(s);
                         let result = match graphemes.split_first() {
@@ -9999,7 +10086,7 @@ impl Interpreter {
             }
             IntrinsicId::StringToLowerFirst if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => {
                         let graphemes = string_graphemes(s);
                         let result = match graphemes.split_first() {
@@ -10021,7 +10108,7 @@ impl Interpreter {
 
             IntrinsicId::StringIsNumeric if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Bool(
                         !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
                     ))),
@@ -10031,7 +10118,7 @@ impl Interpreter {
 
             IntrinsicId::StringIsAlpha if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Bool(
                         !s.is_empty() && s.chars().all(|c| c.is_alphabetic()),
                     ))),
@@ -10042,7 +10129,7 @@ impl Interpreter {
             // -- Encoding operations (stdlib/encoding.jett) -------------------
             IntrinsicId::EncodingBase64Encode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => {
                         let encoded = base64_encode(bytes);
                         Some(Ok(Value::String(encoded)))
@@ -10053,7 +10140,7 @@ impl Interpreter {
 
             IntrinsicId::EncodingBase64Decode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match base64_decode(s) {
                         Ok(bytes) => Some(Ok(Value::ResultOk(Box::new(Value::Bytes(bytes))))),
                         Err(error) => Some(Ok(Value::ResultFail(Box::new(Value::String(
@@ -10066,7 +10153,7 @@ impl Interpreter {
 
             IntrinsicId::EncodingHexDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match encoding_hex_decode(s) {
                         Ok(bytes) => Some(Ok(Value::ResultOk(Box::new(Value::Bytes(bytes))))),
                         Err(error) => Some(Ok(Value::ResultFail(Box::new(Value::String(
@@ -10079,7 +10166,7 @@ impl Interpreter {
 
             IntrinsicId::EncodingUrlEncode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(percent_encode(s, false)))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -10087,7 +10174,7 @@ impl Interpreter {
 
             IntrinsicId::EncodingUrlDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(percent_decode(s, false)
                         .map(|decoded| Value::ResultOk(Box::new(Value::String(decoded))))
                         .unwrap_or_else(|error| {
@@ -10099,7 +10186,7 @@ impl Interpreter {
 
             IntrinsicId::EncodingFormEncode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::String(percent_encode(s, true)))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -10107,7 +10194,7 @@ impl Interpreter {
 
             IntrinsicId::EncodingFormDecode if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(percent_decode(s, true)
                         .map(|decoded| Value::ResultOk(Box::new(Value::String(decoded))))
                         .unwrap_or_else(|error| {
@@ -10120,7 +10207,7 @@ impl Interpreter {
             // -- Crypto operations (stdlib/crypto.jett) -----------------------
             IntrinsicId::CryptoSha256 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha256_digest(bytes)))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
@@ -10128,7 +10215,7 @@ impl Interpreter {
 
             IntrinsicId::CryptoSha512 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(sha512_digest(bytes)))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
@@ -10136,7 +10223,7 @@ impl Interpreter {
 
             IntrinsicId::CryptoMd5 if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(bytes) => Some(Ok(Value::Bytes(md5_digest(bytes)))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
@@ -10144,7 +10231,7 @@ impl Interpreter {
 
             IntrinsicId::CryptoHmacSha256 if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Bytes(key), Value::Bytes(message)) => {
                         Some(Ok(Value::Bytes(hmac_sha256_digest(key, message))))
                     }
@@ -10167,11 +10254,11 @@ impl Interpreter {
             // -- Launch environment operations (stdlib/environment.jett) -------
             IntrinsicId::EnvironmentGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
+                if !matches!(args[0].payload(), Value::Capability(capability) if capability == "Environment")
                 {
                     return Some(Err(format!("{name} expects Environment")));
                 }
-                let Value::String(key) = &args[1] else {
+                let Value::String(key) = args[1].payload() else {
                     return Some(Err(format!("{name} expects a string key")));
                 };
                 let Some(environment) = &self.launch_environment else {
@@ -10187,7 +10274,7 @@ impl Interpreter {
             }
             IntrinsicId::EnvironmentArgs if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                if !matches!(&args[0], Value::Capability(capability) if capability == "Environment")
+                if !matches!(args[0].payload(), Value::Capability(capability) if capability == "Environment")
                 {
                     return Some(Err(format!("{name} expects Environment")));
                 }
@@ -10207,7 +10294,7 @@ impl Interpreter {
             // -- CSV operations (stdlib/csv.jett) --------------------------
             IntrinsicId::CsvParse if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match parse_csv_records(s) {
                         Ok(records) => {
                             let rows: Vec<Value> = records
@@ -10226,7 +10313,7 @@ impl Interpreter {
 
             IntrinsicId::CsvStringify if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::List(rows) => {
                         let mut lines = Vec::new();
                         for row in rows {
@@ -10254,7 +10341,7 @@ impl Interpreter {
 
             IntrinsicId::CsvParseWithHeader if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => match parse_csv_with_header(s) {
                         Ok(records) => {
                             let rows = records
@@ -10282,21 +10369,21 @@ impl Interpreter {
             IntrinsicId::Range => {
                 match args.len() {
                     // range(end) — 0 to end exclusive
-                    1 => match &args[0] {
+                    1 => match args[0].payload() {
                         Value::Int64(end) => {
                             Some(range_values_checked(0, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end) — start to end exclusive
-                    2 => match (&args[0], &args[1]) {
+                    2 => match (args[0].payload(), args[1].payload()) {
                         (Value::Int64(start), Value::Int64(end)) => {
                             Some(range_values_checked(*start, *end, 1).map(Value::List))
                         }
                         _ => Some(Err(format!("{name} expects int64 arguments"))),
                     },
                     // range(start, end, step)
-                    3 => match (&args[0], &args[1], &args[2]) {
+                    3 => match (args[0].payload(), args[1].payload(), args[2].payload()) {
                         (Value::Int64(start), Value::Int64(end), Value::Int64(step)) => {
                             Some(range_values_checked(*start, *end, *step).map(Value::List))
                         }
@@ -10314,7 +10401,7 @@ impl Interpreter {
 
             IntrinsicId::BytesLength if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(b) => Some(Ok(Value::Int64(b.len() as i64))),
                     _ => Some(Err(format!("{name} expects a bytes argument"))),
                 }
@@ -10322,7 +10409,7 @@ impl Interpreter {
 
             IntrinsicId::BytesSlice if self.current_function_trusted_stdlib => {
                 require_args!(name, 3, args);
-                match (&args[0], &args[1], &args[2]) {
+                match (args[0].payload(), args[1].payload(), args[2].payload()) {
                     (Value::Bytes(b), Value::Int64(start), Value::Int64(end)) => {
                         let len = b.len() as i64;
                         let start = (*start).clamp(0, len) as usize;
@@ -10338,7 +10425,7 @@ impl Interpreter {
 
             IntrinsicId::BytesConcat if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Bytes(a), Value::Bytes(b)) => {
                         let mut result = a.clone();
                         result.extend(b.iter());
@@ -10350,7 +10437,7 @@ impl Interpreter {
 
             IntrinsicId::BytesFromString if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(s) => Some(Ok(Value::Bytes(s.as_bytes().to_vec()))),
                     _ => Some(Err(format!("{name} expects a string argument"))),
                 }
@@ -10358,7 +10445,7 @@ impl Interpreter {
 
             IntrinsicId::BytesToString if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(b) => match String::from_utf8(b.clone()) {
                         Ok(s) => Some(Ok(Value::ResultOk(Box::new(Value::String(s))))),
                         Err(e) => Some(Ok(Value::ResultFail(Box::new(Value::String(format!(
@@ -10371,7 +10458,7 @@ impl Interpreter {
 
             IntrinsicId::BytesToHex if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::Bytes(b) => {
                         let hex: String = b.iter().map(|byte| format!("{byte:02x}")).collect();
                         Some(Ok(Value::String(hex)))
@@ -10382,7 +10469,7 @@ impl Interpreter {
 
             IntrinsicId::BytesFromHex if self.current_function_trusted_stdlib => {
                 require_args!(name, 1, args);
-                match &args[0] {
+                match args[0].payload() {
                     Value::String(raw) => match Self::parse_hex_bytes(
                         raw,
                         "bytes.from_hex: expected even-length hex string",
@@ -10397,7 +10484,7 @@ impl Interpreter {
 
             IntrinsicId::BytesGet if self.current_function_trusted_stdlib => {
                 require_args!(name, 2, args);
-                match (&args[0], &args[1]) {
+                match (args[0].payload(), args[1].payload()) {
                     (Value::Bytes(b), Value::Int64(index)) => {
                         let Some(idx) = usize::try_from(*index).ok() else {
                             return Some(Ok(Value::OptionalNone));
@@ -10821,7 +10908,10 @@ impl Interpreter {
                 // Compute keys for each item.
                 let mut keyed: Vec<(i64, Value)> = Vec::new();
                 for item in items {
-                    match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                    match self
+                        .call_fn_value(fn_val.clone(), vec![item.clone()])
+                        .map(Value::into_payload)
+                    {
                         Ok(Value::Int64(k)) => keyed.push((k, item)),
                         Ok(other) => {
                             return Some(Err(format!(
@@ -10847,11 +10937,11 @@ impl Interpreter {
                             return Some(Ok(Value::Int64(0)));
                         }
                         // Detect int64 vs float64 from first element.
-                        match &items[0] {
+                        match items[0].payload() {
                             Value::Int64(_) => {
                                 let mut total = 0i64;
                                 for item in items {
-                                    match item {
+                                    match item.payload() {
                                         Value::Int64(n) => {
                                             total = total.wrapping_add(*n);
                                         }
@@ -10863,7 +10953,7 @@ impl Interpreter {
                             Value::Float64(_) => {
                                 let mut total = 0.0f64;
                                 for item in items {
-                                    match item {
+                                    match item.payload() {
                                         Value::Float64(n) => total += n,
                                         _ => return Some(Err(format!("{name}: mixed types"))),
                                     }
@@ -10892,7 +10982,10 @@ impl Interpreter {
                 let fn_val = args[1].clone();
                 let mut groups: Vec<(Value, Value)> = Vec::new();
                 for item in items {
-                    let key = match self.call_fn_value(fn_val.clone(), vec![item.clone()]) {
+                    let key = match self
+                        .call_fn_value(fn_val.clone(), vec![item.clone()])
+                        .map(Value::into_payload)
+                    {
                         Ok(k) => k,
                         Err(e) => return Some(Err(e)),
                     };
@@ -11426,7 +11519,7 @@ impl Default for Interpreter {
 // ---------------------------------------------------------------------------
 
 fn is_truthy(val: &Value) -> Result<bool, String> {
-    match val {
+    match val.payload() {
         Value::Bool(b) => Ok(*b),
         _ => Err(format!("expected boolean, got {val}")),
     }
@@ -11640,6 +11733,7 @@ fn compare_i64_uint64(left: i64, op: BinOp, right: u64) -> Result<Value, String>
 }
 
 fn eval_binary_op(left: &Value, op: BinOp, right: &Value) -> Result<Value, String> {
+    let (left, right) = (left.payload(), right.payload());
     match (left, op, right) {
         // -- Integer arithmetic -----------------------------------------------
         (Value::Int64(a), BinOp::Add, Value::Int64(b)) => Ok(Value::Int64(a.wrapping_add(*b))),
@@ -12021,6 +12115,7 @@ fn type_expr_display(ty: &TypeExpr) -> String {
 
 fn runtime_type_name(value: &Value) -> Option<String> {
     match value {
+        Value::Typed { type_name, .. } => Some(type_name.clone()),
         Value::Int64(_) => Some("int64".to_string()),
         Value::Uint64(_) => Some("uint64".to_string()),
         Value::Float64(_) => Some("float64".to_string()),
@@ -12937,7 +13032,8 @@ mod tests {
             } else {
                 assert!(matches!(
                     result.unwrap(),
-                    Some(Signal::Return(Value::Int64(-128)))
+                    Some(Signal::Return(Value::Typed { type_name, value }))
+                        if type_name == "int8" && *value == Value::Int64(-128)
                 ));
             }
             assert!(Arc::ptr_eq(

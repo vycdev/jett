@@ -82,10 +82,12 @@ This does **not** close the full interface gate. Still required:
   different native helpers and lack checked source bodies.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
-- Preserve primitive-width/refinement interface dispatch identity in the
-  interpreter. A concrete probe with `implement Named for int8` and `int64`
-  prints `narrow`, `wide` natively but `wide`, `wide` in the interpreter.
-  Canonical runtime identity currently collapses both integer values.
+- Preserve interface implementation identity for generic collection owners and
+  non-primitive refinement payloads. A checked probe implementing `Named` for
+  `list[int64]` and `list[string]` prints `numbers`, `words` natively but
+  `words`, `words` in the interpreter. Collection registrations and values still
+  collapse to their base names; primitive and generic struct metadata do not
+  close this remaining gate.
 
 Generic struct interface dispatch uses the concrete instantiated owner retained
 on the value. Implementations for `Box[int64]`, `Box[string]`, and
@@ -260,3 +262,23 @@ predicate-call and detached-bool casts rejected inside callbacks. The
 `generic_reflection_unknown_guard_invalid_binding` negative fixture checks
 invalid lookups in unknown match arms and closures, complementing the existing
 runtime-if regression.
+
+Primitive interface identity implementation: the interpreter must retain the
+checked concrete type when a primitive carrier would erase it (integer widths,
+float32, and nominal refinements). This is value metadata, preserved by cloning,
+containers, pending results, captures, and comptime constants. Primitive
+operations inspect the payload; interface dispatch and comptime materialization
+inspect the retained identity. Transparent aliases canonicalize to their base,
+and an interface-typed boundary must preserve the incoming concrete identity.
+Typed debug output must keep recursive secret redaction. This restores the
+already checked dispatch contract without changing source typing or arithmetic.
+
+The primitive identity regression now covers every signed and unsigned width,
+float32 versus float64, nominal integer/string refinements, and a transparent
+primitive alias in a namespace. Runtime and baked lists, literal element types,
+callbacks, cloning, pending values, list/optional/map conversions, and reflected
+interface fields retain the checked identity. Native materialization resolves
+that retained name to a unique checked type instead of guessing from the carrier.
+Primitive operations borrow the payload; container insertion and cloning keep
+the whole value. The broader fixture suite caught and pinned byte-list consumers
+that also need to inspect their element payloads.

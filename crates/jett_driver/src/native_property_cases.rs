@@ -266,6 +266,13 @@ pub(super) struct ValueContext<'a> {
 }
 
 fn erased_value_type(value: &Value, types: &TypeInterner) -> Option<TypeId> {
+    if let Value::Typed { type_name, .. } = value {
+        let mut candidates = types
+            .type_ids()
+            .filter(|ty| types.type_name(*ty) == *type_name);
+        let candidate = candidates.next()?;
+        return candidates.next().is_none().then_some(candidate);
+    }
     let primitive = match value {
         Value::Int64(_) => Some(TypeInterner::INT64),
         Value::Uint64(_) => Some(TypeInterner::UINT64),
@@ -323,6 +330,7 @@ pub(super) fn value_expression(
                 value, concrete, span, context,
             )?))
         }
+        (_, Value::Typed { value, .. }) => return value_expression(value, ty, span, context),
         (
             Type::Int8
             | Type::Int16
