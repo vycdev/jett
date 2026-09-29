@@ -1773,10 +1773,13 @@ mod tests {
             .expect_err("private cross-file use should fail resolution");
 
         let rendered = render_query_diagnostic_agent_error(&error);
+        let canonical_support =
+            std::fs::canonicalize(&support_file).expect("canonical support file");
+        let support_path = canonical_support.display().to_string();
+        let support_path = support_path.strip_prefix(r"\\?\").unwrap_or(&support_path);
         std::fs::remove_dir_all(&root).expect("temporary query directory should be removed");
 
         assert!(rendered.contains("labels[1]{code,message,file,line,column,end_line,end_column}:"));
-        let support_path = support_file.display().to_string().replace('\\', "/");
         assert!(
             rendered.contains(&escape_toon_scalar(&support_path)),
             "{rendered}"
