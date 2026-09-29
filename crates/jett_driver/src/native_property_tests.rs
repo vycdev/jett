@@ -2,6 +2,79 @@
 use super::*;
 
 #[test]
+fn native_property_shrinking_preserves_narrow_boundaries_and_nested_inputs() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("integer-boundary.jett");
+    let text = r#"namespace app
+struct Boxed[T]:
+    value: T
+property boundary:
+    given number: int8
+    given record: Boxed[int8]
+    given numbers: list[int8]
+    given lookup: map[int8, Boxed[int8]]
+    int8 minimum = -128
+    assert number >= minimum "minimum sentinel"
+"#;
+    fs::write(&source, text).unwrap();
+    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let mut changed = 0;
+    for function in &mut lowered.hir.functions {
+        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
+            continue;
+        }
+        for statement in &mut function.body.statements {
+            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
+                if let jett_hir::ExpressionKind::Binary { op, .. } = &mut condition.kind {
+                    assert_eq!(*op, jett_hir::BinaryOp::GreaterEqual);
+                    *op = jett_hir::BinaryOp::NotEqual;
+                    changed += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    fs::write(&source, text.replace(">= minimum", "!= minimum")).unwrap();
+    let oracle = crate::test_file(&source).unwrap();
+    assert_eq!(oracle.failed, 1);
+    assert_eq!(oracle.blocks[0].iterations, Some(8));
+    let expected = oracle.blocks[0].error.as_deref().unwrap();
+    assert!(expected.contains("number = -128"), "{expected}");
+    assert!(!expected.contains("number = 128"), "{expected}");
+    fs::remove_file(&source).unwrap();
+    let launcher = launcher();
+    for optimize in [false, true] {
+        let result = property_runner::run_lowered(
+            &source,
+            &lowered,
+            &launcher,
+            NativePropertyOptions {
+                optimize,
+                ..NativePropertyOptions::default()
+            },
+        )
+        .unwrap();
+        let failure = result.failure.unwrap();
+        assert_eq!(result.trials, 8);
+        assert_eq!(failure.trial, 8);
+        assert_eq!(failure.name, "boundary");
+        assert_eq!(
+            format!(
+                "minimum sentinel (counterexample: {})",
+                failure.counterexample
+            ),
+            expected
+        );
+        assert!(result.stdout.is_empty());
+        assert_eq!(
+            result.stderr,
+            b"runtime error: property 'boundary' trial 8: minimum sentinel\n"
+        );
+    }
+}
+
+#[test]
 fn native_property_runner_shrinks_native_failures_from_the_checked_session() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("shrink.jett");

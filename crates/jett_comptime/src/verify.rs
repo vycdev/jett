@@ -556,12 +556,20 @@ pub fn eval_assert(
 // Property-based testing
 // ---------------------------------------------------------------------------
 
-/// Run a single property block for `PROPERTY_DEFAULT_ITERATIONS` iterations.
-/// Each iteration generates random values for each `given` parameter, binds
-/// them into the interpreter, and executes the body.
-/// Generate candidate shrunk versions of a value (ordered from simplest to most complex).
+/// Generate candidates in the property runner's established shrink order.
 fn shrink_value(value: &Value) -> Vec<Value> {
     match value {
+        Value::Typed { type_name, value } if narrow_integer_bounds(type_name).is_some() => {
+            let (min, max) = narrow_integer_bounds(type_name).unwrap();
+            shrink_value(value)
+                .into_iter()
+                .filter(|candidate| matches!(candidate, Value::Int64(n) if (min..=max).contains(n)))
+                .map(|candidate| Value::Typed {
+                    type_name: type_name.clone(),
+                    value: Box::new(candidate),
+                })
+                .collect()
+        }
         Value::Int64(n) => {
             let mut candidates = Vec::new();
             if *n != 0 {
@@ -937,6 +945,34 @@ fn generate_values_for_type(ty: &TypeExpr) -> Vec<Value> {
     generate_values_for_type_in_namespace(&mut interp, ty, None, &[], &[], &[], &[])
 }
 
+fn narrow_integer_bounds(type_name: &str) -> Option<(i64, i64)> {
+    match type_name {
+        "int8" => Some((i8::MIN.into(), i8::MAX.into())),
+        "int16" => Some((i16::MIN.into(), i16::MAX.into())),
+        "int32" => Some((i32::MIN.into(), i32::MAX.into())),
+        "uint8" => Some((0, u8::MAX.into())),
+        "uint16" => Some((0, u16::MAX.into())),
+        "uint32" => Some((0, u32::MAX.into())),
+        _ => None,
+    }
+}
+
+fn generate_narrow_integer_values(type_name: &str) -> Vec<Value> {
+    let (min, max) = narrow_integer_bounds(type_name).expect("a checked narrow integer primitive");
+    let values = if min < 0 {
+        generate_signed_integer_values(min, max)
+    } else {
+        generate_unsigned_integer_values(max)
+    };
+    values
+        .into_iter()
+        .map(|value| Value::Typed {
+            type_name: type_name.to_owned(),
+            value: Box::new(value),
+        })
+        .collect()
+}
+
 fn generate_signed_integer_values(min: i64, max: i64) -> Vec<Value> {
     unique_values(
         [0, 1, -1, 42, -42, 100, max, min]
@@ -1005,13 +1041,10 @@ fn generate_values_for_type_in_namespace(
 
     match ty {
         TypeExpr::Named(ident) => match ident.name.as_str() {
-            "int8" => generate_signed_integer_values(i8::MIN as i64, i8::MAX as i64),
-            "int16" => generate_signed_integer_values(i16::MIN as i64, i16::MAX as i64),
-            "int32" => generate_signed_integer_values(i32::MIN as i64, i32::MAX as i64),
+            "int8" | "int16" | "int32" | "uint8" | "uint16" | "uint32" => {
+                generate_narrow_integer_values(&ident.name)
+            }
             "int64" => generate_signed_integer_values(i64::MIN, i64::MAX),
-            "uint8" => generate_unsigned_integer_values(u8::MAX as i64),
-            "uint16" => generate_unsigned_integer_values(u16::MAX as i64),
-            "uint32" => generate_unsigned_integer_values(u32::MAX as i64),
             "uint64" => generate_uint64_values(),
             "string" => vec![
                 Value::String(String::new()),
@@ -3486,26 +3519,34 @@ mod tests {
     fn property_generator_supports_sized_numeric_primitives() {
         let int8_values = generate_values_for_type(&type_named("int8"));
         assert!(!int8_values.is_empty());
+        assert!(int8_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "int8")));
         assert!(int8_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (i8::MIN as i64..=i8::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (i8::MIN as i64..=i8::MAX as i64).contains(n))
         }));
 
         let int16_values = generate_values_for_type(&type_named("int16"));
         assert!(!int16_values.is_empty());
+        assert!(int16_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "int16")));
         assert!(int16_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (i16::MIN as i64..=i16::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (i16::MIN as i64..=i16::MAX as i64).contains(n))
         }));
 
         let int32_values = generate_values_for_type(&type_named("int32"));
         assert!(!int32_values.is_empty());
+        assert!(int32_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "int32")));
         assert!(int32_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (i32::MIN as i64..=i32::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (i32::MIN as i64..=i32::MAX as i64).contains(n))
         }));
 
         let uint32_values = generate_values_for_type(&type_named("uint32"));
         assert!(!uint32_values.is_empty());
+        assert!(uint32_values.iter().all(|value| matches!(value,
+            Value::Typed { type_name, .. } if type_name == "uint32")));
         assert!(uint32_values.iter().all(|value| {
-            matches!(value, Value::Int64(n) if (0..=u32::MAX as i64).contains(n))
+            matches!(value.payload(), Value::Int64(n) if (0..=u32::MAX as i64).contains(n))
         }));
 
         let uint64_values = generate_values_for_type(&type_named("uint64"));
@@ -3891,7 +3932,7 @@ mod tests {
                                         Value::List(items)
                                             if !items.is_empty()
                                                 && items.iter().all(|item| {
-                                                    matches!(item, Value::Int64(n) if (0..=255).contains(n))
+                                                    matches!(item, Value::Typed { type_name, value } if type_name == "uint8" && matches!(value.as_ref(), Value::Int64(n) if (0..=255).contains(n)))
                                                 })
                                     )
                             })
@@ -4061,6 +4102,91 @@ mod tests {
             }),
             "expected generic struct type arguments to resolve in the use-site namespace"
         );
+    }
+
+    #[test]
+    fn property_shrinker_keeps_narrow_integer_domains_at_every_boundary() {
+        for name in ["int8", "int16", "int32", "uint8", "uint16", "uint32"] {
+            let (min, max) = narrow_integer_bounds(name).unwrap();
+            for number in [min, max] {
+                let input = Value::Typed {
+                    type_name: name.to_owned(),
+                    value: Box::new(Value::Int64(number)),
+                };
+                let candidates = shrink_value(&input);
+                assert!(!candidates.is_empty() || number == 0, "{name}: {number}");
+                for candidate in candidates {
+                    assert!(matches!(candidate, Value::Typed { type_name, value }
+                        if type_name == name && matches!(value.as_ref(), Value::Int64(n) if (min..=max).contains(n))));
+                }
+            }
+        }
+        // The same magnitude is a valid int64 candidate; do not suppress it
+        // globally just to make narrow native literals compile.
+        assert!(shrink_value(&Value::Int64(-128)).contains(&Value::Int64(128)));
+    }
+
+    #[test]
+    fn property_shrinker_retains_integer_domains_inside_aggregate_candidates() {
+        let narrow = Value::Typed {
+            type_name: "int8".to_owned(),
+            value: Box::new(Value::Int64(-128)),
+        };
+        let aggregates = [
+            Value::List(vec![narrow.clone()]),
+            Value::Set(vec![narrow.clone()]),
+            Value::Map(vec![(narrow.clone(), narrow.clone())]),
+            Value::OptionalSome(Box::new(narrow.clone())),
+            Value::ResultOk(Box::new(narrow.clone())),
+            Value::ResultFail(Box::new(narrow.clone())),
+            Value::Enum {
+                type_name: "Choice".to_owned(),
+                variant: "number".to_owned(),
+                fields: vec![narrow.clone()],
+            },
+            Value::Struct {
+                concrete_type: None,
+                type_name: "Box[int8]".to_owned(),
+                fields: vec![("value".to_owned(), narrow)],
+            },
+        ];
+        fn check(value: &Value, count: &mut usize) {
+            match value {
+                Value::Typed { type_name, value } => {
+                    assert_eq!(type_name, "int8");
+                    assert!(matches!(value.as_ref(), Value::Int64(n) if (-128..=127).contains(n)));
+                    *count += 1;
+                }
+                Value::List(values) | Value::Set(values) | Value::Enum { fields: values, .. } => {
+                    for value in values {
+                        check(value, count);
+                    }
+                }
+                Value::Map(entries) => {
+                    for (key, value) in entries {
+                        check(key, count);
+                        check(value, count);
+                    }
+                }
+                Value::Struct { fields, .. } => {
+                    for (_, value) in fields {
+                        check(value, count);
+                    }
+                }
+                Value::OptionalSome(value) | Value::ResultOk(value) | Value::ResultFail(value) => {
+                    check(value, count)
+                }
+                Value::OptionalNone => {}
+                other => panic!("lost checked integer identity: {other:?}"),
+            }
+        }
+        for aggregate in aggregates {
+            let mut count = 0;
+            for candidate in shrink_value(&aggregate) {
+                check(&candidate, &mut count);
+            }
+            assert!(count > 0, "expected typed payload candidates");
+        }
     }
 
     #[test]

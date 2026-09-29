@@ -96,9 +96,18 @@ modes. It matches the interpreter's counterexample after deleting the source;
 original suite output stays separate from replay output. Additional regressions
 reject timeouts and an initial MIR fault that checked-HIR replay cannot reproduce.
 Candidate generation/order and backend-error propagation are covered by the
-shared shrink-search tests. Broader failing-input combinations, including
-refinements and narrow integer boundaries, still need auditing; passing the
-successful inventory does not prove every shrink candidate can be replayed.
+shared shrink-search tests. The integer-domain regression covers both signed
+and unsigned narrow pool boundaries and checks metadata through nested shrink
+candidates. `native_property_shrinking_preserves_narrow_boundaries_and_nested_inputs`
+compares debug and optimized native shrinking of an `int8` minimum with the
+interpreter, including generic record, list, and map inputs. It prevents an
+out-of-range positive candidate from replacing the signed minimum.
+The refinement audit found another concrete gap: `type Positive = int64 where
+value > 0` with a failing property currently shrinks its given value to zero.
+Its predicate must survive candidate generation and be checked before replay;
+integer range metadata alone does not address this. Refinements and further
+failing-input combinations remain open; passing the successful inventory does
+not prove every shrink candidate can be replayed.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

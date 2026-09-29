@@ -5888,7 +5888,10 @@ case and evaluates the existing bounded shrink search using fresh native
 processes. A standalone suite executable reports the original failure; the
 driver returns the shrunk counterexample separately. Backend build errors,
 timeouts, unsuccessful cleanup, and unreproducible failures remain runner
-errors, not passing properties or accepted shrink candidates.
+errors, not passing properties or accepted shrink candidates. Generated narrow
+integers retain their declared width through aggregates and shrinking. A shrink
+candidate outside that integer range is discarded before property execution;
+an invalid input must not become a counterexample through its range error.
 
 #### Property Tests with Capability Mocks
 

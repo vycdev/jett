@@ -1589,3 +1589,16 @@ checked HIR, with no source rechecking or runtime interpreter fallback. This
 initial implementation favors an exact existing contract over caching candidate
 objects. Normal source validation remains mandatory. A failure that cannot be
 reproduced in isolation must be reported, never converted to a passing suite.
+
+
+### Shrink candidate integer ranges
+
+A generated input and every accepted shrink candidate must remain representable
+by the declared `given` type. The audit found that an `int8` minimum input could
+shrink to 128: the interpreter treated the resulting range error as another
+property failure, while native replay correctly rejected the invalid literal.
+Narrow integer pools now retain concrete `Value::Typed` identity
+through containers and record fields. The shared shrinker preserves that
+identity and filters candidates against its primitive range. Candidate ordering
+and the 50-step bound stay unchanged. Plain `int64` and `uint64` carriers already
+encode their ranges; nominal refinement shrinking remains a separate audit.

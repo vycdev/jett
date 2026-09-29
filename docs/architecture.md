@@ -2842,6 +2842,11 @@ runs. The native property driver retains the exact checked case/function
 identities and uses shorter native prefixes to locate the first failing case
 without parsing debug output. It confirms an isolated replay, then reuses the
 interpreter's ordered 50-step shrink search with a native execution predicate.
+Narrow integer pools carry their exact primitive identity in `Value::Typed`.
+The shared shrinker preserves that identity and rejects out-of-range candidates
+before either execution backend runs them. These tags survive list/set/map,
+sum, enum, and struct payload shrinking; integer carriers at their full 64-bit
+width keep their existing representation and search order.
 Every replay clones the retained checked HIR, replaces only compiler-owned
 input construction, completes typed conversions, validates MIR, and compiles
 and links a fresh attempt. It does not reload source or execute property bodies
