@@ -7596,6 +7596,11 @@ comparison failures also match. This implementation parity does not establish
 the concurrent scheduling and cancellation checkpoints described in Rule Set 10;
 the current sequential `cancel` leaves its pending operand unchanged.
 
+Native conformance runs the same exhaustive verify/property suite gates on
+Linux GNU and Windows MSVC. The standalone fixture report includes their
+separate execution denominators; passing fixture gates alone does not certify
+the remaining full-language and distribution release gates.
+
 The full native parity gate is still incomplete: the current object count is
 recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See

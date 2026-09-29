@@ -274,6 +274,15 @@ obligation. A single percentage would hide the difference between code
 that merely lowers, code that executes successfully, and code that preserves
 failure semantics.
 
+The portable `native_conformance` integration suite runs on both supported
+x86-64 hosts (Linux GNU and Windows MSVC). It includes the exhaustive verify
+and property execution gates, plus failure probes that prevent a failed
+source assertion in a later body from publishing a native executable.
+The `native_parity` example also discovers top-level verify/property bodies
+from parsed source and reports their fixture and body denominators. Its exit
+status and `fixture_gates_complete` field certify those fixture gates only;
+`complete` remains false while the separately listed release gates are open.
+
 ## Current Coverage Matrix
 
 `tests/native_parity.json` is the machine-checked fixture inventory. The table

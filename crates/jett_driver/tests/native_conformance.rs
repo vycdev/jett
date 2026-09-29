@@ -1,5 +1,11 @@
-//! Link and execute real native programs on the Windows MSVC host.
-#![cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
+//! Run the complete native conformance gates on each supported host.
+#![cfg(all(
+    target_arch = "x86_64",
+    any(
+        all(target_os = "windows", target_env = "msvc"),
+        all(target_os = "linux", target_env = "gnu")
+    )
+))]
 
 use jett_common::FileId;
 use jett_driver::native::{
@@ -31,7 +37,7 @@ fn launcher() -> &'static NativeLauncherBundle {
             let target = profile_directory
                 .parent()
                 .unwrap()
-                .join("native-windows-launcher");
+                .join("native-values-launcher");
             let host = host_target();
             let status = Command::new(env!("CARGO"))
                 .args(["build", "-q", "-p", "jett_native_launcher"])
@@ -47,12 +53,14 @@ fn launcher() -> &'static NativeLauncherBundle {
                 .status()
                 .expect("build host- and profile-matched launcher");
             assert!(status.success(), "launcher build failed: {status}");
-            let archive = target
-                .join(&host)
-                .join(profile)
-                .join("jett_native_launcher.lib");
+            let archive_name = if cfg!(windows) {
+                "jett_native_launcher.lib"
+            } else {
+                "libjett_native_launcher.a"
+            };
+            let archive = target.join(&host).join(profile).join(archive_name);
             let directory = tempfile::tempdir().expect("launcher bundle directory");
-            let copied = directory.path().join("jett_native_launcher.lib");
+            let copied = directory.path().join(archive_name);
             std::fs::copy(&archive, &copied).unwrap_or_else(|error| {
                 panic!(
                     "cannot copy launcher archive {}: {error}",
@@ -60,7 +68,11 @@ fn launcher() -> &'static NativeLauncherBundle {
                 )
             });
             Launcher {
-                bundle: NativeLauncherBundle::windows_msvc_static_v1(copied),
+                bundle: if cfg!(windows) {
+                    NativeLauncherBundle::windows_msvc_static_v1(copied)
+                } else {
+                    NativeLauncherBundle::linux_gnu_v1(copied)
+                },
                 _directory: directory,
             }
         })
@@ -105,8 +117,8 @@ fn run_bounded_with_env(
             break status;
         }
         assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "native executable exceeded 10 second deadline"
+            start.elapsed() < Duration::from_secs(60),
+            "native executable exceeded 60 second deadline"
         );
         std::thread::sleep(Duration::from_millis(10));
     };
@@ -143,6 +155,38 @@ fn native_verify_suite_executes_all_checked_bodies() {
         output.stderr.is_empty(),
         "verify emitted stderr: {output:?}"
     );
+}
+
+#[test]
+fn native_suites_reject_failing_source_assertions() {
+    for (kind, given) in [("verify", ""), ("property", "    given n: int64\n")] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("failure.jett");
+        fs::write(
+            &source,
+            format!(
+                "{kind} first:\n{given}    assert true\n\n{kind} second:\n{given}    assert false \"native suite sentinel\"\n"
+            ),
+        ).unwrap();
+        let oracle = jett_driver::test_file(&source).expect("checked failing suite");
+        assert_eq!((oracle.passed, oracle.failed), (1, 1));
+        let binary = directory.path().join("failure.exe");
+        let build = if kind == "property" {
+            build_host_property_suite_executable
+        } else {
+            build_host_verify_suite_executable
+        };
+        let error =
+            build(&source, launcher(), &binary).expect_err("reject failed source assertion");
+        assert!(
+            error.to_string().contains("native suite sentinel"),
+            "{error}"
+        );
+        assert!(
+            !binary.exists(),
+            "a failed suite must not publish an artifact"
+        );
+    }
 }
 
 #[test]

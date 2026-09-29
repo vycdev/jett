@@ -2794,6 +2794,12 @@ the interpreter's current behavior. The public entry ABI still returns runtime
 status. Sequential cancellation leaves the operand unchanged; asynchronous
 scheduling and capability cancellation checkpoints remain unimplemented.
 
+The portable `native_conformance` integration suite executes the verify and
+property inventories on both supported hosts. The `native_parity` example
+discovers those bodies from parsed source and includes their execution counts
+alongside lowering, object, main, and runtime-contract results. Its successful
+fixture-gate result is distinct from a complete native release audit.
+
 The full native parity gate is still incomplete: the current object count is
 recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main
 outcomes and 25/25 runtime contracts, with 182/182 typed lowering. See

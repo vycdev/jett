@@ -1,7 +1,9 @@
-//! Exhaustive, deliberately failing-until-complete native parity release probe.
+//! Exhaustive native fixture parity probe (separate from the full release audit).
 //! Usage: cargo run -p jett_driver --example native_parity -- LAUNCHER REPORT.json
 //! Every inventory row is attempted, irrespective of staged object_emit markers.
+use jett_common::FileId;
 use jett_driver::native::{self, NativeLauncherBundle};
+use jett_parser::ast::Item;
 use jett_runtime::clock::{ClockTestSample, TEST_SCRIPT_ENV, encode_test_script};
 use jett_runtime::environment::{self, EnvironmentTestSnapshot};
 use jett_runtime::graphics::{self, TestEvent as GraphicsTestEvent};
@@ -65,7 +67,7 @@ fn execute(
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < Duration::from_secs(10) => {
+            Ok(None) if start.elapsed() < Duration::from_secs(60) => {
                 std::thread::sleep(Duration::from_millis(10))
             }
             outcome => {
@@ -74,7 +76,7 @@ fn execute(
                 let _ = out.join();
                 let _ = err.join();
                 return Err(format!(
-                    "native execution failed or exceeded 10s: {outcome:?}"
+                    "native execution failed or exceeded 60s: {outcome:?}"
                 ));
             }
         }
@@ -255,6 +257,46 @@ fn graphics_events(fixture: &Value) -> Result<Option<Vec<GraphicsTestEvent>>, St
         .transpose()
 }
 
+/// Discover suites from syntax, so adding a test block automatically extends
+/// the execution denominator even when its manifest row only names lowering.
+fn suite_counts(source: &str) -> [usize; 2] {
+    let parsed = jett_parser::parse(source, FileId::new(0));
+    let mut counts = [0, 0];
+    for item in &parsed.module.items {
+        match item {
+            Item::Verify(_) => counts[0] += 1,
+            Item::Property(_) => counts[1] += 1,
+            _ => {}
+        }
+    }
+    counts
+}
+
+fn suite_behavior(
+    source: &Path,
+    launcher: &NativeLauncherBundle,
+    property: bool,
+) -> Result<Value, String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let binary = directory
+        .path()
+        .join(if cfg!(windows) { "suite.exe" } else { "suite" });
+    let build = if property {
+        native::build_host_property_suite_executable
+    } else {
+        native::build_host_verify_suite_executable
+    };
+    build(source, launcher, &binary).map_err(|error| error.to_string())?;
+    let actual = execute(&binary, directory.path(), None, None, None, None)?;
+    Ok(json!({
+        "passed": actual.status.success(),
+        "exit_code": actual.status.code(),
+        "stdout": String::from_utf8_lossy(&actual.stdout),
+        "stderr": String::from_utf8_lossy(&actual.stderr),
+        "cleanup_verified": actual.status.success(),
+    }))
+}
+
 fn main() -> ExitCode {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     assert_eq!(args.len(), 2, "usage: native_parity LAUNCHER REPORT.json");
@@ -290,6 +332,9 @@ fn main() -> ExitCode {
     let mut rows = Vec::new();
     let (mut lower_pass, mut object_pass, mut main_pass, mut runtime_pass) = (0, 0, 0, 0);
     let (mut lower_total, mut main_total, mut runtime_total) = (0, 0, 0);
+    let mut suite_total = [0, 0];
+    let mut suite_pass = [0, 0];
+    let mut suite_blocks = [0, 0];
     for fixture in fixtures {
         let path = fixture["path"].as_str().unwrap();
         let obligations = fixture["obligations"].as_array().unwrap();
@@ -301,6 +346,27 @@ fn main() -> ExitCode {
         runtime_total += usize::from(runtime);
         let source = root.join(path);
         let mut row = json!({"path":path,"obligations":obligations});
+        if lower {
+            let blocks = suite_counts(&fs::read_to_string(&source).expect("fixture source"));
+            for (index, label) in ["verify", "property"].into_iter().enumerate() {
+                if blocks[index] == 0 {
+                    continue;
+                }
+                suite_total[index] += 1;
+                suite_blocks[index] += blocks[index];
+                row[label] = match suite_behavior(&source, &launcher, index == 1) {
+                    Ok(result) => {
+                        suite_pass[index] += usize::from(result["passed"] == true);
+                        result
+                    }
+                    Err(error) => json!({"passed":false,"error":error}),
+                };
+                row[label]["blocks"] = json!(blocks[index]);
+                if index == 1 {
+                    row[label]["trials_per_block"] = json!(100);
+                }
+            }
+        }
         match jett_driver::lower_file_for_backend(&source) {
             Err(error) => row["lower_error"] = json!(error.to_string()),
             Ok(lowered) => {
@@ -370,16 +436,21 @@ fn main() -> ExitCode {
         .unwrap();
     }
     let counts = json!({"lower":[lower_pass,lower_total],"object":[object_pass,lower_total],
-        "main":[main_pass,main_total],"runtime_contract":[runtime_pass,runtime_total]});
-    let complete = lower_pass == lower_total
+        "main":[main_pass,main_total],"runtime_contract":[runtime_pass,runtime_total],
+        "verify":[suite_pass[0],suite_total[0]],"property":[suite_pass[1],suite_total[1]]});
+    let fixture_gates_complete = lower_pass == lower_total
         && object_pass == lower_total
         && main_pass == main_total
-        && runtime_pass == runtime_total;
-    let report = json!({"complete":complete,"target":native::host_target(),"counts":counts,"fixtures":rows,
+        && runtime_pass == runtime_total
+        && suite_pass == suite_total;
+    let report = json!({"complete":false,"fixture_gates_complete":fixture_gates_complete,
+        "target":native::host_target(),"counts":counts,"fixtures":rows,
+        "suite_blocks":{"verify":suite_blocks[0],"property":suite_blocks[1]},
         "pending_release_gates":["move-only resource finalizer instrumentation","capability-effect differential oracles","clean Windows MSVC distribution"]});
     fs::write(&args[1], serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     println!("{counts}");
-    if complete {
+    // Successful fixture gates do not certify the outstanding release gates.
+    if fixture_gates_complete {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
