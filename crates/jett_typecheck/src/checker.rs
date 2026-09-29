@@ -385,19 +385,6 @@ impl StaticReflectionEnumValue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReflectionBranchContext {
-    TopLevel,
-    StaticReflectionBranch,
-    RuntimeBranch,
-}
-
-impl ReflectionBranchContext {
-    fn permits_shape_reflection(self) -> bool {
-        matches!(self, Self::TopLevel | Self::StaticReflectionBranch)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MachineStateTruth {
     Is,
     IsNot,
@@ -6286,11 +6273,9 @@ impl<'a> TypeChecker<'a> {
         param_facts: ReflectionParamFacts,
     ) {
         let uses_type_param_reflection = self.generic_function_uses_type_param_reflection(func);
-        let branch_specializable = uses_type_param_reflection
-            && self.generic_function_reflection_is_branch_specializable(func);
-        // Every concrete invocation needs a checked body. Reflection placement
-        // controls proof specialization, never whether ordinary typing runs.
-        let specialize_reflection_branches = branch_specializable || !param_facts.is_empty();
+        // Trusted facts remain available inside closures and arbitrary expression
+        // contexts. Unknown guards fall back to checking every branch normally.
+        let specialize_reflection_branches = uses_type_param_reflection || !param_facts.is_empty();
 
         let definition = self.declaration_def_id(func.name.span);
         let specialization = Self::generic_specialization(
@@ -6847,464 +6832,6 @@ impl<'a> TypeChecker<'a> {
         self.block_uses_type_param_reflection(&func.body, &type_params)
     }
 
-    fn generic_function_reflection_is_branch_specializable(&self, func: &FunctionDef) -> bool {
-        let type_params = func
-            .type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect::<HashSet<_>>();
-        self.block_reflection_is_branch_specializable(&func.body, &type_params)
-    }
-
-    fn block_reflection_is_branch_specializable(
-        &self,
-        block: &Block,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        self.block_reflection_is_branch_specializable_in_context(
-            block,
-            type_params,
-            ReflectionBranchContext::TopLevel,
-        )
-    }
-
-    fn block_reflection_is_branch_specializable_in_context(
-        &self,
-        block: &Block,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        block
-            .stmts
-            .iter()
-            .all(|stmt| self.stmt_reflection_is_branch_specializable(stmt, type_params, context))
-    }
-
-    fn stmt_reflection_is_branch_specializable(
-        &self,
-        stmt: &Stmt,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        if context == ReflectionBranchContext::StaticReflectionBranch {
-            return true;
-        }
-
-        match stmt {
-            Stmt::If(if_stmt) => {
-                let condition_static =
-                    self.expr_is_potential_static_reflection_condition(&if_stmt.condition);
-                if self.expr_uses_type_param_reflection(&if_stmt.condition, type_params)
-                    && !condition_static
-                {
-                    return false;
-                }
-
-                let then_context = if condition_static {
-                    ReflectionBranchContext::StaticReflectionBranch
-                } else {
-                    ReflectionBranchContext::RuntimeBranch
-                };
-                let then_ok = self.block_reflection_is_branch_specializable_in_context(
-                    &if_stmt.then_block,
-                    type_params,
-                    then_context,
-                );
-
-                let mut all_conditions_static = condition_static;
-                let else_ifs_ok = if_stmt.else_ifs.iter().all(|(condition, block)| {
-                    let else_if_static =
-                        self.expr_is_potential_static_reflection_condition(condition);
-                    all_conditions_static &= else_if_static;
-                    if self.expr_uses_type_param_reflection(condition, type_params)
-                        && !else_if_static
-                    {
-                        return false;
-                    }
-                    let else_if_context = if else_if_static {
-                        ReflectionBranchContext::StaticReflectionBranch
-                    } else {
-                        ReflectionBranchContext::RuntimeBranch
-                    };
-                    self.block_reflection_is_branch_specializable_in_context(
-                        block,
-                        type_params,
-                        else_if_context,
-                    )
-                });
-
-                then_ok
-                    && else_ifs_ok
-                    && if_stmt.else_block.as_ref().map_or(true, |block| {
-                        let else_context = if all_conditions_static {
-                            ReflectionBranchContext::StaticReflectionBranch
-                        } else {
-                            ReflectionBranchContext::RuntimeBranch
-                        };
-                        self.block_reflection_is_branch_specializable_in_context(
-                            block,
-                            type_params,
-                            else_context,
-                        )
-                    })
-            }
-            Stmt::VarDecl(decl) => {
-                !self.expr_uses_type_param_reflection(&decl.value, type_params)
-                    || (context.permits_shape_reflection()
-                        && (self
-                            .expr_is_direct_reflection_statement_source(&decl.value, type_params)
-                            || (!decl.mutable
-                                && self.expr_is_reflection_local_fact_source(
-                                    &decl.value,
-                                    type_params,
-                                ))))
-            }
-            Stmt::Return(ret) => ret.value.as_ref().map_or(true, |expr| {
-                !self.expr_uses_type_param_reflection(expr, type_params)
-                    || (context.permits_shape_reflection()
-                        && (self.expr_is_direct_reflection_statement_source(expr, type_params)
-                            || self.expr_forwards_direct_type_info(expr, type_params)))
-            }),
-            Stmt::ComptimeTypeBind(bind) => {
-                self.comptime_type_bind_reflection_is_specializable(bind, type_params, context)
-            }
-            Stmt::For(for_stmt) => {
-                self.for_reflection_is_branch_specializable(for_stmt, type_params, context)
-            }
-            Stmt::Match(match_stmt) => {
-                self.match_reflection_is_branch_specializable(match_stmt, type_params, context)
-            }
-            _ => !self.stmt_uses_type_param_reflection(stmt, type_params),
-        }
-    }
-
-    fn comptime_type_bind_reflection_is_specializable(
-        &self,
-        bind: &ast::ComptimeTypeBindStmt,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        let source_mentions_type_param = comptime_type_info_binding(&bind.value)
-            .or_else(|| comptime_type_arg_binding(&bind.value).map(|(ty, _)| ty))
-            .is_some_and(|ty| Self::type_expr_mentions_type_param(ty, type_params));
-
-        if source_mentions_type_param {
-            return context.permits_shape_reflection()
-                && self.block_reflection_is_branch_specializable_in_context(
-                    &bind.body,
-                    type_params,
-                    context,
-                );
-        }
-
-        !self.expr_uses_type_param_reflection(&bind.value, type_params)
-            && self.block_reflection_is_branch_specializable_in_context(
-                &bind.body,
-                type_params,
-                context,
-            )
-    }
-
-    fn for_reflection_is_branch_specializable(
-        &self,
-        for_stmt: &ast::ForStmt,
-        type_params: &HashSet<String>,
-        context: ReflectionBranchContext,
-    ) -> bool {
-        if let Some(owner_ty) = direct_reflected_loop_owner_type(&for_stmt.iterable) {
-            if Self::type_expr_mentions_type_param(owner_ty, type_params) {
-                return context.permits_shape_reflection()
-                    && self.block_reflection_is_branch_specializable_in_context(
-                        &for_stmt.body,
-                        type_params,
-                        ReflectionBranchContext::StaticReflectionBranch,
-                    );
-            }
-        }
-
-        !self.expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
-            && self.block_reflection_is_branch_specializable_in_context(
-                &for_stmt.body,
-                type_params,
-                context,
-            )
-    }
-
-    fn match_reflection_is_branch_specializable(
-        &self,
-        match_stmt: &ast::MatchStmt,
-        type_params: &HashSet<String>,
-        _context: ReflectionBranchContext,
-    ) -> bool {
-        let scrutinee_static = self.expr_is_potential_static_reflection_value(&match_stmt.expr);
-        if self.expr_uses_type_param_reflection(&match_stmt.expr, type_params) && !scrutinee_static
-        {
-            return false;
-        }
-
-        let arm_context = if scrutinee_static {
-            ReflectionBranchContext::StaticReflectionBranch
-        } else {
-            ReflectionBranchContext::RuntimeBranch
-        };
-
-        match_stmt.arms.iter().all(|arm| {
-            self.block_reflection_is_branch_specializable_in_context(
-                &arm.body,
-                type_params,
-                arm_context,
-            )
-        })
-    }
-
-    fn expr_is_reflection_local_fact_source(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        self.expr_is_type_info_reflection(expr, type_params)
-            || self.expr_is_type_kind_reflection(expr, type_params)
-            || self.expr_is_type_primitive_reflection_value(expr, type_params)
-    }
-
-    fn expr_is_direct_reflection_statement_source(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        match expr {
-            Expr::Paren(inner, _) => {
-                self.expr_is_direct_reflection_statement_source(inner, type_params)
-            }
-            Expr::Handle(target, _, _, _) => {
-                self.expr_is_direct_reflection_statement_source(target, type_params)
-            }
-            Expr::GenericCall(callee, type_args, _, _) => {
-                self.resolved_expr_name(callee).is_some_and(|name| {
-                    matches!(
-                        name.as_str(),
-                        "type.variant_value"
-                            | "type.machine_state_value"
-                            | "type.construct_start"
-                            | "type.construct_variant_start"
-                            | "type.construct_machine_start"
-                            | "type.construct_finish"
-                    )
-                }) && type_args
-                    .iter()
-                    .any(|arg| Self::type_expr_mentions_type_param(arg, type_params))
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_forwards_direct_type_info(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        let args = match expr {
-            Expr::Paren(inner, _) => {
-                return self.expr_forwards_direct_type_info(inner, type_params);
-            }
-            Expr::Call(_, args, _) | Expr::GenericCall(_, _, args, _) => args,
-            _ => return false,
-        };
-        let direct_info = |value: &Expr| match value {
-            Expr::View(inner, _) => self.expr_is_type_info_reflection(inner, type_params),
-            other => self.expr_is_type_info_reflection(other, type_params),
-        };
-        args.iter().any(|arg| direct_info(&arg.value))
-            && args.iter().all(|arg| {
-                !self.expr_uses_type_param_reflection(&arg.value, type_params)
-                    || direct_info(&arg.value)
-            })
-    }
-
-    fn expr_is_potential_static_reflection_condition(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::BoolLiteral(_, _) => true,
-            Expr::Paren(inner, _) => self.expr_is_potential_static_reflection_condition(inner),
-            Expr::GenericCall(callee, _, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.has_secret")
-            }
-            Expr::Unary(UnaryOp::Not, inner, _) => {
-                self.expr_is_potential_static_reflection_condition(inner)
-            }
-            Expr::Binary(lhs, BinOp::And | BinOp::Or, rhs, _) => {
-                self.expr_is_potential_static_reflection_condition(lhs)
-                    && self.expr_is_potential_static_reflection_condition(rhs)
-            }
-            Expr::Binary(lhs, BinOp::Eq | BinOp::NotEq, rhs, _) => {
-                ((self.expr_is_potential_static_reflection_value(lhs)
-                    || self.expr_is_potential_type_name_value(lhs))
-                    && self.expr_is_static_reflection_literal(rhs))
-                    || (self.expr_is_static_reflection_literal(lhs)
-                        && (self.expr_is_potential_static_reflection_value(rhs)
-                            || self.expr_is_potential_type_name_value(rhs)))
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_potential_static_reflection_value(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Paren(inner, _) => self.expr_is_potential_static_reflection_value(inner),
-            Expr::Ident(_) => true,
-            Expr::GenericCall(callee, _, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.kind_tag")
-            }
-            Expr::FieldAccess(_, field, _) if field.name == "kind_tag" => true,
-            Expr::Handle(target, _, body, _) => {
-                self.expr_is_potential_optional_type_primitive_reflection(target)
-                    && Self::handle_default_expr(body)
-                        .is_some_and(|default| self.expr_is_type_primitive_literal(default))
-            }
-            _ => self.expr_is_static_reflection_value(expr, &HashSet::new()),
-        }
-    }
-
-    fn expr_is_potential_type_name_value(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Paren(inner, _) => self.expr_is_potential_type_name_value(inner),
-            Expr::GenericCall(callee, _, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.name")
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_potential_optional_type_primitive_reflection(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Paren(inner, _) => {
-                self.expr_is_potential_optional_type_primitive_reflection(inner)
-            }
-            Expr::FieldAccess(_, field, _) if field.name == "primitive_tag" => true,
-            Expr::GenericCall(callee, _, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.primitive_tag")
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_static_reflection_value(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        self.expr_is_type_kind_reflection(expr, type_params)
-            || self.expr_is_type_primitive_reflection_value(expr, type_params)
-            || self.expr_is_type_name_reflection(expr, type_params)
-    }
-
-    fn expr_is_static_reflection_literal(&self, expr: &Expr) -> bool {
-        self.expr_is_type_kind_literal(expr)
-            || self.expr_is_type_primitive_literal(expr)
-            || matches!(expr, Expr::StringLiteral(_, _))
-    }
-
-    fn expr_is_type_name_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        match expr {
-            Expr::GenericCall(callee, type_args, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.name")
-                    && type_args.len() == 1
-                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
-            }
-            Expr::Paren(inner, _) => self.expr_is_type_name_reflection(inner, type_params),
-            _ => false,
-        }
-    }
-
-    fn expr_is_type_kind_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        match expr {
-            Expr::GenericCall(callee, type_args, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.kind_tag")
-                    && type_args.len() == 1
-                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
-            }
-            Expr::FieldAccess(base, field, _) if field.name == "kind_tag" => {
-                self.expr_is_type_info_reflection(base, type_params)
-            }
-            Expr::Paren(inner, _) => self.expr_is_type_kind_reflection(inner, type_params),
-            _ => false,
-        }
-    }
-
-    fn expr_is_type_primitive_reflection_value(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        match expr {
-            Expr::Handle(target, _, body, _) => {
-                self.expr_is_optional_type_primitive_reflection(target, type_params)
-                    && Self::handle_default_expr(body)
-                        .is_some_and(|default| self.expr_is_type_primitive_literal(default))
-            }
-            Expr::Paren(inner, _) => {
-                self.expr_is_type_primitive_reflection_value(inner, type_params)
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_optional_type_primitive_reflection(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        match expr {
-            Expr::GenericCall(callee, type_args, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.primitive_tag")
-                    && type_args.len() == 1
-                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
-            }
-            Expr::FieldAccess(base, field, _) if field.name == "primitive_tag" => {
-                self.expr_is_type_info_reflection(base, type_params)
-            }
-            Expr::Paren(inner, _) => {
-                self.expr_is_optional_type_primitive_reflection(inner, type_params)
-            }
-            _ => false,
-        }
-    }
-
-    fn expr_is_type_info_reflection(&self, expr: &Expr, type_params: &HashSet<String>) -> bool {
-        match expr {
-            Expr::GenericCall(callee, type_args, args, _) => {
-                args.is_empty()
-                    && self
-                        .resolved_expr_name(callee)
-                        .is_some_and(|name| name == "type.info")
-                    && type_args.len() == 1
-                    && Self::type_expr_mentions_type_param(&type_args[0], type_params)
-            }
-            Expr::Paren(inner, _) => self.expr_is_type_info_reflection(inner, type_params),
-            _ => false,
-        }
-    }
-
-    fn expr_is_type_kind_literal(&self, expr: &Expr) -> bool {
-        self.type_kind_literal_name(expr).is_some()
-    }
-
-    fn expr_is_type_primitive_literal(&self, expr: &Expr) -> bool {
-        self.type_primitive_literal_name(expr).is_some()
-    }
-
     fn type_kind_literal_name(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Paren(inner, _) => self.type_kind_literal_name(inner),
@@ -7577,105 +7104,6 @@ impl<'a> TypeChecker<'a> {
             .stmts
             .iter()
             .any(|stmt| self.stmt_uses_type_param_reflection(stmt, type_params))
-    }
-
-    fn block_type_param_reflection_span(
-        &self,
-        block: &Block,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        block
-            .stmts
-            .iter()
-            .find_map(|stmt| self.stmt_type_param_reflection_span(stmt, type_params))
-    }
-
-    fn if_branch_type_param_reflection_span(
-        &self,
-        if_stmt: &ast::IfStmt,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        self.block_type_param_reflection_span(&if_stmt.then_block, type_params)
-            .or_else(|| {
-                if_stmt.else_ifs.iter().find_map(|(_, block)| {
-                    self.block_type_param_reflection_span(block, type_params)
-                })
-            })
-            .or_else(|| {
-                if_stmt
-                    .else_block
-                    .as_ref()
-                    .and_then(|block| self.block_type_param_reflection_span(block, type_params))
-            })
-    }
-
-    fn stmt_type_param_reflection_span(
-        &self,
-        stmt: &Stmt,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        match stmt {
-            Stmt::VarDecl(decl) => self
-                .expr_uses_type_param_reflection(&decl.value, type_params)
-                .then(|| decl.value.span()),
-            Stmt::Assign(assign) => self
-                .expr_uses_type_param_reflection(&assign.target, type_params)
-                .then(|| assign.target.span())
-                .or_else(|| {
-                    self.expr_uses_type_param_reflection(&assign.value, type_params)
-                        .then(|| assign.value.span())
-                }),
-            Stmt::Return(ret) => ret.value.as_ref().and_then(|expr| {
-                self.expr_uses_type_param_reflection(expr, type_params)
-                    .then(|| expr.span())
-            }),
-            Stmt::Respond(resp) => self
-                .expr_uses_type_param_reflection(&resp.value, type_params)
-                .then(|| resp.value.span()),
-            Stmt::ComptimeTypeBind(bind) => self
-                .expr_uses_type_param_reflection(&bind.value, type_params)
-                .then(|| bind.value.span())
-                .or_else(|| self.block_type_param_reflection_span(&bind.body, type_params)),
-            Stmt::If(if_stmt) => self
-                .expr_uses_type_param_reflection(&if_stmt.condition, type_params)
-                .then(|| if_stmt.condition.span())
-                .or_else(|| self.if_branch_type_param_reflection_span(if_stmt, type_params)),
-            Stmt::For(for_stmt) => self
-                .expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
-                .then(|| for_stmt.iterable.span())
-                .or_else(|| self.block_type_param_reflection_span(&for_stmt.body, type_params)),
-            Stmt::While(while_stmt) => self
-                .expr_uses_type_param_reflection(&while_stmt.condition, type_params)
-                .then(|| while_stmt.condition.span())
-                .or_else(|| self.block_type_param_reflection_span(&while_stmt.body, type_params)),
-            Stmt::Match(match_stmt) => self
-                .expr_uses_type_param_reflection(&match_stmt.expr, type_params)
-                .then(|| match_stmt.expr.span())
-                .or_else(|| {
-                    match_stmt.arms.iter().find_map(|arm| {
-                        self.block_type_param_reflection_span(&arm.body, type_params)
-                    })
-                }),
-            Stmt::Expr(expr_stmt) => self
-                .expr_uses_type_param_reflection(&expr_stmt.expr, type_params)
-                .then(|| expr_stmt.expr.span()),
-            Stmt::Assert(assert_stmt) => self
-                .expr_uses_type_param_reflection(&assert_stmt.condition, type_params)
-                .then(|| assert_stmt.condition.span())
-                .or_else(|| {
-                    assert_stmt.message.as_ref().and_then(|message| {
-                        self.expr_uses_type_param_reflection(message, type_params)
-                            .then(|| message.span())
-                    })
-                }),
-            Stmt::Breakpoint(breakpoint_stmt) => {
-                breakpoint_stmt.condition.as_ref().and_then(|expr| {
-                    self.expr_uses_type_param_reflection(expr, type_params)
-                        .then(|| expr.span())
-                })
-            }
-            Stmt::Trace(_) | Stmt::Use(_) | Stmt::Break(_) | Stmt::Continue(_) => None,
-        }
     }
 
     fn stmt_uses_type_param_reflection(&self, stmt: &Stmt, type_params: &HashSet<String>) -> bool {
@@ -9085,18 +8513,6 @@ impl<'a> TypeChecker<'a> {
                 }
                 return;
             }
-
-            let active_type_params = self.type_var_subst.keys().cloned().collect::<HashSet<_>>();
-            if let Some(span) =
-                self.if_branch_type_param_reflection_span(if_stmt, &active_type_params)
-            {
-                self.check_condition_expr(&if_stmt.condition);
-                for (else_if_cond, _) in &if_stmt.else_ifs {
-                    self.check_condition_expr(else_if_cond);
-                }
-                self.sink.emit(errors::invalid_comptime_type_binding(span));
-                return;
-            }
         }
 
         self.check_condition_expr(&if_stmt.condition);
@@ -9405,17 +8821,6 @@ impl<'a> TypeChecker<'a> {
         None
     }
 
-    fn match_arm_type_param_reflection_span(
-        &self,
-        match_stmt: &ast::MatchStmt,
-        type_params: &HashSet<String>,
-    ) -> Option<Span> {
-        match_stmt
-            .arms
-            .iter()
-            .find_map(|arm| self.block_type_param_reflection_span(&arm.body, type_params))
-    }
-
     fn check_for(&mut self, for_stmt: &ast::ForStmt) {
         let iterable_type = self.check_expr(&for_stmt.iterable);
 
@@ -9623,24 +9028,11 @@ impl<'a> TypeChecker<'a> {
                 CheckedStaticSelection::MatchArm(selected_arm),
             );
         }
-        let unknown_reflection_span = if self.specialize_reflection_branches
-            && selected_static_arm.is_none()
-        {
-            let active_type_params = self.type_var_subst.keys().cloned().collect::<HashSet<_>>();
-            if self.expr_uses_type_param_reflection(&match_stmt.expr, &active_type_params) {
-                Some(match_stmt.expr.span())
-            } else {
-                self.match_arm_type_param_reflection_span(match_stmt, &active_type_params)
-            }
-        } else {
-            None
-        };
         let mut covered = HashSet::new();
         let mut has_other = false;
 
         for (arm_index, arm) in match_stmt.arms.iter().enumerate() {
-            let check_body = unknown_reflection_span.is_none()
-                && selected_static_arm.map_or(true, |selected| selected == arm_index);
+            let check_body = selected_static_arm.map_or(true, |selected| selected == arm_index);
 
             match &arm.pattern {
                 ast::Pattern::Ident(name) => {
@@ -9701,10 +9093,6 @@ impl<'a> TypeChecker<'a> {
             if check_body {
                 self.check_block(&arm.body);
             }
-        }
-
-        if let Some(span) = unknown_reflection_span {
-            self.sink.emit(errors::invalid_comptime_type_binding(span));
         }
 
         if !has_other {
@@ -14996,13 +14384,6 @@ fn comptime_type_variants_binding(expr: &Expr) -> Option<&TypeExpr> {
         return None;
     }
     type_args.first()
-}
-
-fn direct_reflected_loop_owner_type(expr: &Expr) -> Option<&TypeExpr> {
-    comptime_type_fields_binding(expr)
-        .or_else(|| comptime_type_variants_binding(expr))
-        .or_else(|| comptime_type_machine_states_binding(expr))
-        .or_else(|| comptime_type_machine_fields_binding(expr))
 }
 
 fn comptime_type_variant_value_binding(expr: &Expr) -> Option<&TypeExpr> {

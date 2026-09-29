@@ -1152,7 +1152,9 @@ inside interpolation, call arguments, and closures. Reflection placement never
 allows ordinary type checking to be skipped. A `comptime type` binding must be
 valid during compilation even behind an ordinary runtime condition: for example,
 `type.arg[string](0)` is invalid regardless of the condition's runtime value.
-Only supported reflection specialization may exclude an unreachable branch.
+Valid bindings under unknown runtime guards are checked normally in every
+branch. Only supported reflection specialization may exclude an unreachable
+branch.
 
 Generic specialization uses only reflection facts that remain structurally
 tied to the reflected type: direct `TypeKind` / `TypePrimitive` comparisons,
@@ -1160,6 +1162,10 @@ immutable locals carrying those tags, typed helper parameters receiving them
 from the same generic instantiation, and matching arms. Arbitrary tags supplied
 by callers are not facts about `T`. The checker can use visible facts to
 determine branch reachability and validate casts for a concrete instantiation.
+Known selections are recorded inside inline functions and are independent of
+where other reflection expressions occur in the body. When no selection is
+known, the checker checks all branches, including their scoped type bindings;
+there is no separate placement restriction on otherwise valid bindings.
 Predicate calls that return `bool` and reflection comparisons copied into
 arbitrary `bool` locals do not carry type evidence. This conservative boundary
 prevents facts from being detached from their generic parameter or from hiding

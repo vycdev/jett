@@ -228,6 +228,25 @@ fn native_reflected_alias_callbacks_match_interpreter() {
 }
 
 #[test]
+fn native_closure_reflection_guards_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/closure_reflection_guards.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("closure reflection guard oracle");
+    assert_eq!(
+        expected.stdout,
+        "0\n2\n0\n3\ntype:int64:0\ntype:list[int64]:2\n2\n3\n4\n0\n0\n0\n2\n0\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("closure_reflection_guards.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native closure reflection guards");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_reflection_expressions_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_reflection_expressions.jett");

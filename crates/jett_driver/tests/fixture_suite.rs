@@ -2099,8 +2099,8 @@ compile_fail_fixture!(
     compile_fail_generic_reflection_guarded_type_arg_error,
     "generic_reflection_guarded_type_arg_error.jett"
 );
-compile_fail_fixture!(
-    compile_fail_generic_reflection_guarded_unknown_fact,
+compile_pass_fixture!(
+    compile_pass_generic_reflection_guarded_unknown_fact,
     "generic_reflection_guarded_unknown_fact.jett"
 );
 compile_fail_fixture!(
@@ -2111,8 +2111,8 @@ compile_fail_fixture!(
     compile_fail_generic_reflection_match_reachable_arm_error,
     "generic_reflection_match_reachable_arm_error.jett"
 );
-compile_fail_fixture!(
-    compile_fail_generic_reflection_match_unknown_fact,
+compile_pass_fixture!(
+    compile_pass_generic_reflection_match_unknown_fact,
     "generic_reflection_match_unknown_fact.jett"
 );
 compile_fail_fixture!(
@@ -3005,4 +3005,14 @@ compile_fail_fixture!(
 compile_fail_fixture!(
     compile_fail_generic_reflection_body_type_error,
     "generic_reflection_body_type_error.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_closure_reflection_boolean_boundaries,
+    "closure_reflection_boolean_boundaries.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_generic_reflection_unknown_guard_invalid_binding,
+    "generic_reflection_unknown_guard_invalid_binding.jett"
 );

@@ -1,4 +1,3 @@
-# ERROR: E0345
 function helper_match_requires_known_kind[T](value: T, kind: TypeKind) returns int64:
     match kind:
         list_type:

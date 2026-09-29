@@ -78,18 +78,14 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Audit trusted reflection guards inside closures. A generic factory whose
-  callback tests `type.kind_tag[T]() == TypeKind.list_type` currently checks
-  its unreachable list-only branch for `T = int64` and reports E0311. Concrete
-  generic checking is retained, but proof specialization still depends on a
-  whole-function reflection placement classifier.
-
 - Audit interpreter source instances of compiler-owned facades that use
   different native helpers and lack checked source bodies.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
-- Audit primitive-width/refinement dispatch identity against interpreter runtime
-  identity rather than assuming every checked TypeId has a distinct runtime name.
+- Preserve primitive-width/refinement interface dispatch identity in the
+  interpreter. A concrete probe with `implement Named for int8` and `int64`
+  prints `narrow`, `wide` natively but `wide`, `wide` in the interpreter.
+  Canonical runtime identity currently collapses both integer values.
 
 Generic struct interface dispatch uses the concrete instantiated owner retained
 on the value. Implementations for `Box[int64]`, `Box[string]`, and
@@ -246,3 +242,21 @@ may have no global reflection-table entry, so argument selection now retains
 metadata from the lexical scope or from the interpreter's existing type
 reflection representation. This prevents a missing callee context from
 evaluating `127 + 1` as 128 instead of -128.
+
+Settled reflection guard policy: a valid `comptime type` binding is allowed
+under an unknown runtime guard when every branch typechecks. An invalid binding
+still fails at compile time, regardless of the runtime condition. Unknown tags,
+predicate calls, and detached boolean locals do not provide type evidence.
+The former `generic_reflection_guarded_unknown_fact` and
+`generic_reflection_match_unknown_fact` negative fixtures become compile-pass
+fixtures; runtime coverage exercises both outcomes of each guard.
+
+Known reflection branch selection also applies inside closures and after
+interpolation or other reflection expressions. The checker no longer uses a
+whole-body placement classifier to decide whether these facts are available.
+`closure_reflection_guards` compares runtime and baked callbacks with scalar
+and list instantiations. `closure_reflection_boolean_boundaries` keeps
+predicate-call and detached-bool casts rejected inside callbacks. The
+`generic_reflection_unknown_guard_invalid_binding` negative fixture checks
+invalid lookups in unknown match arms and closures, complementing the existing
+runtime-if regression.

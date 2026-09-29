@@ -7551,7 +7551,10 @@ inside interpolation, call arguments, and closures. Reflection placement never
 allows ordinary type checking to be skipped. A `comptime type` binding must be
 valid during compilation even behind an ordinary runtime condition: for example,
 `type.arg[string](0)` is invalid regardless of the condition's runtime value.
-Only supported reflection specialization may exclude an unreachable branch.
+Valid bindings are allowed behind unknown runtime guards when all branches
+typecheck. An unknown guard does not itself make a binding invalid or provide
+evidence for a cast. Only supported reflection specialization may exclude an
+unreachable branch.
 
 
 Generic casts may be justified only by reflection evidence that stays visibly
@@ -7559,8 +7562,10 @@ tied to the reflected type. Direct `TypeKind` / `TypePrimitive` comparisons,
 immutable locals carrying those tags, typed helper parameters receiving them
 from the same generic instantiation, and matching arms can specialize a branch
 for that instantiation. Arbitrary caller-supplied tags are not facts about `T`.
-A predicate call returning `bool` does not create such a fact,
-and copying a reflection comparison into an arbitrary `bool` local discards
+The same trusted facts apply inside inline functions and after reflection
+expressions used in interpolation or ordinary arguments; expression placement
+does not discard a known fact. A predicate call returning `bool` does not
+create such a fact, and copying a reflection comparison into an arbitrary `bool` local discards
 the evidence.
 
 This conservative rule keeps type proofs local for agents and prevents broad
