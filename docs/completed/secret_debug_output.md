@@ -28,3 +28,6 @@ closure, inferred-binding, pipeline, and builder cases. Seven secret-bearing
 pending reflected owner/builder failure fixtures compare error output. Runtime
 tests prove redaction ignores invalid hidden handles and large pending depths,
 does not confer equality, and does not mistake public marker text for a secret.
+
+Generic task joins preserve the instantiated error type in handler observations,
+including when one source body is called with both secret and public errors.

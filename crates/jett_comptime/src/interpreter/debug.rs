@@ -27,6 +27,28 @@ impl Interpreter {
             | Expr::View(inner, _)
             | Expr::Paren(inner, _)
             | Expr::Run(inner, _) => self.debug_expression_type(inner),
+            Expr::Join(inner, span) => {
+                let ty = self.debug_expression_type(inner)?;
+                if matches!(self.inference_base_type(&ty), TypeExpr::Generic(name, _, _) if name.name == "result")
+                {
+                    Some(ty)
+                } else {
+                    Some(TypeExpr::Generic(
+                        super::Ident {
+                            name: "result".into(),
+                            span: *span,
+                        },
+                        vec![
+                            ty,
+                            TypeExpr::Named(super::Ident {
+                                name: "string".into(),
+                                span: *span,
+                            }),
+                        ],
+                        *span,
+                    ))
+                }
+            }
             Expr::Call(callee, args, _) | Expr::GenericCall(callee, _, args, _) => {
                 let type_args = match expression {
                     Expr::GenericCall(_, args, _, _) => args.as_slice(),

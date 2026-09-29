@@ -2962,3 +2962,6 @@ machine finish checks the selected state. Structs requiring refinement
 validation remain native parity work.
 Earlier native coverage figures above describe historical slices, not the current
 release gate. The exhaustive checkpoint is recorded in the active parity plan.
+
+Generic task joins preserve the instantiated error type in handler observations,
+including when one source body is called with both secret and public errors.

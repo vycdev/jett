@@ -7695,3 +7695,6 @@ Native `json.parse` and `json.parse_exact` likewise decode sets of any
 primitive-backed hashable element, including narrow integers and refinements.
 Each element is checked before insertion, and duplicate values collapse under
 the set's existing equality semantics.
+
+Generic task joins preserve the instantiated error type in handler observations,
+including when one source body is called with both secret and public errors.
