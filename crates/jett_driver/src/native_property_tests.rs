@@ -2,6 +2,85 @@
 use super::*;
 
 #[test]
+fn native_property_shrinking_checks_refinement_chains_and_nested_predicates() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("refined-inputs.jett");
+    let text = r#"namespace constraints
+function positive(value: int64) returns bool:
+    if value == 0:
+        string rejected = string.repeat("ab", 9223372036854775807)
+        return string.char_count(rejected) > 0
+    return value > 0
+export type Positive = int64 where positive(value)
+export type Large = Positive where value > 1
+namespace app
+function positive(value: int64) returns bool:
+    return false
+struct Boxed[T]:
+    value: T
+type Nonempty = list[constraints.Large] where list.length[constraints.Large](value) > 0
+property refined:
+    given number: constraints.Large
+    given record: Boxed[constraints.Positive]
+    given items: Nonempty
+    assert true "property sentinel"
+"#;
+    fs::write(&source, text).unwrap();
+    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let mut changed = 0;
+    for function in &mut lowered.hir.functions {
+        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
+            continue;
+        }
+        for statement in &mut function.body.statements {
+            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
+                assert_eq!(condition.kind, jett_hir::ExpressionKind::Bool(true));
+                condition.kind = jett_hir::ExpressionKind::Bool(false);
+                changed += 1;
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    fs::write(&source, text.replace("assert true", "assert false")).unwrap();
+    let oracle = crate::test_file(&source).unwrap();
+    assert_eq!(oracle.failed, 1);
+    let expected = oracle.blocks[0].error.as_deref().unwrap();
+    assert!(expected.contains("number = 2"), "{expected}");
+    assert!(expected.contains("value: 1"), "{expected}");
+    assert!(expected.contains("items = list(2)"), "{expected}");
+    fs::remove_file(&source).unwrap();
+    let launcher = launcher();
+    for optimize in [false, true] {
+        let result = property_runner::run_lowered(
+            &source,
+            &lowered,
+            &launcher,
+            NativePropertyOptions {
+                optimize,
+                ..NativePropertyOptions::default()
+            },
+        )
+        .unwrap();
+        let failure = result.failure.unwrap();
+        assert_eq!(result.trials, 1);
+        assert_eq!(failure.trial, 1);
+        assert_eq!(
+            format!(
+                "property sentinel (counterexample: {})",
+                failure.counterexample
+            ),
+            expected
+        );
+        assert!(result.stdout.is_empty());
+        assert_eq!(
+            result.stderr,
+            b"runtime error: property 'refined' trial 1: property sentinel\n"
+        );
+    }
+}
+
+#[test]
 fn native_property_shrinking_preserves_narrow_boundaries_and_nested_inputs() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("integer-boundary.jett");

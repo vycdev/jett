@@ -2846,7 +2846,15 @@ Narrow integer pools carry their exact primitive identity in `Value::Typed`.
 The shared shrinker preserves that identity and rejects out-of-range candidates
 before either execution backend runs them. These tags survive list/set/map,
 sum, enum, and struct payload shrinking; integer carriers at their full 64-bit
-width keep their existing representation and search order.
+width keep their existing representation and search order. Refined generated
+values likewise retain their canonical type names. The interpreter recursively
+checks these tags before executing a shrink candidate. Native candidate
+materialization resolves the exact checked predicate functions and emits the
+existing refinement handlers, including inherited and nested predicates. A
+rejected candidate clears its diagnostic context and returns without calling
+the property; normal failure cleanup releases partially constructed inputs.
+The initial suite and prefix replay still use the already validated generator
+inputs, avoiding additional predicate effects in normal suite output.
 Every replay clones the retained checked HIR, replaces only compiler-owned
 input construction, completes typed conversions, validates MIR, and compiles
 and links a fresh attempt. It does not reload source or execute property bodies

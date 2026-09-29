@@ -172,6 +172,7 @@ impl Baker<'_> {
                         types: self.types,
                         reflection: self.reflection,
                         functions: self.function_values,
+                        refinement_functions: None,
                         locals: &mut *self.locals,
                         bindings: &mut self.bindings,
                     },

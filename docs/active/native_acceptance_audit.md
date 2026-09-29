@@ -102,12 +102,18 @@ candidates. `native_property_shrinking_preserves_narrow_boundaries_and_nested_in
 compares debug and optimized native shrinking of an `int8` minimum with the
 interpreter, including generic record, list, and map inputs. It prevents an
 out-of-range positive candidate from replacing the signed minimum.
-The refinement audit found another concrete gap: `type Positive = int64 where
-value > 0` with a failing property currently shrinks its given value to zero.
-Its predicate must survive candidate generation and be checked before replay;
-integer range metadata alone does not address this. Refinements and further
-failing-input combinations remain open; passing the successful inventory does
-not prove every shrink candidate can be replayed.
+Refinement identities now survive candidate generation too. The interpreter
+checks retained tags recursively, and native replay emits the existing checked
+predicate handlers before calling the property. The regression
+`native_property_shrinking_checks_refinement_chains_and_nested_predicates`
+compares debug and optimized counterexamples for a namespaced refinement chain,
+a generic record with a refined field, and a refined nonempty list whose elements
+are refined. It also rejects a candidate whose predicate raises a runtime error,
+without replacing the original property failure or failing cleanup. The direct
+`Positive` regression keeps its counterexample at one rather than zero, and unit
+tests cover nested container and sum shapes. Further failing-input combinations
+remain part of the semantic audit; successful inventory counts alone do not
+prove every shrink candidate can be replayed.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

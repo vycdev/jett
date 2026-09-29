@@ -83,6 +83,7 @@ pub(super) fn append_property_suite(
                 types,
                 reflection,
                 &function_values,
+                None,
                 &mut locals,
                 &mut statements,
             )?;
@@ -158,6 +159,7 @@ impl NativePropertyPlan {
         &self,
         lowered: &crate::BackendLoweringResult,
         trials: &[NativePropertyTrial],
+        validate_inputs: bool,
     ) -> Result<jett_mir::Program, crate::BackendLoweringError> {
         let mut hir = lowered.hir.clone();
         let mut locals = Vec::new();
@@ -179,6 +181,7 @@ impl NativePropertyPlan {
                 &lowered.interner,
                 &lowered.reflection_metadata,
                 &self.function_values,
+                validate_inputs.then_some(hir.functions.as_slice()),
                 &mut locals,
                 &mut statements,
             )
@@ -206,6 +209,7 @@ fn append_trial(
     types: &TypeInterner,
     reflection: &ReflectionMetadata,
     functions: &[FunctionValueCandidate],
+    refinement_functions: Option<&[Function]>,
     locals: &mut Vec<Local>,
     statements: &mut Vec<Statement>,
 ) -> Result<(), Vec<jett_hir::LowerError>> {
@@ -227,6 +231,7 @@ fn append_trial(
         types,
         reflection,
         functions,
+        refinement_functions,
         locals,
         bindings: statements,
     };
@@ -393,6 +398,8 @@ pub(super) struct ValueContext<'a> {
     pub(super) types: &'a TypeInterner,
     pub(super) reflection: &'a ReflectionMetadata,
     pub(super) functions: &'a [FunctionValueCandidate],
+    /// Present only when constructing unvalidated property shrink candidates.
+    pub(super) refinement_functions: Option<&'a [Function]>,
     pub(super) locals: &'a mut Vec<Local>,
     pub(super) bindings: &'a mut Vec<Statement>,
 }
@@ -445,6 +452,92 @@ fn erased_value_type(value: &Value, types: &TypeInterner) -> Option<TypeId> {
     candidates.next().is_none().then_some(candidate)
 }
 
+fn checked_refinement_candidate(
+    mut value: &Value,
+    ty: TypeId,
+    span: Span,
+    context: &mut ValueContext<'_>,
+) -> Result<Expression, String> {
+    let types = context.types;
+    let mut base_type = ty;
+    while let Type::Refinement { base, .. } = types.resolve(base_type) {
+        base_type = *base;
+    }
+    let input_type = match types.resolve(base_type) {
+        Type::Secret(inner) => *inner,
+        _ => base_type,
+    };
+    let mut current = ty;
+    let mut predicates = Vec::new();
+    while let Type::Refinement { name, base } = types.resolve(current) {
+        let mut functions = context
+            .refinement_functions
+            .unwrap()
+            .iter()
+            .filter(|function| {
+                let declaration = &function.identity.declaration;
+                let canonical = if declaration.namespace.is_empty() {
+                    declaration.name.clone()
+                } else {
+                    format!("{}.{}", declaration.namespace, declaration.name)
+                };
+                declaration.kind == DeclarationKind::RefinementPredicate
+                    && canonical == *name
+                    && function.params.len() == 1
+                    && function.params[0].ty == input_type
+            });
+        let function = functions.next().ok_or_else(|| {
+            format!("refinement '{name}' has no exact checked predicate for native replay")
+        })?;
+        if functions.next().is_some() {
+            return Err(format!(
+                "refinement '{name}' has multiple native replay predicates"
+            ));
+        }
+        predicates.push(jett_hir::RefinementPredicate {
+            refined_type: current,
+            type_name: name.clone(),
+            function: function.id,
+            base_type,
+            input_type,
+        });
+        if let Value::Typed {
+            type_name,
+            value: inner,
+        } = value
+        {
+            if type_name == name {
+                value = inner;
+            }
+        }
+        current = *base;
+    }
+    predicates.reverse();
+    let target = value_expression(value, base_type, span, context)?;
+    Ok(Expression {
+        kind: ExpressionKind::Handle {
+            target: Box::new(target),
+            kind: HandleKind::Refinement {
+                refined_type: ty,
+                predicates,
+            },
+            error_local: None,
+            failure: Block {
+                statements: vec![
+                    property_case_context(None, span),
+                    Statement {
+                        kind: StatementKind::Return(None),
+                        span,
+                    },
+                ],
+                span,
+            },
+        },
+        ty,
+        span,
+    })
+}
+
 pub(super) fn value_expression(
     value: &Value,
     ty: TypeId,
@@ -452,6 +545,11 @@ pub(super) fn value_expression(
     context: &mut ValueContext<'_>,
 ) -> Result<Expression, String> {
     let types = context.types;
+    if context.refinement_functions.is_some()
+        && matches!(types.resolve(ty), Type::Refinement { .. })
+    {
+        return checked_refinement_candidate(value, ty, span, context);
+    }
     let kind = match (types.resolve(ty), value) {
         (_, Value::Pending(inner)) => {
             ExpressionKind::Run(Box::new(value_expression(inner, ty, span, context)?))

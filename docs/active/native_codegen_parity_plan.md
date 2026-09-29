@@ -1601,4 +1601,20 @@ Narrow integer pools now retain concrete `Value::Typed` identity
 through containers and record fields. The shared shrinker preserves that
 identity and filters candidates against its primitive range. Candidate ordering
 and the 50-step bound stay unchanged. Plain `int64` and `uint64` carriers already
-encode their ranges; nominal refinement shrinking remains a separate audit.
+encode their ranges. The refinement handling below extends this invariant to
+user predicates.
+
+
+### Refinement-preserving shrink candidates
+
+Property generation must retain the canonical refinement identity after filtering
+its initial pool. Shrinking may simplify that payload, but an invalid predicate
+result is not a property failure. The interpreter validates retained tags
+recursively before binding a candidate. Native candidate replay constructs
+checked refinement handlers that call the already-lowered predicate functions;
+a rejected candidate returns successfully without entering the property body.
+Original generated trials and prefix replay keep their existing trusted input
+path, so validation does not add observable predicate calls to normal suites.
+Predicate chains use declaration identities and the existing handler ordering,
+including refinements inside aggregates. No property body or native predicate
+falls back to the interpreter.

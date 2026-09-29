@@ -142,14 +142,14 @@ pub(super) fn run_lowered(
     let mut failing = plan.trials.len();
     while passing + 1 < failing {
         let middle = passing + (failing - passing) / 2;
-        if runner.replay(&plan.trials[..middle])? {
+        if runner.replay(&plan.trials[..middle], false)? {
             failing = middle;
         } else {
             passing = middle;
         }
     }
     let trial = &plan.trials[failing - 1];
-    if !runner.replay(std::slice::from_ref(trial))? {
+    if !runner.replay(std::slice::from_ref(trial), false)? {
         return Err(NativePropertyRunError::ReplayPassed {
             stdout: original.stdout,
             stderr: original.stderr,
@@ -159,7 +159,7 @@ pub(super) fn run_lowered(
         jett_comptime::verify::shrink_property_inputs(trial.case.arguments.clone(), |arguments| {
             let mut candidate = trial.clone();
             candidate.case.arguments = arguments.to_vec();
-            runner.replay(&[candidate])
+            runner.replay(&[candidate], true)
         })?;
     let counterexample = trial
         .given_names
@@ -204,13 +204,17 @@ struct Runner<'a> {
 }
 
 impl Runner<'_> {
-    fn replay(&self, trials: &[NativePropertyTrial]) -> Result<bool, NativePropertyRunError> {
+    fn replay(
+        &self,
+        trials: &[NativePropertyTrial],
+        validate_inputs: bool,
+    ) -> Result<bool, NativePropertyRunError> {
         let mir = self
             .lowered
             .native_property_plan
             .as_ref()
             .unwrap()
-            .replay_mir(self.lowered, trials)
+            .replay_mir(self.lowered, trials, validate_inputs)
             .map_err(NativePropertyRunError::Lowering)?;
         failed(&self.execute(&mir)?)
     }

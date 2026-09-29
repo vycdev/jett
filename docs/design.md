@@ -5892,6 +5892,10 @@ errors, not passing properties or accepted shrink candidates. Generated narrow
 integers retain their declared width through aggregates and shrinking. A shrink
 candidate outside that integer range is discarded before property execution;
 an invalid input must not become a counterexample through its range error.
+Refinement identities also survive shrinking, including inside aggregates.
+Candidates that fail a refinement predicate, or whose predicate evaluation fails,
+are rejected before executing the property. Native candidate validation calls
+the compiled predicates; it does not interpret their bodies.
 
 #### Property Tests with Capability Mocks
 

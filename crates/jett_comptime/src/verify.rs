@@ -570,6 +570,13 @@ fn shrink_value(value: &Value) -> Vec<Value> {
                 })
                 .collect()
         }
+        Value::Typed { type_name, value } => shrink_value(value)
+            .into_iter()
+            .map(|candidate| Value::Typed {
+                type_name: type_name.clone(),
+                value: Box::new(candidate),
+            })
+            .collect(),
         Value::Int64(n) => {
             let mut candidates = Vec::new();
             if *n != 0 {
@@ -785,6 +792,12 @@ fn shrink_inputs(
     failing: Vec<Value>,
 ) -> Vec<Value> {
     let result = shrink_property_inputs(failing, |attempt| {
+        if !attempt
+            .iter()
+            .all(|value| valid_shrink_refinements(interp, value))
+        {
+            return Ok::<_, std::convert::Infallible>(false);
+        }
         interp.push_scope_public();
         for (given, value) in pb.givens.iter().zip(attempt.iter()) {
             interp.set_variable_public(&given.name.name, value.clone());
@@ -796,6 +809,32 @@ fn shrink_inputs(
     match result {
         Ok(values) => values,
         Err(never) => match never {},
+    }
+}
+
+fn valid_shrink_refinements(interp: &mut Interpreter, value: &Value) -> bool {
+    match value {
+        Value::Typed { type_name, value } => {
+            valid_shrink_refinements(interp, value)
+                && interp.check_refinement_type(type_name, value).is_ok()
+        }
+        Value::List(values)
+        | Value::Set(values)
+        | Value::Enum { fields: values, .. }
+        | Value::Machine { fields: values, .. } => values
+            .iter()
+            .all(|value| valid_shrink_refinements(interp, value)),
+        Value::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, value)| valid_shrink_refinements(interp, value)),
+        Value::Map(entries) => entries.iter().all(|(key, value)| {
+            valid_shrink_refinements(interp, key) && valid_shrink_refinements(interp, value)
+        }),
+        Value::OptionalSome(value)
+        | Value::ResultOk(value)
+        | Value::ResultFail(value)
+        | Value::Pending(value) => valid_shrink_refinements(interp, value),
+        _ => true,
     }
 }
 
@@ -1573,6 +1612,10 @@ fn generate_type_alias_values(
             interp
                 .check_refinement_type(&alias_def.type_name, value)
                 .is_ok()
+        })
+        .map(|value| Value::Typed {
+            type_name: alias_def.type_name.clone(),
+            value: Box::new(value),
         })
         .collect()
 }
@@ -3992,7 +4035,7 @@ mod tests {
         assert!(
             refined_values
                 .iter()
-                .all(|value| matches!(value, Value::Int64(n) if *n > 0)),
+                .all(|value| matches!(value, Value::Typed { type_name, value } if type_name == "app.Positive" && matches!(value.payload(), Value::Int64(n) if *n > 0))),
             "expected refinement generation to keep only values accepted by the constraint"
         );
     }
@@ -4028,7 +4071,7 @@ mod tests {
                 matches!(
                     value,
                     Value::Struct { fields, .. }
-                        if matches!(fields.as_slice(), [(_, Value::Int64(n))] if *n > 0)
+                        if matches!(fields.as_slice(), [(_, Value::Typed { type_name, value })] if type_name == "app.Positive" && matches!(value.payload(), Value::Int64(n) if *n > 0))
                 )
             }),
             "expected refined struct fields to be generated through refinement filtering"
@@ -4097,10 +4140,89 @@ mod tests {
                 matches!(
                     value,
                     Value::Struct { fields, .. }
-                        if matches!(fields.as_slice(), [(_, Value::Int64(n))] if *n > 0)
+                        if matches!(fields.as_slice(), [(_, Value::Typed { type_name, value })] if type_name == "app.Positive" && matches!(value.payload(), Value::Int64(n) if *n > 0))
                 )
             }),
             "expected generic struct type arguments to resolve in the use-site namespace"
+        );
+    }
+
+    #[test]
+    fn property_shrinker_does_not_report_an_invalid_refinement_counterexample() {
+        let parsed = jett_parser::parse(
+            "type Positive = int64 where value > 0\nproperty domain:\n    given number: Positive\n    assert false \"refinement sentinel\"\n",
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty());
+        let results = run_verify_blocks_detailed(&parsed.module);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].iterations, Some(1));
+        assert_eq!(
+            results[0].error.as_deref(),
+            Some("refinement sentinel (counterexample: number = 1)")
+        );
+    }
+
+    #[test]
+    fn property_shrinker_checks_refined_payloads_in_every_aggregate_shape() {
+        let mut interp = Interpreter::new();
+        let constraint = binary(var("value"), BinOp::Gt, int(0));
+        interp.register_type_alias_in_namespace(
+            Some("app"),
+            &type_alias("Positive", "int64", Some(constraint)),
+        );
+        let wrap = |number| Value::Typed {
+            type_name: "app.Positive".to_owned(),
+            value: Box::new(Value::Int64(number)),
+        };
+        for number in [0, 1] {
+            let value = wrap(number);
+            let shapes = [
+                value.clone(),
+                Value::List(vec![value.clone()]),
+                Value::Set(vec![value.clone()]),
+                Value::Map(vec![(value.clone(), wrap(1))]),
+                Value::Map(vec![(wrap(1), value.clone())]),
+                Value::OptionalSome(Box::new(value.clone())),
+                Value::ResultOk(Box::new(value.clone())),
+                Value::ResultFail(Box::new(value.clone())),
+                Value::Pending(Box::new(value.clone())),
+                Value::Enum {
+                    type_name: "Choice".to_owned(),
+                    variant: "number".to_owned(),
+                    fields: vec![value.clone()],
+                },
+                Value::Machine {
+                    type_name: "State".to_owned(),
+                    state: "ready".to_owned(),
+                    fields: vec![value.clone()],
+                },
+                Value::Struct {
+                    concrete_type: None,
+                    type_name: "Box[app.Positive]".to_owned(),
+                    fields: vec![("value".to_owned(), value)],
+                },
+            ];
+            for shape in shapes {
+                assert_eq!(
+                    valid_shrink_refinements(&mut interp, &shape),
+                    number > 0,
+                    "{shape:?}"
+                );
+            }
+        }
+        let shrunk = shrink_property_inputs(vec![wrap(42)], |values| {
+            Ok::<_, ()>(
+                values
+                    .iter()
+                    .all(|value| valid_shrink_refinements(&mut interp, value)),
+            )
+        })
+        .unwrap();
+        assert_eq!(
+            shrunk,
+            vec![wrap(1)],
+            "refined values must still shrink within their domain"
         );
     }
 
