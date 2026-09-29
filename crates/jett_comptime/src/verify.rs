@@ -6,7 +6,7 @@ use jett_parser::ast::{
 };
 use jett_types::ReflectionMetadata;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::interpreter::Interpreter;
@@ -235,11 +235,13 @@ pub fn run_verify_blocks_with_metadata_and_expression_types(
     module: &Module,
     metadata: Arc<ReflectionMetadata>,
     expression_types: Arc<HashMap<Span, String>>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed_with_metadata_and_expression_types(
         module,
         Some(metadata),
         Some(expression_types),
+        Some(breakpoint_exclusions),
     );
     verify_results_to_diagnostics(results)
 }
@@ -275,15 +277,23 @@ pub fn run_verify_blocks_detailed_with_metadata(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
 ) -> Vec<VerifyResult> {
-    run_verify_blocks_detailed_with_metadata_and_expression_types(module, metadata, None)
+    run_verify_blocks_detailed_with_metadata_and_expression_types(module, metadata, None, None)
 }
 
 pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
     expression_types: Option<Arc<HashMap<Span, String>>>,
+    breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
 ) -> Vec<VerifyResult> {
-    run_verification(module, metadata, expression_types, false).results
+    run_verification(
+        module,
+        metadata,
+        expression_types,
+        breakpoint_exclusions,
+        false,
+    )
+    .results
 }
 
 /// Reuse the interpreter's deterministic property pools for native test input
@@ -294,19 +304,29 @@ pub fn collect_property_cases_with_metadata_and_expression_types(
     module: &Module,
     metadata: Arc<ReflectionMetadata>,
     expression_types: Arc<HashMap<Span, String>>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> Vec<PropertyCase> {
-    run_verification(module, Some(metadata), Some(expression_types), true).property_cases
+    run_verification(
+        module,
+        Some(metadata),
+        Some(expression_types),
+        Some(breakpoint_exclusions),
+        true,
+    )
+    .property_cases
 }
 
 fn run_verification(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
     expression_types: Option<Arc<HashMap<Span, String>>>,
+    breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
     collect_cases: bool,
 ) -> VerificationRun {
     let module_for_thread = module.clone();
     let thread_metadata = metadata.clone();
     let thread_expression_types = expression_types.clone();
+    let thread_exclusions = breakpoint_exclusions.clone();
     match std::thread::Builder::new()
         .name("jett-verify".to_string())
         .stack_size(VERIFY_STACK_SIZE)
@@ -315,6 +335,7 @@ fn run_verification(
                 &module_for_thread,
                 thread_metadata,
                 thread_expression_types,
+                thread_exclusions,
                 collect_cases,
             )
         }) {
@@ -322,9 +343,13 @@ fn run_verification(
             Ok(results) => results,
             Err(payload) => std::panic::resume_unwind(payload),
         },
-        Err(_) => {
-            run_verify_blocks_detailed_inner(module, metadata, expression_types, collect_cases)
-        }
+        Err(_) => run_verify_blocks_detailed_inner(
+            module,
+            metadata,
+            expression_types,
+            breakpoint_exclusions,
+            collect_cases,
+        ),
     }
 }
 
@@ -332,9 +357,13 @@ fn run_verify_blocks_detailed_inner(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
     expression_types: Option<Arc<HashMap<Span, String>>>,
+    breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
     collect_cases: bool,
 ) -> VerificationRun {
     let mut interp = Interpreter::new();
+    if let Some(exclusions) = breakpoint_exclusions {
+        interp.set_breakpoint_exclusions(exclusions);
+    }
     if let Some(metadata) = metadata {
         interp.set_reflection_metadata(metadata);
     }
@@ -2275,7 +2304,7 @@ mod tests {
             FileId::new(0),
         );
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let run = run_verification(&parsed.module, None, None, true);
+        let run = run_verification(&parsed.module, None, None, None, true);
         assert_eq!(run.results.len(), 1);
         assert!(run.results[0].passed);
         assert_eq!(run.property_cases.len(), PROPERTY_DEFAULT_ITERATIONS);

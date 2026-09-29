@@ -51,6 +51,7 @@ impl DiscoveredModules {
 
 /// Result of compiling a single file.
 pub struct BuildResult {
+    pub breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
     pub diagnostics: Vec<Diagnostic>,
     pub has_errors: bool,
     /// The source text that was compiled (for diagnostic rendering).
@@ -520,6 +521,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -535,6 +537,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -552,6 +555,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -569,6 +573,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             file_path: file_path.to_string(),
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -580,12 +585,14 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         &parse_result.module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
+        Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     all_diagnostics.extend(comptime_diagnostics);
     let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
         &parse_result.module,
         check_result.reflection_metadata,
         checked_expression_types.clone(),
+        Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     all_diagnostics.extend(verify_diagnostics);
 
@@ -598,6 +605,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         file_path: file_path.to_string(),
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
+        breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
         explicit_comptime_values: Some(Arc::new(explicit_comptime_values)),
     }
 }
@@ -2721,6 +2729,7 @@ fn lower_file_for_backend_inner(
             file_path: file_path.clone(),
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         })
     })?;
@@ -2736,6 +2745,7 @@ fn lower_file_for_backend_inner(
                 file_path: file_path.clone(),
                 reflection_metadata,
                 checked_expression_types,
+                breakpoint_exclusions: None,
                 explicit_comptime_values,
             })
         };
@@ -2787,12 +2797,14 @@ fn lower_file_for_backend_inner(
         &parse_result.module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
+        Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     diagnostics.extend(comptime_diagnostics);
     diagnostics.extend(run_verify_blocks_with_metadata_and_expression_types(
         &parse_result.module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
+        Arc::new(check_result.breakpoint_exclusions.clone()),
     ));
     let explicit_comptime_values = Arc::new(explicit_comptime_values);
     if has_error_diagnostics(&diagnostics) {
@@ -2837,6 +2849,7 @@ fn lower_file_for_backend_inner(
             &parse_result.module,
             reflection_metadata.clone(),
             checked_expression_types.clone(),
+            Arc::new(check_result.breakpoint_exclusions.clone()),
         );
         native_property_cases::append_property_suite(
             &mut hir,
@@ -2885,6 +2898,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
                 file_path: file_path_str,
                 reflection_metadata: None,
                 checked_expression_types: None,
+                breakpoint_exclusions: None,
                 explicit_comptime_values: None,
             };
         }
@@ -2906,6 +2920,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -2926,6 +2941,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -2944,6 +2960,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -2967,6 +2984,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             file_path: file_path_str,
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         };
     }
@@ -2978,12 +2996,14 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
         &parse_result.module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
+        Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     all_diagnostics.extend(comptime_diagnostics);
     let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
         &parse_result.module,
         check_result.reflection_metadata,
         checked_expression_types.clone(),
+        Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     all_diagnostics.extend(verify_diagnostics);
 
@@ -2996,6 +3016,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
         file_path: file_path_str,
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
+        breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
         explicit_comptime_values: Some(Arc::new(explicit_comptime_values)),
     }
 }
@@ -3876,6 +3897,9 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
     if let Some(metadata) = build.reflection_metadata.clone() {
         interp.set_reflection_metadata(metadata);
     }
+    if let Some(exclusions) = build.breakpoint_exclusions.clone() {
+        interp.set_breakpoint_exclusions(exclusions);
+    }
     if let Some(expression_types) = build.checked_expression_types.clone() {
         interp.set_checked_expression_types(expression_types);
     }
@@ -4220,6 +4244,7 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         &parse_result.module,
         Some(check_result.reflection_metadata),
         Some(checked_expression_types),
+        Some(Arc::new(check_result.breakpoint_exclusions.clone())),
     );
 
     let total = results.len();
@@ -4585,6 +4610,7 @@ fn bundle_ordering_error(
             file_path,
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: None,
             explicit_comptime_values: None,
         })),
     }

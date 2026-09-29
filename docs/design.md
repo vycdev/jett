@@ -7163,7 +7163,11 @@ metadata-only secret inspection policy remains in force. See
 `docs/completed/secret_debug_output.md`.
 Debug binding labels preserve declared aliases, including concrete generic
 arguments and closure captures. Inferred loop, match, and handler bindings carry
-their checked types. A binding is not visible inside its own initializer.
+their checked types. A binding is not visible inside its own initializer. Breakpoint snapshots omit
+consumed bindings; assignment to a mutable binding makes it visible again.
+At a branch merge, a binding must remain available on every live path to appear.
+Actor handlers have their own lexical frame, containing state, capabilities,
+message parameters, and handler locals rather than caller locals.
 Reflected construction accepts a field value with its exact refinement type
 after that value has passed the refinement predicate. A supplied base value
 still requires the predicate at builder completion; the exact refined type

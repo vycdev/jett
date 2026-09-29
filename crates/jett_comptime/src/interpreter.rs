@@ -636,6 +636,7 @@ pub struct Interpreter {
     /// Checked expression type names keyed by source span, when supplied by
     /// the driver after type checking.
     checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
     explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
     /// Live actor instances keyed by unique ID.
@@ -701,6 +702,7 @@ impl Interpreter {
             reflected_machine_state_scopes: Vec::new(),
             reflection_metadata: None,
             checked_expression_types: None,
+            breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
             actor_instances: HashMap::new(),
             next_actor_id: 0,
@@ -1010,7 +1012,11 @@ impl Interpreter {
             .unwrap_or_else(|| name.to_string())
     }
 
-    fn hit_breakpoint(&mut self) {
+    pub fn set_breakpoint_exclusions(&mut self, exclusions: Arc<HashMap<Span, HashSet<String>>>) {
+        self.breakpoint_exclusions = exclusions;
+    }
+
+    fn hit_breakpoint(&mut self, span: Span) {
         let mut bindings = BTreeMap::new();
         for (index, (scope, type_scope)) in self
             .scopes
@@ -1026,6 +1032,9 @@ impl Interpreter {
             }
         }
 
+        if let Some(excluded) = self.breakpoint_exclusions.get(&span) {
+            bindings.retain(|name, _| !excluded.contains(name));
+        }
         if bindings.is_empty() {
             self.emit_debug_line("breakpoint hit".to_string());
             return;
@@ -3376,7 +3385,7 @@ impl Interpreter {
                 };
 
                 if should_break {
-                    self.hit_breakpoint();
+                    self.hit_breakpoint(breakpoint_stmt.span);
                 }
                 Ok(None)
             }
@@ -3570,65 +3579,74 @@ impl Interpreter {
             normalized_args[index] = self.normalize_value_for_type(&param_ty, value)?;
         }
 
-        // Execute handler body in a new scope with state + caps + params.
+        // An actor handler is a separate lexical call frame.
+        let scope_base = self.scopes.len();
+        let saved_floor = std::mem::replace(&mut self.lexical_scope_floor, scope_base);
         self.push_scope();
-        for (name, val) in &state_snapshot {
-            if let Some(field) = actor_def
-                .state_fields
-                .iter()
-                .find(|field| field.name.name == *name)
-            {
-                let field_ty = self.substitute_type_expr(&field.ty);
-                self.set_variable_with_type(name, val.clone(), field_ty);
-            } else {
-                self.set_variable(name, val.clone());
-            }
-        }
-        for (name, val) in &caps_snapshot {
-            if let Some(param) = actor_def
-                .capability_params
-                .iter()
-                .find(|param| param.name.name == *name)
-            {
-                let param_ty = self.substitute_type_expr(&param.ty);
-                self.set_variable_with_type(name, val.clone(), param_ty);
-            } else {
-                self.set_variable(name, val.clone());
-            }
-        }
-        for (param, val) in handler.params.iter().zip(normalized_args) {
-            let param_ty = self.substitute_type_expr(&param.ty);
-            self.set_variable_with_type(&param.name.name, val, param_ty);
-        }
-
-        // Execute the handler body, collecting signals.
-        let mut respond_value = Value::Nothing;
-        for stmt in &handler.body.stmts {
-            match self.exec_stmt_inner(stmt)? {
-                Some(Signal::Respond(val)) => {
-                    respond_value = val;
-                    break;
+        let outcome = (|| -> Result<_, String> {
+            for (name, val) in &state_snapshot {
+                if let Some(field) = actor_def
+                    .state_fields
+                    .iter()
+                    .find(|field| field.name.name == *name)
+                {
+                    let field_ty = self.substitute_type_expr(&field.ty);
+                    self.set_variable_with_type(name, val.clone(), field_ty);
+                } else {
+                    self.set_variable(name, val.clone());
                 }
-                Some(Signal::Return(_)) => break,
-                Some(Signal::Break) | Some(Signal::Continue) => break,
-                Some(Signal::Default(_)) => break,
-                None => {}
             }
-        }
-
-        // Collect updated state field values before popping scope.
-        let mut updated_state = state_snapshot;
-        for field in &actor_def.state_fields {
-            let name = &field.name.name;
-            // Check innermost scope(s) for the updated value.
-            if let Some(val) = self.scopes.last().and_then(|s| s.get(name)).cloned() {
-                let field_ty = self.substitute_type_expr(&field.ty);
-                let val = self.normalize_value_for_type(&field_ty, val)?;
-                updated_state.insert(name.clone(), val);
+            for (name, val) in &caps_snapshot {
+                if let Some(param) = actor_def
+                    .capability_params
+                    .iter()
+                    .find(|param| param.name.name == *name)
+                {
+                    let param_ty = self.substitute_type_expr(&param.ty);
+                    self.set_variable_with_type(name, val.clone(), param_ty);
+                } else {
+                    self.set_variable(name, val.clone());
+                }
             }
-        }
+            for (param, val) in handler.params.iter().zip(normalized_args) {
+                let param_ty = self.substitute_type_expr(&param.ty);
+                self.set_variable_with_type(&param.name.name, val, param_ty);
+            }
 
-        self.pop_scope();
+            // Execute the handler body, collecting signals.
+            let mut respond_value = Value::Nothing;
+            for stmt in &handler.body.stmts {
+                match self.exec_stmt_inner(stmt)? {
+                    Some(Signal::Respond(val)) => {
+                        respond_value = val;
+                        break;
+                    }
+                    Some(Signal::Return(_)) => break,
+                    Some(Signal::Break) | Some(Signal::Continue) => break,
+                    Some(Signal::Default(_)) => break,
+                    None => {}
+                }
+            }
+
+            // Collect updated state field values before popping scope.
+            let mut updated_state = state_snapshot;
+            for field in &actor_def.state_fields {
+                let name = &field.name.name;
+                // Check innermost scope(s) for the updated value.
+                if let Some(val) = self.scopes.last().and_then(|s| s.get(name)).cloned() {
+                    let field_ty = self.substitute_type_expr(&field.ty);
+                    let val = self.normalize_value_for_type(&field_ty, val)?;
+                    updated_state.insert(name.clone(), val);
+                }
+            }
+
+            Ok((respond_value, updated_state))
+        })();
+        while self.scopes.len() > scope_base {
+            self.pop_scope();
+        }
+        self.lexical_scope_floor = saved_floor;
+        let (mut respond_value, updated_state) = outcome?;
 
         // Write updated state back to the actor instance.
         if let Some(instance) = self.actor_instances.get_mut(&actor_id) {
@@ -16960,6 +16978,7 @@ function main() returns nothing:
         let (values, diagnostics) = crate::evaluate_explicit_comptime_expressions(
             &parsed.module,
             Arc::new(ReflectionMetadata::new()),
+            Arc::new(HashMap::new()),
             Arc::new(HashMap::new()),
         );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");

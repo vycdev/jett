@@ -3025,6 +3025,26 @@ fn native_breakpoints_preserve_lexical_frames_and_capture_types() {
 }
 
 #[test]
+fn native_breakpoints_omit_consumed_bindings() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/breakpoint_consumed_bindings.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert!(!debug.contains("initial:"), "{debug}");
+    assert!(debug.contains("original_count: app.Count = 7"), "{debug}");
+    assert!(debug.contains("copied_count: app.Count = 7"), "{debug}");
+    assert!(debug.contains("breakpoint hit: moved: bytes"), "{debug}");
+    assert!(debug.contains("breakpoint hit\n"), "{debug}");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("breakpoint_consumed.exe");
+    build_host_executable(&fixture, launcher(), &binary).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(String::from_utf8_lossy(&actual.stderr), debug);
+}
+
+#[test]
 fn native_secret_debug_values_are_recursively_redacted() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_secret_values.jett");
@@ -3184,7 +3204,7 @@ fn native_actor_debug_values_match_interpreter() {
             "trace first: test.Holder = actor#0",
             "trace second: test.Holder = actor#1",
             "trace active: list[test.Holder] = list(actor#2)",
-            "breakpoint hit: active: list[test.Holder] = list(actor#2), first: test.Holder = actor#0, second: test.Holder = actor#1, third: test.Holder = actor#2",
+            "breakpoint hit: active: list[test.Holder] = list(actor#2), first: test.Holder = actor#0, second: test.Holder = actor#1",
         ]
     );
     let directory = tempfile::tempdir().expect("isolated actor debug directory");

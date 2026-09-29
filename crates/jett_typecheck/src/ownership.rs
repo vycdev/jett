@@ -40,6 +40,7 @@ struct VarInfo {
     state_qualified_machine: bool,
     /// The span where the variable was consumed (for "previously consumed here" labels).
     consumed_span: Option<Span>,
+    debug_consumed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +128,8 @@ pub struct OwnershipChecker<'a> {
     states: HashMap<String, VarInfo>,
     /// Collected diagnostics.
     diagnostics: Vec<Diagnostic>,
+    breakpoint_exclusions: HashMap<Span, HashSet<String>>,
+    debug_copyable: HashMap<Span, bool>,
     /// The type interner, needed to check whether a type is implicitly copyable.
     interner: &'a TypeInterner,
     /// Source-defined functions whose first parameter is declared as a view.
@@ -138,13 +141,33 @@ impl<'a> OwnershipChecker<'a> {
         Self {
             states: HashMap::new(),
             diagnostics: Vec::new(),
+            breakpoint_exclusions: HashMap::new(),
+            debug_copyable: HashMap::new(),
             interner,
             source_first_argument_views: HashSet::new(),
         }
     }
 
+    pub fn with_debug_types(mut self, types: impl IntoIterator<Item = (Span, TypeId)>) -> Self {
+        for (span, ty) in types {
+            let copyable = self.is_copyable(ty);
+            self.debug_copyable
+                .entry(span)
+                .and_modify(|all| *all &= copyable)
+                .or_insert(copyable);
+        }
+        self
+    }
+
     /// Run ownership analysis on a module and return collected diagnostics.
-    pub fn check_module(mut self, module: &Module) -> Vec<Diagnostic> {
+    pub fn check_module(self, module: &Module) -> Vec<Diagnostic> {
+        self.check_module_with_debug(module).0
+    }
+
+    pub fn check_module_with_debug(
+        mut self,
+        module: &Module,
+    ) -> (Vec<Diagnostic>, HashMap<Span, HashSet<String>>) {
         self.collect_source_first_argument_views(module);
         for item in &module.items {
             match item {
@@ -159,11 +182,61 @@ impl<'a> OwnershipChecker<'a> {
                         self.check_function(method);
                     }
                 }
+                Item::Actor(actor) => self.observe_actor_breakpoints(actor),
                 Item::VarDecl(decl) => self.check_var_decl(decl),
                 _ => {}
             }
         }
-        self.diagnostics
+        (self.diagnostics, self.breakpoint_exclusions)
+    }
+
+    fn observe_actor_breakpoints(&mut self, actor: &ast::ActorDef) {
+        // Actor validity is checked separately. Reuse this flow solely for
+        // observations, with state and message bindings local to each handler.
+        let saved = std::mem::take(&mut self.states);
+        let diagnostics_len = self.diagnostics.len();
+        for handler in &actor.handlers {
+            self.states.clear();
+            for field in &actor.state_fields {
+                self.states.insert(
+                    field.name.name.clone(),
+                    VarInfo {
+                        state: OwnershipState::Owned,
+                        mutable: field.mutable,
+                        type_id: self.resolve_type_for_ownership(&field.ty),
+                        state_qualified_machine: matches!(
+                            field.ty,
+                            ast::TypeExpr::StateQualified(_, _, _)
+                        ),
+                        consumed_span: None,
+                        debug_consumed: false,
+                    },
+                );
+            }
+            for param in actor.capability_params.iter().chain(&handler.params) {
+                self.states.insert(
+                    param.name.name.clone(),
+                    VarInfo {
+                        state: if param.view {
+                            OwnershipState::Viewed
+                        } else {
+                            OwnershipState::Owned
+                        },
+                        mutable: param.mutable,
+                        type_id: self.resolve_type_for_ownership(&param.ty),
+                        state_qualified_machine: matches!(
+                            param.ty,
+                            ast::TypeExpr::StateQualified(_, _, _)
+                        ),
+                        consumed_span: None,
+                        debug_consumed: false,
+                    },
+                );
+            }
+            self.check_block(&handler.body);
+        }
+        self.diagnostics.truncate(diagnostics_len);
+        self.states = saved;
     }
 
     fn collect_source_first_argument_views(&mut self, module: &Module) {
@@ -246,6 +319,7 @@ impl<'a> OwnershipChecker<'a> {
                         ast::TypeExpr::StateQualified(_, _, _)
                     ),
                     consumed_span: None,
+                    debug_consumed: false,
                 },
             );
         }
@@ -305,6 +379,50 @@ impl<'a> OwnershipChecker<'a> {
         if let Some(condition) = &breakpoint_stmt.condition {
             self.check_expr_ownership(condition);
         }
+        self.breakpoint_exclusions.insert(
+            breakpoint_stmt.span,
+            self.states
+                .iter()
+                .filter(|(_, info)| {
+                    info.debug_consumed
+                        || matches!(
+                            info.state,
+                            OwnershipState::Consumed | OwnershipState::Uninitialized
+                        )
+                })
+                .map(|(name, _)| name.clone())
+                .collect(),
+        );
+    }
+
+    // Preserve the existing source-validation policy while recording moves
+    // that native value lowering performs at binding and destructuring sites.
+    fn record_debug_move(&mut self, expression: &Expr) {
+        match expression {
+            Expr::Ident(ident) => {
+                let info = self.states.get(&ident.name);
+                let copyable = self
+                    .debug_copyable
+                    .get(&ident.span)
+                    .copied()
+                    .unwrap_or_else(|| info.is_none_or(|info| self.is_copyable(info.type_id)));
+                if !copyable && info.is_none_or(|info| info.state != OwnershipState::Viewed) {
+                    self.states
+                        .entry(ident.name.clone())
+                        .or_insert(VarInfo {
+                            state: OwnershipState::Owned,
+                            mutable: false,
+                            type_id: TypeInterner::ERROR,
+                            state_qualified_machine: false,
+                            consumed_span: None,
+                            debug_consumed: false,
+                        })
+                        .debug_consumed = true;
+                }
+            }
+            Expr::Paren(inner, _) => self.record_debug_move(inner),
+            _ => {}
+        }
     }
 
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
@@ -321,6 +439,7 @@ impl<'a> OwnershipChecker<'a> {
         } else {
             self.check_expr_ownership(&decl.value);
         }
+        self.record_debug_move(&decl.value);
 
         let type_id = self.resolve_type_for_ownership(&decl.ty);
         self.states.insert(
@@ -331,14 +450,15 @@ impl<'a> OwnershipChecker<'a> {
                 type_id,
                 state_qualified_machine: matches!(decl.ty, ast::TypeExpr::StateQualified(_, _, _)),
                 consumed_span: None,
+                debug_consumed: false,
             },
         );
     }
 
     fn check_assign(&mut self, assign: &ast::AssignStmt) {
         let initial_state = self.initial_task_state(&assign.value);
-        // Check the value expression.
         self.check_expr_ownership(&assign.value);
+        self.record_debug_move(&assign.value);
 
         // If the target is an identifier, check if it's mutable and handle rebinding.
         if let Expr::Ident(ident) = &assign.target {
@@ -347,6 +467,7 @@ impl<'a> OwnershipChecker<'a> {
                     // Rebinding may start a fresh pending task.
                     info.state = initial_state;
                     info.consumed_span = None;
+                    info.debug_consumed = false;
                 } else {
                     self.diagnostics
                         .push(cannot_rebind_immutable(&ident.name, ident.span));
@@ -464,6 +585,9 @@ impl<'a> OwnershipChecker<'a> {
             if branches.iter().any(|branch| !branch.contains_key(name)) {
                 result = baseline_info.clone();
             }
+            result.debug_consumed |= branches
+                .iter()
+                .any(|branch| branch.get(name).is_some_and(|info| info.debug_consumed));
             merged.insert(name.clone(), result);
         }
         merged
@@ -523,6 +647,7 @@ impl<'a> OwnershipChecker<'a> {
                 type_id: TypeInterner::ERROR, // Element type not tracked here
                 state_qualified_machine: false,
                 consumed_span: None,
+                debug_consumed: false,
             },
         );
 
@@ -561,6 +686,7 @@ impl<'a> OwnershipChecker<'a> {
 
     fn check_match(&mut self, match_stmt: &ast::MatchStmt) {
         self.check_expr_ownership(&match_stmt.expr);
+        self.record_debug_move(&match_stmt.expr);
         let baseline = self.states.clone();
         let mut fallthrough_states = Vec::new();
 
@@ -637,6 +763,7 @@ impl<'a> OwnershipChecker<'a> {
             }
             Expr::Handle(target, _, body, _) => {
                 self.check_expr_ownership(target);
+                self.record_debug_move(target);
                 let success_state = self.states.clone();
                 let handler_state = self.check_block_from_state(&success_state, body);
                 let mut fallthrough_states = vec![success_state.clone()];
@@ -725,6 +852,7 @@ impl<'a> OwnershipChecker<'a> {
                                 ast::TypeExpr::StateQualified(_, _, _)
                             ),
                             consumed_span: None,
+                            debug_consumed: false,
                         },
                     );
                 }
@@ -877,6 +1005,7 @@ impl<'a> OwnershipChecker<'a> {
         match expr {
             Expr::Ident(ident) => {
                 self.consume_variable(&ident.name, ident.span, span);
+                self.record_debug_move(expr);
             }
             Expr::Paren(inner, _) => self.consume_expr(inner, span),
             Expr::View(inner, _) => {

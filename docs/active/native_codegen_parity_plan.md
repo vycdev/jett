@@ -1467,6 +1467,10 @@ handler/pipeline failures use active invocation types. Binding initialization
 precedes visibility in a breakpoint. Linked differential coverage exercises
 these observations plus seven pending-owner/builder failure paths.
 
-Consumed bindings are to be omitted from breakpoint snapshots (user decision).
-The implementation and differential coverage for that additional ownership
-visibility rule remain pending; this redaction change does not close that gap.
+Consumed bindings are omitted from breakpoint snapshots through a shared
+compiler-owned exclusion map. Differential coverage includes local transfers,
+call arguments, loop elements, handled results, branch joins, mutable
+reinitialization, copyable aliases, and actor handlers. Actor snapshots now
+exclude caller locals and restore the caller frame after handler completion or
+failure. This closes the consumed-binding observation decision; it does not
+establish the remaining full-release gates.

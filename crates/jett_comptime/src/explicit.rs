@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use jett_common::{FileId, Span};
@@ -19,6 +19,7 @@ pub fn evaluate_explicit_comptime_expressions(
     module: &Module,
     reflection_metadata: Arc<ReflectionMetadata>,
     checked_expression_types: Arc<HashMap<Span, String>>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> (HashMap<Span, Value>, Vec<Diagnostic>) {
     let mut expressions = Vec::new();
     collect_module_expressions(module, &mut expressions);
@@ -26,6 +27,7 @@ pub fn evaluate_explicit_comptime_expressions(
     let mut interpreter = Interpreter::new();
     interpreter.set_reflection_metadata(reflection_metadata);
     interpreter.set_checked_expression_types(checked_expression_types);
+    interpreter.set_breakpoint_exclusions(breakpoint_exclusions);
     interpreter.register_module(module);
 
     let mut values = HashMap::new();

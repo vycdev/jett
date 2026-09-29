@@ -198,6 +198,8 @@ pub struct CheckedStructConstruction {
 /// The result of type checking.
 #[derive(Debug)]
 pub struct CheckResult {
+    /// Source bindings unavailable for observation after checked consumption.
+    pub breakpoint_exclusions: HashMap<Span, HashSet<String>>,
     /// Diagnostics (errors and warnings) emitted during type checking.
     pub diagnostics: Vec<Diagnostic>,
     /// Map from expression spans to their inferred type.
@@ -268,7 +270,21 @@ pub fn check_with_options(
     let complexity_diagnostics = crate::complexity::check_complexity(module);
 
     // Run ownership analysis (linear type checking) after type checking.
-    let ownership_diagnostics = crate::ownership::check_ownership(module, &checker.interner);
+    let (ownership_diagnostics, breakpoint_exclusions) =
+        crate::ownership::OwnershipChecker::new(&checker.interner)
+            .with_debug_types(
+                checker
+                    .type_map
+                    .iter()
+                    .chain(
+                        checker
+                            .generic_function_instantiations
+                            .iter()
+                            .flat_map(|body| body.type_map.iter()),
+                    )
+                    .map(|(&span, &ty)| (span, ty)),
+            )
+            .check_module_with_debug(module);
 
     let reflection_metadata = Arc::new(checker.build_reflection_metadata());
 
@@ -283,6 +299,7 @@ pub fn check_with_options(
         .collect();
 
     CheckResult {
+        breakpoint_exclusions,
         diagnostics,
         type_map: checker.type_map,
         debug_type_names: checker.debug_type_names,

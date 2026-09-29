@@ -2578,6 +2578,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 for scope in &self.visible_bindings {
                     visible.extend(scope.iter().map(|(name, local)| (name, *local)));
                 }
+                if let Some(excluded) = self.parent.check.breakpoint_exclusions.get(&point.span) {
+                    visible.retain(|name, _| !excluded.contains(*name));
+                }
                 (
                     StatementKind::Breakpoint {
                         condition,
