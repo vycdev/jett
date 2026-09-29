@@ -320,6 +320,43 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_nominal_identity_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_nominal_identity.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("nominal interface oracle");
+    let mixed = "active:7\nsession:7\nempty-state\nrefined-session:7\nidle\nevent:normal\ntagged:chosen\nheader:2\nnonzero-header:3\n";
+    assert_eq!(
+        expected.stdout,
+        format!(
+            "{mixed}{mixed}empty-state\nactive:9\nsession:9\nactive:9\nactive:7\nactive:7\nactive:7\nactive:7\n"
+        )
+    );
+    assert!(
+        expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("[redacted]"))
+    );
+    assert!(
+        !expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("hidden-nominal-secret"))
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_nominal_identity.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native nominal interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_interface_function_identity_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_function_identity.jett");

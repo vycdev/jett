@@ -82,8 +82,8 @@ This does **not** close the full interface gate. Still required:
   different native helpers and lack checked source bodies.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
-- Audit remaining nominal state payloads and non-primitive refinements beyond
-  the tested list/record shapes in runtime and comptime paths.
+- Audit remaining non-primitive refinements beyond the tested list, record,
+  enum, machine, and bitfield shapes in runtime and comptime paths.
 
 Generic struct interface dispatch uses the concrete instantiated owner retained
 on the value. Implementations for `Box[int64]`, `Box[string]`, and
@@ -321,3 +321,24 @@ interface lists, cloning, pending functions, reflected function fields, and
 contravariant parameter/covariant return adapters retain the exposed signature
 and evaluated source body. Its native stdout and trace output match the
 interpreter, including explicit comptime erasure after a callback conversion.
+
+Machine interface identity must distinguish the checked bare machine type from
+each state-qualified type when both have implementations. A value checked as
+`Session at active` dispatches to that implementation; converting it to `Session`
+uses the bare implementation. Keep the actual state and fields in the payload,
+and preserve the exposed owner through erasure and explicit comptime evaluation.
+The interpreter retains the qualification so a state-qualified value selects
+its own implementation.
+Checked flow narrowing inside a state guard must also supply the exposed state
+type even when the binding was declared with the bare machine type. Native
+materialization must construct the actual state and then bind it at the requested
+bare type before wrapping a refinement or interface; returning a state-typed
+constructor in place of the requested bare value changes dispatch and violates
+the refinement base contract.
+
+`interface_nominal_identity` covers bare machines and distinct state-qualified
+implementations, aliases, transitions, guarded narrowing, pending values,
+reflected state-qualified fields, and enum/machine/bitfield refinements. Runtime
+and baked mixed interface lists retain the same dispatch and recursive secret
+redaction. Materialized bare machines use an explicit typed local after state
+construction, preserving both the requested owner and validated refinement base.

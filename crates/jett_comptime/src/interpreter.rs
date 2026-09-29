@@ -1727,6 +1727,9 @@ impl Interpreter {
         }
         let base = self.primitive_base_type_name(name);
         let owner = base.split('[').next().unwrap_or(&base);
+        let owner = owner
+            .split_once(" at ")
+            .map_or(owner, |(machine, _)| machine);
         let is_concrete = base.starts_with("function(")
             || matches!(owner, "list" | "map" | "set" | "optional" | "result")
             || self.structs.contains_key(owner)
@@ -1967,10 +1970,19 @@ impl Interpreter {
         } else {
             None
         };
-        let Some(type_name) = binding_type.as_deref().or_else(|| {
-            self.checked_expression_type(expr.span())
-                .map(String::as_str)
-        }) else {
+        let checked_type = self
+            .checked_expression_type(expr.span())
+            .map(String::as_str);
+        // A state guard narrows an expression without changing the binding's
+        // declared type. Keep that checked owner when the value is erased.
+        let narrowed_state = binding_type.as_deref().and_then(|binding| {
+            checked_type.filter(|checked| {
+                checked
+                    .strip_prefix(binding)
+                    .is_some_and(|suffix| suffix.starts_with(" at "))
+            })
+        });
+        let Some(type_name) = narrowed_state.or(binding_type.as_deref()).or(checked_type) else {
             return Ok(value);
         };
         if matches!(

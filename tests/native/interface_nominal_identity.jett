@@ -1,0 +1,129 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+machine Session:
+    states:
+        empty
+        active(count: int64, token: secret[string])
+    transitions:
+        empty to active
+implement Named for Session:
+    function name(view self: Session) returns string:
+        if self at active:
+            return "session:{self.count}"
+        return "empty"
+type ActiveState = Session at active
+implement Named for ActiveState:
+    function name(view self: ActiveState) returns string:
+        return "active:{self.count}"
+implement Named for Session at empty:
+    function name(view self: Session at empty) returns string:
+        return "empty-state"
+type Active = Session where value at active
+implement Named for Active:
+    function name(view self: Active) returns string:
+        Session plain = coarsen self
+        if plain at active:
+            return "refined-session:{plain.count}"
+        return "unexpected-empty"
+enum Event:
+    idle
+    named(label: string, token: secret[string])
+function is_named(view value: Event) returns bool:
+    match value:
+        idle:
+            return false
+        named(label, token):
+            return true
+type Tagged = Event where is_named(view value)
+implement Named for Event:
+    function name(view self: Event) returns string:
+        match self:
+            idle:
+                return "idle"
+            named(label, token):
+                return "event:{label}"
+implement Named for Tagged:
+    function name(view self: Tagged) returns string:
+        Event plain = coarsen self
+        match plain:
+            idle:
+                return "unexpected-idle"
+            named(label, token):
+                return "tagged:{label}"
+bitfield Header:
+    kind: 8 bits
+type NonzeroHeader = Header where value.kind > 0
+implement Named for Header:
+    function name(view self: Header) returns string:
+        return "header:{self.kind}"
+implement Named for NonzeroHeader:
+    function name(view self: NonzeroHeader) returns string:
+        Header plain = coarsen self
+        return "nonzero-header:{plain.kind}"
+function make() returns Session at active:
+    return Session(active, 7, "hidden-nominal-secret")
+function refined_session() returns Named:
+    Session source = make()
+    Active value = source handle error:
+        return Event.idle
+    return value
+function refined_event() returns Named:
+    Tagged value = Event.named("chosen", "hidden-nominal-secret") handle error:
+        return Event.idle
+    return value
+function refined_header() returns Named:
+    NonzeroHeader value = Header(kind: 3) handle error:
+        return Event.idle
+    return value
+function mixed() returns list[Named]:
+    Session plain = make()
+    return list(make(), plain, Session(empty), refined_session(), Event.idle, Event.named("normal", "hidden-nominal-secret"), refined_event(), Header(kind: 2), refined_header())
+function show(view value: Named) returns string:
+    return Named.name(view value)
+struct Holder:
+    value: ActiveState
+function reflected() returns Named:
+    Holder source = Holder(value: make())
+    mutable TypeConstruction builder = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Holder, Field](view source, view field)
+            builder = type.construct_put[Holder, Field](builder, view field, value) handle error:
+                return Event.idle
+    Holder built = type.construct_finish[Holder](builder) handle error:
+        return Event.idle
+    return built.value
+function states() returns nothing:
+    Session at empty initial = Session(empty)
+    println(show(view initial))
+    Session at active changed = Session.transition(initial, active, 9, "hidden-nominal-secret")
+    println(show(view changed))
+    Session bare = changed
+    println(show(view bare))
+    if bare at active:
+        println(show(view bare))
+    Session at active later = run make()
+    Session at active ready = join later handle error:
+        return nothing
+    println(show(view ready))
+    Named erased = ready
+    Named copied = clone erased
+    println(show(view copied))
+    trace copied
+    Named reflected_value = reflected()
+    Named reflected_baked = comptime reflected()
+    println(show(view reflected_value))
+    println(show(view reflected_baked))
+    return nothing
+function main() returns nothing:
+    list[Named] live = mixed()
+    trace live
+    for value in live:
+        println(show(view value))
+    list[Named] baked = comptime mixed()
+    trace baked
+    for value in baked:
+        println(show(view value))
+    states()
+    return nothing

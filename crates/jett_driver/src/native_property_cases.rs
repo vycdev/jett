@@ -517,7 +517,7 @@ pub(super) fn value_expression(
                     })
                     .ok_or("checked machine state type is absent")?
             };
-            return Ok(Expression {
+            let constructed = Expression {
                 kind: ExpressionKind::MachineConstruct {
                     state_type,
                     state: StateId::new(index),
@@ -530,6 +530,34 @@ pub(super) fn value_expression(
                         .collect::<Result<_, _>>()?,
                 },
                 ty: state_type,
+                span,
+            };
+            if state_type == ty {
+                return Ok(constructed);
+            }
+            // Construct the exact state, then apply the checked widening at a
+            // binding boundary. Erasure and refinement validation must see the
+            // requested bare machine type, not its constructor's state type.
+            let local = LocalId::new(context.locals.len() as u32);
+            context.locals.push(Local {
+                id: local,
+                name: format!("__native_baked_machine_{}", local.index()),
+                ty,
+                debug_ty: ty,
+                debug_type_name: None,
+                mutable: false,
+                span,
+            });
+            context.bindings.push(Statement {
+                kind: StatementKind::Let {
+                    local,
+                    value: constructed,
+                },
+                span,
+            });
+            return Ok(Expression {
+                kind: ExpressionKind::Local(local),
+                ty,
                 span,
             });
         }

@@ -298,8 +298,11 @@ The 2026-09-29 semantic audit found an additional native gap: interface-typed
 runtime values and dynamic interface dispatch. Concrete interface method calls
 already worked; typed erased boxes and generated dispatch now also cover direct
 parameters, returns, stored values, mixed literals, and nested whole-container
-conversions. Compatible function signature adapters remain open. See [native interface values](native_interface_values.md).
-Passing the existing fixture denominators does not close this gap.
+conversions. Safe function signature adapters and runtime/baked identity now
+cover primitive widths, collections, functions, machine states, and the tested
+nominal refinements. The remaining interface audit and cross-platform release
+gates are tracked in [native interface values](native_interface_values.md).
+Passing the existing fixture denominators alone does not close these gates.
 
 `tests/native_parity.json` is the machine-checked fixture inventory. The table
 below records implementation coverage; a row is complete only when its native

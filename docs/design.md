@@ -7712,6 +7712,11 @@ view modes and result types. A safe callback conversion changes this exposed
 signature while preserving the original function body, captures, and generic
 context. Interface dispatch uses the exposed signature; invoking the callback
 still executes its source body, including after explicit comptime evaluation.
+Machine interface values likewise distinguish the bare machine from its checked
+state-qualified types, including inside state guards. Widening to the bare type
+changes the implementation selected at an interface boundary. Enum, machine,
+and bitfield refinements retain their nominal implementation across erasure and
+explicit comptime evaluation.
 Expected type context also passes through `run`: for example, initializing
 `result[int64, string]` with `run ok(17)` retains both declared result payload
 types in the checked body used by native lowering.
