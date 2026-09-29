@@ -2934,6 +2934,13 @@ Explicit comptime evaluation runs on a scoped worker with the same 8 MiB stack
 budget as reference execution, independent of the compiler caller's thread.
 Modules without explicit expressions skip worker creation. Worker creation
 failures become compilation diagnostics; evaluation never moves to runtime.
+Explicit values are keyed by source span and checked type context, including
+generic arguments, reflection specialization, and lexical type-binding chains.
+HIR snapshots lexical bindings at each explicit expression, so native baking
+and interpreter execution select the same value after generic and inline
+function lowering. Evaluation supplies checked type bindings without runtime
+locals or parameters. Nested explicit expressions in baked inline function
+bodies are collected independently; a missing checked value is an error.
 Machine owners retain checked state qualification, including flow narrowing
 inside state guards. Native materialization constructs the exact state and binds
 it at the requested bare machine type when widening is required, so subsequent

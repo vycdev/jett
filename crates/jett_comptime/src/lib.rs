@@ -7,7 +7,9 @@ pub mod verify;
 /// Shared stack budget for recursive reference and explicit comptime execution.
 pub const INTERPRETER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
-pub use explicit::evaluate_explicit_comptime_expressions;
+pub use explicit::{
+    ComptimeContext, ExplicitComptimeValues, evaluate_explicit_comptime_expressions,
+};
 pub use interpreter::{
     ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
     GraphicsTestEvent, GraphicsTestKey, GraphicsTestObservation, Interpreter, RandomTestSample,

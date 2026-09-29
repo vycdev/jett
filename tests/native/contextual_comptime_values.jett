@@ -1,0 +1,74 @@
+namespace app
+type Label = string
+struct T:
+    count: int64
+function label[T]() returns string:
+    return comptime "{type.name[T]()}:{type.kind[T]()}"
+function forward[T]() returns string:
+    return comptime label[T]()
+function callback[T]() returns function() returns string:
+    return function() returns string: return comptime type.name[T]()
+function nested[T]() returns string:
+    comptime type Outer = type.info[list[T]]():
+        comptime type Inner = type.arg[Outer](0):
+            return comptime type.name[Inner]()
+function scoped_callback[T]() returns function() returns string:
+    comptime type Bound = type.info[T]():
+        return function() returns string: return comptime type.name[Bound]()
+function shape[T]() returns string:
+    if type.kind_tag[T]() == TypeKind.list_type:
+        comptime type Element = type.arg[T](0):
+            return comptime type.name[Element]()
+    return comptime type.name[T]()
+function guarded[T](flag: bool) returns string:
+    if flag:
+        return comptime type.name[T]()
+    return "off"
+function global_label() returns string:
+    return comptime type.name[T]()
+function invoke[T]() returns string:
+    return global_label()
+function empty[T]() returns list[T]:
+    return comptime list.new[T]()
+struct Record:
+    count: int8
+    label: Label
+    text: string
+function fields() returns nothing:
+    for field in type.fields[Record]():
+        comptime type Field = field.type_info:
+            println(comptime type.name[Field]())
+            comptime type Wrapped = type.info[list[Field]]():
+                println(comptime type.name[Wrapped]())
+    return nothing
+function main() returns nothing:
+    println(label[int64]())
+    println(label[string]())
+    println(label[Label]())
+    println(nested[int8]())
+    println(nested[Label]())
+    function() returns string small = callback[int8]()
+    function() returns string text = callback[string]()
+    function() returns string alias = comptime callback[Label]()
+    println(small())
+    println(text())
+    println(alias())
+    println(list.length[int8](empty[int8]()))
+    println(list.length[string](empty[string]()))
+    fields()
+    function() returns string scoped = scoped_callback[int8]()
+    function() returns string scoped_baked = comptime scoped_callback[Label]()
+    println(scoped())
+    println(scoped_baked())
+    println(shape[list[int8]]())
+    println(shape[string]())
+    println(guarded[int8](true))
+    println(guarded[string](false))
+    println(invoke[int64]())
+    println(invoke[string]())
+    println(global_label())
+    function() returns string direct = comptime function() returns string: return comptime type.name[int16]()
+    println(direct())
+    println(forward[string]())
+    println(forward[Label]())
+    return nothing

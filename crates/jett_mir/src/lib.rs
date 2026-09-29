@@ -714,7 +714,7 @@ impl FunctionValidator<'_, '_> {
             | hir::ExpressionKind::ResultOk(value)
             | hir::ExpressionKind::ResultFail(value)
             | hir::ExpressionKind::OptionalSome(value)
-            | hir::ExpressionKind::Comptime(value)
+            | hir::ExpressionKind::Comptime { value, .. }
             | hir::ExpressionKind::Declassify(value)
             | hir::ExpressionKind::Coarsen(value)
             | hir::ExpressionKind::RefinementValidated(value)

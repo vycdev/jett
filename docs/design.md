@@ -2376,6 +2376,11 @@ Block-local `use` aliases may name those functions and types; an inner block may
 shadow an alias without changing a later expression in the outer block.
 It receives the same expected type as an ordinary expression in that position,
 so `comptime ok(value)` and `comptime none` can use a declared sum type's context.
+Inside a generic body, evaluation uses each checked instantiation's type
+arguments and lexical `comptime type` bindings. Source aliases remain visible
+to reflection even when their canonical types coincide. A type parameter is
+available during evaluation; a runtime value parameter or closure capture is
+not. An uninstantiated generic template has no concrete value to evaluate.
 Compilation fails if the compiler cannot produce the value. An ordinary pure
 call remains a runtime call in source semantics. The optimizer may fold it when
 safe, but that invisible optimization cannot introduce diagnostics, suppress

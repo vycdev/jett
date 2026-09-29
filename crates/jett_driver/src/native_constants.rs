@@ -4,13 +4,12 @@
 //! value cannot fall back to running the original computation at runtime.
 
 use jett_common::Span;
-use jett_comptime::Value;
+use jett_comptime::{ComptimeContext, ExplicitComptimeValues};
 use jett_hir::{
     Block, Expression, ExpressionKind as E, Local, LowerError, Program, Statement,
     StatementKind as S, StringSegment,
 };
 use jett_types::{ReflectionMetadata, TypeInterner};
-use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::native_property_cases::{
@@ -19,7 +18,7 @@ use crate::native_property_cases::{
 
 pub(crate) fn bake_values(
     program: &mut Program,
-    values: &HashMap<Span, Value>,
+    values: &ExplicitComptimeValues,
     types: &TypeInterner,
     reflection: &ReflectionMetadata,
     method_value_definitions: &HashSet<Span>,
@@ -27,7 +26,25 @@ pub(crate) fn bake_values(
     let function_values = function_value_candidates(&program.functions, method_value_definitions);
     let mut errors = Vec::new();
     for function in &mut program.functions {
+        let specialization = &function.identity.specialization;
         let mut baker = Baker {
+            context: ComptimeContext {
+                type_arguments: function
+                    .identity
+                    .type_arguments
+                    .iter()
+                    .map(|ty| types.type_name(*ty))
+                    .collect(),
+                type_argument_reflections: specialization.type_argument_reflections.clone(),
+                type_info_kinds: specialization.type_info_kinds.clone(),
+                type_info_primitives: specialization.type_info_primitives.clone(),
+                type_kind_values: specialization.type_kind_values.clone(),
+                type_primitive_values: specialization.type_primitive_values.clone(),
+                scoped_type_bindings: scoped_bindings(
+                    &function.identity.scoped_type_bindings,
+                    types,
+                ),
+            },
             values,
             types,
             reflection,
@@ -47,8 +64,23 @@ pub(crate) fn bake_values(
     }
 }
 
+fn scoped_bindings(
+    bindings: &[jett_hir::ScopedTypeBinding],
+    types: &TypeInterner,
+) -> Vec<jett_comptime::value::ClosureScopedTypeBinding> {
+    bindings
+        .iter()
+        .map(|binding| jett_comptime::value::ClosureScopedTypeBinding {
+            name: binding.name.clone(),
+            canonical_name: types.type_name(binding.ty),
+            reflection: Some(binding.reflection.clone()),
+        })
+        .collect()
+}
+
 struct Baker<'a> {
-    values: &'a HashMap<Span, Value>,
+    context: ComptimeContext,
+    values: &'a ExplicitComptimeValues,
     types: &'a TypeInterner,
     reflection: &'a ReflectionMetadata,
     function_values: &'a [FunctionValueCandidate],
@@ -121,8 +153,12 @@ impl Baker<'_> {
     }
 
     fn expression(&mut self, expr: &mut Expression) {
-        if matches!(expr.kind, E::Comptime(_)) {
-            match self.values.get(&expr.span) {
+        if let E::Comptime { bindings, .. } = &expr.kind {
+            let mut context = self.context.clone();
+            if !bindings.is_empty() {
+                context.scoped_type_bindings = scoped_bindings(bindings, self.types);
+            }
+            match self.values.get(expr.span, &context) {
                 Some(value) => match value_expression(
                     value,
                     expr.ty,
@@ -222,7 +258,7 @@ impl Baker<'_> {
             | E::Local(_)
             | E::FunctionRef(_)
             | E::ClosureRef { .. }
-            | E::Comptime(_) => {}
+            | E::Comptime { .. } => {}
         }
     }
 

@@ -1,15 +1,93 @@
-use crate::checked_types::CheckedExpressionTypes;
+use crate::checked_types::{CheckedExpressionTypes, CheckedFunctionTypes, CheckedScopedTypes};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use jett_common::{FileId, Span};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{Block, Expr, Item, Module, Stmt, StringPart};
-use jett_types::ReflectionMetadata;
+use jett_types::{ReflectionMetadata, ReflectionTypeInfo};
 
+use crate::value::ClosureScopedTypeBinding;
 use crate::{Interpreter, Value};
 
-type CollectedExpression<'a> = (Option<String>, HashMap<String, String>, &'a Expr, Span);
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct ComptimeContext {
+    pub type_arguments: Vec<String>,
+    pub type_argument_reflections: Vec<ReflectionTypeInfo>,
+    pub type_info_kinds: Vec<(usize, String)>,
+    pub type_info_primitives: Vec<(usize, Option<String>)>,
+    pub type_kind_values: Vec<(usize, String)>,
+    pub type_primitive_values: Vec<(usize, String)>,
+    pub scoped_type_bindings: Vec<ClosureScopedTypeBinding>,
+}
+
+impl ComptimeContext {
+    pub fn from_checked(function: Option<&CheckedFunctionTypes>) -> Self {
+        let Some(function) = function else {
+            return Self::default();
+        };
+        Self {
+            type_arguments: function.type_arguments.clone(),
+            type_argument_reflections: function.type_argument_reflections.clone(),
+            type_info_kinds: function.type_info_kinds.clone(),
+            type_info_primitives: function.type_info_primitives.clone(),
+            type_kind_values: function.type_kind_values.clone(),
+            type_primitive_values: function.type_primitive_values.clone(),
+            scoped_type_bindings: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExplicitComptimeValues {
+    values: HashMap<(Span, ComptimeContext), Value>,
+}
+
+impl ExplicitComptimeValues {
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &Value> {
+        self.values.values()
+    }
+
+    pub fn get(&self, span: Span, context: &ComptimeContext) -> Option<&Value> {
+        self.values.get(&(span, context.clone()))
+    }
+
+    pub fn insert(&mut self, span: Span, context: ComptimeContext, value: Value) {
+        self.values.insert((span, context), value);
+    }
+}
+
+struct CollectedExpression<'a> {
+    namespace: Option<String>,
+    aliases: HashMap<String, String>,
+    expression: &'a Expr,
+    span: Span,
+    owner: Option<(Span, Vec<String>)>,
+    bindings: Vec<(Span, String)>,
+}
+
+#[derive(Clone, Default)]
+struct EvaluationContext {
+    function: Option<Arc<CheckedFunctionTypes>>,
+    scope: Option<Arc<CheckedScopedTypes>>,
+    bindings: Vec<ClosureScopedTypeBinding>,
+}
+
+impl EvaluationContext {
+    fn key(&self) -> ComptimeContext {
+        let mut key = ComptimeContext::from_checked(self.function.as_deref());
+        key.scoped_type_bindings = self.bindings.clone();
+        key
+    }
+}
 
 /// Evaluate every explicit `comptime` expression in a checked module.
 ///
@@ -21,13 +99,13 @@ pub fn evaluate_explicit_comptime_expressions(
     reflection_metadata: Arc<ReflectionMetadata>,
     checked_expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
-) -> (HashMap<Span, Value>, Vec<Diagnostic>) {
+) -> (ExplicitComptimeValues, Vec<Diagnostic>) {
     let mut expressions = Vec::new();
     collect_module_expressions(module, &mut expressions);
-    let Some((_, _, _, span)) = expressions.first() else {
-        return (HashMap::new(), Vec::new());
+    let Some(first) = expressions.first() else {
+        return (ExplicitComptimeValues::default(), Vec::new());
     };
-    let span = *span;
+    let span = first.span;
     // Compiler callers may have a smaller stack than reference execution.
     // Keep required comptime evaluation on the same fixed interpreter budget.
     std::thread::scope(|scope| {
@@ -48,7 +126,7 @@ pub fn evaluate_explicit_comptime_expressions(
                 Err(payload) => std::panic::resume_unwind(payload),
             },
             Err(error) => (
-                HashMap::new(),
+                ExplicitComptimeValues::default(),
                 vec![Diagnostic::error(
                     9001,
                     format!("cannot create comptime evaluation worker: {error}"),
@@ -65,35 +143,108 @@ fn evaluate_collected_expressions(
     reflection_metadata: Arc<ReflectionMetadata>,
     checked_expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
-) -> (HashMap<Span, Value>, Vec<Diagnostic>) {
+) -> (ExplicitComptimeValues, Vec<Diagnostic>) {
     let mut interpreter = Interpreter::new();
     interpreter.set_reflection_metadata(reflection_metadata);
-    interpreter.set_checked_expression_types(checked_expression_types);
+    interpreter.set_checked_expression_types(checked_expression_types.clone());
     interpreter.set_breakpoint_exclusions(breakpoint_exclusions);
     interpreter.register_module(module);
 
-    let mut values = HashMap::new();
+    let mut values = ExplicitComptimeValues::default();
     let mut diagnostics = Vec::new();
-    for (namespace, aliases, expression, span) in expressions {
-        match interpreter.eval_expr_in_namespace_with_aliases(
-            namespace.as_deref(),
-            &aliases,
-            expression,
-        ) {
-            Ok(value) => {
-                values.insert(span, value);
+    for collected in expressions {
+        let contexts = evaluation_contexts(&collected, &checked_expression_types);
+        let parameters = collected
+            .owner
+            .as_ref()
+            .map_or(&[][..], |(_, names)| names.as_slice());
+        for context in contexts {
+            let key = context.key();
+            if values.get(collected.span, &key).is_some() {
+                continue;
             }
-            Err(error) => diagnostics.push(Diagnostic::error(
-                9001,
-                format!(
-                    "`comptime` expression must be closed and evaluable during compilation: {error}"
-                ),
-                span,
-            )),
+            match interpreter.eval_closed_comptime_expression(
+                collected.namespace.as_deref(),
+                &collected.aliases,
+                collected.expression,
+                parameters,
+                context.function,
+                context.scope,
+                context.bindings,
+            ) {
+                Ok(value) => values.insert(collected.span, key, value),
+                Err(error) => diagnostics.push(Diagnostic::error(
+                    9001,
+                    format!("`comptime` expression must be closed and evaluable during compilation: {error}"),
+                    collected.span,
+                )),
+            }
         }
     }
-
     (values, diagnostics)
+}
+
+fn evaluation_contexts(
+    expression: &CollectedExpression<'_>,
+    checked: &CheckedExpressionTypes,
+) -> Vec<EvaluationContext> {
+    let mut contexts = if let Some((owner, parameters)) = &expression.owner {
+        match checked.functions.get(owner) {
+            Some(instances) => instances
+                .iter()
+                .map(|instance| EvaluationContext {
+                    function: Some(instance.clone()),
+                    ..EvaluationContext::default()
+                })
+                .collect(),
+            None if !parameters.is_empty() => Vec::new(),
+            None => vec![EvaluationContext::default()],
+        }
+    } else {
+        vec![EvaluationContext::default()]
+    };
+    for (span, name) in &expression.bindings {
+        contexts = contexts
+            .into_iter()
+            .flat_map(|context| {
+                let bindings = context
+                    .scope
+                    .as_ref()
+                    .map(|scope| &scope.bindings)
+                    .or_else(|| context.function.as_ref().map(|function| &function.bindings))
+                    .unwrap_or(&checked.bindings);
+                bindings
+                    .get(span)
+                    .into_iter()
+                    .flatten()
+                    .map(|scope| {
+                        let mut next = context.clone();
+                        next.scope = Some(scope.clone());
+                        next.bindings.push(ClosureScopedTypeBinding {
+                            name: name.clone(),
+                            canonical_name: scope.bound_type.clone(),
+                            reflection: scope.reflection.clone(),
+                        });
+                        next
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+    }
+    contexts.retain(|context| {
+        let expressions = context
+            .scope
+            .as_ref()
+            .map(|scope| &scope.expressions)
+            .or_else(|| {
+                context
+                    .function
+                    .as_ref()
+                    .map(|function| function.expressions.as_ref())
+            });
+        expressions.is_none_or(|expressions| expressions.contains_key(&expression.span))
+    });
+    contexts
 }
 
 fn collect_module_expressions<'a>(
@@ -142,15 +293,23 @@ fn collect_item<'a>(
 ) {
     let aliases = &HashMap::new();
     match item {
-        Item::Function(function) => collect_block(&function.body, namespace, aliases, expressions),
+        Item::Function(function) => {
+            collect_function(function, &[], namespace, aliases, expressions)
+        }
         Item::Implement(implementation) => {
             for method in &implementation.methods {
-                collect_block(&method.body, namespace, aliases, expressions);
+                collect_function(method, &[], namespace, aliases, expressions);
             }
         }
         Item::Struct(structure) => {
             for method in &structure.methods {
-                collect_block(&method.body, namespace, aliases, expressions);
+                collect_function(
+                    method,
+                    &structure.type_params,
+                    namespace,
+                    aliases,
+                    expressions,
+                );
             }
         }
         Item::Actor(actor) => {
@@ -178,6 +337,25 @@ fn collect_item<'a>(
         | Item::Enum(_)
         | Item::Resource(_)
         | Item::Machine(_) => {}
+    }
+}
+
+fn collect_function<'a>(
+    function: &'a jett_parser::ast::FunctionDef,
+    outer_parameters: &[jett_parser::ast::Ident],
+    namespace: Option<&str>,
+    aliases: &HashMap<String, String>,
+    expressions: &mut Vec<CollectedExpression<'a>>,
+) {
+    let start = expressions.len();
+    collect_block(&function.body, namespace, aliases, expressions);
+    let parameters = outer_parameters
+        .iter()
+        .chain(&function.type_params)
+        .map(|parameter| parameter.name.clone())
+        .collect::<Vec<_>>();
+    for expression in &mut expressions[start..] {
+        expression.owner = Some((function.name.span, parameters.clone()));
     }
 }
 
@@ -215,7 +393,13 @@ fn collect_stmt<'a>(
         Stmt::Respond(statement) => collect_expr(&statement.value, namespace, aliases, expressions),
         Stmt::ComptimeTypeBind(binding) => {
             collect_expr(&binding.value, namespace, aliases, expressions);
+            let start = expressions.len();
             collect_block(&binding.body, namespace, aliases, expressions);
+            for expression in &mut expressions[start..] {
+                expression
+                    .bindings
+                    .insert(0, (binding.span, binding.name.name.clone()));
+            }
         }
         Stmt::If(statement) => {
             collect_expr(&statement.condition, namespace, aliases, expressions);
@@ -271,7 +455,17 @@ fn collect_expr<'a>(
 ) {
     match expression {
         Expr::Comptime(inner, span) => {
-            expressions.push((namespace.map(str::to_string), aliases.clone(), inner, *span));
+            expressions.push(CollectedExpression {
+                namespace: namespace.map(str::to_string),
+                aliases: aliases.clone(),
+                expression: inner,
+                span: *span,
+                owner: None,
+                bindings: Vec::new(),
+            });
+            // A baked inline function can still execute its body later. Its
+            // nested explicit expressions need independent closed values too.
+            collect_expr(inner, namespace, aliases, expressions);
         }
         Expr::Binary(left, _, right, _) => {
             collect_expr(left, namespace, aliases, expressions);

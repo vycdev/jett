@@ -320,6 +320,25 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_contextual_comptime_values_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/contextual_comptime_values.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("contextual comptime oracle");
+    assert_eq!(
+        expected.stdout,
+        "int64:primitive\nstring:primitive\napp.Label:alias\nint8\napp.Label\nint8\nstring\napp.Label\n0\n0\nint8\nlist[int8]\napp.Label\nlist[app.Label]\nstring\nlist[string]\nint8\napp.Label\nint8\nstring\nint8\noff\napp.T\napp.T\napp.T\nint16\nstring:primitive\napp.Label:alias\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("contextual_comptime_values.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native contextual comptime");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_reflected_opaque_fields_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/reflected_opaque_fields.jett");

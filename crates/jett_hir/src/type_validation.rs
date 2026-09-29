@@ -183,6 +183,16 @@ impl BackendTypeValidator<'_> {
             format!("function `{function_name}` expression result"),
         );
         match &expression.kind {
+            ExpressionKind::Comptime { value, bindings } => {
+                for binding in bindings {
+                    self.type_id(
+                        binding.ty,
+                        expression.span,
+                        format!("comptime binding `{}`", binding.name),
+                    );
+                }
+                self.expression(value, function_name);
+            }
             ExpressionKind::Binary { left, right, .. } => {
                 self.expression(left, function_name);
                 self.expression(right, function_name);
@@ -191,7 +201,6 @@ impl BackendTypeValidator<'_> {
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value)
-            | ExpressionKind::Comptime(value)
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
@@ -732,6 +741,47 @@ mod tests {
 
         validate_backend_types(&program_with(recursive_type, Vec::new()), &interner)
             .expect("accepted backend types should validate");
+    }
+
+    #[test]
+    fn rejects_error_types_in_comptime_binding_contexts() {
+        let span = test_span();
+        let statement = Statement {
+            kind: StatementKind::Expression(Expression {
+                kind: ExpressionKind::Comptime {
+                    value: Box::new(Expression {
+                        kind: ExpressionKind::Int(7),
+                        ty: TypeInterner::INT64,
+                        span,
+                    }),
+                    bindings: vec![crate::ScopedTypeBinding {
+                        name: "Bound".into(),
+                        ty: TypeInterner::ERROR,
+                        reflection: jett_types::ReflectionTypeInfo {
+                            type_name: "int64".into(),
+                            kind: "primitive".into(),
+                            primitive_tag: Some("int64".into()),
+                            has_secret: false,
+                            args: Vec::new(),
+                        },
+                    }],
+                },
+                ty: TypeInterner::INT64,
+                span,
+            }),
+            span,
+        };
+        let errors = validate_backend_types(
+            &program_with(TypeInterner::NOTHING, vec![statement]),
+            &TypeInterner::new(),
+        )
+        .expect_err("comptime type bindings are backend-visible");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("comptime binding `Bound`")
+                    && error.message.contains("unresolved `<error>` type"))
+        );
     }
 
     #[test]

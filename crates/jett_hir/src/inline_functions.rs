@@ -225,7 +225,7 @@ impl Extractor<'_> {
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value)
-            | ExpressionKind::Comptime(value)
+            | ExpressionKind::Comptime { value, .. }
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
@@ -389,7 +389,7 @@ fn expression_uses_local(expression: &Expression, target: u32) -> bool {
         | ExpressionKind::ResultOk(value)
         | ExpressionKind::ResultFail(value)
         | ExpressionKind::OptionalSome(value)
-        | ExpressionKind::Comptime(value)
+        | ExpressionKind::Comptime { value, .. }
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)

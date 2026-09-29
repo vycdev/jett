@@ -651,7 +651,7 @@ pub struct Interpreter {
     active_checked_scope: Option<Arc<CheckedScopedTypes>>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
-    explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
+    explicit_comptime_values: Option<Arc<crate::ExplicitComptimeValues>>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -805,7 +805,7 @@ impl Interpreter {
     }
 
     /// Attach values produced for explicit `comptime` expressions by the build.
-    pub fn set_explicit_comptime_values(&mut self, values: Arc<HashMap<Span, Value>>) {
+    pub fn set_explicit_comptime_values(&mut self, values: Arc<crate::ExplicitComptimeValues>) {
         self.explicit_comptime_values = Some(values);
     }
 
@@ -1842,6 +1842,63 @@ impl Interpreter {
         result
     }
 
+    pub(crate) fn eval_closed_comptime_expression(
+        &mut self,
+        namespace: Option<&str>,
+        aliases: &HashMap<String, String>,
+        expression: &Expr,
+        parameters: &[String],
+        function: Option<Arc<CheckedFunctionTypes>>,
+        checked_scope: Option<Arc<CheckedScopedTypes>>,
+        bindings: Vec<ClosureScopedTypeBinding>,
+    ) -> Result<Value, String> {
+        let mut arguments = Vec::new();
+        let mut parameter_scope = HashMap::new();
+        if let Some(function) = &function {
+            if function.type_arguments.len() != parameters.len() {
+                return Err(
+                    "checked comptime type argument arity differs from its declaration".into(),
+                );
+            }
+            for (index, (parameter, canonical)) in
+                parameters.iter().zip(&function.type_arguments).enumerate()
+            {
+                let name = function
+                    .type_argument_reflections
+                    .get(index)
+                    .map_or(canonical.as_str(), |info| info.type_name.as_str());
+                let ty = Self::simple_type_expr_from_name(name, expression.span())
+                    .ok_or_else(|| format!("cannot reconstruct checked comptime type `{name}`"))?;
+                arguments.push(ty.clone());
+                parameter_scope.insert(parameter.clone(), ty);
+            }
+        }
+        let mut scopes = vec![parameter_scope];
+        for binding in &bindings {
+            let name = binding
+                .reflection
+                .as_ref()
+                .map_or(binding.canonical_name.as_str(), |info| {
+                    info.type_name.as_str()
+                });
+            let ty = Self::simple_type_expr_from_name(name, expression.span())
+                .ok_or_else(|| format!("cannot reconstruct checked lexical type `{name}`"))?;
+            scopes.push(HashMap::from([(binding.name.clone(), ty)]));
+        }
+        let saved_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
+        let saved_function = std::mem::replace(&mut self.active_checked_function, function);
+        let saved_scope = std::mem::replace(&mut self.active_checked_scope, checked_scope);
+        let saved_bindings = std::mem::replace(&mut self.scoped_type_bindings, bindings);
+        let saved_scopes = std::mem::replace(&mut self.type_arg_scopes, scopes);
+        let result = self.eval_expr_in_namespace_with_aliases(namespace, aliases, expression);
+        self.type_arg_scopes = saved_scopes;
+        self.scoped_type_bindings = saved_bindings;
+        self.active_checked_scope = saved_scope;
+        self.active_checked_function = saved_function;
+        self.current_type_arguments = saved_arguments;
+        result
+    }
+
     fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
         let flow = self.eval_expr_flow_inner(expr)?;
         match flow {
@@ -2068,15 +2125,15 @@ impl Interpreter {
             Expr::Paren(inner, _) => self.eval_expr_flow(inner),
             Expr::View(inner, _) => self.eval_expr_flow(inner),
             Expr::Comptime(inner, span) => {
-                if let Some(value) = self
-                    .explicit_comptime_values
-                    .as_ref()
-                    .and_then(|values| values.get(span))
-                {
-                    Ok(ExprFlow::Value(value.clone()))
-                } else {
-                    self.eval_expr_flow(inner)
+                if let Some(values) = &self.explicit_comptime_values {
+                    let mut context = crate::ComptimeContext::from_checked(
+                        self.active_checked_function.as_deref(),
+                    );
+                    context.scoped_type_bindings = self.scoped_type_bindings.clone();
+                    return values.get(*span, &context).cloned().map(ExprFlow::Value)
+                        .ok_or_else(|| "explicit comptime expression has no evaluated value for its checked type context".into());
                 }
+                self.eval_expr_flow(inner)
             }
             Expr::Declassify(inner, _) => self.eval_expr_flow(inner),
 
@@ -12464,8 +12521,8 @@ mod tests {
             )),
             span,
         );
-        let mut values = HashMap::new();
-        values.insert(span, Value::Int64(42));
+        let mut values = crate::ExplicitComptimeValues::default();
+        values.insert(span, crate::ComptimeContext::default(), Value::Int64(42));
 
         let mut interpreter = Interpreter::new();
         interpreter.set_explicit_comptime_values(Arc::new(values));

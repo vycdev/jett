@@ -304,6 +304,11 @@ nominal refinements. The remaining interface audit and cross-platform release
 gates are tracked in [native interface values](native_interface_values.md).
 Passing the existing fixture denominators alone does not close these gates.
 
+Explicit comptime values now retain each checked generic instantiation and
+lexical reflected type-binding chain, including nested callback bodies. The
+context fix and its differential regression coverage are recorded in
+[native comptime contexts](native_comptime_context.md).
+
 `tests/native_parity.json` is the machine-checked fixture inventory. The table
 below records implementation coverage; a row is complete only when its native
 object, linked execution, and differential behavior gates all pass. Typed

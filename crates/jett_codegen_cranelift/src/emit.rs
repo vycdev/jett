@@ -2047,7 +2047,7 @@ impl Translator<'_, '_> {
                 };
                 Ok(LoweredValue::Scalar(zero))
             }
-            ExpressionKind::Comptime(_) => {
+            ExpressionKind::Comptime { .. } => {
                 Err(self.unsupported(expression.span, "unbaked comptime expression"))
             }
             ExpressionKind::View(value) => self.argument(value, true),

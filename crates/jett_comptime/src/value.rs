@@ -16,7 +16,7 @@ pub struct ClosureTypeContext {
     pub arguments: Vec<ClosureTypeArgument>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClosureScopedTypeBinding {
     pub name: String,
     pub canonical_name: String,

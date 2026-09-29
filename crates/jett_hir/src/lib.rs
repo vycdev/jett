@@ -398,7 +398,10 @@ pub enum ExpressionKind {
         evaluation_order: Vec<usize>,
     },
     StringInterpolation(Vec<StringSegment>),
-    Comptime(Box<Expression>),
+    Comptime {
+        value: Box<Expression>,
+        bindings: Vec<ScopedTypeBinding>,
+    },
     Declassify(Box<Expression>),
     Coarsen(Box<Expression>),
     /// Compiler-owned conversion after every required refinement predicate passed.
@@ -789,7 +792,7 @@ impl Validator<'_> {
             | ExpressionKind::OptionalSome(value)
             | ExpressionKind::View(value)
             | ExpressionKind::Clone(value)
-            | ExpressionKind::Comptime(value)
+            | ExpressionKind::Comptime { value, .. }
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
@@ -3191,9 +3194,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     lowered
                 });
             }
-            Expr::Comptime(value, _) => {
-                ExpressionKind::Comptime(Box::new(self.lower_expression(value)?))
-            }
+            Expr::Comptime(value, _) => ExpressionKind::Comptime {
+                value: Box::new(self.lower_expression(value)?),
+                bindings: self.scoped_type_bindings.clone(),
+            },
             Expr::Declassify(value, _) => {
                 ExpressionKind::Declassify(Box::new(self.lower_expression(value)?))
             }
@@ -6568,7 +6572,7 @@ function render(view values: list[int64]) returns string:
             function.body.statements[0].kind,
             StatementKind::Let {
                 value: Expression {
-                    kind: ExpressionKind::Comptime(_),
+                    kind: ExpressionKind::Comptime { .. },
                     ..
                 },
                 ..

@@ -259,7 +259,7 @@ fn collect_expression_references(
         | ExpressionKind::ResultOk(value)
         | ExpressionKind::ResultFail(value)
         | ExpressionKind::OptionalSome(value)
-        | ExpressionKind::Comptime(value)
+        | ExpressionKind::Comptime { value, .. }
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)

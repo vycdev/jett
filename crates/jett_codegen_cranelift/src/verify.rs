@@ -1422,7 +1422,7 @@ impl Verifier<'_> {
                     "direct call result type does not match its signature",
                 )
             }
-            ExpressionKind::Comptime(_) => {
+            ExpressionKind::Comptime { .. } => {
                 Err(self.unsupported(function, expression.span, "unbaked comptime expression"))
             }
             ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
@@ -3115,7 +3115,7 @@ fn integer_expression_is_statically_zero(expression: &Expression) -> bool {
             op: UnaryOp::Negate,
             value,
         }
-        | ExpressionKind::Comptime(value)
+        | ExpressionKind::Comptime { value, .. }
         | ExpressionKind::View(value)
         | ExpressionKind::Clone(value) => integer_expression_is_statically_zero(value),
         _ => false,

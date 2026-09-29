@@ -67,7 +67,7 @@ pub struct BuildResult {
     /// Checked expression type names for runtime normalization at expression-only sites.
     pub checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
     /// Values baked by explicit `comptime` expressions.
-    pub explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
+    pub explicit_comptime_values: Option<Arc<jett_comptime::ExplicitComptimeValues>>,
 }
 
 /// Backend-neutral programs and checked data produced for a valid source file.
@@ -96,7 +96,7 @@ pub struct BackendLoweringResult {
     pub source_origins: HashMap<FileId, SourceOrigin>,
     pub reflection_metadata: Arc<ReflectionMetadata>,
     pub checked_expression_types: Arc<CheckedExpressionTypes>,
-    pub explicit_comptime_values: Arc<HashMap<Span, Value>>,
+    pub explicit_comptime_values: Arc<jett_comptime::ExplicitComptimeValues>,
 }
 
 /// Failure while validating or lowering a file for a backend.
@@ -2744,7 +2744,7 @@ fn lower_file_for_backend_inner(
         |diagnostics: Vec<Diagnostic>,
          reflection_metadata: Option<Arc<ReflectionMetadata>>,
          checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
-         explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>| {
+         explicit_comptime_values: Option<Arc<jett_comptime::ExplicitComptimeValues>>| {
             BackendLoweringError::Build(BuildResult {
                 diagnostics,
                 has_errors: true,

@@ -726,7 +726,7 @@ impl Coercions<'_> {
             ExpressionKind::Unary { value, .. }
             | ExpressionKind::Field { base: value, .. }
             | ExpressionKind::StateIs { value, .. }
-            | ExpressionKind::Comptime(value)
+            | ExpressionKind::Comptime { value, .. }
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)

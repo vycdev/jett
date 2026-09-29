@@ -1,0 +1,7 @@
+# ERROR: E9001
+namespace app
+function invalid[T](value: T) returns T:
+    return comptime value
+function main() returns nothing:
+    println(invalid[int64](7))
+    return nothing

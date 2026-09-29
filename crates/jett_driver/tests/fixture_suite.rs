@@ -444,6 +444,10 @@ compile_fail_fixture!(
     "comptime_expression_requires_closed_value.jett"
 );
 compile_fail_fixture!(
+    compile_fail_comptime_generic_requires_closed_value,
+    "comptime_generic_requires_closed_value.jett"
+);
+compile_fail_fixture!(
     compile_fail_comptime_expression_rejects_capability,
     "comptime_expression_rejects_capability.jett"
 );
