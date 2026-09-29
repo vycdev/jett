@@ -492,3 +492,10 @@ for dispatch after joining, while a fresh pending actor still fails a rejected
 refinement constructor. A scalar-returning computation uses a refined actor
 internally at runtime and comptime; no actor handle escapes evaluation.
 Exact stdout and traces match, including actor identity through reconstruction.
+
+`interface_display_contexts` checks the exact display contract of interface
+values against their concrete records, including namespaced implementations,
+generic and reflected scoped types, fields, returned values, and comptime
+formatting. A side-effecting receiver is evaluated once, view operands remain
+usable, and explicit primitive display implementations override the default
+formatter. See [display contexts](native_display_context.md).

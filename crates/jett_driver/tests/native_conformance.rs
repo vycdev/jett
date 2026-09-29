@@ -342,6 +342,25 @@ fn native_interface_refined_interfaces_match_interpreter() {
 }
 
 #[test]
+fn native_interface_display_contexts_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_display_contexts.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("interface display context oracle");
+    assert_eq!(
+        expected.stdout,
+        "erased:number:7\nconcrete:Ada\nerased:record:Ada\nconcrete:Ada\nerased:number:7\nerased:record:Ada\nfield:erased:record:Ada\ncall:erased:record:returned\nevaluated\nonce:erased:record:returned\nerased:record:returned\nerased:record:returned\nscoped:erased:record:returned\nnumber:7 Ada\nenabled\ndisabled\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_display_contexts.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native interface display");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_interface_refined_actors_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_refined_actors.jett");

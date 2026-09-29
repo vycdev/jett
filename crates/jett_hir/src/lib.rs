@@ -2989,25 +2989,6 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn lower_interpolation_value(&mut self, expression: &Expr) -> Option<Expression> {
         let value = self.lower_expression(expression)?;
-        if matches!(
-            self.parent.check.interner.resolve(value.ty),
-            Type::Int8
-                | Type::Int16
-                | Type::Int32
-                | Type::Int64
-                | Type::Uint8
-                | Type::Uint16
-                | Type::Uint32
-                | Type::Uint64
-                | Type::Float32
-                | Type::Float64
-                | Type::String
-                | Type::Bool
-                | Type::Nothing
-        ) {
-            return Some(value);
-        }
-
         let method_span = self
             .parent
             .check
@@ -3022,6 +3003,24 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             })
             .map(|method| method.source_span);
         let Some(method_span) = method_span else {
+            if matches!(
+                self.parent.check.interner.resolve(value.ty),
+                Type::Int8
+                    | Type::Int16
+                    | Type::Int32
+                    | Type::Int64
+                    | Type::Uint8
+                    | Type::Uint16
+                    | Type::Uint32
+                    | Type::Uint64
+                    | Type::Float32
+                    | Type::Float64
+                    | Type::String
+                    | Type::Bool
+                    | Type::Nothing
+            ) {
+                return Some(value);
+            }
             self.parent.error(
                 expression.span(),
                 "displayable interpolation has no checked display method",

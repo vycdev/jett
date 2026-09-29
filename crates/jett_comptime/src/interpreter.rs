@@ -1315,7 +1315,9 @@ impl Interpreter {
         namespace: Option<&str>,
         block: &ImplementBlock,
     ) {
-        let interface_name = block.interface_name.name.clone();
+        let interface_name = self
+            .expand_type_ident(&block.interface_name, namespace)
+            .name;
         let owner_type = self.substitute_type_expr_in_namespace(&block.for_type, namespace);
         let owner_type = self.concrete_type_expr(&owner_type, &mut HashSet::new());
         let concrete_owner = type_expr_display(&owner_type);
@@ -1330,11 +1332,7 @@ impl Interpreter {
 
         for method in &block.methods {
             let concrete_name = format!("{}.{}", owner_name, method.name.name);
-            let qualified_interface = namespace
-                .filter(|_| !interface_name.contains('.'))
-                .map(|namespace| format!("{namespace}.{interface_name}"))
-                .unwrap_or_else(|| interface_name.clone());
-            let interface_method_name = format!("{}.{}", qualified_interface, method.name.name);
+            let interface_method_name = format!("{}.{}", interface_name, method.name.name);
             let implementation_name = format!("{owner_name} as {interface_method_name}");
             self.register_function_named(
                 &implementation_name,
@@ -2202,7 +2200,7 @@ impl Interpreter {
                         StringPart::Literal(s) => result.push_str(s),
                         StringPart::Expr(expr) => {
                             let val = value_or_signal!(self, expr);
-                            result.push_str(&self.display_interpolation_value(val)?);
+                            result.push_str(&self.display_interpolation_value(expr, val)?);
                         }
                     }
                 }
@@ -11422,8 +11420,16 @@ impl Interpreter {
             .cloned()
     }
 
-    fn display_interpolation_value(&mut self, value: Value) -> Result<String, String> {
-        let display_method = runtime_type_name(&value).and_then(|receiver| {
+    fn display_interpolation_value(&mut self, expr: &Expr, value: Value) -> Result<String, String> {
+        let receiver = self
+            .checked_expression_type(expr.span())
+            .cloned()
+            .or_else(|| {
+                self.call_argument_type(expr)
+                    .map(|ty| self.concrete_type_display(&ty))
+            })
+            .or_else(|| runtime_type_name(&value));
+        let display_method = receiver.and_then(|receiver| {
             self.interface_methods
                 .get("Displayable.display")
                 .and_then(|methods| methods.get(&receiver))

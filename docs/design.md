@@ -6965,6 +6965,12 @@ string msg = "user: {user}"               # COMPILE ERROR: User does not impleme
 
 **Compiler-stdlib coupling:** This is one of a small number of places where the compiler has special knowledge of a standard library interface. String interpolation depends on `Displayable`, just as `handle error:` depends on the built-in `result` type and `handle:` depends on `optional`. These are intentional, well-defined couplings — not a general implicit conversion system. Outside of string interpolation, converting to string requires an explicit `string.from_int64()` or `string.from_float64()` call.
 
+Interpolation selects the implementation for the expression's checked type.
+An implementation for an interface receives its erased value; the concrete
+payload's implementation does not replace that contract. An explicit display
+implementation takes precedence over built-in primitive formatting. Each
+interpolated expression is evaluated once, and display borrows its value.
+
 **Literal braces:** Use `{{` and `}}` for literal `{` and `}` characters:
 
 ```

@@ -840,6 +840,11 @@ Inherited interface refinements therefore dispatch through that base inside
 their predicates. Both successful and rejected boundaries restore caller context.
 Explicit comptime HIR retains its original source span for evaluated-value lookup,
 independently of an enclosing expression span widened by parentheses.
+Interpolation selects the exact checked `Displayable.display` owner before
+using built-in primitive formatting. Interpreter selection uses the expression's
+checked type as well, preserving an interface's own display implementation over
+its concrete payload. Implementation registration resolves the interface's
+declaration namespace independently of the implementation's namespace.
 Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
 lexical evaluation order after type checking has authorized them. The shared
 registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,
