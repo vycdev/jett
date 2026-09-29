@@ -1,0 +1,23 @@
+namespace app
+enum Chain:
+    leaf(value: float64)
+    next(value: Chain)
+function chain(value: float64, depth: int64, pending: bool) returns Chain:
+    mutable Chain current = Chain.leaf(value)
+    mutable int64 index = 0
+    while index < depth:
+        if pending:
+            current = Chain.next(run current)
+        else:
+            current = Chain.next(current)
+        index = index + 1
+    return current
+function main(stdout: Stdout) returns nothing:
+    Chain first = chain(0.0, 160, false)
+    Chain same = chain(-0.0, 160, false)
+    Chain changed = chain(1.0, 160, false)
+    Chain shorter = chain(0.0, 159, false)
+    Chain nan = chain(0.0 / 0.0, 160, false)
+    Chain pending = chain(0.0, 160, true)
+    Chain other = chain(0.0, 160, true)
+    Stdout.write(view stdout, "{first == same} {first != changed} {first == shorter} {nan == nan} {pending == other} {first == pending}\n")

@@ -7065,6 +7065,10 @@ exact `Equatable` implementation gets a compile error for either operator.
 
 Enums retain their existing variant-and-payload equality. Equality does not
 grant collection-key eligibility.
+Finite recursive enum payloads use the same comparisons at every depth. A
+fixed backend traversal limit must not reject an otherwise supported comparison.
+Payload comparison retains its short-circuit order, pending-depth distinctions,
+and IEEE floating behavior, including unequal NaNs and equal signed zeros.
 
 **Collection hashing stays primitive-only.** Jett does not expose a custom
 `Hashable` interface yet. `map[K, V]` accepts only integer, `string`, or `bool`

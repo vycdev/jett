@@ -701,6 +701,13 @@ with owned list fields through construction, borrowed matching, clone, trace,
 list storage, and cleanup. Aggregate payload equality remains guarded; enum
 equality over user structs awaits the rule in
 `docs/open_design/enum_payload_struct_equality.md`.
+Supported aggregate payloads use an explicit comparison stack instead of the
+former 128-level recursion guard. Active `(node, left, right)` paths reject
+malformed cycles; repeated children on separate paths remain valid. Child
+validation is deferred until its comparison executes, preserving short-circuit
+failure precedence. Pointer identity is never an equality shortcut, so nested
+NaN, signed-zero, pending-depth, and collection-order behavior stays intact.
+This changes no ABI signature and does not add direct collection comparisons.
 
 Bitfield values use the same typed record storage for fields, including owned
 payload fields. Native construction, field projection, clone and cleanup match

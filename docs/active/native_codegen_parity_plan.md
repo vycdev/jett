@@ -1687,3 +1687,15 @@ repeated children, trace, print, and secret-bearing breakpoint snapshots.
 Runtime tests cover 4,096 levels and malformed cyclic schemas/payloads without
 recursive traversal or partial output. Existing aggregate equality remains a
 separate audit obligation.
+
+### Deep supported enum equality
+
+Comparing a 160-level recursive enum with itself returned `true` in the
+interpreter and an invalid-struct runtime error natively. The existing supported
+aggregate equality path now uses an explicit stack with active-path cycle
+checks. Child comparisons retain their order and stop at the first unequal
+payload, including before malformed later fields. Linked debug/release tests
+cover deep values, unequal leaves and lengths, pending nodes, NaN, and signed
+zero after source removal. Runtime tests cover 4,096 levels and malformed cycles.
+This does not add equality for user structs, actors, interfaces, or direct
+collection operands; their recorded policy decisions remain open.

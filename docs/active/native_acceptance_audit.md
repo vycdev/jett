@@ -154,8 +154,12 @@ observation of 160-level recursive values, including pending nodes and secret
 leaves, after deleting source. Runtime tests format 4,096-level values and shared
 children, reject alias and payload cycles (including dynamic interface layouts),
 and preserve output-buffer contents on failed formatting. This removes the
-formatter's former 128-level cutoff; it does not establish deep aggregate
-equality coverage.
+formatter's former 128-level cutoff. A separate deep-enum equality gate compares
+debug and release binaries after source removal, including 160-level equal and
+unequal payloads, different chain lengths, pending wrappers, NaN, and signed zero.
+Runtime equality tests cover 4,096 levels, shared children, malformed cycles,
+and short-circuit ordering before invalid later fields. These gates retain the
+existing equality type restrictions and do not resolve the open policies above.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

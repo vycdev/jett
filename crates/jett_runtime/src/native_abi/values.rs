@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod debug_equal;
 mod debug_format;
 pub mod interface_conversion;
 
@@ -684,239 +685,6 @@ impl NativeDebugLayout {
             return Err(INVALID_TRACE_LABEL);
         }
         Ok(Self { root, nodes })
-    }
-
-    fn equal_value(
-        &self,
-        values: &NativeValues,
-        left: u64,
-        right: u64,
-        index: usize,
-        depth: u32,
-    ) -> LeafResult<bool> {
-        if depth >= 128 {
-            return Err(INVALID_STRUCT);
-        }
-        let child = depth + 1;
-        Ok(match self.nodes.get(index).ok_or(INVALID_STRUCT)? {
-            NativeDebugNode::Primitive(raw) => {
-                match NativeSortKind::from_raw(*raw).map_err(|_| INVALID_STRUCT)? {
-                    NativeSortKind::Float32 => {
-                        f32::from_bits(left as u32) == f32::from_bits(right as u32)
-                    }
-                    NativeSortKind::Float64 => f64::from_bits(left) == f64::from_bits(right),
-                    NativeSortKind::String => values.same_string_value(left, right)?,
-                    _ => left == right,
-                }
-            }
-            NativeDebugNode::Nothing => left == right,
-            NativeDebugNode::Bytes => values.same_bytes_value(left, right)?,
-            NativeDebugNode::Alias(base) => {
-                return self.equal_value(values, left, right, *base, child);
-            }
-            NativeDebugNode::List(element) => {
-                let left = values.lists.get(&left).ok_or(INVALID_LIST)?;
-                let right = values.lists.get(&right).ok_or(INVALID_LIST)?;
-                if left.pending_depth != right.pending_depth {
-                    return Ok(false);
-                }
-                if left.elements.len() != right.elements.len() {
-                    return Ok(false);
-                }
-                for (position, (a, b)) in left.elements.iter().zip(&right.elements).enumerate() {
-                    let left_depth = left
-                        .element_pending_depths
-                        .get(&position)
-                        .copied()
-                        .unwrap_or(0);
-                    let right_depth = right
-                        .element_pending_depths
-                        .get(&position)
-                        .copied()
-                        .unwrap_or(0);
-                    if left_depth != right_depth
-                        || !self.equal_value(
-                            values,
-                            a.ok_or(INVALID_LIST)?,
-                            b.ok_or(INVALID_LIST)?,
-                            *element,
-                            child,
-                        )?
-                    {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            NativeDebugNode::Set(element) => {
-                let left = values.sets.get(&left).ok_or(INVALID_SET)?;
-                let right = values.sets.get(&right).ok_or(INVALID_SET)?;
-                if left.pending_depth != right.pending_depth {
-                    return Ok(false);
-                }
-                if left.elements.len() != right.elements.len() {
-                    return Ok(false);
-                }
-                for (position, (a, b)) in left.elements.iter().zip(&right.elements).enumerate() {
-                    let left_depth = left
-                        .element_pending_depths
-                        .get(&position)
-                        .copied()
-                        .unwrap_or(0);
-                    let right_depth = right
-                        .element_pending_depths
-                        .get(&position)
-                        .copied()
-                        .unwrap_or(0);
-                    if left_depth != right_depth
-                        || !self.equal_value(
-                            values,
-                            a.ok_or(INVALID_SET)?,
-                            b.ok_or(INVALID_SET)?,
-                            *element,
-                            child,
-                        )?
-                    {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            NativeDebugNode::Map(key, value) => {
-                let left = values.maps.get(&left).ok_or(INVALID_MAP)?;
-                let right = values.maps.get(&right).ok_or(INVALID_MAP)?;
-                if left.pending_depth != right.pending_depth {
-                    return Ok(false);
-                }
-                if left.entries.len() != right.entries.len() {
-                    return Ok(false);
-                }
-                for (a, b) in left.entries.iter().zip(&right.entries) {
-                    let a = a.ok_or(INVALID_MAP)?;
-                    let b = b.ok_or(INVALID_MAP)?;
-                    if a.key_taken || b.key_taken {
-                        return Err(INVALID_MAP);
-                    }
-                    if a.key_pending_depth != b.key_pending_depth
-                        || a.value_pending_depth != b.value_pending_depth
-                        || !self.equal_value(values, a.key, b.key, *key, child)?
-                        || !self.equal_value(values, a.value, b.value, *value, child)?
-                    {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            NativeDebugNode::Optional(element) => {
-                let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
-                let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
-                if left.pending_depth != right.pending_depth
-                    || left.payload_pending_depth != right.payload_pending_depth
-                {
-                    return Ok(false);
-                }
-                if left.tag != right.tag {
-                    return Ok(false);
-                }
-                match left.tag {
-                    SUM_FAILURE => true,
-                    SUM_SUCCESS => {
-                        self.equal_value(values, left.bits, right.bits, *element, child)?
-                    }
-                    _ => return Err(INVALID_SUM),
-                }
-            }
-            NativeDebugNode::Result(ok, error) => {
-                let left = values.sums.get(&left).ok_or(INVALID_SUM)?;
-                let right = values.sums.get(&right).ok_or(INVALID_SUM)?;
-                if left.pending_depth != right.pending_depth
-                    || left.payload_pending_depth != right.payload_pending_depth
-                {
-                    return Ok(false);
-                }
-                if left.tag != right.tag {
-                    return Ok(false);
-                }
-                let payload = match left.tag {
-                    SUM_FAILURE => *error,
-                    SUM_SUCCESS => *ok,
-                    _ => return Err(INVALID_SUM),
-                };
-                self.equal_value(values, left.bits, right.bits, payload, child)?
-            }
-            NativeDebugNode::Record(_, fields) => {
-                let left = values.structs.get(&left).ok_or(INVALID_STRUCT)?;
-                let right = values.structs.get(&right).ok_or(INVALID_STRUCT)?;
-                if left.pending_depth != right.pending_depth {
-                    return Ok(false);
-                }
-                if left.fields.len() != fields.len() || right.fields.len() != fields.len() {
-                    return Err(INVALID_STRUCT);
-                }
-                for (position, (_, field_type)) in fields.iter().enumerate() {
-                    let a = left.fields[position].ok_or(INVALID_STRUCT)?;
-                    let b = right.fields[position].ok_or(INVALID_STRUCT)?;
-                    if a.pending_depth != b.pending_depth
-                        || !self.equal_value(values, a.bits, b.bits, *field_type, child)?
-                    {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            NativeDebugNode::Enum(_, variants) | NativeDebugNode::Machine(_, variants) => {
-                let left = values.structs.get(&left).ok_or(INVALID_STRUCT)?;
-                let right = values.structs.get(&right).ok_or(INVALID_STRUCT)?;
-                if left.pending_depth != right.pending_depth {
-                    return Ok(false);
-                }
-                let left_tag = usize::try_from(
-                    left.fields
-                        .first()
-                        .copied()
-                        .flatten()
-                        .ok_or(INVALID_STRUCT)?
-                        .bits,
-                )
-                .map_err(|_| INVALID_STRUCT)?;
-                let right_tag = usize::try_from(
-                    right
-                        .fields
-                        .first()
-                        .copied()
-                        .flatten()
-                        .ok_or(INVALID_STRUCT)?
-                        .bits,
-                )
-                .map_err(|_| INVALID_STRUCT)?;
-                if left_tag != right_tag {
-                    return Ok(false);
-                }
-                let (_, fields) = variants.get(left_tag).ok_or(INVALID_STRUCT)?;
-                if left.fields.len() != fields.len() + 1 || right.fields.len() != fields.len() + 1 {
-                    return Err(INVALID_STRUCT);
-                }
-                for (position, field_type) in fields.iter().enumerate() {
-                    let a = left.fields[position + 1].ok_or(INVALID_STRUCT)?;
-                    let b = right.fields[position + 1].ok_or(INVALID_STRUCT)?;
-                    if a.pending_depth != b.pending_depth
-                        || !self.equal_value(values, a.bits, b.bits, *field_type, child)?
-                    {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            NativeDebugNode::Capability(_)
-            | NativeDebugNode::Uninhabited
-            | NativeDebugNode::Redacted
-            | NativeDebugNode::Interface
-            | NativeDebugNode::Function
-            | NativeDebugNode::Actor
-            | NativeDebugNode::TypeConstruction => {
-                return Err(INVALID_STRUCT);
-            }
-        })
     }
 }
 struct BitfieldLayoutCursor<'a> {
@@ -4352,7 +4120,6 @@ impl NativeValues {
             left,
             right,
             layout.root,
-            0,
         )?))
     }
     fn checked_type_arg_index(
@@ -6639,7 +6406,7 @@ mod tests {
             );
         }
         assert_eq!(
-            layout.equal_value(&values, 1, 1, layout.root, 0),
+            layout.equal_value(&values, 1, 1, layout.root),
             Err(INVALID_STRUCT)
         );
         let public = NativeDebugLayout {
@@ -7122,11 +6889,11 @@ mod tests {
             Ok("list(some(function(value)))".into())
         );
         assert_eq!(
-            layout.equal_value(&values, descriptor, descriptor, 0, 0),
+            layout.equal_value(&values, descriptor, descriptor, 0),
             Err(INVALID_STRUCT)
         );
         assert_eq!(
-            layout.equal_value(&values, list, list, layout.root, 0),
+            layout.equal_value(&values, list, list, layout.root),
             Err(INVALID_STRUCT)
         );
         values.drop_value(list).unwrap();
@@ -7469,12 +7236,12 @@ mod tests {
             Ok("list(nothing, pending(pending(nothing)))".into())
         );
         assert_eq!(
-            layout.equal_value(&values, left, right, layout.root, 0),
+            layout.equal_value(&values, left, right, layout.root),
             Ok(true)
         );
         values.lists.get_mut(&right).unwrap().elements[1] = Some(1);
         assert_eq!(
-            layout.equal_value(&values, left, right, layout.root, 0),
+            layout.equal_value(&values, left, right, layout.root),
             Ok(false)
         );
         values.drop_value(left).unwrap();

@@ -2835,10 +2835,14 @@ native owners, and cleanup failure overrides entry failure. UTF-8 string kernels
 use the same extended-grapheme segmentation dependency as the interpreter. This
 initial handle representation is not the proposed inline/SSO optimization.
 Payload enum equality compares the selected variant's integer, boolean,
-floating-point, and string fields through the native value ABI. Comparison
-against a known unit variant checks only the variant tag, including when other
-variants carry aggregate payloads; comparison between two unknown aggregate
-payload values remains outside that path.
+floating-point, and string fields through the native value ABI. Supported
+aggregate payloads use the typed layout graph, including recursive enums,
+collections, sums, machines, and bitfields. Its explicit comparison stack
+preserves left-to-right short-circuit evaluation and rejects malformed cycles
+without imposing a fixed nesting cutoff on finite values. Equal handles do not
+bypass payload comparison: a nested NaN still compares unequal. Comparison
+against a known unit variant checks only the variant tag. User-struct, actor,
+and erased-interface equality policies remain separate open design decisions.
 
 Internal native `nothing` parameters, returns, locals, and aggregate payloads
 carry an unowned u64 pending depth. Sequential `run` increments that depth and
