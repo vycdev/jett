@@ -2953,6 +2953,21 @@ dispatch reads the underlying actor ID. Construction-builder and capability
 refinements likewise retain their nominal implementation owner. MIR handler
 extraction traverses validated refinement wrappers, including reconstruction
 operations nested inside baked builders.
+An interface-backed refinement retains two identities: its nominal method owner
+and the underlying erased value's concrete owner. Interface conversion boxes or
+unboxes that refinement even when both sides share the interface handle layout.
+MIR treats extraction as a borrow of the outer box. Interpreter metadata and
+comptime materialization preserve the inner identity so explicit coarsening can
+restore the requested ancestor without losing the concrete base implementation.
+The checker accepts a compatible whole sum before considering missing payload
+handling. Interpreter refinement handles use the checked source type to
+distinguish a sum from an interface whose concrete payload happens to be a sum.
+Predicates observe the base interface identity; already validated pending
+refinements retain their invariant without rerunning a predicate on the task.
+Constructor fields with pending predicate chains keep their checked ancestor
+type through interface conversion; MIR adds the refined type after validation.
+Interpreter boundary normalization likewise attaches nominal identity only
+after successful validation, including for pending constructor inputs.
 Machine state field type references pass through the same resolver traversal as
 struct and enum fields, retaining declaration-site namespaces, visibility checks,
 and declaration order before checked layouts and reflection metadata are built.

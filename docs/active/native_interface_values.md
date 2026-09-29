@@ -441,3 +441,42 @@ actor references still update the original actor, and joined capabilities retain
 the authority required by their provider. Exact stdout and debug comparisons
 also require reconstruction to succeed; failures cannot return the original
 record as an unnoticed fallback.
+
+The refinement audit found that an interface-backed refinement loses its
+nominal method owner. `type Selected = Named where true` with its own `Named`
+implementation dispatches as the underlying concrete value after erasure;
+the interpreter also loses the owner on direct calls. The established nominal
+refinement rule requires preserving both layers: exposed `Selected` dispatches
+to its implementation, while explicit `coarsen` restores the original erased
+`Named` value and that value's concrete implementation.
+
+Interface-backed refinements use the interface handle as their underlying
+representation. Erasing one must box that handle with the refinement identity;
+dispatch must unbox it before entering the refinement method. Equal underlying
+representations alone cannot justify omitting those conversions. Interpreter
+type metadata must retain the underlying concrete identity instead of flattening
+both layers, including through comptime values, collections, and pending tasks.
+
+The sum-value regression also exposes a checker ordering problem: when both a
+sum and its payload implement the expected interface, the checker requests a
+payload `handle` before checking whether the whole sum already satisfies the
+destination. Existing whole-value compatibility must take precedence. Erasing
+that value preserves the sum and its implementation; only explicit `handle`
+extracts its active payload.
+
+`interface_refined_interfaces` now covers direct and erased dispatch, intermediate
+and fully coarsened ancestors, narrow primitive and secret-bearing record
+payloads, sums whose payloads also implement the interface, whole-container
+conversions, signature adapters, nested pending tasks, and runtime/baked values.
+Its predicate calls the base interface implementation, and rejection cases
+exercise both ordinary values and an unvalidated pending constructor field.
+
+Fresh constructor inputs keep their ancestor type until MIR runs the checked
+predicate chain. Interpreter normalization similarly attaches the destination
+identity after validation. Already validated pending values retain their
+invariant; a new pending value cannot acquire that invariant from a type label.
+
+Validation for this change passed 616 compiler-phase tests, all 583 frontend
+fixtures, 30 native interface/comptime/refinement tests, and workspace
+documentation tests. Actor handles escaping comptime and the remaining semantic
+audit still prevent a full native parity claim.

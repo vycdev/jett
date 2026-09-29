@@ -334,6 +334,13 @@ pub(super) fn value_expression(
                 value, concrete, span, context,
             )?))
         }
+        (Type::Refinement { base, .. }, Value::Typed { type_name, value })
+            if types.type_name(ty) == *type_name =>
+        {
+            ExpressionKind::RefinementValidated(Box::new(value_expression(
+                value, *base, span, context,
+            )?))
+        }
         (_, Value::Typed { value, .. }) => return value_expression(value, ty, span, context),
         (Type::TypeConstruction, Value::TypeConstruction { .. }) => {
             return crate::native_builder_constants::builder_expression(value, span, context);

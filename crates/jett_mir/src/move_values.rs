@@ -21,6 +21,22 @@ pub fn representation_type(types: &TypeInterner, ty: TypeId) -> TypeId {
     current
 }
 
+/// Interface boxes have an erased identity. A refinement over an interface
+/// instead has its own nominal identity, despite sharing the handle layout.
+pub fn is_erased_interface(types: &TypeInterner, mut ty: TypeId) -> bool {
+    for _ in 0..types.len() {
+        if ty.index() as usize >= types.len() {
+            return false;
+        }
+        match types.resolve(ty) {
+            Type::Secret(inner) => ty = *inner,
+            Type::Interface(_) => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
 pub fn is_string(types: &TypeInterner, ty: TypeId) -> bool {
     let underlying = representation_type(types, ty);
     (underlying.index() as usize) < types.len() && matches!(types.resolve(underlying), Type::String)
@@ -563,10 +579,8 @@ impl Flow<'_> {
             ExpressionKind::InterfaceType(value) => self.expr(value, true)?,
             ExpressionKind::FunctionAdapter { value, .. } => self.expr(value, false)?,
             ExpressionKind::InterfaceCoerce { value: inner, .. } => {
-                let source = representation_type(self.types, inner.ty);
-                let target = representation_type(self.types, value.ty);
-                let unbox =
-                    matches!(self.types.resolve(source), Type::Interface(_)) && source != target;
+                let unbox = is_erased_interface(self.types, inner.ty)
+                    && !is_erased_interface(self.types, value.ty);
                 self.expr(inner, borrowed || unbox)?;
             }
             ExpressionKind::OptionalNone => {}

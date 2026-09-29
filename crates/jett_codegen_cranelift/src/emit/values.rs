@@ -1,5 +1,6 @@
 use super::*;
 use jett_hir::{InterfaceFunctionAdapter, IntrinsicId, MapEntry, StringSegment};
+use jett_mir::move_values::is_erased_interface;
 use jett_types::BitfieldFieldKind;
 use std::collections::BTreeSet;
 
@@ -25,21 +26,24 @@ fn interface_conversion(
     use jett_runtime::native_abi::values::interface_conversion::NativeInterfaceConversion as C;
     let source_rep = representation_type(types, source);
     let target_rep = representation_type(types, target);
+    let source_erased = is_erased_interface(types, source);
+    let target_erased = is_erased_interface(types, target);
     let owned = |ty| is_copy_owned(types, ty) || is_linear(types, ty);
-    if source_rep == target_rep || source == TypeInterner::NEVER {
+    if (source_rep == target_rep && source_erased == target_erased) || source == TypeInterner::NEVER
+    {
         return Some(C::Copy {
             owned: owned(target),
         });
     }
     Some(
         match (types.resolve(source_rep), types.resolve(target_rep)) {
-            (_, Type::Interface(_)) => C::Box {
+            (_, _) if target_erased => C::Box {
                 concrete: source.index() as u64,
                 owned: owned(source),
                 nothing: source_rep == TypeInterner::NOTHING,
                 layout: debug::debug_layout(types, source)?,
             },
-            (Type::Interface(_), _) => C::Unbox {
+            (_, _) if source_erased => C::Unbox {
                 concrete: target.index() as u64,
                 owned: owned(target),
                 nothing: target_rep == TypeInterner::NOTHING,
@@ -82,13 +86,12 @@ impl Translator<'_, '_> {
     ) -> Result<LoweredValue, CodegenError> {
         let source = representation_type(self.types, expression.ty);
         let target_representation = representation_type(self.types, target);
-        if source == target_representation {
+        let source_erased = is_erased_interface(self.types, expression.ty);
+        let target_erased = is_erased_interface(self.types, target);
+        if source == target_representation && source_erased == target_erased {
             return self.argument(expression, borrowed);
         }
-        if matches!(
-            self.types.resolve(target_representation),
-            Type::Interface(_)
-        ) {
+        if target_erased {
             let value = self.argument(expression, borrowed)?;
             let depth = if source == TypeInterner::NOTHING {
                 self.scalar(value, expression.span)?
@@ -121,7 +124,7 @@ impl Translator<'_, '_> {
             )?;
             return self.own(result);
         }
-        if matches!(self.types.resolve(source), Type::Interface(_)) {
+        if source_erased {
             let value = self.argument(expression, true)?;
             let value = self.scalar(value, expression.span)?;
             let identity = self

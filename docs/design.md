@@ -569,6 +569,15 @@ NonEmpty ne = coarsen password       # Password → NonEmpty
 string raw = coarsen password        # Password → string (skips to base)
 ```
 
+The same nominal rule applies when a refinement's base is an interface. If the
+refinement explicitly implements that interface, passing the refined value to
+an interface parameter retains the refinement's implementation. Coarsening it
+to the base interface restores the underlying value's concrete implementation;
+coarsening to an intermediate refinement retains that ancestor's implementation.
+When a `result` or `optional` and its payload both implement a destination
+interface, conversion preserves the whole sum and selects its implementation.
+Extracting the payload still requires explicit `handle`.
+
 If you need the base type multiple times in one function, assign it to a local variable once:
 
 ```

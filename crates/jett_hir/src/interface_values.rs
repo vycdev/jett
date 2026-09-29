@@ -658,14 +658,26 @@ impl Coercions<'_> {
             ExpressionKind::StructConstruct {
                 struct_type,
                 fields,
+                refinement_predicates,
                 ..
             } => {
                 if let Type::Struct(id) = self.types.resolve(*struct_type) {
-                    for (value, (_, expected)) in fields
+                    for (index, (value, (_, expected))) in fields
                         .iter_mut()
                         .zip(&self.types.resolve_struct(*id).fields)
+                        .enumerate()
                     {
-                        self.expected(value, *expected, handled);
+                        if refinement_predicates
+                            .get(index)
+                            .is_some_and(|chain| !chain.is_empty())
+                        {
+                            // MIR validates this ancestor before giving the
+                            // field its refined type. It is not an erased box
+                            // from which that refinement may be extracted.
+                            self.expression(value, handled);
+                        } else {
+                            self.expected(value, *expected, handled);
+                        }
                     }
                 }
             }

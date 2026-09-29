@@ -320,6 +320,28 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_refined_interfaces_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_refined_interfaces.jett");
+    let expected = jett_driver::run_file_capture_outcome(&fixture)
+        .unwrap_or_else(|error| panic!("refined interface oracle: {error:?}"));
+    assert_eq!(
+        expected.stdout,
+        "selected:text:plain\nselected:small:7\nselected:record:kept\nagain:selected:text:plain\ntext:plain\nselected:text:plain\nselected:result-ok:9\nselected:result-fail:bad\nselected:optional-none\nselected:text:plain\nselected:small:7\nselected:record:kept\nagain:selected:text:plain\ntext:plain\nselected:text:plain\nselected:result-ok:9\nselected:result-fail:bad\nselected:optional-none\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:callback\nselected:text:callback\nselected:text:direct\nrefinement type constraint failed for 'app.Selected'\nrefinement type constraint failed for 'app.Selected'\nselected:text:fresh\nselected:text:fresh\nrefinement type constraint failed for 'app.Rejected'\n"
+    );
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert!(debug.contains("[redacted]"));
+    assert!(!debug.contains("hidden-refined-interface"));
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_refined_interfaces.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native refined interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(actual.stderr, debug.as_bytes());
+}
+
+#[test]
 fn native_contextual_comptime_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/contextual_comptime_values.jett");

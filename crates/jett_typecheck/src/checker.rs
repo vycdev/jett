@@ -1449,7 +1449,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn type_requires_handle_error(&self, expected: TypeId, got: TypeId) -> bool {
-        if matches!(self.interner.resolve(expected), Type::Result(_, _)) {
+        if self.types_compatible(expected, got)
+            || matches!(self.interner.resolve(expected), Type::Result(_, _))
+        {
             return false;
         }
         match self.interner.resolve(got) {
@@ -1459,10 +1461,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn type_requires_bare_handle(&self, expected: TypeId, got: TypeId) -> bool {
-        if matches!(
-            self.interner.resolve(expected),
-            Type::Result(_, _) | Type::Optional(_)
-        ) {
+        if self.types_compatible(expected, got)
+            || matches!(
+                self.interner.resolve(expected),
+                Type::Result(_, _) | Type::Optional(_)
+            )
+        {
             return false;
         }
         match self.interner.resolve(got) {
@@ -17405,6 +17409,67 @@ function main() returns string:
             errors.iter().any(|d| d.code.code() == 305),
             "expected E0305, got: {:?}",
             errors
+        );
+    }
+
+    #[test]
+    fn whole_sum_interface_compatibility_precedes_payload_handling() {
+        let errors = check_source_errors(
+            r#"
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "integer"
+implement Named for result[int64, string]:
+    function name(view self: result[int64, string]) returns string:
+        return "result"
+implement Named for optional[int64]:
+    function name(view self: optional[int64]) returns string:
+        return "optional"
+function consume(value: Named) returns nothing:
+    return nothing
+function main() returns nothing:
+    result[int64, string] outcome = ok(1)
+    optional[int64] maybe = some(2)
+    Named first = clone outcome
+    Named second = clone maybe
+    consume(outcome)
+    consume(maybe)
+    consume(first)
+    consume(second)
+    return nothing
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn interface_payload_membership_does_not_implicitly_unwrap_sums() {
+        let errors = check_source_errors(
+            r#"
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "integer"
+function consume(value: Named) returns nothing:
+    return nothing
+function main() returns nothing:
+    result[int64, string] outcome = ok(1)
+    optional[int64] maybe = some(2)
+    consume(outcome)
+    consume(maybe)
+    return nothing
+"#,
+        );
+        assert!(
+            errors.iter().any(|error| error.code.code() == 316),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.code.code() == 317),
+            "{errors:?}"
         );
     }
 

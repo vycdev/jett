@@ -1,0 +1,162 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for string:
+    function name(view self: string) returns string:
+        return "text:{self}"
+implement Named for int8:
+    function name(view self: int8) returns string:
+        return "small:{self}"
+struct Record:
+    label: string
+    token: secret[string]
+implement Named for Record:
+    function name(view self: Record) returns string:
+        return "record:{self.label}"
+type Outcome = result[int8, string]
+implement Named for Outcome:
+    function name(view self: Outcome) returns string:
+        int8 found = self handle error:
+            return "result-fail:{error}"
+        return "result-ok:{found}"
+type Maybe = optional[int8]
+implement Named for Maybe:
+    function name(view self: Maybe) returns string:
+        int8 found = self handle:
+            return "optional-none"
+        return "optional-some:{found}"
+struct Empty:
+    code: int64
+implement Named for Empty:
+    function name(view self: Empty) returns string:
+        return ""
+type Selected = Named where Named.name(view value) != ""
+implement Named for Selected:
+    function name(view self: Selected) returns string:
+        Named base = coarsen clone self
+        return "selected:{Named.name(view base)}"
+type Again = Selected where true
+implement Named for Again:
+    function name(view self: Again) returns string:
+        Selected parent = coarsen clone self
+        return "again:{Named.name(view parent)}"
+function select(value: Named) returns result[Selected, string]:
+    Selected selected = value handle error:
+        return fail(error)
+    return ok(selected)
+function mixed() returns result[list[Named], string]:
+    Selected text = select("plain") handle error:
+        return fail(error)
+    int8 number = 7
+    Selected small = select(number) handle error:
+        return fail(error)
+    Selected record = select(Record(label: "kept", token: "hidden-refined-interface")) handle error:
+        return fail(error)
+    Again again = clone text handle error:
+        return fail(error)
+    Named base = coarsen clone again
+    Selected parent = coarsen clone again
+    Outcome success = ok(9)
+    Outcome failure = fail("bad")
+    Maybe absent = none
+    Selected selected_success = select(success) handle error:
+        return fail(error)
+    Selected selected_failure = select(failure) handle error:
+        return fail(error)
+    Selected selected_absent = select(absent) handle error:
+        return fail(error)
+    return ok(list(text, small, record, again, base, parent, selected_success, selected_failure, selected_absent))
+function show(view value: Named) returns string:
+    return Named.name(view value)
+struct Stored:
+    value: Selected
+function constructed() returns result[Stored, string]:
+    Named source = "fresh"
+    return Stored(value: source)
+type Rejected = Named where false
+struct RejectedField:
+    value: Rejected
+function pending_rejection() returns nothing:
+    Named pending = run "unchecked"
+    RejectedField accepted = RejectedField(value: pending) handle error:
+        return println(error)
+    trace accepted
+    println("unexpected pending acceptance")
+    return nothing
+function collections(view original: Selected) returns nothing:
+    list[Selected] source = list(clone original)
+    list[Named] erased = source
+    for value in erased:
+        println(show(view value))
+    map[string, Selected] entries = map("key": clone original)
+    map[string, Named] converted = entries
+    Named mapped = map.get[string, Named](converted, "key") handle:
+        return nothing
+    println(show(view mapped))
+    optional[Selected] maybe = some(clone original)
+    optional[Named] converted_maybe = maybe
+    Named found = converted_maybe handle:
+        return nothing
+    println(show(view found))
+    Stored stored = Stored(value: clone original) handle error:
+        return println(error)
+    println(show(view stored.value))
+    trace stored
+    return nothing
+function selected_callback() returns result[Selected, string]:
+    return select("callback")
+function callbacks() returns nothing:
+    function() returns result[Named, string] live = selected_callback
+    function() returns result[Named, string] baked = comptime selected_callback
+    Named first = live() handle error:
+        return println(error)
+    Named second = baked() handle error:
+        return println(error)
+    println(show(view first))
+    println(show(view second))
+    return nothing
+function tasks(view original: Selected) returns nothing:
+    Selected once = run clone original
+    Selected twice = run once
+    Named erased = twice
+    trace erased
+    Named still_pending = join erased handle error:
+        return println(error)
+    trace still_pending
+    Named ready = join still_pending handle error:
+        return println(error)
+    println(show(view ready))
+    return nothing
+function rejection(value: result[Selected, string]) returns nothing:
+    Selected accepted = value handle error:
+        return println(error)
+    println("unexpected:{show(view accepted)}")
+    return nothing
+function main() returns nothing:
+    list[Named] live = mixed() handle error:
+        return println(error)
+    list[Named] baked = comptime mixed() handle error:
+        return println(error)
+    trace live
+    trace baked
+    for value in live:
+        println(show(view value))
+    for value in baked:
+        println(show(view value))
+    Selected original = select("direct") handle error:
+        return println(error)
+    println(Named.name(view original))
+    println(show(view original))
+    collections(view original)
+    callbacks()
+    tasks(view original)
+    rejection(select(Empty(code: 0)))
+    rejection(comptime select(Empty(code: 0)))
+    Stored fresh = constructed() handle error:
+        return println(error)
+    Stored baked_fresh = comptime constructed() handle error:
+        return println(error)
+    println(show(view fresh.value))
+    println(show(view baked_fresh.value))
+    pending_rejection()
+    return nothing

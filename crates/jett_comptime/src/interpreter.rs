@@ -1411,6 +1411,27 @@ impl Interpreter {
             .registry_name(&self.type_aliases, type_name)
             .unwrap_or_else(|| type_name.to_string());
 
+        let mut resolved = value;
+        while let Value::Pending(inner) = resolved {
+            resolved = inner;
+        }
+        if matches!(value, Value::Pending(_))
+            && matches!(resolved, Value::Typed { type_name: owner, .. } if *owner == type_name)
+        {
+            // `run` preserves an already established refinement. Its pending
+            // wrapper is not a new boundary on which to rerun the predicate.
+            return Ok(());
+        }
+
+        // A predicate's `value` has the base type. Rechecking a value that
+        // already carries an interface-backed refinement must not dispatch
+        // through that refinement again while validating its own predicate.
+        let coarsened = self
+            .interfaces
+            .contains(self.primitive_base_type_name(&type_name).as_ref())
+            .then(|| self.coarsen_interface_value(value.clone()));
+        let value = coarsened.as_ref().unwrap_or(value);
+
         let constraint_value_ty = self
             .type_alias_bases
             .get(&type_name)
@@ -1659,6 +1680,19 @@ impl Interpreter {
         Ok(self.retain_checked_identity(&name, value))
     }
 
+    fn normalize_and_validate_value(
+        &mut self,
+        ty: &TypeExpr,
+        value: Value,
+    ) -> Result<Value, String> {
+        let name = self.concrete_type_display(ty);
+        let value = self.normalize_value_for_type_name(&name, value)?;
+        self.check_refinement(&name, &value)?;
+        // Attach the destination's nominal identity only after its invariant
+        // holds, especially when the incoming value is still pending.
+        Ok(self.retain_checked_identity(&name, value))
+    }
+
     fn retain_checked_identity(&self, name: &str, value: Value) -> Value {
         if !matches!(
             self.primitive_base_type_name(name).as_ref(),
@@ -1726,6 +1760,23 @@ impl Interpreter {
             return value;
         }
         let base = self.primitive_base_type_name(name);
+        if self.interfaces.contains(base.as_ref()) && self.type_name_has_refinement(name) {
+            if let Value::Pending(inner) = value {
+                return Value::Pending(Box::new(self.retain_aggregate_identity(name, *inner)));
+            }
+            let canonical = Self::debug_type(name)
+                .map(|ty| self.concrete_type_display(&ty))
+                .unwrap_or_else(|| name.to_owned());
+            if runtime_type_name(&value).as_deref() == Some(canonical.as_str()) {
+                return value;
+            }
+            // The underlying erased value still needs its own concrete owner
+            // when the refinement is explicitly coarsened later.
+            return Value::Typed {
+                type_name: canonical,
+                value: Box::new(value),
+            };
+        }
         let owner = base.split('[').next().unwrap_or(&base);
         let owner = owner
             .split_once(" at ")
@@ -1762,6 +1813,23 @@ impl Interpreter {
             }
         } else {
             value
+        }
+    }
+
+    fn coarsen_interface_value(&self, value: Value) -> Value {
+        match value {
+            Value::Pending(inner) => Value::Pending(Box::new(self.coarsen_interface_value(*inner))),
+            Value::Typed { type_name, value }
+                if self.type_name_has_refinement(&type_name)
+                    && self
+                        .interfaces
+                        .contains(self.primitive_base_type_name(&type_name).as_ref()) =>
+            {
+                // Expression normalization restores the checked ancestor if
+                // coarsen targets an intermediate refinement in the chain.
+                self.coarsen_interface_value(*value)
+            }
+            value => value,
         }
     }
 
@@ -2299,10 +2367,12 @@ impl Interpreter {
                 }
             }
 
-            // Coarsen: strip refinement type, returning the underlying value.
-            // In the interpreter, the value is already the base type at
-            // runtime, so coarsen is a no-op.
-            Expr::Coarsen(inner, _) => self.eval_expr_flow(inner),
+            // Preserve the underlying erased owner when removing refinement
+            // metadata. Checked normalization restores a requested ancestor.
+            Expr::Coarsen(inner, _) => {
+                let value = value_or_signal!(self, inner);
+                Ok(ExprFlow::Value(self.coarsen_interface_value(value)))
+            }
 
             // Pipeline: `expr into f into g(extra)`
             // Evaluate the initial expression, then for each step, call the
@@ -3320,29 +3390,51 @@ impl Interpreter {
                                 ExprFlow::Value(value) => value,
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
-                            let flow = match target_value.into_payload() {
-                                Value::ResultOk(value) | Value::OptionalSome(value) => self
-                                    .finish_refinement_boundary(
+                            let sum_payload = matches!(
+                                target_value.payload(),
+                                Value::ResultOk(_)
+                                    | Value::ResultFail(_)
+                                    | Value::OptionalSome(_)
+                                    | Value::OptionalNone
+                            );
+                            let handles_sum = sum_payload
+                                && self.debug_expression_type(target).is_none_or(|ty| {
+                                    !self.type_name_has_refinement(&self.concrete_type_display(&ty))
+                                        && matches!(self.inference_base_type(&ty), TypeExpr::Generic(name, _, _)
+                                            if matches!(name.name.as_str(), "result" | "optional"))
+                                });
+                            let flow = if !handles_sum {
+                                self.finish_refinement_boundary(
+                                    &type_name,
+                                    target_value,
+                                    bind_name.as_ref(),
+                                    body,
+                                )?
+                            } else {
+                                match target_value.into_payload() {
+                                    Value::ResultOk(value) | Value::OptionalSome(value) => self
+                                        .finish_refinement_boundary(
+                                            &type_name,
+                                            *value,
+                                            bind_name.as_ref(),
+                                            body,
+                                        )?,
+                                    Value::ResultFail(error) => self.exec_handle_block(
+                                        bind_name.as_ref(),
+                                        Some(*error),
+                                        body,
+                                        self.debug_expression_args(target).get(1),
+                                    )?,
+                                    Value::OptionalNone => {
+                                        self.exec_handle_block(None, None, body, None)?
+                                    }
+                                    value => self.finish_refinement_boundary(
                                         &type_name,
-                                        *value,
+                                        value,
                                         bind_name.as_ref(),
                                         body,
                                     )?,
-                                Value::ResultFail(error) => self.exec_handle_block(
-                                    bind_name.as_ref(),
-                                    Some(*error),
-                                    body,
-                                    self.debug_expression_args(target).get(1),
-                                )?,
-                                Value::OptionalNone => {
-                                    self.exec_handle_block(None, None, body, None)?
                                 }
-                                value => self.finish_refinement_boundary(
-                                    &type_name,
-                                    value,
-                                    bind_name.as_ref(),
-                                    body,
-                                )?,
                             };
                             match flow {
                                 ExprFlow::Value(value) => value,
@@ -8331,14 +8423,10 @@ impl Interpreter {
             };
 
             let field_ty = self.substitute_type_expr(&field.ty);
-            let type_name = type_expr_name(&field_ty);
-            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+            let value = match self.normalize_and_validate_value(&field_ty, value.clone()) {
                 Ok(value) => value,
                 Err(message) => return Ok(result_fail(message)),
             };
-            if let Err(message) = self.check_refinement(&type_name, &value) {
-                return Ok(result_fail(message));
-            }
             struct_fields.push((field.name.clone(), value));
         }
 
@@ -8474,14 +8562,10 @@ impl Interpreter {
             };
 
             let field_ty = self.substitute_type_expr(&field.ty);
-            let type_name = type_expr_name(&field_ty);
-            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+            let value = match self.normalize_and_validate_value(&field_ty, value.clone()) {
                 Ok(value) => value,
                 Err(message) => return Ok(result_fail(message)),
             };
-            if let Err(message) = self.check_refinement(&type_name, &value) {
-                return Ok(result_fail(message));
-            }
             enum_fields.push(value);
         }
 
@@ -8590,14 +8674,10 @@ impl Interpreter {
             };
 
             let field_ty = self.substitute_type_expr(&field.ty);
-            let type_name = type_expr_name(&field_ty);
-            let value = match self.normalize_value_for_type(&field_ty, value.clone()) {
+            let value = match self.normalize_and_validate_value(&field_ty, value.clone()) {
                 Ok(value) => value,
                 Err(message) => return Ok(result_fail(message)),
             };
-            if let Err(message) = self.check_refinement(&type_name, &value) {
-                return Ok(result_fail(message));
-            }
             machine_fields.push(value);
         }
 
@@ -10994,9 +11074,7 @@ impl Interpreter {
         let call_result = (|| {
             for (param, arg) in func.params.iter().zip(args) {
                 let param_ty = self.substitute_type_expr(&param.ty);
-                let type_name = type_expr_name(&param_ty);
-                let arg = self.normalize_value_for_type(&param_ty, arg)?;
-                self.check_refinement(&type_name, &arg)?;
+                let arg = self.normalize_and_validate_value(&param_ty, arg)?;
                 self.set_variable_with_type(&param.name.name, arg, param_ty);
             }
 
@@ -11011,9 +11089,7 @@ impl Interpreter {
 
             if let Some(return_type) = &func.return_type {
                 let return_type = self.substitute_type_expr(return_type);
-                let type_name = type_expr_name(&return_type);
-                value = self.normalize_value_for_type(&return_type, value)?;
-                self.check_refinement(&type_name, &value)?;
+                value = self.normalize_and_validate_value(&return_type, value)?;
             }
 
             Ok(value)
@@ -11369,14 +11445,14 @@ impl Interpreter {
 
             let field_ty = self.substitute_type_expr(&strukt.fields[field_index].ty);
             let type_name = type_expr_name(&field_ty);
-            let value = self.normalize_value_for_type(&field_ty, value)?;
+            let value = self.normalize_value_for_type_name(&type_name, value)?;
             if let Err(message) = self.check_refinement(&type_name, &value) {
                 if validates_refinements {
                     return Ok(Value::ResultFail(Box::new(Value::String(message))));
                 }
                 return Err(message);
             }
-            fields[field_index] = Some(value);
+            fields[field_index] = Some(self.retain_checked_identity(&type_name, value));
         }
 
         for (index, field) in strukt.fields.iter().enumerate() {
