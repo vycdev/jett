@@ -581,8 +581,10 @@ fn visit(
         }
         ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
-        | ExpressionKind::RefinementValidated(value)
-        | ExpressionKind::FunctionAdapter { value, .. }
+        | ExpressionKind::RefinementValidated(value) => {
+            visit(value, reads, temporaries, types, program, borrowed)?
+        }
+        ExpressionKind::FunctionAdapter { value, .. }
         | ExpressionKind::InterfaceCoerce { value, .. }
         | ExpressionKind::InterfaceType(value)
         | ExpressionKind::Run(value)

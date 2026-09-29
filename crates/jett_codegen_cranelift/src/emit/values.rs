@@ -1145,6 +1145,13 @@ impl Translator<'_, '_> {
         borrowed: bool,
     ) -> Result<LoweredValue, CodegenError> {
         if borrowed
+            && let ExpressionKind::Coarsen(inner)
+            | ExpressionKind::Declassify(inner)
+            | ExpressionKind::RefinementValidated(inner) = &expression.kind
+        {
+            return self.argument(inner, true);
+        }
+        if borrowed
             && let ExpressionKind::InterfaceCoerce {
                 value: inner,
                 adapters,

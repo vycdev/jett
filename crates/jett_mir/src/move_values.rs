@@ -580,8 +580,8 @@ impl Flow<'_> {
             }
             ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
-            | ExpressionKind::RefinementValidated(value)
-            | ExpressionKind::Run(value)
+            | ExpressionKind::RefinementValidated(value) => self.expr(value, borrowed)?,
+            ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value)
             | ExpressionKind::Unary { value, .. }

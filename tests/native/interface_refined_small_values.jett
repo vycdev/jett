@@ -1,0 +1,57 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Unit = nothing where true
+type Again = Unit where true
+type Enabled = bool where value
+type Data = bytes where bytes.length(value) > 0
+implement Named for nothing:
+    function name(view self: nothing) returns string:
+        return "nothing"
+implement Named for Unit:
+    function name(view self: Unit) returns string:
+        return "unit"
+implement Named for Again:
+    function name(view self: Again) returns string:
+        return "again"
+implement Named for bool:
+    function name(view self: bool) returns string:
+        return "bool:{self}"
+implement Named for Enabled:
+    function name(view self: Enabled) returns string:
+        return "enabled:{coarsen self}"
+implement Named for bytes:
+    function name(view self: bytes) returns string:
+        return "bytes:{bytes.to_hex(self)}"
+implement Named for Data:
+    function name(view self: Data) returns string:
+        return "data:{bytes.to_hex(coarsen self)}"
+function values() returns list[Named]:
+    Unit unit = nothing handle error:
+        return list()
+    Again again = unit handle error:
+        return list()
+    Enabled enabled = true handle error:
+        return list()
+    Data data = bytes.from_string("ok") handle error:
+        return list()
+    return list(nothing, unit, again, false, enabled, bytes.from_string("ok"), data)
+function restored() returns list[Named]:
+    Unit unit = nothing handle error:
+        return list()
+    Unit pending = run run unit
+    Named erased = pending
+    Named inner = join erased handle error:
+        return list()
+    Named ready = join inner handle error:
+        return list()
+    return list(ready)
+function main() returns nothing:
+    for value in values():
+        println(Named.name(view value))
+    for value in comptime values():
+        println(Named.name(view value))
+    for value in restored():
+        println(Named.name(view value))
+    for value in comptime restored():
+        println(Named.name(view value))
