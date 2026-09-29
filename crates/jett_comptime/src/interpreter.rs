@@ -1733,7 +1733,7 @@ impl Interpreter {
         let is_concrete = base.starts_with("function(")
             || matches!(
                 owner,
-                "list" | "map" | "set" | "optional" | "result" | "TypeConstruction"
+                "list" | "map" | "set" | "optional" | "result" | "TypeConstruction" | "function"
             )
             || self.structs.contains_key(owner)
             || self.enums.contains_key(owner)

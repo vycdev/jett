@@ -320,6 +320,26 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_refined_containers_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_refined_containers.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("refined container oracle");
+    let mixed = "mapping:1\nmembers:1\nsome:9\nnone\nok:11\nfail:problem\ncallback:5\ncallback:7\ncallback:7\nfunction:5\n";
+    assert_eq!(expected.stdout, mixed.repeat(2));
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_refined_containers.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native refined containers");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_interface_reflected_fields_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_reflected_fields.jett");

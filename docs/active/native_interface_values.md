@@ -80,10 +80,11 @@ This does **not** close the full interface gate. Still required:
 
 - Audit interpreter source instances of compiler-owned facades that use
   different native helpers and lack checked source bodies.
-- Remaining comptime payload shapes and reflected interface fields. Generic
-  struct metadata and exact implementation identity are retained.
-- Audit remaining non-primitive refinements beyond the tested list, record,
-  enum, machine, and bitfield shapes in runtime and comptime paths.
+- Audit remaining comptime combinations; reflected interface fields and lists
+  now have record, enum, and machine round-trip coverage.
+- Audit refinement compositions beyond the covered primitive, list, map, set,
+  optional, result, record, enum, machine, bitfield, function, builder, and
+  capability bases.
 
 Generic struct interface dispatch uses the concrete instantiated owner retained
 on the value. Implementations for `Box[int64]`, `Box[string]`, and
@@ -410,3 +411,15 @@ fully baked results, and baked builders completed at runtime; all preserve
 integer-width dispatch and recursively redact secret elements. Resolver tests
 also pin nested field type qualification and reject private or forward field
 type references.
+
+Function-backed refinements retain their nominal interface owner just like
+collection-backed refinements. Alias-base classification can report the simple
+carrier name `function`; that carrier must be treated as concrete, while the
+value metadata keeps the full exposed refinement name. Coarsening restores the
+base function signature and its implementation without changing the callable
+body or captures.
+
+`interface_refined_containers` covers nominal map, set, optional, result, and
+function owners, including both sum branches, named and captured functions,
+cloning, pending callbacks, and coarsening back to the base function signature.
+Runtime and baked heterogeneous interface lists match in calls and traces.

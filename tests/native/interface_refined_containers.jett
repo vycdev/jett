@@ -1,0 +1,70 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Mapping = map[string, int8] where true
+type Members = set[int8] where true
+type Maybe = optional[int8] where true
+type Outcome = result[int8, string] where true
+type Callback = function(int8) returns int8 where true
+implement Named for Mapping:
+    function name(view self: Mapping) returns string:
+        map[string, int8] plain = coarsen self
+        return "mapping:{map.length[string, int8](plain)}"
+implement Named for Members:
+    function name(view self: Members) returns string:
+        set[int8] plain = coarsen self
+        return "members:{set.length[int8](plain)}"
+implement Named for Maybe:
+    function name(view self: Maybe) returns string:
+        int8 plain = coarsen self handle:
+            return "none"
+        return "some:{plain}"
+implement Named for Outcome:
+    function name(view self: Outcome) returns string:
+        int8 plain = coarsen self handle error:
+            return "fail:{error}"
+        return "ok:{plain}"
+implement Named for Callback:
+    function name(view self: Callback) returns string:
+        function(int8) returns int8 plain = coarsen self
+        return "callback:{plain(4)}"
+implement Named for function(int8) returns int8:
+    function name(view self: function(int8) returns int8) returns string:
+        return "function:{self(4)}"
+function increment(value: int8) returns int8:
+    return value + 1
+struct Values:
+    mapping: Mapping
+    members: Members
+    present: Maybe
+    absent: Maybe
+    success: Outcome
+    failure: Outcome
+    callback: Callback
+    captured: Callback
+function mixed() returns list[Named]:
+    map[string, int8] source_map = map("a": 7)
+    set[int8] source_set = set.add[int8](set.new[int8](), 8)
+    optional[int8] source_present = some(9)
+    optional[int8] source_absent = none
+    result[int8, string] source_success = ok(11)
+    result[int8, string] source_failure = fail("problem")
+    int8 offset = 3
+    function(int8) returns int8 closure = function(value: int8) returns int8: return value + offset
+    Values values = Values(mapping: source_map, members: source_set, present: source_present, absent: source_absent, success: source_success, failure: source_failure, callback: increment, captured: closure) handle error:
+        return list()
+    Callback later = run clone values.captured
+    Callback ready = join later handle error:
+        return list()
+    function(int8) returns int8 base = coarsen clone values.callback
+    return list(values.mapping, values.members, values.present, values.absent, values.success, values.failure, values.callback, values.captured, ready, base)
+function main() returns nothing:
+    list[Named] live = mixed()
+    trace live
+    for item in live:
+        println(Named.name(view item))
+    list[Named] baked = comptime mixed()
+    trace baked
+    for item in baked:
+        println(Named.name(view item))
+    return nothing

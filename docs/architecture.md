@@ -2927,6 +2927,9 @@ conversion replaces that signature without replacing the evaluated source body
 or closure context, allowing native materialization to reconstruct the source
 and its required adapter. Type-name parsing preserves nested function signatures
 and parameter view modes before interpreting generic type arguments.
+Function-backed refinements retain their nominal owner even when alias-base
+classification returns the simple carrier `function`. Coarsening replaces that
+owner with the base signature while preserving the source body and captures.
 Explicit comptime evaluation runs on a scoped worker with the same 8 MiB stack
 budget as reference execution, independent of the compiler caller's thread.
 Modules without explicit expressions skip worker creation. Worker creation
