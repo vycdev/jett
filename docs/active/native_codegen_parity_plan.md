@@ -288,6 +288,9 @@ The `native_parity` example also discovers top-level verify/property bodies
 from parsed source and reports their fixture and body denominators. Its exit
 status and `fixture_gates_complete` field certify those fixture gates only;
 `complete` remains false while the separately listed release gates are open.
+Its object gate uses native test lowering, which roots checked verify/property
+bodies as well as program functions; ordinary program-only lowering can produce
+an empty object for a valid test-only fixture and is not the inventory gate.
 
 ## Current Coverage Matrix
 

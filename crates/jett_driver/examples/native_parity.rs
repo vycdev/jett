@@ -367,7 +367,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        match jett_driver::lower_file_for_backend(&source) {
+        match jett_driver::lower_file_for_native_tests(&source) {
             Err(error) => row["lower_error"] = json!(error.to_string()),
             Ok(lowered) => {
                 row["lowered"] = json!(true);
