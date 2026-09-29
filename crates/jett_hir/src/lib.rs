@@ -189,6 +189,7 @@ pub struct Local {
     pub name: String,
     pub ty: TypeId,
     pub debug_ty: TypeId,
+    pub debug_type_name: Option<String>,
     pub mutable: bool,
     pub span: Span,
 }
@@ -1398,6 +1399,7 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             self.check.type_map.clone(),
+            self.check.debug_type_names.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -1480,6 +1482,7 @@ impl<'a> Lowerer<'a> {
             parameter_types,
             return_type,
             expression_types,
+            debug_type_names,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -1498,6 +1501,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.parameter_types.clone(),
                 instantiation.return_type,
                 instantiation.type_map.clone(),
+                instantiation.debug_type_names.clone(),
                 instantiation.generic_calls.clone(),
                 instantiation.intrinsic_ids.clone(),
                 instantiation.intrinsic_type_arguments.clone(),
@@ -1517,6 +1521,7 @@ impl<'a> Lowerer<'a> {
                 method.parameter_types.clone(),
                 method.return_type,
                 self.check.type_map.clone(),
+                self.check.debug_type_names.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -1564,6 +1569,7 @@ impl<'a> Lowerer<'a> {
                 parameter_types,
                 return_type,
                 self.check.type_map.clone(),
+                self.check.debug_type_names.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -1592,6 +1598,7 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             expression_types,
+            debug_type_names,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -1747,6 +1754,7 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             self.check.type_map.clone(),
+            self.check.debug_type_names.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -1930,6 +1938,7 @@ impl<'a> Lowerer<'a> {
 
         let function_ids = self.function_ids.clone();
         let expression_types = self.check.type_map.clone();
+        let debug_type_names = self.check.debug_type_names.clone();
         let generic_calls = self.check.generic_calls.clone();
         let intrinsic_ids = self.check.intrinsic_ids.clone();
         let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
@@ -1946,6 +1955,7 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             expression_types,
+            debug_type_names,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2123,6 +2133,7 @@ impl<'a> Lowerer<'a> {
             self,
             &function_ids,
             self.check.type_map.clone(),
+            self.check.debug_type_names.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -2213,6 +2224,7 @@ struct BodyLowerer<'lowerer, 'program> {
     parent: &'lowerer mut Lowerer<'program>,
     function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
     expression_types: HashMap<Span, TypeId>,
+    debug_type_names: HashMap<Span, String>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2236,6 +2248,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         parent: &'lowerer mut Lowerer<'program>,
         function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
         expression_types: HashMap<Span, TypeId>,
+        debug_type_names: HashMap<Span, String>,
         generic_calls: HashMap<Span, CheckedGenericCall>,
         intrinsic_ids: HashMap<Span, IntrinsicId>,
         intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2252,6 +2265,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             parent,
             function_ids,
             expression_types,
+            debug_type_names,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2333,6 +2347,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .get(&definition)
                 .copied()
                 .unwrap_or(ty),
+            debug_type_name: self
+                .debug_type_names
+                .get(&self.parent.resolve.scope_table.def(definition).span)
+                .cloned(),
             mutable,
             span,
         });
@@ -2373,9 +2391,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         .error(decl.name.span, "local has no checked type");
                     return None;
                 };
+                // The new binding becomes visible only after its initializer,
+                // including any handled failure and nested breakpoint.
+                let value = self.lower_expression(&decl.value)?;
                 let local =
                     self.allocate_local(definition, &decl.name.name, ty, decl.mutable, decl.span);
-                let value = self.lower_expression(&decl.value)?;
                 (StatementKind::Let { local, value }, decl.span)
             }
             Stmt::Assign(assign) => (
@@ -2702,6 +2722,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     ) -> Block {
         let CheckedBodyFacts {
             type_map,
+            debug_type_names,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2716,6 +2737,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         } = facts;
 
         let saved_expression_types = std::mem::replace(&mut self.expression_types, type_map);
+        let saved_debug_type_names =
+            std::mem::replace(&mut self.debug_type_names, debug_type_names);
         let saved_generic_calls = std::mem::replace(&mut self.generic_calls, generic_calls);
         let saved_intrinsic_ids = std::mem::replace(&mut self.intrinsic_ids, intrinsic_ids);
         let saved_intrinsic_type_arguments =
@@ -2746,6 +2769,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
         self.local_ids = saved_local_ids;
         self.expression_types = saved_expression_types;
+        self.debug_type_names = saved_debug_type_names;
         self.generic_calls = saved_generic_calls;
         self.intrinsic_ids = saved_intrinsic_ids;
         self.intrinsic_type_arguments = saved_intrinsic_type_arguments;

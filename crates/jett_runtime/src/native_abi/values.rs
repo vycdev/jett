@@ -265,6 +265,7 @@ pub enum NativeDebugTag {
     Function,
     Actor,
     TypeConstruction,
+    Redacted,
 }
 
 impl NativeDebugTag {
@@ -286,6 +287,7 @@ impl NativeDebugTag {
             13 => Self::Function,
             14 => Self::Actor,
             15 => Self::TypeConstruction,
+            16 => Self::Redacted,
             _ => return Err(INVALID_TRACE_LABEL),
         })
     }
@@ -565,6 +567,7 @@ enum NativeDebugNode {
     Function,
     Actor,
     TypeConstruction,
+    Redacted,
 }
 impl NativeDebugLayout {
     fn parse(bytes: &[u8]) -> LeafResult<Self> {
@@ -657,6 +660,7 @@ impl NativeDebugLayout {
                 NativeDebugTag::Function => NativeDebugNode::Function,
                 NativeDebugTag::Actor => NativeDebugNode::Actor,
                 NativeDebugTag::TypeConstruction => NativeDebugNode::TypeConstruction,
+                NativeDebugTag::Redacted => NativeDebugNode::Redacted,
             };
             if node.position != node_bytes.len() {
                 return Err(INVALID_TRACE_LABEL);
@@ -667,6 +671,17 @@ impl NativeDebugLayout {
             return Err(INVALID_TRACE_LABEL);
         }
         Ok(Self { root, nodes })
+    }
+
+    fn format_pending_at(&self, text: &str, depth: u64, mut index: usize) -> LeafResult<String> {
+        for _ in 0..self.nodes.len() {
+            match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
+                NativeDebugNode::Redacted => return Ok("[redacted]".to_owned()),
+                NativeDebugNode::Alias(base) => index = *base,
+                _ => return format_pending_value(text, depth),
+            }
+        }
+        Err(INVALID_TRACE_LABEL)
     }
 
     fn format_value(
@@ -681,6 +696,7 @@ impl NativeDebugLayout {
         }
         let child = depth + 1;
         Ok(match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
+            NativeDebugNode::Redacted => "[redacted]".to_owned(),
             NativeDebugNode::Primitive(kind) => values.debug_value(bits, *kind)?,
             NativeDebugNode::Nothing => format_nothing(bits)?,
             NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
@@ -739,7 +755,11 @@ impl NativeDebugLayout {
                     result.push_str(": ");
                     let field_value =
                         field_layout.format_value(values, field.bits, field_layout.root, child)?;
-                    result.push_str(&format_pending_value(&field_value, field.pending_depth)?);
+                    result.push_str(&field_layout.format_pending_at(
+                        &field_value,
+                        field.pending_depth,
+                        field_layout.root,
+                    )?);
                 }
                 result.push(')');
                 format_pending_value(&result, record.pending_depth)?
@@ -758,7 +778,7 @@ impl NativeDebugLayout {
                         .get(&position)
                         .copied()
                         .unwrap_or(0);
-                    result.push_str(&format_pending_value(&value, depth)?);
+                    result.push_str(&self.format_pending_at(&value, depth, *element)?);
                 }
                 result.push(')');
                 format_pending_value(&result, list.pending_depth)?
@@ -777,7 +797,7 @@ impl NativeDebugLayout {
                         .get(&position)
                         .copied()
                         .unwrap_or(0);
-                    result.push_str(&format_pending_value(&value, depth)?);
+                    result.push_str(&self.format_pending_at(&value, depth, *element)?);
                 }
                 result.push(')');
                 format_pending_value(&result, set.pending_depth)?
@@ -794,12 +814,17 @@ impl NativeDebugLayout {
                         result.push_str(", ");
                     }
                     let key_value = self.format_value(values, entry.key, *key, child)?;
-                    result.push_str(&format_pending_value(&key_value, entry.key_pending_depth)?);
+                    result.push_str(&self.format_pending_at(
+                        &key_value,
+                        entry.key_pending_depth,
+                        *key,
+                    )?);
                     result.push_str(": ");
                     let mapped_value = self.format_value(values, entry.value, *value, child)?;
-                    result.push_str(&format_pending_value(
+                    result.push_str(&self.format_pending_at(
                         &mapped_value,
                         entry.value_pending_depth,
+                        *value,
                     )?);
                 }
                 result.push(')');
@@ -811,7 +836,8 @@ impl NativeDebugLayout {
                     SUM_FAILURE => "none".to_owned(),
                     SUM_SUCCESS => {
                         let payload = self.format_value(values, sum.bits, *element, child)?;
-                        let payload = format_pending_value(&payload, sum.payload_pending_depth)?;
+                        let payload =
+                            self.format_pending_at(&payload, sum.payload_pending_depth, *element)?;
                         format!("some({payload})")
                     }
                     _ => return Err(INVALID_SUM),
@@ -823,12 +849,14 @@ impl NativeDebugLayout {
                 let text = match sum.tag {
                     SUM_FAILURE => {
                         let payload = self.format_value(values, sum.bits, *error, child)?;
-                        let payload = format_pending_value(&payload, sum.payload_pending_depth)?;
+                        let payload =
+                            self.format_pending_at(&payload, sum.payload_pending_depth, *error)?;
                         format!("fail({payload})")
                     }
                     SUM_SUCCESS => {
                         let payload = self.format_value(values, sum.bits, *ok, child)?;
-                        let payload = format_pending_value(&payload, sum.payload_pending_depth)?;
+                        let payload =
+                            self.format_pending_at(&payload, sum.payload_pending_depth, *ok)?;
                         format!("ok({payload})")
                     }
                     _ => return Err(INVALID_SUM),
@@ -849,7 +877,11 @@ impl NativeDebugLayout {
                     result.push_str(field_name);
                     result.push_str(": ");
                     let value = self.format_value(values, field.bits, *field_type, child)?;
-                    result.push_str(&format_pending_value(&value, field.pending_depth)?);
+                    result.push_str(&self.format_pending_at(
+                        &value,
+                        field.pending_depth,
+                        *field_type,
+                    )?);
                 }
                 result.push(')');
                 format_pending_value(&result, record.pending_depth)?
@@ -885,7 +917,11 @@ impl NativeDebugLayout {
                         }
                         let field = record.fields[position + 1].ok_or(INVALID_STRUCT)?;
                         let value = self.format_value(values, field.bits, *field_type, child)?;
-                        result.push_str(&format_pending_value(&value, field.pending_depth)?);
+                        result.push_str(&self.format_pending_at(
+                            &value,
+                            field.pending_depth,
+                            *field_type,
+                        )?);
                     }
                     result.push(')');
                 }
@@ -1116,6 +1152,7 @@ impl NativeDebugLayout {
                 true
             }
             NativeDebugNode::Capability(_)
+            | NativeDebugNode::Redacted
             | NativeDebugNode::Function
             | NativeDebugNode::Actor
             | NativeDebugNode::TypeConstruction => {
@@ -6473,6 +6510,7 @@ mod tests {
             NativeDebugTag::Function,
             NativeDebugTag::Actor,
             NativeDebugTag::TypeConstruction,
+            NativeDebugTag::Redacted,
         ]
         .into_iter()
         .enumerate()
@@ -6481,7 +6519,7 @@ mod tests {
             assert_eq!(tag as u8, expected);
             assert_eq!(NativeDebugTag::from_raw(expected), Ok(tag));
         }
-        assert_eq!(NativeDebugTag::from_raw(16), Err(INVALID_TRACE_LABEL));
+        assert_eq!(NativeDebugTag::from_raw(17), Err(INVALID_TRACE_LABEL));
         let bytes = function_debug_layout_bytes(&[vec![13]], 0);
         let layout = NativeDebugLayout::parse(&bytes).unwrap();
         assert!(matches!(
@@ -6501,6 +6539,40 @@ mod tests {
                 NATIVE_FUNCTION_LABEL_FIELD,
             ),
             (3, 0, 1, 2)
+        );
+    }
+
+    #[test]
+    fn redacted_debug_nodes_hide_payloads_and_pending_depth_without_reading_handles() {
+        let mut alias = vec![NativeDebugTag::Alias as u8];
+        alias.extend_from_slice(&0u32.to_le_bytes());
+        let layout = NativeDebugLayout::parse(&function_debug_layout_bytes(
+            &[vec![NativeDebugTag::Redacted as u8], alias],
+            1,
+        ))
+        .unwrap();
+        let values = NativeValues::default();
+        for bits in [0, 4321, u64::MAX] {
+            assert_eq!(
+                layout.format_value(&values, bits, layout.root, 0),
+                Ok("[redacted]".to_owned())
+            );
+            assert_eq!(
+                layout.format_pending_at("ignored", u64::MAX, layout.root),
+                Ok("[redacted]".to_owned())
+            );
+        }
+        assert_eq!(
+            layout.equal_value(&values, 1, 1, layout.root, 0),
+            Err(INVALID_STRUCT)
+        );
+        let public = NativeDebugLayout {
+            root: 0,
+            nodes: vec![NativeDebugNode::Nothing],
+        };
+        assert_eq!(
+            public.format_pending_at("[redacted]", 2, 0),
+            Ok("pending(pending([redacted]))".to_owned())
         );
     }
 

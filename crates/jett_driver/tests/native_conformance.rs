@@ -1774,6 +1774,45 @@ fn native_pending_reflected_owner_errors_match_interpreter() {
 }
 
 #[test]
+fn native_secret_debug_failure_messages_are_redacted() {
+    for name in [
+        "secret_pending_struct_field_owner_failure",
+        "secret_pending_variant_value_failure",
+        "secret_pending_machine_state_value_failure",
+        "secret_pending_variant_field_owner_failure",
+        "secret_pending_machine_field_owner_failure",
+        "secret_pending_builder_put_failure",
+        "secret_pending_builder_finish_failure",
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let expected = jett_driver::run_file_capture_outcome(&fixture)
+            .expect_err("pending reflected value must fail");
+        assert!(
+            expected.message.contains("[redacted]"),
+            "{name}: {}",
+            expected.message
+        );
+        assert!(
+            !expected.message.contains("hidden-"),
+            "{name}: {}",
+            expected.message
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join(format!("{name}.exe"));
+        build_host_executable(&fixture, launcher(), &binary).unwrap();
+        let actual = run_bounded(&binary, directory.path());
+        assert!(!actual.status.success(), "{name}: {actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn native_json_nested_secrets_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/json_nested_secret_probe.jett");
@@ -2983,6 +3022,34 @@ fn native_breakpoints_preserve_lexical_frames_and_capture_types() {
         String::from_utf8_lossy(&actual.stderr),
         format!("{}\n", expected.debug_output.join("\n"))
     );
+}
+
+#[test]
+fn native_secret_debug_values_are_recursively_redacted() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_secret_values.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert!(debug.contains("[redacted]"), "{debug}");
+    for secret in ["hidden-", "4321", "7654"] {
+        assert!(!debug.contains(secret), "secret leaked: {debug}");
+    }
+    assert!(
+        debug.contains("label: public-label, token: [redacted]"),
+        "{debug}"
+    );
+    assert!(debug.contains("public-key: [redacted]"), "{debug}");
+    assert!(
+        debug.contains("TypeConstruction[app.Vault](token: [redacted])"),
+        "{debug}"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("secret_debug.exe");
+    build_host_executable(&fixture, launcher(), &binary).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(String::from_utf8_lossy(&actual.stderr), debug);
 }
 
 #[test]

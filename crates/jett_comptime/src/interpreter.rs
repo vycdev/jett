@@ -38,6 +38,7 @@ use jett_types::{
 
 use crate::value::Value;
 
+mod debug;
 mod graphics;
 
 use graphics::GraphicsProvider;
@@ -930,8 +931,9 @@ impl Interpreter {
     }
 
     fn debug_binding_label(&self, name: &str, value: &Value) -> String {
-        self.get_variable_type(name)
-            .map(|ty| format!("{name}: {} = {value}", type_expr_display(ty)))
+        let ty = self.get_variable_type(name);
+        let value = self.format_debug_value(value, ty);
+        ty.map(|ty| format!("{name}: {} = {value}", type_expr_display(ty)))
             .unwrap_or_else(|| format!("{name} = {value}"))
     }
 
@@ -1032,6 +1034,7 @@ impl Interpreter {
         let fields: Vec<String> = bindings
             .into_iter()
             .map(|(name, (value, ty))| {
+                let value = self.format_debug_value(&value, ty.as_ref());
                 ty.map(|ty| format!("{name}: {} = {value}", type_expr_display(&ty)))
                     .unwrap_or_else(|| format!("{name} = {value}"))
             })
@@ -1408,7 +1411,9 @@ impl Interpreter {
     ) -> Result<ExprFlow, String> {
         match self.check_refinement(type_name, &value) {
             Ok(()) => Ok(ExprFlow::Value(value)),
-            Err(message) => self.exec_handle_block(bind_name, Some(Value::String(message)), body),
+            Err(message) => {
+                self.exec_handle_block(bind_name, Some(Value::String(message)), body, None)
+            }
         }
     }
 
@@ -1858,11 +1863,14 @@ impl Interpreter {
                 let target_value = value_or_signal!(self, target);
                 match target_value {
                     Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
-                    Value::ResultFail(error) => {
-                        self.exec_handle_block(bind_name.as_ref(), Some(*error), body)
-                    }
+                    Value::ResultFail(error) => self.exec_handle_block(
+                        bind_name.as_ref(),
+                        Some(*error),
+                        body,
+                        self.debug_expression_args(target).get(1),
+                    ),
                     Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
-                    Value::OptionalNone => self.exec_handle_block(None, None, body),
+                    Value::OptionalNone => self.exec_handle_block(None, None, body, None),
                     other => Err(format!(
                         "handle block requires a result or optional value, got {other}"
                     )),
@@ -1939,9 +1947,17 @@ impl Interpreter {
             // function with the accumulated value as the first argument plus
             // any extra args.
             Expr::Pipeline(initial, steps, _) => {
+                let mut value_type = self.debug_expression_type(initial);
                 let mut value = value_or_signal!(self, initial);
                 for step in steps {
-                    value = match self.eval_pipeline_step(&step, value)? {
+                    let result_type = self.debug_pipeline_result_type(step, value_type.as_ref());
+                    let args = self.debug_type_args(result_type.as_ref());
+                    value_type = if step.handle.is_some() {
+                        args.first().cloned()
+                    } else {
+                        result_type
+                    };
+                    value = match self.eval_pipeline_step(&step, value, args.get(1))? {
                         ExprFlow::Value(next) => next,
                         ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
                     };
@@ -2694,6 +2710,7 @@ impl Interpreter {
         &mut self,
         step: &PipelineStep,
         piped_value: Value,
+        error_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
         let flow = self.eval_pipeline_step_call(step, piped_value)?;
         let Some(handle) = &step.handle else {
@@ -2703,21 +2720,25 @@ impl Interpreter {
             ExprFlow::Value(value) => value,
             ExprFlow::Signal(signal) => return Ok(ExprFlow::Signal(signal)),
         };
-        self.eval_pipeline_step_handle(value, handle)
+        self.eval_pipeline_step_handle(value, handle, error_type)
     }
 
     fn eval_pipeline_step_handle(
         &mut self,
         step_value: Value,
         handle: &PipelineStepHandle,
+        error_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
         match step_value {
             Value::ResultOk(value) => Ok(ExprFlow::Value(*value)),
-            Value::ResultFail(error) => {
-                self.exec_handle_block(handle.error_name.as_ref(), Some(*error), &handle.body)
-            }
+            Value::ResultFail(error) => self.exec_handle_block(
+                handle.error_name.as_ref(),
+                Some(*error),
+                &handle.body,
+                error_type,
+            ),
             Value::OptionalSome(value) => Ok(ExprFlow::Value(*value)),
-            Value::OptionalNone => self.exec_handle_block(None, None, &handle.body),
+            Value::OptionalNone => self.exec_handle_block(None, None, &handle.body, None),
             other => Err(format!(
                 "handle block requires a result or optional value, got {other}"
             )),
@@ -2862,10 +2883,11 @@ impl Interpreter {
         bind_name: Option<&Ident>,
         bind_value: Option<Value>,
         body: &Block,
+        bind_type: Option<&TypeExpr>,
     ) -> Result<ExprFlow, String> {
         self.push_scope();
         if let (Some(name), Some(value)) = (bind_name, bind_value) {
-            self.set_variable(&name.name, value);
+            self.set_inferred_debug_binding(name, value, bind_type);
         }
 
         let mut signal = None;
@@ -2908,10 +2930,15 @@ impl Interpreter {
                                         bind_name.as_ref(),
                                         body,
                                     )?,
-                                Value::ResultFail(error) => {
-                                    self.exec_handle_block(bind_name.as_ref(), Some(*error), body)?
+                                Value::ResultFail(error) => self.exec_handle_block(
+                                    bind_name.as_ref(),
+                                    Some(*error),
+                                    body,
+                                    self.debug_expression_args(target).get(1),
+                                )?,
+                                Value::OptionalNone => {
+                                    self.exec_handle_block(None, None, body, None)?
                                 }
-                                Value::OptionalNone => self.exec_handle_block(None, None, body)?,
                                 value => self.finish_refinement_boundary(
                                     &type_name,
                                     value,
@@ -3047,6 +3074,7 @@ impl Interpreter {
                     self.reflected_machine_field_loop_owner(&for_stmt.iterable)?;
                 let reflected_type_info_bindings =
                     self.reflected_type_info_arg_loop_bindings(&for_stmt.iterable)?;
+                let item_types = self.debug_expression_args(&for_stmt.iterable);
                 let iterable = match self.eval_expr_flow(&for_stmt.iterable)? {
                     ExprFlow::Value(value) => value,
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
@@ -3056,7 +3084,11 @@ impl Interpreter {
                         for (index, item) in items.into_iter().enumerate() {
                             self.push_scope();
                             let loop_item = item.clone();
-                            self.set_variable(&for_stmt.variable.name, item);
+                            self.set_inferred_debug_binding(
+                                &for_stmt.variable,
+                                item,
+                                item_types.first(),
+                            );
 
                             let pushed_field_scope = reflected_field_bindings
                                 .as_ref()
@@ -3158,9 +3190,10 @@ impl Interpreter {
                     Value::String(s) => {
                         for ch in s.chars() {
                             self.push_scope();
-                            self.set_variable(
-                                &for_stmt.variable.name,
+                            self.set_inferred_debug_binding(
+                                &for_stmt.variable,
                                 Value::String(ch.to_string()),
+                                item_types.first(),
                             );
                             let signal = self.exec_block_inner(&for_stmt.body)?;
                             self.pop_scope();
@@ -3175,9 +3208,13 @@ impl Interpreter {
                     Value::Map(entries) => {
                         for (key, val) in entries {
                             self.push_scope();
-                            self.set_variable(&for_stmt.variable.name, key);
+                            self.set_inferred_debug_binding(
+                                &for_stmt.variable,
+                                key,
+                                item_types.first(),
+                            );
                             if let Some(ref val_var) = for_stmt.value_variable {
-                                self.set_variable(&val_var.name, val);
+                                self.set_inferred_debug_binding(val_var, val, item_types.get(1));
                             }
                             let signal = self.exec_block_inner(&for_stmt.body)?;
                             self.pop_scope();
@@ -3192,7 +3229,11 @@ impl Interpreter {
                     Value::Set(items) => {
                         for item in items {
                             self.push_scope();
-                            self.set_variable(&for_stmt.variable.name, item);
+                            self.set_inferred_debug_binding(
+                                &for_stmt.variable,
+                                item,
+                                item_types.first(),
+                            );
                             let signal = self.exec_block_inner(&for_stmt.body)?;
                             self.pop_scope();
                             match signal {
@@ -3235,6 +3276,7 @@ impl Interpreter {
             }
 
             Stmt::Match(match_stmt) => {
+                let owner_type = self.debug_expression_type(&match_stmt.expr);
                 let val = match self.eval_expr_flow(&match_stmt.expr)? {
                     ExprFlow::Value(value) => value,
                     ExprFlow::Signal(signal) => return Ok(Some(signal)),
@@ -3256,8 +3298,18 @@ impl Interpreter {
                         Pattern::Variant(name, bindings) => {
                             if name.name == variant_name {
                                 self.push_scope();
-                                for (binding, field_val) in bindings.iter().zip(fields.iter()) {
-                                    self.set_variable(&binding.name, field_val.clone());
+                                let field_types = owner_type
+                                    .as_ref()
+                                    .map(|ty| self.debug_fields(ty, Some((&variant_name, false))))
+                                    .unwrap_or_default();
+                                for (index, (binding, field_val)) in
+                                    bindings.iter().zip(fields.iter()).enumerate()
+                                {
+                                    self.set_inferred_debug_binding(
+                                        binding,
+                                        field_val.clone(),
+                                        field_types.get(index).map(|(_, ty)| ty),
+                                    );
                                 }
                                 let result = self.exec_block_inner(&arm.body);
                                 self.pop_scope();
@@ -6753,8 +6805,9 @@ impl Interpreter {
                 .map(|(_, field_value)| field_value.clone())
                 .ok_or_else(|| format!("type.field_value: value is missing field '{field_name}'")),
             other => Err(format!(
-                "type.field_value: expected struct value for '{}', got {other}",
-                type_expr_display(owner_ty)
+                "type.field_value: expected struct value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(other, Some(owner_ty))
             )),
         }
     }
@@ -6769,8 +6822,9 @@ impl Interpreter {
         } = value
         else {
             return Err(format!(
-                "type.machine_state_value: expected machine value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.machine_state_value: expected machine value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -6840,8 +6894,9 @@ impl Interpreter {
         } = value
         else {
             return Err(format!(
-                "type.machine_field_value: expected machine value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.machine_field_value: expected machine value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -6957,8 +7012,9 @@ impl Interpreter {
         } = value
         else {
             return Err(format!(
-                "type.variant_value: expected enum value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.variant_value: expected enum value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -7017,8 +7073,9 @@ impl Interpreter {
         } = value
         else {
             return Err(format!(
-                "type.variant_field_value: expected enum value for '{}', got {value}",
-                type_expr_display(owner_ty)
+                "type.variant_field_value: expected enum value for '{}', got {}",
+                type_expr_display(owner_ty),
+                self.format_debug_value(value, Some(owner_ty))
             ));
         };
 
@@ -7152,7 +7209,8 @@ impl Interpreter {
         } = builder
         else {
             return Err(format!(
-                "type.construct_put: first argument must be TypeConstruction, got {builder}"
+                "type.construct_put: first argument must be TypeConstruction, got {}",
+                self.format_debug_value(builder, None)
             ));
         };
 
@@ -7722,7 +7780,8 @@ impl Interpreter {
         } = builder
         else {
             return Err(format!(
-                "type.construct_finish: first argument must be TypeConstruction, got {builder}"
+                "type.construct_finish: first argument must be TypeConstruction, got {}",
+                self.format_debug_value(builder, None)
             ));
         };
 

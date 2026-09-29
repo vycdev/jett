@@ -18,6 +18,7 @@ fn temporary(function: &mut Function, ty: TypeId, span: Span) -> LocalId {
         name: format!("$iterator{}", id.index()),
         ty,
         debug_ty: ty,
+        debug_type_name: None,
         mutable: true,
         span,
     });

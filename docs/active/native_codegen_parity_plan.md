@@ -323,7 +323,7 @@ current estimate.
 | Capabilities and runtime resources | nominal checked types covered | entry grants for all eleven capability types; capability task handles retain authority and pending depth through `run`/`join`; provider effects remain limited to implemented families | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; native/interpreter fixtures compare plain and pending Stdout and Environment debug values, nested capability joins, Stdout cancellation, and a joined Stdout write; successful native runs reject unconsumed scripted Random, Clock, and Graphics inputs; other providers/resources pending |
 | Actors and structured concurrency | covered | sequential `run`/`join`/`cancel` values and result propagation; pending depth for `nothing` persists through calls, captures, and aggregates, while owned strings, bytes, lists, sets, maps, optionals, results, structs, enums, bitfields, machines, function descriptors, and `TypeConstruction` builders retain pending depth through runtime handles; actor identities and capability authority retain depth through separate scalar handles; actor constructors, registration, handler dispatch, and state writeback covered; general primitive pending-task representation remains pending | native/interpreter differential probes cover successful and failed string tasks, nested pending `nothing` and owned values including optional and result branches, captured functions, builders, actor identities, and capabilities, bare-unit and plain Stdout join failure, current sequential cancellation behavior, pending-value debug output, string and enum direct equality errors, pending function-call, builder-use, and actor-message errors, and aggregate enum-payload equality, actor allocation and owned-state cleanup, message ordering, state mutation, and responses; asynchronous scheduling and cancellation checkpoints remain pending |
 | JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections including sets of primitive-backed elements, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32`, `uint16`/`uint32`, and `float32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of primitive-backed hashable types, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections including lists/maps of enums and enum payload structs, result branches, errors, and owned cleanup; other concrete JSON types pending |
-| Trace, breakpoint, assert, and failure reporting | covered | primitive, capability, function, actor, `TypeConstruction`, and recursive list, set, map, optional, result, struct, bitfield, enum, and machine values trace; zero- and multi-binding breakpoints over those types; default and interpolated custom-message `assert` in test bodies; other special debug values pending | native debug lines match interpreter stderr for scalar and aggregate fixtures, including empty and recursive values, bitfield numeric/enum/payload fields, false conditions, Unicode strings, bytes, `nothing`, plain/pending capabilities, and an out-of-scope local; named, inline, captured, and comptime callbacks inside aggregates, with subsequent calls and failure cleanup; actor ordinals and partially filled struct, bitfield, enum, and machine builders match; custom assertion codegen, context-owned error text, launcher copy-out, and passing verify/property suites have separate tests; lexical breakpoint frames, nested-scope exit, and typed closure captures covered; secret-bearing debug output pending |
+| Trace, breakpoint, assert, and failure reporting | covered | primitive, capability, function, actor, `TypeConstruction`, and recursive list, set, map, optional, result, struct, bitfield, enum, and machine values trace; zero- and multi-binding breakpoints over those types; default and interpolated custom-message `assert` in test bodies; other special debug values pending | native debug lines match interpreter stderr for scalar and aggregate fixtures, including empty and recursive values, bitfield numeric/enum/payload fields, false conditions, Unicode strings, bytes, `nothing`, plain/pending capabilities, and an out-of-scope local; named, inline, captured, and comptime callbacks inside aggregates, with subsequent calls and failure cleanup; actor ordinals and partially filled struct, bitfield, enum, and machine builders match; custom assertion codegen, context-owned error text, launcher copy-out, and passing verify/property suites have separate tests; lexical breakpoint frames, nested-scope exit, and typed closure captures covered; recursive secret redaction covered, including inferred bindings, generic errors, and reflection failures |
 
 Numeric and boolean task values now retain pending depth through native locals,
 direct and indirect function calls, closure captures, and result payloads.
@@ -566,7 +566,7 @@ builders for struct, bitfield, enum, and machine owners, including a struct
 whose fields are supplied out of declaration order. Native builder metadata
 stores checked field debug layouts and successful insertion order; tracing
 does not consume the builder. The secret-field output policy is recorded in
-`docs/open_design/secret_debug_output.md`. The 62-test Windows native suite,
+`docs/completed/secret_debug_output.md`. The 62-test Windows native suite,
 182-fixture typed-lowering gate, and backend/runtime unit suites pass after
 this change.
 The linked `tests/native/collection_callbacks.jett` fixture now covers
@@ -1450,3 +1450,23 @@ portable conformance suite compares moves, explicit views, indirect calls,
 nested task wrapping/joins, trace output, and plain-capability join failure for
 all six families. Runtime tests require distinct authority across kinds and
 contexts. Implementing their provider effects remains separate work.
+
+
+### Recursive secret observations and declared debug types
+
+Trace and one-line breakpoint output now use the decided `[redacted]` marker
+through secret aliases/refinements and nested collections, records, recursive
+enums, machines, and all reflected builder kinds. Pending secret payload depth
+is hidden. Typed reflection failures use the same redaction. Native layouts do
+not inspect hidden payload handles, and redacted layouts cannot be used for
+equality. Public text equal to the marker retains ordinary pending formatting.
+Declared debug labels survive canonical alias interning, concrete generic
+specialization, reflected body expansions, and closure capture lowering.
+Interpreter loop, match, and handler bindings now carry type metadata; generic
+handler/pipeline failures use active invocation types. Binding initialization
+precedes visibility in a breakpoint. Linked differential coverage exercises
+these observations plus seven pending-owner/builder failure paths.
+
+Consumed bindings are to be omitted from breakpoint snapshots (user decision).
+The implementation and differential coverage for that additional ownership
+visibility rule remain pending; this redaction change does not close that gap.

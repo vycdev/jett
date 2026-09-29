@@ -1378,7 +1378,10 @@ impl Translator<'_, '_> {
                     Type::Bytes => Some(DEBUG_BYTES_KIND),
                     _ => None,
                 });
-            let type_name = self.types.type_name(local.debug_ty);
+            let type_name = local
+                .debug_type_name
+                .clone()
+                .unwrap_or_else(|| self.types.type_name(local.debug_ty));
             let label = format!(
                 "{}{}: {} = ",
                 if index == 0 { "" } else { ", " },

@@ -2922,7 +2922,16 @@ Native debug layouts recognize `TypeConstruction` handles. Builder metadata
 also carries checked debug layouts for each field and records successful put
 order, so trace and breakpoint render partial struct, bitfield, enum, and
 machine builders in the same order as the interpreter without consuming them.
-Fields without a supported debug layout remain unavailable to native tracing.
+The zero-payload native debug tag `Redacted` (16) renders a secret without
+reading its bits or handle. Alias nodes preserve this behavior, including field
+pending depth. Interpreter formatting walks typed values and reflected builder
+fields recursively, and typed reflection failures use the same formatter.
+The checker exports declared debug type names separately from canonical TypeIds,
+per generic instantiation and reflected body expansion. HIR/MIR retain those
+labels, including closure captures. Interpreter loop, match, and handler bindings
+retain type metadata; generic handlers and pipelines use the active invocation's
+types when a single source span has multiple checked instantiations. HIR exposes
+new locals only after lowering their initializers.
 When a generic record helper is instantiated for a non-record reflection kind,
 native code creates an empty builder that preserves the interpreter's handled
 `type.construct_put` and `type.construct_finish` errors. It does not infer a

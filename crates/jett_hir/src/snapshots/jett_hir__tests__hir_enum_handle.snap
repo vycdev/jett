@@ -1,6 +1,5 @@
 ---
 source: crates/jett_hir/src/lib.rs
-assertion_line: 6195
 expression: program
 ---
 Program {
@@ -69,6 +68,9 @@ Program {
                     ),
                     debug_ty: TypeId(
                         10,
+                    ),
+                    debug_type_name: Some(
+                        "string",
                     ),
                     mutable: false,
                     span: Span {
@@ -205,12 +207,36 @@ Program {
                     id: LocalId(
                         0,
                     ),
+                    name: "error",
+                    ty: TypeId(
+                        10,
+                    ),
+                    debug_ty: TypeId(
+                        10,
+                    ),
+                    debug_type_name: None,
+                    mutable: false,
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 220,
+                        end: 225,
+                    },
+                },
+                Local {
+                    id: LocalId(
+                        1,
+                    ),
                     name: "value",
                     ty: TypeId(
                         47,
                     ),
                     debug_ty: TypeId(
                         47,
+                    ),
+                    debug_type_name: Some(
+                        "app.Value",
                     ),
                     mutable: false,
                     span: Span {
@@ -219,26 +245,6 @@ Program {
                         ),
                         start: 188,
                         end: 261,
-                    },
-                },
-                Local {
-                    id: LocalId(
-                        1,
-                    ),
-                    name: "error",
-                    ty: TypeId(
-                        10,
-                    ),
-                    debug_ty: TypeId(
-                        10,
-                    ),
-                    mutable: false,
-                    span: Span {
-                        file: FileId(
-                            0,
-                        ),
-                        start: 220,
-                        end: 225,
                     },
                 },
                 Local {
@@ -252,6 +258,7 @@ Program {
                     debug_ty: TypeId(
                         3,
                     ),
+                    debug_type_name: None,
                     mutable: false,
                     span: Span {
                         file: FileId(
@@ -267,7 +274,7 @@ Program {
                     Statement {
                         kind: Let {
                             local: LocalId(
-                                0,
+                                1,
                             ),
                             value: Expression {
                                 kind: Handle {
@@ -311,7 +318,7 @@ Program {
                                     kind: Result,
                                     error_local: Some(
                                         LocalId(
-                                            1,
+                                            0,
                                         ),
                                     ),
                                     failure: Block {
@@ -384,7 +391,7 @@ Program {
                             scrutinee: Expression {
                                 kind: Local(
                                     LocalId(
-                                        0,
+                                        1,
                                     ),
                                 ),
                                 ty: TypeId(

@@ -7153,8 +7153,17 @@ consume the handle.
 An in-progress `TypeConstruction` builder appears with its owner, selected
 variant or machine state, and the fields successfully supplied so far. Fields
 appear in insertion order. Inspecting the builder does not finish or consume it.
-The treatment of secret-bearing fields in debug output remains unresolved; see
-`docs/open_design/secret_debug_output.md`.
+Trace and one-line breakpoint snapshots render `secret[T]` as `[redacted]`,
+including through aliases and refinements and inside collections, sums, records,
+enums, machines, and builders. Secret payloads and their pending depth never
+appear; public fields and pending wrappers outside a secret retain their usual
+format. Formatting does not consume, finish, or declassify values. Typed runtime
+reflection diagnostics use the same rule. The interactive debugger's existing
+metadata-only secret inspection policy remains in force. See
+`docs/completed/secret_debug_output.md`.
+Debug binding labels preserve declared aliases, including concrete generic
+arguments and closure captures. Inferred loop, match, and handler bindings carry
+their checked types. A binding is not visible inside its own initializer.
 Reflected construction accepts a field value with its exact refinement type
 after that value has passed the refinement predicate. A supplied base value
 still requires the predicate at builder completion; the exact refined type

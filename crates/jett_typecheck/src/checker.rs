@@ -43,6 +43,8 @@ pub struct CheckedGenericFunctionInstantiation {
     pub return_type: TypeId,
     /// Expression types captured while checking this concrete body.
     pub type_map: HashMap<Span, TypeId>,
+    /// Checked declared type labels, retaining aliases per concrete body.
+    pub debug_type_names: HashMap<Span, String>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     /// Closed compiler operation selected for each accepted intrinsic call.
@@ -108,6 +110,8 @@ pub enum CheckedComptimeTypeSelection {
 #[derive(Debug, Clone, Default)]
 pub struct CheckedBodyFacts {
     pub type_map: HashMap<Span, TypeId>,
+    /// Checked declared type labels, retaining aliases per concrete body.
+    pub debug_type_names: HashMap<Span, String>,
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -198,6 +202,8 @@ pub struct CheckResult {
     pub diagnostics: Vec<Diagnostic>,
     /// Map from expression spans to their inferred type.
     pub type_map: HashMap<Span, TypeId>,
+    /// Checked declared type labels, retaining aliases per concrete body.
+    pub debug_type_names: HashMap<Span, String>,
     /// Session-local resolved definitions and their checked types.
     ///
     /// Lowering uses this map with the resolver's `DefId` join keys. Durable
@@ -279,6 +285,7 @@ pub fn check_with_options(
     CheckResult {
         diagnostics,
         type_map: checker.type_map,
+        debug_type_names: checker.debug_type_names,
         definition_types: checker.type_env,
         generic_calls: checker.generic_calls,
         intrinsic_ids: checker.intrinsic_ids,
@@ -374,6 +381,7 @@ struct ClosureCaptureScope {
 struct ActiveGenericInstantiation {
     manifest_index: usize,
     type_map: HashMap<Span, TypeId>,
+    debug_type_names: HashMap<Span, String>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -426,6 +434,7 @@ struct TypeChecker<'a> {
     resolving_type_aliases: HashSet<String>,
     /// Expression span → TypeId (the output type map).
     type_map: HashMap<Span, TypeId>,
+    debug_type_names: HashMap<Span, String>,
     /// The expected return type for the function currently being checked.
     current_return_type: Option<TypeId>,
     /// (interface, concrete type) -> implemented method signatures.
@@ -593,6 +602,7 @@ impl<'a> TypeChecker<'a> {
             type_aliases: HashMap::new(),
             resolving_type_aliases: HashSet::new(),
             type_map: HashMap::new(),
+            debug_type_names: HashMap::new(),
             current_return_type: None,
             interface_impls: HashMap::new(),
             impl_methods_by_type: HashMap::new(),
@@ -5310,12 +5320,14 @@ impl<'a> TypeChecker<'a> {
             .zip(actor_def.capability_params.iter())
         {
             if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
+                self.record_debug_type_name(&param_ast.name, &param_ast.ty);
                 self.type_env.insert(def_id, *param_ty);
             }
         }
 
         // Type-check state field initializers.
         for field in &def.state_fields {
+            self.record_debug_type_name(&field.name, &field.ty);
             let declared_ty = self.resolve_type_expr(&field.ty);
             let init_ty = self.check_expr_for_expected(&field.value, declared_ty, true);
             if init_ty != TypeInterner::ERROR
@@ -5352,6 +5364,7 @@ impl<'a> TypeChecker<'a> {
                 handler_ast.params.iter().zip(handler_def.params.iter())
             {
                 if let Some(def_id) = self.declaration_def_id(param_ast.name.span) {
+                    self.record_debug_type_name(&param_ast.name, &param_ast.ty);
                     self.type_env.insert(def_id, *param_ty);
                 }
             }
@@ -6305,6 +6318,7 @@ impl<'a> TypeChecker<'a> {
                         parameter_types: parameter_types.clone(),
                         return_type,
                         type_map: HashMap::new(),
+                        debug_type_names: HashMap::new(),
                         generic_calls: HashMap::new(),
                         intrinsic_ids: HashMap::new(),
                         intrinsic_type_arguments: HashMap::new(),
@@ -6348,6 +6362,7 @@ impl<'a> TypeChecker<'a> {
                 .push(ActiveGenericInstantiation {
                     manifest_index,
                     type_map: HashMap::new(),
+                    debug_type_names: HashMap::new(),
                     generic_calls: HashMap::new(),
                     intrinsic_ids: HashMap::new(),
                     intrinsic_type_arguments: HashMap::new(),
@@ -6374,6 +6389,7 @@ impl<'a> TypeChecker<'a> {
             let conflicts = {
                 let entry = &mut self.generic_function_instantiations[active.manifest_index];
                 entry.type_map.extend(active.type_map);
+                entry.debug_type_names.extend(active.debug_type_names);
                 entry.generic_calls.extend(active.generic_calls);
                 entry.intrinsic_ids.extend(active.intrinsic_ids);
                 entry
@@ -6418,6 +6434,18 @@ impl<'a> TypeChecker<'a> {
         self.specialize_reflection_branches = old_specialize_reflection_branches;
         self.type_env = old_type_env;
         self.closure_capture_scopes = old_closure_capture_scopes;
+    }
+
+    fn record_debug_type_name(&mut self, name: &ast::Ident, ty: &TypeExpr) {
+        let namespace = self
+            .declaration_def_id(name.span)
+            .and_then(|id| self.resolve.scope_table.def(id).namespace.as_deref());
+        let label = self.reflection_type_expr_display(ty, namespace);
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.debug_type_names.insert(name.span, label);
+        } else {
+            self.debug_type_names.insert(name.span, label);
+        }
     }
 
     fn record_expression_type(&mut self, span: Span, ty: TypeId) {
@@ -6611,8 +6639,10 @@ impl<'a> TypeChecker<'a> {
         // Expression types are also retained in the root map for the existing
         // interpreter handoff, even while a generic fact scope is active.
         Self::clear_facts_in_span(&mut self.type_map, owner);
+        Self::clear_facts_in_span(&mut self.debug_type_names, owner);
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             Self::clear_facts_in_span(&mut active.type_map, owner);
+            Self::clear_facts_in_span(&mut active.debug_type_names, owner);
             Self::clear_facts_in_span(&mut active.generic_calls, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_type_arguments, owner);
@@ -6642,6 +6672,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(active) = self.active_generic_instantiations.last() {
             return CheckedBodyFacts {
                 type_map: Self::facts_in_span(&active.type_map, owner),
+                debug_type_names: Self::facts_in_span(&active.debug_type_names, owner),
                 generic_calls: Self::facts_in_span(&active.generic_calls, owner),
                 intrinsic_ids: Self::facts_in_span(&active.intrinsic_ids, owner),
                 intrinsic_type_arguments: Self::facts_in_span(
@@ -6666,6 +6697,7 @@ impl<'a> TypeChecker<'a> {
         }
         CheckedBodyFacts {
             type_map: Self::facts_in_span(&self.type_map, owner),
+            debug_type_names: Self::facts_in_span(&self.debug_type_names, owner),
             generic_calls: Self::facts_in_span(&self.generic_calls, owner),
             intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
             intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
@@ -7946,6 +7978,7 @@ impl<'a> TypeChecker<'a> {
 
         // Bind parameter types into the type environment.
         for param in &func.params {
+            self.record_debug_type_name(&param.name, &param.ty);
             let param_type = self.resolve_type_expr(&param.ty);
             if let Some(def_id) = self.declaration_def_id(param.name.span) {
                 self.type_env.insert(def_id, param_type);
@@ -7970,6 +8003,7 @@ impl<'a> TypeChecker<'a> {
     fn check_property_block(&mut self, prop: &ast::PropertyBlock) {
         self.in_property_block = true;
         for given in &prop.givens {
+            self.record_debug_type_name(&given.name, &given.ty);
             let given_type = self.resolve_type_expr(&given.ty);
             if let Some(def_id) = self.declaration_def_id(given.name.span) {
                 self.type_env.insert(def_id, given_type);
@@ -8912,6 +8946,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(name) = bind_name {
             if let Some(def_id) = self.declaration_def_id(name.span) {
                 self.type_env.insert(def_id, TypeInterner::STRING);
+                self.record_expression_type(name.span, TypeInterner::STRING);
                 self.record_closure_local(def_id);
             }
         }
@@ -8970,6 +9005,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_var_decl(&mut self, decl: &ast::VarDecl) {
+        self.record_debug_type_name(&decl.name, &decl.ty);
         let declared_type = self.resolve_type_expr(&decl.ty);
         let init_type = self.check_expr_for_expected(&decl.value, declared_type, true);
 
@@ -9700,6 +9736,7 @@ impl<'a> TypeChecker<'a> {
                             {
                                 if let Some(def_id) = self.declaration_def_id(binding.span) {
                                     self.type_env.insert(def_id, *field_ty);
+                                    self.record_expression_type(binding.span, *field_ty);
                                     self.record_closure_local(def_id);
                                 }
                             }
@@ -9973,6 +10010,7 @@ impl<'a> TypeChecker<'a> {
                     .push(ClosureCaptureScope::default());
 
                 for (param, &param_type) in params.iter().zip(&param_types) {
+                    self.record_debug_type_name(&param.name, &param.ty);
                     if let Some(def_id) = self.declaration_def_id(param.name.span) {
                         self.type_env.insert(def_id, param_type);
                         self.record_closure_local(def_id);
@@ -14291,6 +14329,7 @@ impl<'a> TypeChecker<'a> {
                 if let Some(name) = bind_name {
                     if let Some(def_id) = self.declaration_def_id(name.span) {
                         self.type_env.insert(def_id, err_ty);
+                        self.record_expression_type(name.span, err_ty);
                         self.record_closure_local(def_id);
                     }
                 }

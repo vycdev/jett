@@ -21,6 +21,7 @@ enum DebugNode {
     Function,
     Actor,
     TypeConstruction,
+    Redacted,
     Alias(u32),
 }
 
@@ -55,7 +56,7 @@ impl DebugGraph<'_> {
                     for (name, ty) in definition.fields {
                         fields.push((name, self.node(ty)?));
                     }
-                    DebugNode::Record(definition.name, fields)
+                    DebugNode::Record(value_type_name(&definition.name), fields)
                 }
                 Type::Bitfield(id) => {
                     let definition = self.types.resolve_bitfield(id).clone();
@@ -63,7 +64,7 @@ impl DebugGraph<'_> {
                     for field in definition.fields {
                         fields.push((field.name, self.node(field.ty)?));
                     }
-                    DebugNode::Record(definition.name, fields)
+                    DebugNode::Record(value_type_name(&definition.name), fields)
                 }
                 Type::Enum(id) => {
                     let definition = self.types.resolve_enum(id).clone();
@@ -75,7 +76,7 @@ impl DebugGraph<'_> {
                         }
                         variants.push((variant.name, fields));
                     }
-                    DebugNode::Enum(definition.name, variants)
+                    DebugNode::Enum(value_type_name(&definition.name), variants)
                 }
                 Type::Machine(id) | Type::MachineState { machine: id, .. } => {
                     let definition = self.types.resolve_machine(id).clone();
@@ -87,18 +88,15 @@ impl DebugGraph<'_> {
                         }
                         states.push((state.name, fields));
                     }
-                    DebugNode::Machine(definition.name, states)
+                    DebugNode::Machine(value_type_name(&definition.name), states)
                 }
                 Type::Capability(_) => DebugNode::Capability(self.types.type_name(ty)),
                 Type::Function { .. } => DebugNode::Function,
                 Type::Actor(_) => DebugNode::Actor,
                 Type::TypeConstruction => DebugNode::TypeConstruction,
                 Type::Refinement { base, .. } => DebugNode::Alias(self.node(base)?),
-                Type::Secret(_)
-                | Type::Never
-                | Type::Interface(_)
-                | Type::Resource(_)
-                | Type::Error => return None,
+                Type::Secret(_) => DebugNode::Redacted,
+                Type::Never | Type::Interface(_) | Type::Resource(_) | Type::Error => return None,
                 Type::Int8
                 | Type::Int16
                 | Type::Int32
@@ -116,6 +114,14 @@ impl DebugGraph<'_> {
         self.nodes[index as usize] = Some(node);
         Some(index)
     }
+}
+
+// Value displays use the nominal declaration name; the binding label carries
+// the complete instantiated type, including declared aliases.
+fn value_type_name(name: &str) -> String {
+    name.split_once('[')
+        .map_or(name, |(base, _)| base)
+        .to_owned()
 }
 
 fn number(bytes: &mut Vec<u8>, value: usize) -> Option<()> {
@@ -140,6 +146,7 @@ fn encode_node(bytes: &mut Vec<u8>, node: DebugNode) -> Option<()> {
         DebugNode::Function => bytes.push(NativeDebugTag::Function as u8),
         DebugNode::Actor => bytes.push(NativeDebugTag::Actor as u8),
         DebugNode::TypeConstruction => bytes.push(NativeDebugTag::TypeConstruction as u8),
+        DebugNode::Redacted => bytes.push(NativeDebugTag::Redacted as u8),
         DebugNode::List(child) => child_node(bytes, NativeDebugTag::List, child),
         DebugNode::Set(child) => child_node(bytes, NativeDebugTag::Set, child),
         DebugNode::Optional(child) => child_node(bytes, NativeDebugTag::Optional, child),
@@ -318,7 +325,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn function_debug_layout_is_opaque_and_does_not_enable_equality_or_secret_debugging() {
+    fn function_debug_layout_is_opaque_and_secret_values_are_redacted() {
         let mut types = TypeInterner::new();
         let function = types.intern(Type::Function {
             params: vec![TypeInterner::INT64],
@@ -338,6 +345,8 @@ mod tests {
             assert!(equality_layout(&types, ty).is_none());
         }
         let secret = types.intern(Type::Secret(function));
-        assert!(debug_layout(&types, secret).is_none());
+        let layout = debug_layout(&types, secret).unwrap();
+        assert_eq!(layout.last(), Some(&(NativeDebugTag::Redacted as u8)));
+        assert!(equality_layout(&types, secret).is_none());
     }
 }

@@ -754,9 +754,12 @@ The selection and field-read leaves also reject pending source enum, machine,
 struct, and bitfield records before returning reflected data. For payload
 fields, a pending `TypeField` is diagnosed first, then a pending source value,
 then an owner mismatch; struct field reads retain their checked field/type
-validation before checking the source value. Secret-bearing owners have no
-debug layout, so a pending one fails without formatting its payload while the
-secret-debug policy remains open.
+validation before checking the source value. Secret-bearing owners use recursive
+redaction in these diagnostics. Debug tag `Redacted` (16) has no payload and
+formats `[redacted]` without accessing hidden handles or pending depth. It is
+not an equality layout and never changes ownership or declassifies a value.
+Public pending text equal to the literal `[redacted]` still retains its pending
+wrappers; redaction is determined by the layout, not the resulting string.
 Static machine layout, state, and transition reflection materializes checked
 metadata as ordinary owned structs and lists, including nested `TypeField`
 records. State-qualified machine types expose their machine's full layout;
