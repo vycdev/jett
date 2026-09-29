@@ -434,3 +434,10 @@ raw JSON access covers malformed input, wrong-kind errors, missing items, and
 successful absent optionals. Runtime and baked lists retain their full result
 owner even when the active payload is only an error string, and traces preserve
 recursive secret redaction.
+
+`reflected_opaque_fields` checks plain and doubly pending actor/capability fields
+through typed field reads and builder reconstruction. Messages through rebuilt
+actor references still update the original actor, and joined capabilities retain
+the authority required by their provider. Exact stdout and debug comparisons
+also require reconstruction to succeed; failures cannot return the original
+record as an unnoticed fallback.

@@ -320,6 +320,25 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_reflected_opaque_fields_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/reflected_opaque_fields.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("reflected opaque field oracle");
+    assert_eq!(expected.stdout, "plain:5\nready\npending:5\nready\n");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("reflected_opaque_fields.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native reflected opaque fields");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_comptime_actor_computation_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/comptime_actor_computation.jett");
