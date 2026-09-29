@@ -21,3 +21,11 @@ available afterward.
 An explicit checked display implementation also takes precedence over the
 built-in formatter for primitive types. Both the interpreter and native HIR
 select the exact method before their primitive fallback.
+
+Pending interface receivers still fail dispatch. Their diagnostic names the
+registered interface method, including its declaration namespace, consistently
+with generated dispatchers. The failure regression evaluates an earlier owned
+interpolation segment before a temporary pending interface receiver containing
+a secret-bearing record. Both paths preserve the earlier output, omit the
+secret, and terminate with the same error; native cleanup must release all
+partially evaluated owners.

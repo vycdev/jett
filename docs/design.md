@@ -6970,6 +6970,8 @@ An implementation for an interface receives its erased value; the concrete
 payload's implementation does not replace that contract. An explicit display
 implementation takes precedence over built-in primitive formatting. Each
 interpolated expression is evaluated once, and display borrows its value.
+Failed dispatch through a pending interface value reports the registered
+interface method's name, including its declaration namespace.
 
 **Literal braces:** Use `{{` and `}}` for literal `{` and `}` characters:
 

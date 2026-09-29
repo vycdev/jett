@@ -11072,7 +11072,12 @@ impl Interpreter {
         let registered = self
             .functions
             .get(&resolved_name)
-            .ok_or_else(|| format!("undefined function '{name}'"))?
+            .ok_or_else(|| {
+                let name = self
+                    .registry_name(&self.interface_methods, name)
+                    .unwrap_or_else(|| name.to_string());
+                format!("undefined function '{name}'")
+            })?
             .clone();
         let func = registered.definition;
 

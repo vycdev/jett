@@ -845,6 +845,8 @@ using built-in primitive formatting. Interpreter selection uses the expression's
 checked type as well, preserving an interface's own display implementation over
 its concrete payload. Implementation registration resolves the interface's
 declaration namespace independently of the implementation's namespace.
+When a pending interface receiver cannot dispatch, the interpreter and generated
+dispatcher both name the registered interface method with its canonical namespace.
 Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
 lexical evaluation order after type checking has authorized them. The shared
 registry is the only source-spelling-to-intrinsic boundary; HIR, MIR,

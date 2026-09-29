@@ -361,6 +361,27 @@ fn native_interface_display_contexts_match_interpreter() {
 }
 
 #[test]
+fn native_interface_display_failure_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_display_failure.jett");
+    let expected = jett_driver::run_file_capture_outcome(&fixture)
+        .expect_err("pending interface display must fail");
+    assert_eq!(expected.output.stdout, "prefix\n");
+    assert!(expected.output.debug_output.is_empty());
+    assert_eq!(
+        expected.message,
+        "runtime error: undefined function 'app.Named.name'"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_display_failure.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native interface display failure");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+}
+
+#[test]
 fn native_interface_refined_actors_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_refined_actors.jett");

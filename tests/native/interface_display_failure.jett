@@ -1,0 +1,24 @@
+interface Displayable:
+    function display(view self: Displayable) returns string
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+struct Record:
+    label: string
+    hidden: secret[string]
+implement Named for Record:
+    function name(view self: Record) returns string:
+        return self.label
+implement Displayable for Named:
+    function display(view self: Named) returns string:
+        return Named.name(view self)
+function make() returns Named:
+    Record source = Record(label: "visible", hidden: "hidden-display-failure")
+    Named value = source
+    return run value
+function prefix() returns string:
+    println("prefix")
+    return "allocated-prefix"
+function main() returns nothing:
+    println("{prefix()}:{make()}:unreached")
+    return nothing
