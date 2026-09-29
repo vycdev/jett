@@ -1676,3 +1676,14 @@ This is an uncovered accepted-source contract, not a passing failure-parity
 case. The source-language choice between compile-time rejection and preserved
 runtime errors is recorded in
 [direct collection equality](../open_design/direct_collection_equality.md).
+
+### Deep recursive debug values
+
+A finite 160-level enum printed in the interpreter but failed native formatting
+with `invalid native trace label`. Typed native formatting now uses an explicit
+work stack and active-path cycle detection instead of its 128-level recursion
+limit. The linked regression covers pending recursive values, erased owners,
+repeated children, trace, print, and secret-bearing breakpoint snapshots.
+Runtime tests cover 4,096 levels and malformed cyclic schemas/payloads without
+recursive traversal or partial output. Existing aggregate equality remains a
+separate audit obligation.

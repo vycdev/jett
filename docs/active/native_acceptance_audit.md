@@ -149,6 +149,13 @@ arguments spanning handlers. A terminal argument failure must produce no partial
 call output and exit 71 after cleanup. Runtime layout tests reject a fabricated
 inhabitant of an uninhabited debug node. These tests do not resolve the separate
 hidden-secret print policy above.
+The deep-value gate compares trace, print, breakpoint, and erased-interface
+observation of 160-level recursive values, including pending nodes and secret
+leaves, after deleting source. Runtime tests format 4,096-level values and shared
+children, reject alias and payload cycles (including dynamic interface layouts),
+and preserve output-buffer contents on failed formatting. This removes the
+formatter's former 128-level cutoff; it does not establish deep aggregate
+equality coverage.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

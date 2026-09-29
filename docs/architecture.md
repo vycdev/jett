@@ -2820,6 +2820,13 @@ An additive `Uninhabited` debug node describes never-typed children of empty
 containers and absent sums; attempting to format an actual value at that node
 fails without reading a payload. The typed formatter still redacts hidden
 secrets; interpreter parity for those print values awaits the recorded policy.
+Typed aggregate formatting traverses values with an explicit work stack, so
+finite recursive values have no formatter-specific nesting cutoff. An active
+path tracks layout, node, and payload identity to reject malformed cycles while
+allowing shared children on separate paths. Dynamic interface and builder
+layouts are cached for the traversal; aliases are resolved with a schema-sized
+cycle check. Secret nodes short-circuit before inspecting payloads or pending
+depth, and the caller receives text only after the whole formatting succeeds.
 
 Terminal runtime failure is a context-local first error, not `result.fail` data.
 Compiled calls test that channel before using a return value; failure edges release

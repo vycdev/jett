@@ -16,6 +16,12 @@ tag 18, `Uninhabited`, is additive: empty containers and inactive sum branches
 may refer to it, but formatting or comparing an actual payload through it fails.
 Existing tag numbers remain unchanged. Secret nodes retain conservative
 redaction pending the hidden-secret debug-print policy decision.
+The aggregate formatter uses a work stack rather than recursive calls and a
+fixed depth ceiling. Active-path identities reject cyclic schemas/payloads;
+shared finite subvalues remain valid. Dynamic layouts are cached by descriptor
+bytes during each observation so cycles crossing interface layouts are detected.
+Formatting failure leaves the caller's text buffer unchanged. This changes no
+ABI tag or leaf signature and does not extend the aggregate equality contract.
 
 Immutable UTF-8 strings use nonzero u64 context-associated handles. Zero is an
 uninitialized slot, never a language string. Each owning slot holds one reference.

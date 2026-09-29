@@ -3426,6 +3426,10 @@ rules. All arguments are evaluated before the call emits text, so a failing
 later argument cannot leave partial output from that call. The policy for
 secrets hidden by an interface or builder remains tracked in
 `open_design/debug_print_hidden_secrets.md`.
+Finite recursive values retain their full typed debug representation; nesting
+past a fixed implementation depth must not turn valid observation into a runtime
+error. This also applies to trace and breakpoint snapshots, preserving pending
+wrappers, field order, and recursive secret redaction.
 
 The current interpreter shares their path with `Stdout.write`; separating debug
 events is pending. When the release/backend boundary is implemented, release

@@ -1,0 +1,34 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+enum Chain:
+    end
+    next(value: Chain)
+implement Named for Chain:
+    function name(view self: Chain) returns string:
+        return "chain"
+enum Hidden:
+    token(value: secret[string])
+    next(value: Hidden)
+function secret_values() returns nothing:
+    mutable Hidden hidden = Hidden.token("deep-secret-token")
+    mutable int64 index = 0
+    while index < 160:
+        hidden = Hidden.next(run hidden)
+        index = index + 1
+    trace hidden
+    breakpoint
+function main() returns nothing:
+    mutable Chain chain = Chain.end
+    mutable int64 index = 0
+    while index < 160:
+        chain = Chain.next(run chain)
+        index = index + 1
+    trace chain
+    println(view chain)
+    list[Chain] repeated = list(clone chain, clone chain)
+    trace repeated
+    Named erased = chain
+    trace erased
+    println(view erased)
+    secret_values()

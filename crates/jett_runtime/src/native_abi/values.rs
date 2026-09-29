@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use subtle::ConstantTimeEq;
 use unicode_segmentation::UnicodeSegmentation;
 
+mod debug_format;
 pub mod interface_conversion;
 
 pub type NativeHandle = u64;
@@ -552,10 +553,12 @@ enum DecodedBitfieldField {
     Enum(u32),
     Payload(Vec<u8>),
 }
+#[derive(Clone)]
 struct NativeDebugLayout {
     root: usize,
     nodes: Vec<NativeDebugNode>,
 }
+#[derive(Clone)]
 enum NativeDebugNode {
     Primitive(u32),
     Nothing,
@@ -681,280 +684,6 @@ impl NativeDebugLayout {
             return Err(INVALID_TRACE_LABEL);
         }
         Ok(Self { root, nodes })
-    }
-
-    fn format_pending_at(&self, text: &str, depth: u64, mut index: usize) -> LeafResult<String> {
-        for _ in 0..self.nodes.len() {
-            match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
-                NativeDebugNode::Redacted => return Ok("[redacted]".to_owned()),
-                NativeDebugNode::Alias(base) => index = *base,
-                _ => return format_pending_value(text, depth),
-            }
-        }
-        Err(INVALID_TRACE_LABEL)
-    }
-
-    fn format_value(
-        &self,
-        values: &NativeValues,
-        bits: u64,
-        index: usize,
-        depth: u32,
-    ) -> LeafResult<String> {
-        if depth >= 128 {
-            return Err(INVALID_TRACE_LABEL);
-        }
-        let child = depth + 1;
-        Ok(match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
-            NativeDebugNode::Uninhabited => return Err(INVALID_TRACE_LABEL),
-            NativeDebugNode::Redacted => "[redacted]".to_owned(),
-            NativeDebugNode::Interface => {
-                let field = values.struct_field(bits, 1)?;
-                let layout_handle = values.struct_field(bits, 2)?.bits;
-                let layout = NativeDebugLayout::parse(values.bytes(layout_handle)?)?;
-                let text = layout.format_value(values, field.bits, layout.root, child)?;
-                let text = layout.format_pending_at(&text, field.pending_depth, layout.root)?;
-                layout.format_pending_at(
-                    &text,
-                    values
-                        .structs
-                        .get(&bits)
-                        .ok_or(INVALID_STRUCT)?
-                        .pending_depth,
-                    layout.root,
-                )?
-            }
-            NativeDebugNode::Primitive(kind) => values.debug_value(bits, *kind)?,
-            NativeDebugNode::Nothing => format_nothing(bits)?,
-            NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
-            NativeDebugNode::Alias(base) => return self.format_value(values, bits, *base, child),
-            NativeDebugNode::Capability(name) => values.debug_capability(bits, name)?,
-            NativeDebugNode::Function => {
-                let label = values.function_debug_label(bits)?;
-                let depth = values
-                    .structs
-                    .get(&bits)
-                    .ok_or(INVALID_STRUCT)?
-                    .pending_depth;
-                format_pending_value(label, depth)?
-            }
-            NativeDebugNode::Actor => {
-                let ordinal = values.actors.get(&bits).ok_or(INVALID_ACTOR)?;
-                let depth = values
-                    .structs
-                    .get(&bits)
-                    .ok_or(INVALID_ACTOR)?
-                    .pending_depth;
-                format_pending_value(&format!("actor#{ordinal}"), depth)?
-            }
-            NativeDebugNode::TypeConstruction => {
-                let builder = values.builders.get(&bits).ok_or(INVALID_CONSTRUCTION)?;
-                let record = values.structs.get(&bits).ok_or(INVALID_CONSTRUCTION)?;
-                let mut result = format!("TypeConstruction[{}", builder.owner);
-                if let Some(variant) = &builder.variant {
-                    result.push('.');
-                    result.push_str(variant);
-                }
-                if let Some(state) = &builder.state {
-                    result.push('@');
-                    result.push_str(state);
-                }
-                result.push_str("](");
-                for (position, &field_index) in builder.put_order.iter().enumerate() {
-                    let field = record
-                        .fields
-                        .get(field_index + builder.field_offset)
-                        .and_then(Option::as_ref)
-                        .ok_or(INVALID_CONSTRUCTION)?;
-                    let name = builder
-                        .field_names
-                        .get(field_index)
-                        .ok_or(INVALID_CONSTRUCTION)?;
-                    let layout = builder
-                        .field_debug_layouts
-                        .get(field_index)
-                        .ok_or(INVALID_CONSTRUCTION)?;
-                    let field_layout = NativeDebugLayout::parse(layout)?;
-                    if position > 0 {
-                        result.push_str(", ");
-                    }
-                    result.push_str(name);
-                    result.push_str(": ");
-                    let field_value =
-                        field_layout.format_value(values, field.bits, field_layout.root, child)?;
-                    result.push_str(&field_layout.format_pending_at(
-                        &field_value,
-                        field.pending_depth,
-                        field_layout.root,
-                    )?);
-                }
-                result.push(')');
-                format_pending_value(&result, record.pending_depth)?
-            }
-            NativeDebugNode::List(element) => {
-                let list = values.lists.get(&bits).ok_or(INVALID_LIST)?;
-                let mut result = String::from("list(");
-                for (position, item) in list.elements.iter().enumerate() {
-                    if position > 0 {
-                        result.push_str(", ");
-                    }
-                    let value =
-                        self.format_value(values, item.ok_or(INVALID_LIST)?, *element, child)?;
-                    let depth = list
-                        .element_pending_depths
-                        .get(&position)
-                        .copied()
-                        .unwrap_or(0);
-                    result.push_str(&self.format_pending_at(&value, depth, *element)?);
-                }
-                result.push(')');
-                format_pending_value(&result, list.pending_depth)?
-            }
-            NativeDebugNode::Set(element) => {
-                let set = values.sets.get(&bits).ok_or(INVALID_SET)?;
-                let mut result = String::from("set(");
-                for (position, item) in set.elements.iter().enumerate() {
-                    if position > 0 {
-                        result.push_str(", ");
-                    }
-                    let value =
-                        self.format_value(values, item.ok_or(INVALID_SET)?, *element, child)?;
-                    let depth = set
-                        .element_pending_depths
-                        .get(&position)
-                        .copied()
-                        .unwrap_or(0);
-                    result.push_str(&self.format_pending_at(&value, depth, *element)?);
-                }
-                result.push(')');
-                format_pending_value(&result, set.pending_depth)?
-            }
-            NativeDebugNode::Map(key, value) => {
-                let map = values.maps.get(&bits).ok_or(INVALID_MAP)?;
-                let mut result = String::from("map(");
-                for (position, entry) in map.entries.iter().enumerate() {
-                    let entry = entry.ok_or(INVALID_MAP)?;
-                    if entry.key_taken {
-                        return Err(INVALID_MAP);
-                    }
-                    if position > 0 {
-                        result.push_str(", ");
-                    }
-                    let key_value = self.format_value(values, entry.key, *key, child)?;
-                    result.push_str(&self.format_pending_at(
-                        &key_value,
-                        entry.key_pending_depth,
-                        *key,
-                    )?);
-                    result.push_str(": ");
-                    let mapped_value = self.format_value(values, entry.value, *value, child)?;
-                    result.push_str(&self.format_pending_at(
-                        &mapped_value,
-                        entry.value_pending_depth,
-                        *value,
-                    )?);
-                }
-                result.push(')');
-                format_pending_value(&result, map.pending_depth)?
-            }
-            NativeDebugNode::Optional(element) => {
-                let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
-                let text = match sum.tag {
-                    SUM_FAILURE => "none".to_owned(),
-                    SUM_SUCCESS => {
-                        let payload = self.format_value(values, sum.bits, *element, child)?;
-                        let payload =
-                            self.format_pending_at(&payload, sum.payload_pending_depth, *element)?;
-                        format!("some({payload})")
-                    }
-                    _ => return Err(INVALID_SUM),
-                };
-                format_pending_value(&text, sum.pending_depth)?
-            }
-            NativeDebugNode::Result(ok, error) => {
-                let sum = values.sums.get(&bits).ok_or(INVALID_SUM)?;
-                let text = match sum.tag {
-                    SUM_FAILURE => {
-                        let payload = self.format_value(values, sum.bits, *error, child)?;
-                        let payload =
-                            self.format_pending_at(&payload, sum.payload_pending_depth, *error)?;
-                        format!("fail({payload})")
-                    }
-                    SUM_SUCCESS => {
-                        let payload = self.format_value(values, sum.bits, *ok, child)?;
-                        let payload =
-                            self.format_pending_at(&payload, sum.payload_pending_depth, *ok)?;
-                        format!("ok({payload})")
-                    }
-                    _ => return Err(INVALID_SUM),
-                };
-                format_pending_value(&text, sum.pending_depth)?
-            }
-            NativeDebugNode::Record(name, fields) => {
-                let record = values.structs.get(&bits).ok_or(INVALID_STRUCT)?;
-                if record.fields.len() != fields.len() {
-                    return Err(INVALID_STRUCT);
-                }
-                let mut result = format!("{name}(");
-                for (position, (field_name, field_type)) in fields.iter().enumerate() {
-                    if position > 0 {
-                        result.push_str(", ");
-                    }
-                    let field = record.fields[position].ok_or(INVALID_STRUCT)?;
-                    result.push_str(field_name);
-                    result.push_str(": ");
-                    let value = self.format_value(values, field.bits, *field_type, child)?;
-                    result.push_str(&self.format_pending_at(
-                        &value,
-                        field.pending_depth,
-                        *field_type,
-                    )?);
-                }
-                result.push(')');
-                format_pending_value(&result, record.pending_depth)?
-            }
-            NativeDebugNode::Enum(name, variants) | NativeDebugNode::Machine(name, variants) => {
-                let record = values.structs.get(&bits).ok_or(INVALID_STRUCT)?;
-                let tag = usize::try_from(
-                    record
-                        .fields
-                        .first()
-                        .copied()
-                        .flatten()
-                        .ok_or(INVALID_STRUCT)?
-                        .bits,
-                )
-                .map_err(|_| INVALID_STRUCT)?;
-                let (variant_name, fields) = variants.get(tag).ok_or(INVALID_STRUCT)?;
-                if record.fields.len() != fields.len() + 1 {
-                    return Err(INVALID_STRUCT);
-                }
-                let separator = if matches!(self.nodes.get(index), Some(NativeDebugNode::Enum(..)))
-                {
-                    "."
-                } else {
-                    "@"
-                };
-                let mut result = format!("{name}{separator}{variant_name}");
-                if !fields.is_empty() {
-                    result.push('(');
-                    for (position, field_type) in fields.iter().enumerate() {
-                        if position > 0 {
-                            result.push_str(", ");
-                        }
-                        let field = record.fields[position + 1].ok_or(INVALID_STRUCT)?;
-                        let value = self.format_value(values, field.bits, *field_type, child)?;
-                        result.push_str(&self.format_pending_at(
-                            &value,
-                            field.pending_depth,
-                            *field_type,
-                        )?);
-                    }
-                    result.push(')');
-                }
-                format_pending_value(&result, record.pending_depth)?
-            }
-        })
     }
 
     fn equal_value(
@@ -1625,8 +1354,8 @@ impl NativeValues {
         ) {
             return Err(INVALID_STRUCT);
         }
-        let left = layout.format_value(self, left, layout.root, 0)?;
-        let right = layout.format_value(self, right, layout.root, 0)?;
+        let left = layout.format_value(self, left, layout.root)?;
+        let right = layout.format_value(self, right, layout.root)?;
         let operation = if not_equal == 0 { "Eq" } else { "NotEq" };
         self.dynamic_failure_message =
             Some(format!("unsupported binary operation: {left} {operation} {right}").into_bytes());
@@ -1759,7 +1488,7 @@ impl NativeValues {
         layout: &[u8],
     ) -> LeafResult<u32> {
         let layout = NativeDebugLayout::parse(layout)?;
-        let value = layout.format_value(self, bits, layout.root, 0)?;
+        let value = layout.format_value(self, bits, layout.root)?;
         let text = &mut self.strings.get_mut(&builder).ok_or(INVALID_HANDLE)?.text;
         text.push_str(label);
         text.push_str(&value);
@@ -4027,7 +3756,7 @@ impl NativeValues {
             let debug = NativeDebugLayout::parse(metadata_debug_layout)
                 .map_err(|_| INVALID_CONSTRUCTION_LAYOUT)?;
             let value = debug
-                .format_value(self, metadata, debug.root, 0)
+                .format_value(self, metadata, debug.root)
                 .map_err(|_| INVALID_CONSTRUCTION)?;
             let (caller, kind) = if machine {
                 ("type.construct_machine_start", "TypeMachineState")
@@ -4260,7 +3989,7 @@ impl NativeValues {
             root: 0,
             nodes: vec![NativeDebugNode::TypeConstruction],
         };
-        let value = layout.format_value(self, builder, 0, 0)?;
+        let value = layout.format_value(self, builder, 0)?;
         self.dynamic_failure_message = Some(
             format!("type.{operation}: first argument must be TypeConstruction, got {value}")
                 .into_bytes(),
@@ -4717,7 +4446,7 @@ impl NativeValues {
             return Ok(None);
         }
         let layout = NativeDebugLayout::parse(metadata_layout)?;
-        let value = layout.format_value(self, actual, layout.root, 0)?;
+        let value = layout.format_value(self, actual, layout.root)?;
         Ok(Some(format!(
             "{caller}: second argument must be TypeField, got {value}"
         )))
@@ -4740,7 +4469,7 @@ impl NativeValues {
         }
         let layout = NativeDebugLayout::parse(debug_layout).map_err(|_| INVALID_REFLECTED_OWNER)?;
         let actual = layout
-            .format_value(self, value, layout.root, 0)
+            .format_value(self, value, layout.root)
             .map_err(|_| INVALID_REFLECTED_OWNER)?;
         let (caller, expected) = match kind {
             0 => ("type.variant_value", "enum"),
@@ -6801,15 +6530,15 @@ mod tests {
         let present = values.sum(SUM_SUCCESS, 0, false).unwrap();
         let text = values.insert("before".to_owned()).unwrap();
         assert_eq!(
-            list_layout.format_value(&values, empty_list, 1, 0),
+            list_layout.format_value(&values, empty_list, 1),
             Ok("list()".into())
         );
         assert_eq!(
-            optional_layout.format_value(&values, absent, 2, 0),
+            optional_layout.format_value(&values, absent, 2),
             Ok("none".into())
         );
         assert_eq!(
-            optional_layout.format_value(&values, present, 2, 0),
+            optional_layout.format_value(&values, present, 2),
             Err(INVALID_TRACE_LABEL)
         );
         values
@@ -6891,15 +6620,22 @@ mod tests {
             1,
         ))
         .unwrap();
-        let values = NativeValues::default();
+        let mut values = NativeValues::default();
+        let list = values.new_list(false).unwrap();
+        let mut list_layout = layout.clone();
+        list_layout.nodes.push(NativeDebugNode::List(layout.root));
+        list_layout.root = list_layout.nodes.len() - 1;
         for bits in [0, 4321, u64::MAX] {
             assert_eq!(
-                layout.format_value(&values, bits, layout.root, 0),
+                layout.format_value(&values, bits, layout.root),
                 Ok("[redacted]".to_owned())
             );
+            let contents = values.lists.get_mut(&list).unwrap();
+            contents.elements = vec![Some(bits)];
+            contents.element_pending_depths.insert(0, u64::MAX);
             assert_eq!(
-                layout.format_pending_at("ignored", u64::MAX, layout.root),
-                Ok("[redacted]".to_owned())
+                list_layout.format_value(&values, list, list_layout.root),
+                Ok("list([redacted])".to_owned())
             );
         }
         assert_eq!(
@@ -6907,13 +6643,23 @@ mod tests {
             Err(INVALID_STRUCT)
         );
         let public = NativeDebugLayout {
-            root: 0,
-            nodes: vec![NativeDebugNode::Nothing],
+            root: 1,
+            nodes: vec![
+                NativeDebugNode::Primitive(NativeSortKind::String as u32),
+                NativeDebugNode::List(0),
+            ],
         };
+        let marker = values.insert("[redacted]".into()).unwrap();
+        let contents = values.lists.get_mut(&list).unwrap();
+        contents.elements = vec![Some(marker)];
+        contents.element_pending_depths.insert(0, 2);
         assert_eq!(
-            public.format_pending_at("[redacted]", 2, 0),
-            Ok("pending(pending([redacted]))".to_owned())
+            public.format_value(&values, list, public.root),
+            Ok("list(pending(pending([redacted])))".to_owned())
         );
+        values.drop_value(list).unwrap();
+        values.drop_value(marker).unwrap();
+        assert!(values.is_empty());
     }
 
     #[test]
@@ -6977,7 +6723,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            layout.format_value(&values, joined, 0, 0),
+            layout.format_value(&values, joined, 0),
             Ok("[redacted]".into())
         );
         for handle in [source, boxed, clone, joined] {
@@ -7237,16 +6983,10 @@ mod tests {
             0,
         ))
         .unwrap();
-        assert_eq!(
-            layout.format_value(&values, first, 0, 0).unwrap(),
-            "actor#0"
-        );
-        assert_eq!(
-            layout.format_value(&values, second, 0, 0).unwrap(),
-            "actor#1"
-        );
+        assert_eq!(layout.format_value(&values, first, 0).unwrap(), "actor#0");
+        assert_eq!(layout.format_value(&values, second, 0).unwrap(), "actor#1");
         assert!(matches!(
-            layout.format_value(&values, u64::MAX, 0, 0),
+            layout.format_value(&values, u64::MAX, 0),
             Err(INVALID_ACTOR)
         ));
         values.release_actors().unwrap();
@@ -7378,7 +7118,7 @@ mod tests {
         );
         let layout = NativeDebugLayout::parse(&bytes).unwrap();
         assert_eq!(
-            layout.format_value(&values, list, layout.root, 0),
+            layout.format_value(&values, list, layout.root),
             Ok("list(some(function(value)))".into())
         );
         assert_eq!(
@@ -7718,17 +7458,14 @@ mod tests {
                 values.debug_value(depth, DEBUG_NOTHING_KIND),
                 Ok(expected.into())
             );
-            assert_eq!(
-                layout.format_value(&values, depth, 0, 0),
-                Ok(expected.into())
-            );
+            assert_eq!(layout.format_value(&values, depth, 0), Ok(expected.into()));
         }
         let left = values.new_list(false).unwrap();
         let right = values.new_list(false).unwrap();
         values.lists.get_mut(&left).unwrap().elements = vec![Some(0), Some(2)];
         values.lists.get_mut(&right).unwrap().elements = vec![Some(0), Some(2)];
         assert_eq!(
-            layout.format_value(&values, left, layout.root, 0),
+            layout.format_value(&values, left, layout.root),
             Ok("list(nothing, pending(pending(nothing)))".into())
         );
         assert_eq!(

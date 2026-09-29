@@ -4364,6 +4364,27 @@ fn native_actor_message_arguments_nested_handlers_match_interpreter() {
 }
 
 #[test]
+fn native_deep_debug_values_match_interpreter_without_a_fixed_depth_limit() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_deep_values.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("deep.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).unwrap();
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert!(expected.stdout.contains("app.Chain.end"));
+    assert!(debug.contains("[redacted]"));
+    assert!(!debug.contains("deep-secret-token"));
+    let binary = directory.path().join("deep.exe");
+    build_host_executable(&source, launcher(), &binary).unwrap();
+    fs::remove_file(&source).unwrap();
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(actual.stderr, debug.as_bytes());
+}
+
+#[test]
 fn native_debug_print_argument_failure_produces_no_partial_output() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("print_failure.jett");
