@@ -1,0 +1,16 @@
+function decorate(value: string) returns string:
+    return "<{value}>"
+function describe[T]() returns string:
+    return "type:{type.name[T]()}"
+function nested_argument[T]() returns string:
+    return decorate(type.name[T]())
+function make[T](prefix: string) returns function() returns string:
+    return function() returns string: return "{prefix}:{type.name[T]()}"
+function main() returns nothing:
+    println(describe[int64]())
+    println(nested_argument[string]())
+    function() returns string live = make[int64]("live")
+    function() returns string baked = comptime make[string]("baked")
+    println(live())
+    println(baked())
+    return nothing

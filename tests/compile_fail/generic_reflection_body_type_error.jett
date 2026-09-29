@@ -1,0 +1,6 @@
+# ERROR: E0305
+function broken[T]() returns int64:
+    return "type:{type.name[T]()}"
+function main() returns nothing:
+    println(broken[int64]())
+    return nothing

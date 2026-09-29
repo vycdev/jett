@@ -330,8 +330,8 @@ compile_pass_fixture!(
     compile_pass_generic_reflection_local_fact_specialization,
     "generic_reflection_local_fact_specialization.jett"
 );
-compile_pass_fixture!(
-    compile_pass_generic_reflection_runtime_guard_deferral,
+compile_fail_fixture!(
+    compile_fail_generic_reflection_runtime_guard_deferral,
     "generic_reflection_runtime_guard_deferral.jett"
 );
 compile_pass_fixture!(
@@ -3000,4 +3000,9 @@ fn stdlib_loaded_for_test_file() {
 compile_fail_fixture!(
     compile_fail_generic_method_owner,
     "generic_method_owner.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_generic_reflection_body_type_error,
+    "generic_reflection_body_type_error.jett"
 );

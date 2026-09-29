@@ -6286,11 +6286,8 @@ impl<'a> TypeChecker<'a> {
         let uses_type_param_reflection = self.generic_function_uses_type_param_reflection(func);
         let branch_specializable = uses_type_param_reflection
             && self.generic_function_reflection_is_branch_specializable(func);
-        let runtime_lowerable = uses_type_param_reflection
-            && self.generic_function_reflection_is_runtime_lowerable(func);
-        if uses_type_param_reflection && !branch_specializable && !runtime_lowerable {
-            return;
-        }
+        // Every concrete invocation needs a checked body. Reflection placement
+        // controls proof specialization, never whether ordinary typing runs.
         let specialize_reflection_branches = branch_specializable || !param_facts.is_empty();
 
         let definition = self.declaration_def_id(func.name.span);
@@ -6855,137 +6852,6 @@ impl<'a> TypeChecker<'a> {
             .map(|param| param.name.clone())
             .collect::<HashSet<_>>();
         self.block_reflection_is_branch_specializable(&func.body, &type_params)
-    }
-
-    /// A deliberately small runtime-reflection slice that can be checked
-    /// concretely without turning runtime values into type proofs.
-    ///
-    /// `type.name[T]()` is permitted only as the direct returned value. The
-    /// metadata/read pair used by the flat serializer remains runtime checked:
-    /// `type.fields[T]()` may initialize a local and `type.field_value[T, U]()`
-    /// may initialize a concrete `U`. In particular, branching on a type-name
-    /// string is not included and cannot authorize a cast to or from `T`.
-    fn generic_function_reflection_is_runtime_lowerable(&self, func: &FunctionDef) -> bool {
-        let type_params = func
-            .type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect::<HashSet<_>>();
-        self.block_reflection_is_runtime_lowerable(&func.body, &type_params)
-    }
-
-    fn block_reflection_is_runtime_lowerable(
-        &self,
-        block: &Block,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        block
-            .stmts
-            .iter()
-            .all(|stmt| self.stmt_reflection_is_runtime_lowerable(stmt, type_params))
-    }
-
-    fn stmt_reflection_is_runtime_lowerable(
-        &self,
-        stmt: &Stmt,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        if !self.stmt_uses_type_param_reflection(stmt, type_params) {
-            return true;
-        }
-        match stmt {
-            Stmt::VarDecl(decl) => self.direct_runtime_reflection_call_is_one_of(
-                &decl.value,
-                type_params,
-                &[
-                    "type.fields",
-                    "type.field_value",
-                    "type.bitfield_fields",
-                    "type.bitfield_layout",
-                    "type.machine_layout",
-                    "type.machine_states",
-                    "type.machine_transitions",
-                    "type.variants",
-                    "type.primitive_tag",
-                ],
-            ),
-            Stmt::Return(ret) => ret.value.as_ref().is_some_and(|value| {
-                self.direct_runtime_reflection_call_is_one_of(value, type_params, &["type.name"])
-                    || self.direct_runtime_reflection_comparison(value, type_params)
-            }),
-            Stmt::If(if_stmt) => {
-                !self.expr_uses_type_param_reflection(&if_stmt.condition, type_params)
-                    && self.block_reflection_is_runtime_lowerable(&if_stmt.then_block, type_params)
-                    && if_stmt.else_ifs.iter().all(|(condition, block)| {
-                        !self.expr_uses_type_param_reflection(condition, type_params)
-                            && self.block_reflection_is_runtime_lowerable(block, type_params)
-                    })
-                    && if_stmt.else_block.as_ref().is_none_or(|block| {
-                        self.block_reflection_is_runtime_lowerable(block, type_params)
-                    })
-            }
-            Stmt::For(for_stmt) => {
-                !self.expr_uses_type_param_reflection(&for_stmt.iterable, type_params)
-                    && self.block_reflection_is_runtime_lowerable(&for_stmt.body, type_params)
-            }
-            Stmt::While(while_stmt) => {
-                !self.expr_uses_type_param_reflection(&while_stmt.condition, type_params)
-                    && self.block_reflection_is_runtime_lowerable(&while_stmt.body, type_params)
-            }
-            Stmt::Match(match_stmt) => {
-                !self.expr_uses_type_param_reflection(&match_stmt.expr, type_params)
-                    && match_stmt.arms.iter().all(|arm| {
-                        self.block_reflection_is_runtime_lowerable(&arm.body, type_params)
-                    })
-            }
-            Stmt::Assign(_)
-            | Stmt::Respond(_)
-            | Stmt::ComptimeTypeBind(_)
-            | Stmt::Expr(_)
-            | Stmt::Assert(_)
-            | Stmt::Trace(_)
-            | Stmt::Breakpoint(_)
-            | Stmt::Use(_)
-            | Stmt::Break(_)
-            | Stmt::Continue(_) => false,
-        }
-    }
-
-    fn direct_runtime_reflection_call_is_one_of(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-        allowed: &[&str],
-    ) -> bool {
-        if let Expr::Paren(inner, _) | Expr::Handle(inner, _, _, _) = expr {
-            return self.direct_runtime_reflection_call_is_one_of(inner, type_params, allowed);
-        }
-        let Expr::GenericCall(callee, type_args, args, _) = expr else {
-            return false;
-        };
-        self.resolved_expr_name(callee)
-            .is_some_and(|name| allowed.contains(&name.as_str()))
-            && type_args
-                .iter()
-                .any(|type_arg| Self::type_expr_mentions_type_param(type_arg, type_params))
-            && args
-                .iter()
-                .all(|arg| !self.expr_uses_type_param_reflection(&arg.value, type_params))
-    }
-
-    fn direct_runtime_reflection_comparison(
-        &self,
-        expr: &Expr,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        let Expr::Binary(left, BinOp::Eq | BinOp::NotEq, right, _) = expr else {
-            return false;
-        };
-        let allowed = ["type.kind_tag", "type.primitive_tag", "type.has_secret"];
-        (self.direct_runtime_reflection_call_is_one_of(left, type_params, &allowed)
-            && !self.expr_uses_type_param_reflection(right, type_params))
-            || (self.direct_runtime_reflection_call_is_one_of(right, type_params, &allowed)
-                && !self.expr_uses_type_param_reflection(left, type_params))
     }
 
     fn block_reflection_is_branch_specializable(

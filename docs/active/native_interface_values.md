@@ -78,12 +78,6 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Generic body checking still skips some reflection expression placements.
-  Eager checking fixes interpolation and closure bodies but exposes the existing
-  `generic_reflection_runtime_guard_deferral` fixture. Whether an invalid
-  `comptime type` lookup behind an ordinary runtime guard is diagnosed at
-  compile time or fails only when executed is pending a user decision.
-
 - Audit reflected-loop callback bindings. Generic type arguments, alias
   reflection metadata, and reflection-valued parameter facts are retained.
 - Audit scoped expression facts in reflected-loop expansions and interpreter
@@ -202,3 +196,11 @@ well as type arguments and alias metadata. The linked
 signature, and type arguments using `TypeKind`, `TypePrimitive`, and both kind
 and primitive facts from `TypeInfo` parameters. Captured ordinary values survive
 selection, and moving a reflection parameter before closure creation is valid.
+
+Every concrete generic invocation is now checked regardless of where reflection
+expressions occur. Interpolation, nested call arguments, and runtime or baked
+closures retain checked bodies for native lowering. The user selected a
+compile-time error for invalid `comptime type` bindings behind runtime guards;
+`generic_reflection_runtime_guard_deferral` is now a compile-fail fixture.
+`generic_reflection_body_type_error` rejects a mismatched generic return type,
+and `generic_reflection_expressions` compares interpreter and native output.

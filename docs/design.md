@@ -7538,6 +7538,14 @@ External dependencies live in the `deps/` directory as vendored `.jett` files tr
 
 ## Generic Reflection Specialization Facts
 
+Every concrete generic invocation must have a checked body, including reflection
+inside interpolation, call arguments, and closures. Reflection placement never
+allows ordinary type checking to be skipped. A `comptime type` binding must be
+valid during compilation even behind an ordinary runtime condition: for example,
+`type.arg[string](0)` is invalid regardless of the condition's runtime value.
+Only supported reflection specialization may exclude an unreachable branch.
+
+
 Generic casts may be justified only by reflection evidence that stays visibly
 tied to the reflected type. Direct `TypeKind` / `TypePrimitive` comparisons,
 immutable locals carrying those tags, typed helper parameters receiving them

@@ -1147,6 +1147,13 @@ The comptime interpreter supports basic type-level reflection for generic type p
 
 These are built-in operations of the comptime interpreter that query the compiler's type table. They enable `if comptime` branching on type properties.
 
+Every concrete generic invocation must have a checked body, including reflection
+inside interpolation, call arguments, and closures. Reflection placement never
+allows ordinary type checking to be skipped. A `comptime type` binding must be
+valid during compilation even behind an ordinary runtime condition: for example,
+`type.arg[string](0)` is invalid regardless of the condition's runtime value.
+Only supported reflection specialization may exclude an unreachable branch.
+
 Generic specialization uses only reflection facts that remain structurally
 tied to the reflected type: direct `TypeKind` / `TypePrimitive` comparisons,
 immutable locals carrying those tags, typed helper parameters receiving them
