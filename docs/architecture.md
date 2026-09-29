@@ -1182,6 +1182,12 @@ Known selections are recorded inside inline functions and are independent of
 where other reflection expressions occur in the body. When no selection is
 known, the checker checks all branches, including their scoped type bindings;
 there is no separate placement restriction on otherwise valid bindings.
+Native reflected-type dispatch serializes `TypeInfo` identities using an
+explicit traversal stack. Finite argument and alias trees have no fixed runtime
+depth cutoff; active-path checks reject cyclic metadata while permitting shared
+children. Reflection dispatch retains alias identities, and canonical identity
+matching keeps its existing alias erasure. Both use the same identity encoding
+as before, without runtime source lookup or interpretation.
 Predicate calls that return `bool` and reflection comparisons copied into
 arbitrary `bool` locals do not carry type evidence. This conservative boundary
 prevents facts from being detached from their generic parameter or from hiding

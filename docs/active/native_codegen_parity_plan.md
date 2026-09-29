@@ -1699,3 +1699,13 @@ cover deep values, unequal leaves and lengths, pending nodes, NaN, and signed
 zero after source removal. Runtime tests cover 4,096 levels and malformed cycles.
 This does not add equality for user structs, actors, interfaces, or direct
 collection operands; their recorded policy decisions remain open.
+
+### Deep reflected type identities
+
+A scoped reflected binding for a field with 70 nested list arguments succeeded
+in the interpreter and failed native dispatch with invalid `TypeInfo`. Runtime
+identity construction now uses an explicit stack instead of a 64-level recursion
+limit, retaining the existing identity encoding and alias preservation/erasure
+modes. Linked debug/release tests cover both direct and aliased deep fields;
+runtime tests cover 4,096 alias levels, shared subtrees, cycles, and malformed
+arguments. This changes no language binding or specialization rule.

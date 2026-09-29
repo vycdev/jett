@@ -7629,6 +7629,9 @@ typecheck. An unknown guard does not itself make a binding invalid or provide
 evidence for a cast. Only supported reflection specialization may exclude an
 unreachable branch.
 
+Reflected type bindings preserve supported finite nested type arguments and
+alias identities at runtime. Native dispatch must not reject a checked type
+solely because its metadata exceeds a backend traversal depth limit.
 
 Generic casts may be justified only by reflection evidence that stays visibly
 tied to the reflected type. Direct `TypeKind` / `TypePrimitive` comparisons,

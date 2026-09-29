@@ -709,6 +709,13 @@ failure precedence. Pointer identity is never an equality shortcut, so nested
 NaN, signed-zero, pending-depth, and collection-order behavior stays intact.
 This changes no ABI signature and does not add direct collection comparisons.
 
+`TypeInfoMatches` and `TypeInfoReflectionMatches` construct their existing
+length-prefixed identity strings with a work stack. Canonical matching still
+erases aliases; reflection matching preserves them. The previous 64-level
+metadata cutoff is removed for finite trees. Active metadata handles detect
+cycles without rejecting shared argument subtrees, and malformed alias arity,
+secret flags, and missing arguments retain their existing errors.
+
 Bitfield values use the same typed record storage for fields, including owned
 payload fields. Native construction, field projection, clone and cleanup match
 the interpreter in a dedicated fixture. `to_bytes` writes checked field widths,

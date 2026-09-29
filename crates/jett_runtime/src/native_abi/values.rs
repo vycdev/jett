@@ -4322,53 +4322,64 @@ impl NativeValues {
         }
         Ok(index)
     }
-    fn type_info_identity(
-        &self,
-        value: u64,
-        depth: usize,
-        preserve_aliases: bool,
-    ) -> LeafResult<String> {
-        if depth >= 64 {
-            return Err(INVALID_TYPE_INFO);
+    fn type_info_identity(&self, value: u64, preserve_aliases: bool) -> LeafResult<String> {
+        enum Frame {
+            Enter(Option<u64>),
+            Leave(u64),
         }
-        let type_name = self.text(self.struct_field(value, 0)?.bits)?;
-        let kind = self.text(self.struct_field(value, 1)?.bits)?;
-        let secret = self.struct_field(value, 4)?.bits;
-        if secret > 1 {
-            return Err(INVALID_TYPE_INFO);
-        }
-        let arguments = self
-            .lists
-            .get(&self.struct_field(value, 5)?.bits)
-            .ok_or(INVALID_TYPE_INFO)?;
-        if !preserve_aliases && kind == "alias" {
-            let [Some(base)] = arguments.elements.as_slice() else {
-                return Err(INVALID_TYPE_INFO);
+        let mut work = vec![Frame::Enter(Some(value))];
+        let mut active = std::collections::HashSet::new();
+        let mut identity = String::new();
+        while let Some(frame) = work.pop() {
+            let value = match frame {
+                Frame::Leave(value) => {
+                    active.remove(&value);
+                    continue;
+                }
+                Frame::Enter(value) => value.ok_or(INVALID_TYPE_INFO)?,
             };
-            return self.type_info_identity(*base, depth + 1, false);
-        }
-        let name = match kind {
-            "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
-            "struct" if !arguments.elements.is_empty() => type_name
-                .split_once('[')
-                .map_or(type_name, |(base, _)| base),
-            _ => type_name,
-        };
-        let mut identity = format!(
-            "{}:{}{}:{}{}:{}",
-            kind.len(),
-            kind,
-            name.len(),
-            name,
-            secret,
-            arguments.elements.len(),
-        );
-        for argument in &arguments.elements {
-            identity.push_str(&self.type_info_identity(
-                argument.ok_or(INVALID_TYPE_INFO)?,
-                depth + 1,
-                preserve_aliases,
-            )?);
+            if !active.insert(value) {
+                return Err(INVALID_TYPE_INFO);
+            }
+            work.push(Frame::Leave(value));
+            let type_name = self.text(self.struct_field(value, 0)?.bits)?;
+            let kind = self.text(self.struct_field(value, 1)?.bits)?;
+            let secret = self.struct_field(value, 4)?.bits;
+            if secret > 1 {
+                return Err(INVALID_TYPE_INFO);
+            }
+            let arguments = self
+                .lists
+                .get(&self.struct_field(value, 5)?.bits)
+                .ok_or(INVALID_TYPE_INFO)?;
+            if !preserve_aliases && kind == "alias" {
+                let [Some(base)] = arguments.elements.as_slice() else {
+                    return Err(INVALID_TYPE_INFO);
+                };
+                work.push(Frame::Enter(Some(*base)));
+                continue;
+            }
+            let name = match kind {
+                "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
+                "struct" if !arguments.elements.is_empty() => type_name
+                    .split_once('[')
+                    .map_or(type_name, |(base, _)| base),
+                _ => type_name,
+            };
+            let prefix = format!(
+                "{}:{}{}:{}{}:{}",
+                kind.len(),
+                kind,
+                name.len(),
+                name,
+                secret,
+                arguments.elements.len()
+            );
+            identity.try_reserve(prefix.len()).map_err(|_| EXHAUSTED)?;
+            identity.push_str(&prefix);
+            for argument in arguments.elements.iter().rev() {
+                work.push(Frame::Enter(*argument));
+            }
         }
         Ok(identity)
     }
@@ -5192,12 +5203,12 @@ leaves! {
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
             let expected = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(expected, length) } };
-            Ok(u32::from(s.type_info_identity(actual, 0, false)?.as_bytes() == expected)) };
+            Ok(u32::from(s.type_info_identity(actual, false)?.as_bytes() == expected)) };
     TypeInfoReflectionMatches, jett_rt_v1_type_info_reflection_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
             let expected = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(expected, length) } };
-            Ok(u32::from(s.type_info_identity(actual, 0, true)?.as_bytes() == expected)) };
+            Ok(u32::from(s.type_info_identity(actual, true)?.as_bytes() == expected)) };
     TypeArgIndex, jett_rt_v1_type_arg_index, false, (index: i64 => I64, count: u64 => I64), u64 => I64,
         |_s| { let index = u64::try_from(index).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
             if index >= count { return Err(INVALID_TYPE_ARG_INDEX); }
@@ -6242,6 +6253,95 @@ mod tests {
             bytes.extend_from_slice(node);
         }
         bytes
+    }
+
+    fn identity_test_info(
+        values: &mut NativeValues,
+        name: &str,
+        kind: &str,
+        args: Vec<u64>,
+        handles: &mut Vec<u64>,
+    ) -> u64 {
+        let name = values.insert(name.into()).unwrap();
+        let kind = values.insert(kind.into()).unwrap();
+        let arguments = values.new_list(false).unwrap();
+        values.lists.get_mut(&arguments).unwrap().elements = args.into_iter().map(Some).collect();
+        let info = values.new_struct(6).unwrap();
+        for (index, bits) in [(0, name), (1, kind), (4, 0), (5, arguments)] {
+            values.structs.get_mut(&info).unwrap().fields[index] = Some(NativeField {
+                bits,
+                pending_depth: 0,
+                owned: false,
+            });
+        }
+        handles.extend([name, kind, arguments, info]);
+        info
+    }
+
+    #[test]
+    fn deep_type_info_identity_preserves_aliases_and_shared_children() {
+        let mut values = NativeValues::default();
+        let mut handles = Vec::new();
+        let leaf = identity_test_info(&mut values, "int64", "primitive", vec![], &mut handles);
+        let mut current = leaf;
+        for _ in 0..4096 {
+            current =
+                identity_test_info(&mut values, "Alias", "alias", vec![current], &mut handles);
+        }
+        assert_eq!(
+            values.type_info_identity(current, false),
+            Ok("9:primitive5:int640:0".into())
+        );
+        let preserved = format!("{}9:primitive5:int640:0", "5:alias5:Alias0:1".repeat(4096));
+        assert_eq!(values.type_info_identity(current, true), Ok(preserved));
+        let pair = identity_test_info(
+            &mut values,
+            "unused",
+            "map",
+            vec![current, current],
+            &mut handles,
+        );
+        assert_eq!(
+            values.type_info_identity(pair, false),
+            Ok("3:map0:0:29:primitive5:int640:09:primitive5:int640:0".into())
+        );
+        for handle in handles {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn type_info_identity_rejects_cycles_and_malformed_aliases() {
+        let mut values = NativeValues::default();
+        let mut handles = Vec::new();
+        let alias = identity_test_info(&mut values, "Alias", "alias", vec![], &mut handles);
+        assert_eq!(
+            values.type_info_identity(alias, false),
+            Err(INVALID_TYPE_INFO)
+        );
+        let args = values.struct_field(alias, 5).unwrap().bits;
+        values
+            .lists
+            .get_mut(&args)
+            .unwrap()
+            .elements
+            .push(Some(alias));
+        for preserve in [false, true] {
+            assert_eq!(
+                values.type_info_identity(alias, preserve),
+                Err(INVALID_TYPE_INFO)
+            );
+        }
+        values.lists.get_mut(&args).unwrap().elements[0] = None;
+        assert_eq!(
+            values.type_info_identity(alias, true),
+            Err(INVALID_TYPE_INFO)
+        );
+        for handle in handles {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
     }
 
     fn debug_function_descriptor(values: &mut NativeValues, label: &str, captured: bool) -> u64 {

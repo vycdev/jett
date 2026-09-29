@@ -160,6 +160,11 @@ unequal payloads, different chain lengths, pending wrappers, NaN, and signed zer
 Runtime equality tests cover 4,096 levels, shared children, malformed cycles,
 and short-circuit ordering before invalid later fields. These gates retain the
 existing equality type restrictions and do not resolve the open policies above.
+The deep-reflection dispatch gate checks 70 nested list arguments both directly
+and through a named alias, comparing exact reflected names/kinds in debug and
+release binaries after source removal. Runtime identity tests cover 4,096 alias
+levels with alias preservation and erasure, shared metadata, cycles, and
+malformed alias arguments. These replace the former 64-level identity cutoff.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical
