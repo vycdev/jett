@@ -320,6 +320,23 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_comptime_actor_computation_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/comptime_actor_computation.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("comptime actor computation oracle");
+    assert_eq!(expected.stdout, "live:5\nbaked:5\n");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("comptime_actor_computation.exe");
+    build_host_executable(&fixture, launcher(), &binary)
+        .expect("native comptime actor computation");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_interface_facade_results_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_facade_results.jett");

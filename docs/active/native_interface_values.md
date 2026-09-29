@@ -82,6 +82,9 @@ This does **not** close the full interface gate. Still required:
   different native helpers and lack checked source bodies.
 - Audit remaining comptime combinations; reflected interface fields and lists
   now have record, enum, and machine round-trip coverage.
+- Resolve actor handles escaping comptime evaluation; a saved interpreter actor
+  ID currently has no corresponding runtime instance. See
+  [comptime actor values](../open_design/comptime_actor_values.md).
 - Audit refinement compositions beyond the covered primitive, list, map, set,
   optional, result, record, enum, machine, bitfield, function, builder, and
   capability bases.
