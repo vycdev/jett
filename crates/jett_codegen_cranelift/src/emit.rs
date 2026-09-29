@@ -1998,6 +1998,30 @@ impl Translator<'_, '_> {
                 args,
                 evaluation_order,
             } => self.call(*function, args, evaluation_order, expression),
+            ExpressionKind::InterfaceCoerce(value) => self.interface_coerce(value, expression.ty),
+            ExpressionKind::InterfaceType(value) => {
+                let lowered = self.argument(value, true)?;
+                let handle = self.scalar(lowered, value.span)?;
+                Ok(LoweredValue::Scalar(self.leaf(
+                    NativeLeaf::InterfaceType,
+                    &[handle],
+                    true,
+                )?))
+            }
+            ExpressionKind::RuntimeFailure(message) => {
+                let lowered = self.literal(message)?;
+                let handle = self.scalar(lowered, expression.span)?;
+                self.leaf(NativeLeaf::RuntimeFailMessage, &[handle], true)?;
+                let native_ty = self.required_clif_type(expression.ty, expression.span)?;
+                let zero = if native_ty == ir::types::F32 {
+                    self.builder.ins().f32const(0.0)
+                } else if native_ty == ir::types::F64 {
+                    self.builder.ins().f64const(0.0)
+                } else {
+                    self.builder.ins().iconst(native_ty, 0)
+                };
+                Ok(LoweredValue::Scalar(zero))
+            }
             ExpressionKind::Comptime(_) => {
                 Err(self.unsupported(expression.span, "unbaked comptime expression"))
             }
@@ -2173,6 +2197,7 @@ impl Translator<'_, '_> {
                         | Type::Machine(_)
                         | Type::MachineState { .. }
                         | Type::Function { .. }
+                        | Type::Interface(_)
                         | Type::TypeConstruction
                 ) {
                     let source = self.scalar(lowered, value.span)?;
@@ -2243,6 +2268,7 @@ impl Translator<'_, '_> {
                         | Type::Machine(_)
                         | Type::MachineState { .. }
                         | Type::Function { .. }
+                        | Type::Interface(_)
                         | Type::TypeConstruction
                 ) {
                     let source = self.scalar(result, value.span)?;

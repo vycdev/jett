@@ -296,9 +296,10 @@ an empty object for a valid test-only fixture and is not the inventory gate.
 
 The 2026-09-29 semantic audit found an additional native gap: interface-typed
 runtime values and dynamic interface dispatch. Concrete interface method calls
-already work, but do not cover erased interface parameters, returns, or mixed
-collections. See [native interface values](native_interface_values.md). Passing
-the existing fixture denominators does not close this gap.
+already worked; typed erased boxes and generated dispatch now also cover direct
+parameters, returns, stored values, and mixed literals. Whole-container and
+function conversions remain open. See [native interface values](native_interface_values.md).
+Passing the existing fixture denominators does not close this gap.
 
 `tests/native_parity.json` is the machine-checked fixture inventory. The table
 below records implementation coverage; a row is complete only when its native

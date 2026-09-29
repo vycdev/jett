@@ -17,6 +17,77 @@ fn append_builder_debug_layout(
 }
 
 impl Translator<'_, '_> {
+    pub(super) fn interface_coerce(
+        &mut self,
+        expression: &Expression,
+        target: TypeId,
+    ) -> Result<LoweredValue, CodegenError> {
+        let source = representation_type(self.types, expression.ty);
+        let target_representation = representation_type(self.types, target);
+        if source == target_representation {
+            return self.expression(expression);
+        }
+        if matches!(
+            self.types.resolve(target_representation),
+            Type::Interface(_)
+        ) {
+            let value = self.expression(expression)?;
+            let depth = if source == TypeInterner::NOTHING {
+                self.scalar(value, expression.span)?
+            } else {
+                match value {
+                    LoweredValue::ScalarTask(_, depth) => depth,
+                    _ => self.builder.ins().iconst(ir::types::I64, 0),
+                }
+            };
+            let bits = if source == TypeInterner::NOTHING {
+                self.builder.ins().iconst(ir::types::I64, 0)
+            } else {
+                self.payload_bits(value).0
+            };
+            let owned =
+                is_copy_owned(self.types, expression.ty) || is_linear(self.types, expression.ty);
+            let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            let identity = self
+                .builder
+                .ins()
+                .iconst(ir::types::I64, expression.ty.index() as i64);
+            let layout = debug::debug_layout(self.types, expression.ty).ok_or_else(|| {
+                self.unsupported(expression.span, "interface payload debug layout")
+            })?;
+            let (layout, length) = self.static_data(&layout)?;
+            let result = self.leaf(
+                NativeLeaf::InterfaceBox,
+                &[identity, bits, owned, depth, layout, length],
+                true,
+            )?;
+            return self.own(result);
+        }
+        if matches!(self.types.resolve(source), Type::Interface(_)) {
+            let value = self.argument(expression, true)?;
+            let value = self.scalar(value, expression.span)?;
+            let identity = self
+                .builder
+                .ins()
+                .iconst(ir::types::I64, target.index() as i64);
+            let bits = self.leaf(NativeLeaf::InterfaceUnbox, &[value, identity], true)?;
+            if target_representation == TypeInterner::NOTHING {
+                let depth = self.leaf(NativeLeaf::InterfacePendingDepth, &[value], true)?;
+                return Ok(LoweredValue::Scalar(depth));
+            }
+            let unpacked = self.unpack_payload(bits, target, expression.span)?;
+            if is_task_scalar(self.types, target)? {
+                let depth = self.leaf(NativeLeaf::InterfacePendingDepth, &[value], true)?;
+                return Ok(LoweredValue::ScalarTask(
+                    self.scalar(unpacked, expression.span)?,
+                    depth,
+                ));
+            }
+            return Ok(unpacked);
+        }
+        Err(self.unsupported(expression.span, "nested interface-compatible conversion"))
+    }
+
     pub(super) fn leaf(
         &mut self,
         leaf: NativeLeaf,
@@ -391,7 +462,9 @@ impl Translator<'_, '_> {
             Type::Struct(_) | Type::Enum(_) | Type::Bitfield(_) | Type::TypeConstruction => {
                 NativeLeaf::StructClone
             }
-            Type::Machine(_) | Type::MachineState { .. } => NativeLeaf::StructClone,
+            Type::Machine(_) | Type::MachineState { .. } | Type::Interface(_) => {
+                NativeLeaf::StructClone
+            }
             _ => NativeLeaf::SumClone,
         };
         self.leaf(leaf, &[value], true)

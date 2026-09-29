@@ -23,6 +23,7 @@ use jett_types::{
 };
 
 mod inline_functions;
+mod interface_values;
 mod type_validation;
 
 pub use type_validation::validate_backend_types;
@@ -391,6 +392,12 @@ pub enum ExpressionKind {
     Coarsen(Box<Expression>),
     /// Compiler-owned conversion after every required refinement predicate passed.
     RefinementValidated(Box<Expression>),
+    /// Explicit conversion at an interface-compatible typed boundary.
+    InterfaceCoerce(Box<Expression>),
+    /// Concrete implementation identity of an erased interface value.
+    InterfaceType(Box<Expression>),
+    /// Compiler-owned terminal runtime failure with an already checked result type.
+    RuntimeFailure(String),
     StateIs {
         value: Box<Expression>,
         state: StateId,
@@ -749,6 +756,8 @@ impl Validator<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::InterfaceCoerce(value)
+            | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value) => self.expression(value),
@@ -972,6 +981,7 @@ impl Validator<'_> {
             | ExpressionKind::String(_)
             | ExpressionKind::Bool(_)
             | ExpressionKind::Nothing
+            | ExpressionKind::RuntimeFailure(_)
             | ExpressionKind::OptionalNone => {}
         }
     }
@@ -1040,6 +1050,10 @@ struct RefinementSource<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FunctionKey {
+    Interface {
+        owner: TypeId,
+        method: usize,
+    },
     Definition {
         definition: DefId,
         concrete_args: Vec<TypeId>,
@@ -1095,6 +1109,7 @@ impl<'a> Lowerer<'a> {
 
     fn lower(mut self) -> Result<Program, Vec<LowerError>> {
         self.collect_functions();
+        let interface_dispatches = self.collect_interface_dispatches();
         let sources = std::mem::take(&mut self.functions);
         let mut functions = Vec::with_capacity(sources.len());
         for source in sources {
@@ -1120,6 +1135,7 @@ impl<'a> Lowerer<'a> {
                 functions.push(function);
             }
         }
+        functions.extend(interface_dispatches);
         if self.include_test_bodies {
             let mut namespaces = HashMap::new();
             for item in &self.module.items {
@@ -1162,7 +1178,8 @@ impl<'a> Lowerer<'a> {
         }
         if self.errors.is_empty() {
             inline_functions::extract_inline_functions(&mut functions, &self.check.interner);
-            let program = Program { functions };
+            let mut program = Program { functions };
+            interface_values::coerce_program(&mut program, &self.check.interner);
             validate(&program).map_err(|errors| {
                 errors
                     .into_iter()
@@ -2396,8 +2413,12 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 };
                 let Some(ty) = self
                     .expression_types
-                    .get(&decl.value.span())
+                    .get(&decl.name.span)
                     .copied()
+                    .filter(|ty| {
+                        interface_values::contains_interface(&self.parent.check.interner, *ty)
+                    })
+                    .or_else(|| self.expression_types.get(&decl.value.span()).copied())
                     .or_else(|| self.parent.check.definition_types.get(&definition).copied())
                 else {
                     self.parent
@@ -3425,12 +3446,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         call_span: Span,
         has_explicit_type_arguments: bool,
     ) -> Option<ExpressionKind> {
-        if self.interface_calls.contains_key(&call_span) {
-            self.parent.error(
-                call_span,
-                "checked dynamic interface dispatch is not lowered yet",
-            );
-            return None;
+        if let Some(call) = self.interface_calls.get(&call_span) {
+            let key = FunctionKey::Interface {
+                owner: call.interface_type,
+                method: call.method_index,
+            };
+            let function = self.function_ids.get(&key).copied()?;
+            let (args, evaluation_order) =
+                self.lower_arguments_in_parameter_order(args, call_span)?;
+            return Some(ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+            });
         }
         // Call checking treats parentheses as transparent when selecting a
         // declaration, intrinsic, or function-value signature. Its checked

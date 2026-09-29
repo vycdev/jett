@@ -66,6 +66,7 @@ pub fn is_linear(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::Set(_)
             | Type::Map(..)
             | Type::Struct(_)
+            | Type::Interface(_)
             | Type::Enum(_)
             | Type::Bitfield(_)
             | Type::Machine(_)
@@ -559,6 +560,15 @@ impl Flow<'_> {
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value) => self.expr(value, false)?,
+            ExpressionKind::InterfaceType(value) => self.expr(value, true)?,
+            ExpressionKind::InterfaceCoerce(value) => {
+                let borrowed = matches!(
+                    self.types
+                        .resolve(representation_type(self.types, value.ty)),
+                    Type::Interface(_)
+                );
+                self.expr(value, borrowed)?;
+            }
             ExpressionKind::OptionalNone => {}
             ExpressionKind::StructConstruct {
                 fields,
@@ -639,7 +649,8 @@ impl Flow<'_> {
             | ExpressionKind::Bool(_)
             | ExpressionKind::String(_)
             | ExpressionKind::FunctionRef(_)
-            | ExpressionKind::Nothing => {}
+            | ExpressionKind::Nothing
+            | ExpressionKind::RuntimeFailure(_) => {}
             _ => return Err("expression needs explicit native ownership lowering".into()),
         }
         Ok(())

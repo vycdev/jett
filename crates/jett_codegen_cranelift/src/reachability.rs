@@ -259,6 +259,8 @@ fn collect_expression_references(
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
+        | ExpressionKind::InterfaceCoerce(value)
+        | ExpressionKind::InterfaceType(value)
         | ExpressionKind::Run(value)
         | ExpressionKind::Join(value)
         | ExpressionKind::Cancel(value)
@@ -359,6 +361,7 @@ fn collect_expression_references(
         | ExpressionKind::String(_)
         | ExpressionKind::Bool(_)
         | ExpressionKind::Nothing
+        | ExpressionKind::RuntimeFailure(_)
         | ExpressionKind::Local(_)
         | ExpressionKind::OptionalNone => {}
     }

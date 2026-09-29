@@ -266,6 +266,7 @@ pub enum NativeDebugTag {
     Actor,
     TypeConstruction,
     Redacted,
+    Interface,
 }
 
 impl NativeDebugTag {
@@ -288,6 +289,7 @@ impl NativeDebugTag {
             14 => Self::Actor,
             15 => Self::TypeConstruction,
             16 => Self::Redacted,
+            17 => Self::Interface,
             _ => return Err(INVALID_TRACE_LABEL),
         })
     }
@@ -568,6 +570,7 @@ enum NativeDebugNode {
     Actor,
     TypeConstruction,
     Redacted,
+    Interface,
 }
 impl NativeDebugLayout {
     fn parse(bytes: &[u8]) -> LeafResult<Self> {
@@ -661,6 +664,7 @@ impl NativeDebugLayout {
                 NativeDebugTag::Actor => NativeDebugNode::Actor,
                 NativeDebugTag::TypeConstruction => NativeDebugNode::TypeConstruction,
                 NativeDebugTag::Redacted => NativeDebugNode::Redacted,
+                NativeDebugTag::Interface => NativeDebugNode::Interface,
             };
             if node.position != node_bytes.len() {
                 return Err(INVALID_TRACE_LABEL);
@@ -697,6 +701,22 @@ impl NativeDebugLayout {
         let child = depth + 1;
         Ok(match self.nodes.get(index).ok_or(INVALID_TRACE_LABEL)? {
             NativeDebugNode::Redacted => "[redacted]".to_owned(),
+            NativeDebugNode::Interface => {
+                let field = values.struct_field(bits, 1)?;
+                let layout_handle = values.struct_field(bits, 2)?.bits;
+                let layout = NativeDebugLayout::parse(values.bytes(layout_handle)?)?;
+                let text = layout.format_value(values, field.bits, layout.root, child)?;
+                let text = layout.format_pending_at(&text, field.pending_depth, layout.root)?;
+                layout.format_pending_at(
+                    &text,
+                    values
+                        .structs
+                        .get(&bits)
+                        .ok_or(INVALID_STRUCT)?
+                        .pending_depth,
+                    layout.root,
+                )?
+            }
             NativeDebugNode::Primitive(kind) => values.debug_value(bits, *kind)?,
             NativeDebugNode::Nothing => format_nothing(bits)?,
             NativeDebugNode::Bytes => values.debug_value(bits, DEBUG_BYTES_KIND)?,
@@ -1153,6 +1173,7 @@ impl NativeDebugLayout {
             }
             NativeDebugNode::Capability(_)
             | NativeDebugNode::Redacted
+            | NativeDebugNode::Interface
             | NativeDebugNode::Function
             | NativeDebugNode::Actor
             | NativeDebugNode::TypeConstruction => {
@@ -3322,6 +3343,111 @@ impl NativeValues {
             .pending_depth = depth;
         Ok(joined)
     }
+    // Interface boxes store task depth on the box, so running and joining an
+    // erased value behave exactly like running and joining its concrete value.
+    fn owned_pending_depth(&self, value: u64) -> LeafResult<u64> {
+        if let Some(value) = self.strings.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.structs.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.lists.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.sets.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.maps.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        if let Some(value) = self.sums.get(&value) {
+            return Ok(value.pending_depth);
+        }
+        self.bytes_depth(value)
+    }
+
+    fn clone_with_pending_depth(&mut self, value: u64, depth: u64) -> LeafResult<u64> {
+        // Strings share storage when cloned. Changing their metadata would also
+        // change the original binding, so make a separate string here.
+        if let Some(value) = self.strings.get(&value) {
+            return self.insert_pending(value.text.clone(), depth);
+        }
+        let cloned = self.clone_value(value)?;
+        if let Some(value) = self.structs.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.lists.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.sets.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.maps.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if let Some(value) = self.sums.get_mut(&cloned) {
+            value.pending_depth = depth;
+        } else if self.bytes.contains_key(&cloned) {
+            if depth == 0 {
+                self.bytes_pending.remove(&cloned);
+            } else {
+                self.bytes_pending.insert(cloned, depth);
+            }
+        } else {
+            self.drop_value(cloned)?;
+            return Err(INVALID_HANDLE);
+        }
+        Ok(cloned)
+    }
+
+    fn interface_box(
+        &mut self,
+        concrete: u64,
+        bits: u64,
+        owned: bool,
+        depth: u64,
+        layout: &[u8],
+    ) -> LeafResult<u64> {
+        NativeDebugLayout::parse(layout)?;
+        let depth = if owned {
+            depth
+                .checked_add(self.owned_pending_depth(bits)?)
+                .ok_or(EXHAUSTED)?
+        } else {
+            depth
+        };
+        let value = self.new_struct(3)?;
+        self.structs
+            .get_mut(&value)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth = depth;
+        let result = (|| {
+            self.structs.get_mut(&value).ok_or(INVALID_STRUCT)?.fields[0] = Some(NativeField {
+                bits: concrete,
+                owned: false,
+                pending_depth: 0,
+            });
+            let bits = if owned {
+                self.clone_with_pending_depth(bits, 0)?
+            } else {
+                bits
+            };
+            self.structs.get_mut(&value).ok_or(INVALID_STRUCT)?.fields[1] = Some(NativeField {
+                bits,
+                owned,
+                pending_depth: 0,
+            });
+            let layout = self.insert_bytes(layout.to_vec())?;
+            self.structs.get_mut(&value).ok_or(INVALID_STRUCT)?.fields[2] = Some(NativeField {
+                bits: layout,
+                owned: true,
+                pending_depth: 0,
+            });
+            Ok(value)
+        })();
+        if result.is_err() {
+            let _ = self.drop_value(value);
+        }
+        result
+    }
+
     fn new_struct(&mut self, count: u64) -> LeafResult<u64> {
         #[cfg(test)]
         self.allocation_checkpoint()?;
@@ -5365,6 +5491,25 @@ leaves! {
             let owner = unsafe { std::slice::from_raw_parts(owner_pointer as *const u8, owner_length) };
             let owner = std::str::from_utf8(owner).map_err(|_| INVALID_CONSTRUCTION)?;
             s.builder_finish(builder, owner) };
+    InterfaceBox, jett_rt_v1_interface_box, false, (concrete: u64 => I64, bits: u64 => I64, owned: u32 => I32, depth: u64 => I64, layout: *const u8 => Pointer, length: u64 => I64), u64 => I64,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_STRUCT)?;
+            if owned > 1 || length > isize::MAX as usize || (length != 0 && layout.is_null()) { return Err(INVALID_STRUCT); }
+            let layout = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, length) } };
+            s.interface_box(concrete, bits, owned != 0, depth, layout) };
+    InterfaceType, jett_rt_v1_interface_type, false, (value: u64 => I64), u64 => I64,
+        |s| { let record = s.structs.get(&value).ok_or(INVALID_STRUCT)?;
+            if record.pending_depth != 0 || s.struct_field(value, 1)?.pending_depth != 0 { return Ok(u64::MAX); }
+            Ok(s.struct_field(value, 0)?.bits) };
+    InterfaceUnbox, jett_rt_v1_interface_unbox, false, (value: u64 => I64, concrete: u64 => I64), u64 => I64,
+        |s| { if s.struct_field(value, 0)?.bits != concrete { return Err(INVALID_STRUCT); }
+            let field = s.struct_field(value, 1)?;
+            let depth = s.structs.get(&value).ok_or(INVALID_STRUCT)?.pending_depth;
+            if field.owned { s.clone_with_pending_depth(field.bits, depth) } else { Ok(field.bits) } };
+    InterfacePendingDepth, jett_rt_v1_interface_pending_depth, false, (value: u64 => I64), u64 => I64,
+        |s| s.structs.get(&value).map(|v| v.pending_depth).ok_or(INVALID_STRUCT);
+    RuntimeFailMessage, jett_rt_v1_runtime_fail_message, false, (message: u64 => I64), u32 => I32,
+        |s| { s.dynamic_failure_message = Some(s.text(message)?.as_bytes().to_vec());
+            Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"native runtime failure")) };
     StructNew, jett_rt_v1_struct_new, false, (count: u64 => I64), u64 => I64,
         |s| s.new_struct(count);
     StructInit, jett_rt_v1_struct_init, false, (value: u64 => I64, index: u64 => I64, bits: u64 => I64, owned: u32 => I32), u32 => I32,
@@ -6511,6 +6656,7 @@ mod tests {
             NativeDebugTag::Actor,
             NativeDebugTag::TypeConstruction,
             NativeDebugTag::Redacted,
+            NativeDebugTag::Interface,
         ]
         .into_iter()
         .enumerate()
@@ -6519,7 +6665,7 @@ mod tests {
             assert_eq!(tag as u8, expected);
             assert_eq!(NativeDebugTag::from_raw(expected), Ok(tag));
         }
-        assert_eq!(NativeDebugTag::from_raw(17), Err(INVALID_TRACE_LABEL));
+        assert_eq!(NativeDebugTag::from_raw(18), Err(INVALID_TRACE_LABEL));
         let bytes = function_debug_layout_bytes(&[vec![13]], 0);
         let layout = NativeDebugLayout::parse(&bytes).unwrap();
         assert!(matches!(
@@ -6574,6 +6720,53 @@ mod tests {
             public.format_pending_at("[redacted]", 2, 0),
             Ok("pending(pending([redacted]))".to_owned())
         );
+    }
+
+    #[test]
+    fn interface_boxes_preserve_pending_aliases_and_redaction() {
+        let mut values = NativeValues::default();
+        let source = values.insert_pending("hidden".into(), 2).unwrap();
+        let hidden = function_debug_layout_bytes(&[vec![NativeDebugTag::Redacted as u8]], 0);
+        let boxed = values.interface_box(42, source, true, 0, &hidden).unwrap();
+        let clone = values.clone_struct(boxed).unwrap();
+        let joined = values.join_record(clone).unwrap();
+        assert_eq!(values.owned_pending_depth(source), Ok(2));
+        assert_eq!(values.owned_pending_depth(boxed), Ok(2));
+        assert_eq!(values.owned_pending_depth(joined), Ok(1));
+        let payload = values.struct_field(joined, 1).unwrap();
+        assert_eq!(values.owned_pending_depth(payload.bits), Ok(0));
+        let layout = NativeDebugLayout::parse(&function_debug_layout_bytes(
+            &[vec![NativeDebugTag::Interface as u8]],
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            layout.format_value(&values, joined, 0, 0),
+            Ok("[redacted]".into())
+        );
+        for handle in [source, boxed, clone, joined] {
+            values.drop_value(handle).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn interface_box_allocation_failures_release_partial_payloads() {
+        let layout = function_debug_layout_bytes(&[vec![NativeDebugTag::Redacted as u8]], 0);
+        // Box, cloned string, and layout each have a separate allocation.
+        for budget in 0..3 {
+            let mut values = NativeValues::default();
+            let original = values.insert_pending("secret".into(), 1).unwrap();
+            values.allocation_budget = Some(budget);
+            assert_eq!(
+                values.interface_box(7, original, true, 0, &layout),
+                Err(EXHAUSTED)
+            );
+            assert_eq!(values.strings.len(), 1);
+            assert_eq!(values.owned_pending_depth(original), Ok(1));
+            values.drop_value(original).unwrap();
+            assert!(values.is_empty());
+        }
     }
 
     #[test]

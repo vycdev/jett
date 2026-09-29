@@ -243,6 +243,22 @@ impl Interpreter {
             .collect()
     }
 
+    fn debug_nominal_owner(&self, declared: Option<TypeExpr>, concrete: &str) -> Option<TypeExpr> {
+        fn name(ty: &TypeExpr) -> Option<&str> {
+            match ty {
+                TypeExpr::Named(name) | TypeExpr::Generic(name, _, _) => Some(&name.name),
+                TypeExpr::StateQualified(inner, _, _) | TypeExpr::View(inner, _) => name(inner),
+                _ => None,
+            }
+        }
+        // Interface bindings retain their declared label, but fields belong to
+        // the concrete runtime owner. Keep generic arguments when the declared
+        // and concrete nominal owners agree.
+        declared
+            .filter(|ty| name(ty) == Some(concrete))
+            .or_else(|| Self::debug_type(concrete))
+    }
+
     pub(super) fn format_debug_value(&self, value: &Value, ty: Option<&TypeExpr>) -> String {
         let ty = ty.map(|ty| self.inference_base_type(ty));
         if let Some(TypeExpr::View(inner, _)) = &ty {
@@ -294,7 +310,7 @@ impl Interpreter {
                 format!("fail({})", self.format_debug_value(inner, args.get(1)))
             }
             Value::Struct { type_name, fields } => {
-                let owner = ty.or_else(|| Self::debug_type(type_name));
+                let owner = self.debug_nominal_owner(ty, type_name);
                 let types = owner
                     .as_ref()
                     .map(|ty| self.debug_fields(ty, None))
@@ -322,7 +338,7 @@ impl Interpreter {
                 fields,
             } => {
                 let machine = matches!(value, Value::Machine { .. });
-                let owner = ty.or_else(|| Self::debug_type(type_name));
+                let owner = self.debug_nominal_owner(ty, type_name);
                 let types = owner
                     .as_ref()
                     .map(|ty| self.debug_fields(ty, Some((member, machine))))

@@ -386,6 +386,7 @@ fn scalar_kind_inner(
             ScalarKind::Map
         }
         Type::TypeConstruction => ScalarKind::Construction,
+        Type::Interface(_) => ScalarKind::Struct,
         Type::Optional(inner) => {
             if *inner != TypeInterner::NEVER {
                 scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
@@ -444,6 +445,44 @@ fn never_value_compatible(types: &TypeInterner, expected: TypeId, actual: TypeId
         | (Type::Result(expected_key, expected_value), Type::Result(actual_key, actual_value)) => {
             never_value_compatible(types, *expected_key, *actual_key)
                 && never_value_compatible(types, *expected_value, *actual_value)
+        }
+        _ => false,
+    }
+}
+
+fn interface_conversion_shape(types: &TypeInterner, source: TypeId, target: TypeId) -> bool {
+    let source = jett_mir::move_values::representation_type(types, source);
+    let target = jett_mir::move_values::representation_type(types, target);
+    if source == target || source == TypeInterner::NEVER {
+        return true;
+    }
+    match (types.resolve(source), types.resolve(target)) {
+        (Type::Interface(_), _) | (_, Type::Interface(_)) => true,
+        (Type::List(a), Type::List(b)) | (Type::Optional(a), Type::Optional(b)) => {
+            interface_conversion_shape(types, *a, *b)
+        }
+        (Type::Map(ak, av), Type::Map(bk, bv)) | (Type::Result(ak, av), Type::Result(bk, bv)) => {
+            interface_conversion_shape(types, *ak, *bk)
+                && interface_conversion_shape(types, *av, *bv)
+        }
+        (
+            Type::Function {
+                params: a,
+                view_params: am,
+                return_type: ar,
+            },
+            Type::Function {
+                params: b,
+                view_params: bm,
+                return_type: br,
+            },
+        ) => {
+            a.len() == b.len()
+                && am == bm
+                && a.iter()
+                    .zip(b)
+                    .all(|(a, b)| interface_conversion_shape(types, *a, *b))
+                && interface_conversion_shape(types, *ar, *br)
         }
         _ => false,
     }
@@ -2385,6 +2424,25 @@ impl Verifier<'_> {
                     Err(self.expression_kind_error(function, expression, "coarsen"))
                 }
             }
+            ExpressionKind::InterfaceCoerce(value) => {
+                self.expression(function, value)?;
+                if interface_conversion_shape(self.types, value.ty, expression.ty) {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "interface conversion"))
+                }
+            }
+            ExpressionKind::InterfaceType(value) => {
+                self.expression(function, value)?;
+                if matches!(self.types.resolve(value.ty), Type::Interface(_))
+                    && expression.ty == TypeInterner::UINT64
+                {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "interface type identity"))
+                }
+            }
+            ExpressionKind::RuntimeFailure(_) => Ok(()),
             ExpressionKind::RefinementValidated(value) => {
                 self.expression(function, value)?;
                 let mut current = expression.ty;

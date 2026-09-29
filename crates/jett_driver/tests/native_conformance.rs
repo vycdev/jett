@@ -137,6 +137,58 @@ fn run_bounded_with_env(
 }
 
 #[test]
+fn native_interface_values_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/interface_values.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("interface interpreter oracle");
+    assert!(
+        expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("[redacted]"))
+    );
+    assert!(
+        !expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("hidden-interface-token"))
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_values.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native interface values");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
+fn native_interface_pending_failure_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_pending_failure.jett");
+    let expected = jett_driver::run_file_capture_outcome(&fixture)
+        .expect_err("a pending receiver has no concrete dispatch target");
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_pending_failure.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native interface failure");
+    let actual = run_bounded(&binary, directory.path());
+    assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+    assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!(
+            "{}\n{}\n",
+            expected.output.debug_output.join("\n"),
+            expected.message
+        )
+    );
+}
+
+#[test]
 fn native_verify_suite_executes_all_checked_bodies() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/verify_test.jett");

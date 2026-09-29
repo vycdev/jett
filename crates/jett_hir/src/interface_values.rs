@@ -1,0 +1,535 @@
+//! Preserve checked interface boundaries before ownership and CFG lowering.
+use super::*;
+
+impl Lowerer<'_> {
+    pub(super) fn collect_interface_dispatches(&mut self) -> Vec<Function> {
+        let mut slots = Vec::new();
+        fn calls(slots: &mut Vec<(TypeId, usize)>, facts: &HashMap<Span, CheckedInterfaceCall>) {
+            slots.extend(
+                facts
+                    .values()
+                    .map(|call| (call.interface_type, call.method_index)),
+            );
+        }
+        fn bindings(
+            slots: &mut Vec<(TypeId, usize)>,
+            facts: &HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+        ) {
+            for binding in facts.values().flatten() {
+                calls(slots, &binding.body.interface_calls);
+                bindings(slots, &binding.body.comptime_type_bindings);
+            }
+        }
+        calls(&mut slots, &self.check.interface_calls);
+        bindings(&mut slots, &self.check.comptime_type_bindings);
+        for body in &self.check.generic_function_instantiations {
+            calls(&mut slots, &body.interface_calls);
+            bindings(&mut slots, &body.comptime_type_bindings);
+        }
+        let first = self.functions.len()
+            + self.actor_constructors.len()
+            + self.actor_handlers.len()
+            + self.refinement_sources.len();
+        let mut functions = Vec::new();
+        slots.sort_by_key(|(owner, method)| (owner.index(), *method));
+        slots.dedup();
+        for (owner, method_index) in slots {
+            let Type::Interface(interface) = self.check.interner.resolve(owner) else {
+                self.error(
+                    self.module.span,
+                    "checked interface slot has a non-interface owner",
+                );
+                continue;
+            };
+            let interface = self.check.interner.resolve_interface(*interface);
+            let Some((&definition, _)) =
+                self.check.definition_types.iter().find(|(definition, ty)| {
+                    **ty == owner
+                        && self.resolve.scope_table.def(**definition).kind == DefKind::Interface
+                })
+            else {
+                self.error(
+                    self.module.span,
+                    "checked interface slot has no resolved declaration",
+                );
+                continue;
+            };
+            let declaration = self.resolve.scope_table.def(definition);
+            let span = declaration.span;
+            let Some(method) = interface.methods.get(method_index) else {
+                self.error(span, "checked interface method slot is out of range");
+                continue;
+            };
+            let Some(origin) = self.origins.get(&span.file).cloned() else {
+                self.error(span, "checked interface declaration has no source origin");
+                continue;
+            };
+            let id = FunctionId((first + functions.len()) as u32);
+            self.function_ids.insert(
+                FunctionKey::Interface {
+                    owner,
+                    method: method_index,
+                },
+                id,
+            );
+            let params = method
+                .params
+                .iter()
+                .enumerate()
+                .map(|(index, (name, ty, view))| Param {
+                    local: LocalId(index as u32),
+                    name: name.clone(),
+                    ty: *ty,
+                    mode: if *view {
+                        ParamMode::View
+                    } else {
+                        ParamMode::Owned
+                    },
+                    mutable: false,
+                    span,
+                })
+                .collect::<Vec<_>>();
+            let locals = params
+                .iter()
+                .map(|param| Local {
+                    id: param.local,
+                    name: param.name.clone(),
+                    ty: param.ty,
+                    debug_ty: param.ty,
+                    debug_type_name: None,
+                    mutable: false,
+                    span,
+                })
+                .collect();
+            let mut statements = Vec::new();
+            for implementation in &self.check.method_definitions {
+                if implementation.interface_type != Some(owner)
+                    || implementation.method_name != method.name
+                {
+                    continue;
+                }
+                let Some(&target) = self.function_ids.get(&FunctionKey::Method {
+                    source_span: implementation.source_span,
+                }) else {
+                    self.error(
+                        implementation.source_span,
+                        "checked interface implementation has no native function",
+                    );
+                    continue;
+                };
+                let receiver = Expression {
+                    kind: ExpressionKind::Local(LocalId(0)),
+                    ty: owner,
+                    span,
+                };
+                let condition = Expression {
+                    kind: ExpressionKind::Binary {
+                        left: Box::new(Expression {
+                            kind: ExpressionKind::InterfaceType(Box::new(receiver)),
+                            ty: TypeInterner::UINT64,
+                            span,
+                        }),
+                        op: BinaryOp::Equal,
+                        right: Box::new(Expression {
+                            kind: ExpressionKind::Int(implementation.owner_type.index() as i128),
+                            ty: TypeInterner::UINT64,
+                            span,
+                        }),
+                    },
+                    ty: TypeInterner::BOOL,
+                    span,
+                };
+                let args = params
+                    .iter()
+                    .zip(&implementation.parameter_types)
+                    .map(|(param, ty)| {
+                        let mut value = Expression {
+                            kind: ExpressionKind::Local(param.local),
+                            ty: param.ty,
+                            span,
+                        };
+                        coerce(&mut value, *ty, &self.check.interner);
+                        value
+                    })
+                    .collect::<Vec<_>>();
+                let value = Expression {
+                    kind: ExpressionKind::Call {
+                        function: target,
+                        evaluation_order: (0..args.len()).collect(),
+                        args,
+                    },
+                    ty: implementation.return_type,
+                    span,
+                };
+                statements.push(Statement {
+                    kind: StatementKind::If {
+                        condition,
+                        then_block: Block {
+                            statements: vec![Statement {
+                                kind: StatementKind::Return(Some(value)),
+                                span,
+                            }],
+                            span,
+                        },
+                        else_block: None,
+                    },
+                    span,
+                });
+            }
+            let name = format!("{}.{}", interface.name, method.name);
+            statements.push(Statement {
+                kind: StatementKind::Return(Some(Expression {
+                    kind: ExpressionKind::RuntimeFailure(format!("undefined function '{name}'")),
+                    ty: method.return_type,
+                    span,
+                })),
+                span,
+            });
+            functions.push(Function {
+                id,
+                identity: FunctionIdentity {
+                    declaration: DeclarationId {
+                        origin,
+                        namespace: declaration.namespace.clone().unwrap_or_default(),
+                        name: format!("$interface.dispatch.{name}"),
+                        kind: DeclarationKind::Method,
+                    },
+                    type_arguments: Vec::new(),
+                    specialization: CheckedGenericSpecialization::default(),
+                },
+                debug_kind: FunctionDebugKind::Named(name),
+                source_definition: None,
+                params,
+                capture_count: 0,
+                return_type: method.return_type,
+                locals,
+                body: Block { statements, span },
+                span,
+            });
+        }
+        functions
+    }
+}
+
+pub(super) fn contains_interface(types: &TypeInterner, ty: TypeId) -> bool {
+    match types.resolve(ty) {
+        Type::Interface(_) => true,
+        Type::List(inner)
+        | Type::Set(inner)
+        | Type::Optional(inner)
+        | Type::Secret(inner)
+        | Type::Refinement { base: inner, .. } => contains_interface(types, *inner),
+        Type::Map(a, b) | Type::Result(a, b) => {
+            contains_interface(types, *a) || contains_interface(types, *b)
+        }
+        Type::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            params.iter().any(|ty| contains_interface(types, *ty))
+                || contains_interface(types, *return_type)
+        }
+        _ => false,
+    }
+}
+
+fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
+    if value.ty == expected
+        || value.ty == TypeInterner::NEVER
+        || !(contains_interface(types, expected) || contains_interface(types, value.ty))
+    {
+        return;
+    }
+    let placeholder = Expression {
+        kind: ExpressionKind::Nothing,
+        ty: expected,
+        span: value.span,
+    };
+    let inner = std::mem::replace(value, placeholder);
+    value.kind = ExpressionKind::InterfaceCoerce(Box::new(inner));
+}
+
+pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
+    let signatures = program
+        .functions
+        .iter()
+        .map(|function| function.params.iter().map(|param| param.ty).collect())
+        .collect::<Vec<Vec<_>>>();
+    for function in &mut program.functions {
+        let locals = function
+            .locals
+            .iter()
+            .map(|local| local.ty)
+            .collect::<Vec<_>>();
+        let pass = Coercions {
+            types,
+            signatures: &signatures,
+            locals: &locals,
+            return_type: function.return_type,
+        };
+        pass.block(&mut function.body, None);
+    }
+}
+
+struct Coercions<'a> {
+    types: &'a TypeInterner,
+    signatures: &'a [Vec<TypeId>],
+    locals: &'a [TypeId],
+    return_type: TypeId,
+}
+
+impl Coercions<'_> {
+    fn expected(&self, value: &mut Expression, expected: TypeId, handled: Option<TypeId>) {
+        self.expression(value, handled);
+        coerce(value, expected, self.types);
+    }
+    fn block(&self, block: &mut Block, handled: Option<TypeId>) {
+        for statement in &mut block.statements {
+            match &mut statement.kind {
+                StatementKind::Let { local, value } => {
+                    self.expected(value, self.locals[local.index() as usize], handled)
+                }
+                StatementKind::Assign { target, value } => {
+                    self.expression(target, handled);
+                    self.expected(value, target.ty, handled);
+                }
+                StatementKind::Return(Some(value)) => {
+                    self.expected(value, self.return_type, handled)
+                }
+                StatementKind::HandleDefault(value) => {
+                    self.expected(value, handled.unwrap_or(value.ty), handled)
+                }
+                StatementKind::Expression(value) => self.expression(value, handled),
+                StatementKind::If {
+                    condition,
+                    then_block,
+                    else_block,
+                } => {
+                    self.expression(condition, handled);
+                    self.block(then_block, handled);
+                    if let Some(block) = else_block {
+                        self.block(block, handled);
+                    }
+                }
+                StatementKind::While { condition, body } => {
+                    self.expression(condition, handled);
+                    self.block(body, handled);
+                }
+                StatementKind::For { iterable, body, .. } => {
+                    self.expression(iterable, handled);
+                    self.block(body, handled);
+                }
+                StatementKind::Match { scrutinee, arms } => {
+                    self.expression(scrutinee, handled);
+                    for arm in arms {
+                        self.block(&mut arm.body, handled);
+                    }
+                }
+                StatementKind::Assert { condition, message } => {
+                    self.expression(condition, handled);
+                    if let Some(value) = message {
+                        self.expression(value, handled);
+                    }
+                }
+                StatementKind::Breakpoint {
+                    condition: Some(condition),
+                    ..
+                } => self.expression(condition, handled),
+                StatementKind::Scope(block) => self.block(block, handled),
+                StatementKind::ReflectedTypeDispatch { type_info, arms } => {
+                    self.expression(type_info, handled);
+                    for arm in arms {
+                        self.block(&mut arm.body, handled);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn machine_payloads(
+        &self,
+        ty: TypeId,
+        state: StateId,
+        values: &mut [Expression],
+        handled: Option<TypeId>,
+    ) {
+        let machine = match self.types.resolve(ty) {
+            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+                self.types.resolve_machine(*id)
+            }
+            _ => return,
+        };
+        if let Some(state) = machine.states.get(state.index() as usize) {
+            for (value, (_, expected)) in values.iter_mut().zip(&state.fields) {
+                self.expected(value, *expected, handled);
+            }
+        }
+    }
+    fn expression(&self, expression: &mut Expression, handled: Option<TypeId>) {
+        let ty = expression.ty;
+        match &mut expression.kind {
+            ExpressionKind::Call { function, args, .. } => {
+                for (argument, expected) in args
+                    .iter_mut()
+                    .zip(&self.signatures[function.index() as usize])
+                {
+                    self.expected(argument, *expected, handled);
+                }
+            }
+            ExpressionKind::IndirectCall { callee, args, .. } => {
+                self.expression(callee, handled);
+                if let Type::Function { params, .. } = self.types.resolve(callee.ty) {
+                    for (argument, expected) in args.iter_mut().zip(params) {
+                        self.expected(argument, *expected, handled);
+                    }
+                }
+            }
+            ExpressionKind::StructConstruct {
+                struct_type,
+                fields,
+                ..
+            } => {
+                if let Type::Struct(id) = self.types.resolve(*struct_type) {
+                    for (value, (_, expected)) in fields
+                        .iter_mut()
+                        .zip(&self.types.resolve_struct(*id).fields)
+                    {
+                        self.expected(value, *expected, handled);
+                    }
+                }
+            }
+            ExpressionKind::EnumConstruct {
+                enum_type,
+                variant,
+                payloads,
+                ..
+            } => {
+                if let Type::Enum(id) = self.types.resolve(*enum_type) {
+                    for (value, (_, expected)) in payloads.iter_mut().zip(
+                        &self.types.resolve_enum(*id).variants[variant.index() as usize].fields,
+                    ) {
+                        self.expected(value, *expected, handled);
+                    }
+                }
+            }
+            ExpressionKind::ListConstruct { elements } => {
+                if let Type::List(inner) = self.types.resolve(ty) {
+                    for value in elements {
+                        self.expected(value, *inner, handled);
+                    }
+                }
+            }
+            ExpressionKind::MapConstruct { entries } => {
+                if let Type::Map(key, value) = self.types.resolve(ty) {
+                    for entry in entries {
+                        self.expected(&mut entry.key, *key, handled);
+                        self.expected(&mut entry.value, *value, handled);
+                    }
+                }
+            }
+            ExpressionKind::ResultOk(value) => {
+                if let Type::Result(inner, _) = self.types.resolve(ty) {
+                    self.expected(value, *inner, handled);
+                }
+            }
+            ExpressionKind::ResultFail(value) => {
+                if let Type::Result(_, inner) = self.types.resolve(ty) {
+                    self.expected(value, *inner, handled);
+                }
+            }
+            ExpressionKind::OptionalSome(value) => {
+                if let Type::Optional(inner) = self.types.resolve(ty) {
+                    self.expected(value, *inner, handled);
+                }
+            }
+            ExpressionKind::Handle {
+                target, failure, ..
+            } => {
+                self.expression(target, handled);
+                self.block(failure, Some(ty));
+            }
+            ExpressionKind::Binary { left, right, .. } => {
+                self.expression(left, handled);
+                self.expression(right, handled);
+            }
+            ExpressionKind::Unary { value, .. }
+            | ExpressionKind::Field { base: value, .. }
+            | ExpressionKind::StateIs { value, .. }
+            | ExpressionKind::Comptime(value)
+            | ExpressionKind::Declassify(value)
+            | ExpressionKind::Coarsen(value)
+            | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::InterfaceCoerce(value)
+            | ExpressionKind::InterfaceType(value)
+            | ExpressionKind::Run(value)
+            | ExpressionKind::Join(value)
+            | ExpressionKind::Cancel(value)
+            | ExpressionKind::View(value)
+            | ExpressionKind::Clone(value) => self.expression(value, handled),
+            ExpressionKind::StringInterpolation(parts) => {
+                for part in parts {
+                    if let StringSegment::Value(value) = part {
+                        self.expression(value, handled);
+                    }
+                }
+            }
+            ExpressionKind::Intrinsic { args, .. }
+            | ExpressionKind::BitfieldConstruct { fields: args, .. } => {
+                for value in args {
+                    self.expression(value, handled);
+                }
+            }
+            ExpressionKind::MachineConstruct {
+                state_type,
+                state,
+                payloads,
+            } => {
+                self.machine_payloads(*state_type, *state, payloads, handled);
+            }
+            ExpressionKind::MachineTransition {
+                source,
+                state_type,
+                target,
+                payloads,
+            } => {
+                self.expression(source, handled);
+                self.machine_payloads(*state_type, *target, payloads, handled);
+            }
+            ExpressionKind::ActorSpawn {
+                args, constructor, ..
+            } => {
+                if let Some(constructor) = constructor {
+                    for (value, expected) in args
+                        .iter_mut()
+                        .zip(&self.signatures[constructor.index() as usize])
+                    {
+                        self.expected(value, *expected, handled);
+                    }
+                } else if let Type::Actor(id) = self.types.resolve(ty) {
+                    let actor = self.types.resolve_actor(*id);
+                    for (value, (_, expected)) in args
+                        .iter_mut()
+                        .zip(actor.capability_params.iter().chain(&actor.state_fields))
+                    {
+                        self.expected(value, *expected, handled);
+                    }
+                }
+            }
+            ExpressionKind::ActorMessage {
+                actor,
+                handler,
+                args,
+                ..
+            } => {
+                self.expression(actor, handled);
+                let signature = &self.signatures[handler.index() as usize];
+                let offset = signature.len().saturating_sub(args.len());
+                for (value, expected) in args.iter_mut().zip(&signature[offset..]) {
+                    self.expected(value, *expected, handled);
+                }
+            }
+            _ => {}
+        }
+    }
+}

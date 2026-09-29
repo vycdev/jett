@@ -2834,11 +2834,13 @@ the same map. Mutable assignment restores availability and branch joins require
 availability on every continuing path. Actor handlers establish and restore their
 own lexical frame, including on failure.
 
-Interface-typed runtime parameters, returns, and stored values are accepted by
-the interpreter but remain a native gap. The checker now records dynamic
-interface slots separately from concrete method bodies, including generic and
-reflected body facts. See `active/native_interface_values.md` for the native
-representation and dispatch handoff.
+Interface-typed runtime parameters, returns, stored values, and mixed collection
+literals use typed native boxes and compiler-generated dispatch functions. The
+checker records interface slots separately from concrete method bodies, including
+generic and reflected body facts. Interface values remain move-only, with explicit
+cloning, borrowing, pending depth, and recursive secret redaction preserved.
+Whole-container and function-signature conversions remain open parity work; see
+`active/native_interface_values.md` for the representation and remaining gates.
 
 The full native parity gate is still incomplete: the current object count is
 recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main

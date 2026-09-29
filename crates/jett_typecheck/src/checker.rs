@@ -174,6 +174,7 @@ pub struct CheckedMethodDefinition {
     pub owner_name: String,
     pub method_name: String,
     pub interface_name: Option<String>,
+    pub interface_type: Option<TypeId>,
     pub parameter_types: Vec<TypeId>,
     pub return_type: TypeId,
 }
@@ -6507,6 +6508,7 @@ impl<'a> TypeChecker<'a> {
             owner_name: owner_name.to_string(),
             method_name: method.name.name.clone(),
             interface_name: interface_type.map(|interface| self.type_name(interface)),
+            interface_type,
             parameter_types: signature.params.iter().map(|(_, ty, _)| *ty).collect(),
             return_type: signature.return_type,
         });
@@ -9049,6 +9051,7 @@ impl<'a> TypeChecker<'a> {
         self.record_debug_type_name(&decl.name, &decl.ty);
         let declared_type = self.resolve_type_expr(&decl.ty);
         let init_type = self.check_expr_for_expected(&decl.value, declared_type, true);
+        self.record_expression_type(decl.name.span, declared_type);
 
         // Bind the variable's DefId to its declared type.
         if let Some(def_id) = self.declaration_def_id(decl.name.span) {

@@ -156,6 +156,8 @@ impl Baker<'_> {
             | E::Declassify(value)
             | E::Coarsen(value)
             | E::RefinementValidated(value)
+            | E::InterfaceCoerce(value)
+            | E::InterfaceType(value)
             | E::StateIs { value, .. }
             | E::Run(value)
             | E::Join(value)
@@ -210,6 +212,7 @@ impl Baker<'_> {
             | E::String(_)
             | E::Bool(_)
             | E::Nothing
+            | E::RuntimeFailure(_)
             | E::OptionalNone
             | E::Local(_)
             | E::FunctionRef(_)

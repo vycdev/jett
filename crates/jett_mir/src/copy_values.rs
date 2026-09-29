@@ -389,6 +389,7 @@ fn visit(
                         | Type::Machine(_)
                         | Type::MachineState { .. }
                         | Type::Function { .. }
+                        | Type::Interface(_)
                         | Type::TypeConstruction
                 )
             }
@@ -399,6 +400,12 @@ fn visit(
     // accumulate until full-expression cleanup; even short-circuit alternatives
     // receive distinct slots during emission. View/clone add no ownership.
     match &value.kind {
+        ExpressionKind::InterfaceCoerce(_) => {
+            *temporaries += 3;
+        }
+        ExpressionKind::RuntimeFailure(_) => {
+            *temporaries += 1;
+        }
         ExpressionKind::String(_)
         | ExpressionKind::Local(_)
         | ExpressionKind::Call { .. }
@@ -494,7 +501,8 @@ fn visit(
         | ExpressionKind::Bool(_)
         | ExpressionKind::String(_)
         | ExpressionKind::FunctionRef(_)
-        | ExpressionKind::Nothing => {}
+        | ExpressionKind::Nothing
+        | ExpressionKind::RuntimeFailure(_) => {}
         ExpressionKind::Binary { left, right, .. } => {
             visit(left, reads, temporaries, types, program, false)?;
             visit(right, reads, temporaries, types, program, false)?;
@@ -567,6 +575,8 @@ fn visit(
         ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
+        | ExpressionKind::InterfaceCoerce(value)
+        | ExpressionKind::InterfaceType(value)
         | ExpressionKind::Run(value)
         | ExpressionKind::Join(value)
         | ExpressionKind::Cancel(value)
@@ -743,6 +753,7 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
             | Type::String
             | Type::Capability(_)
             | Type::Actor(_)
+            | Type::Interface(_)
     ) {
         return Ok(());
     }

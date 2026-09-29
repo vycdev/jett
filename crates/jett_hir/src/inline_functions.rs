@@ -227,6 +227,8 @@ impl Extractor<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::InterfaceCoerce(value)
+            | ExpressionKind::InterfaceType(value)
             | ExpressionKind::StateIs { value, .. }
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
@@ -302,6 +304,7 @@ impl Extractor<'_> {
             | ExpressionKind::String(_)
             | ExpressionKind::Bool(_)
             | ExpressionKind::Nothing
+            | ExpressionKind::RuntimeFailure(_)
             | ExpressionKind::Local(_)
             | ExpressionKind::FunctionRef(_)
             | ExpressionKind::ClosureRef { .. }
@@ -387,6 +390,8 @@ fn expression_uses_local(expression: &Expression, target: u32) -> bool {
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
+        | ExpressionKind::InterfaceCoerce(value)
+        | ExpressionKind::InterfaceType(value)
         | ExpressionKind::StateIs { value, .. }
         | ExpressionKind::Run(value)
         | ExpressionKind::Join(value)
@@ -447,6 +452,7 @@ fn expression_uses_local(expression: &Expression, target: u32) -> bool {
         | ExpressionKind::String(_)
         | ExpressionKind::Bool(_)
         | ExpressionKind::Nothing
+        | ExpressionKind::RuntimeFailure(_)
         | ExpressionKind::FunctionRef(_)
         | ExpressionKind::OptionalNone => false,
     }

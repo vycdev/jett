@@ -1,0 +1,157 @@
+interface Named:
+    function name(view self: Named) returns string
+struct User:
+    label: string
+struct Group:
+    label: string
+implement Named for User:
+    function name(view self: User) returns string:
+        return "user:{self.label}"
+implement Named for Group:
+    function name(view self: Group) returns string:
+        return "group:{self.label}"
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "number:{self}"
+implement Named for string:
+    function name(view self: string) returns string:
+        return "text:{self}"
+implement Named for nothing:
+    function name(view self: nothing) returns string:
+        return "nothing"
+function show(view item: Named) returns string:
+    return Named.name(view item)
+function select(flag: bool) returns Named:
+    if flag:
+        return User(label: "Ada")
+    return Group(label: "team")
+struct Holder:
+    item: Named
+enum Choice:
+    item(value: Named)
+    empty
+struct Vault:
+    token: secret[string]
+implement Named for Vault:
+    function name(view self: Vault) returns string:
+        return "vault"
+function secret_values() returns nothing:
+    Named vault = Vault(token: "hidden-interface-token")
+    trace vault
+    println(show(view vault))
+    Named later = run vault
+    trace later
+    secret[Named] hidden = later
+    trace hidden
+    return nothing
+machine Session:
+    states:
+        opened(item: Named)
+        closed(item: Named)
+    transitions:
+        opened to closed
+actor Catalog(initial: Named):
+    mutable Named item = clone initial
+    receive replace(value: Named):
+        item = value
+    receive read responds string:
+        respond show(view item)
+function state_values() returns nothing:
+    Session at opened started = Session(opened, User(label: "session"))
+    println(show(view started.item))
+    Session at closed ended = Session.transition(started, closed, Group(label: "closed"))
+    println(show(view ended.item))
+    Catalog catalog = spawn Catalog(initial: User(label: "actor"))
+    println(ask catalog.read)
+    send catalog.replace(Group(label: "message"))
+    println(ask catalog.read)
+    return nothing
+function primitive_values() returns nothing:
+    Named empty = run nothing
+    trace empty
+    Named joined_empty = join empty handle error:
+        return nothing
+    println(show(view joined_empty))
+    Named number = 42
+    Named text = "hello"
+    println(show(view number))
+    println(show(view text))
+    Named pending = run 17
+    trace pending
+    Named ready = join pending handle error:
+        return nothing
+    println(show(view ready))
+    string source = run "later"
+    Named erased = source
+    trace source
+    trace erased
+    Named joined = join erased handle error:
+        return nothing
+    println(show(view joined))
+    return nothing
+function stored_values() returns nothing:
+    Holder holder = Holder(item: User(label: "stored"))
+    println(show(view holder.item))
+    Holder copied = clone holder
+    println(show(view copied.item))
+    Choice choice = Choice.item(Group(label: "enum"))
+    match choice:
+        item(value):
+            println(show(view value))
+        empty:
+            println("empty")
+    Named original = User(label: "copy")
+    Named copied_item = clone original
+    println(show(view original))
+    println(show(view copied_item))
+    return nothing
+function pending_values() returns nothing:
+    Named pending = run run User(label: "pending")
+    trace pending
+    Named once = join pending handle error:
+        return nothing
+    trace once
+    Named ready = join once handle error:
+        return nothing
+    println(show(view ready))
+    Named erased = Group(label: "erased")
+    Named later = run erased
+    trace later
+    Named joined = join later handle error:
+        return nothing
+    println(show(view joined))
+    return nothing
+function generic_show[T](view item: Named, marker: T) returns string:
+    return Named.name(view item)
+function callback_values() returns nothing:
+    Named item = User(label: "callback")
+    function(view Named) returns string reader = show
+    println(reader(view item))
+    println(generic_show[int64](view item, 1))
+    return nothing
+function moved_values() returns nothing:
+    mutable Named original = User(label: "before move")
+    Named moved = original
+    breakpoint
+    original = Group(label: "restored")
+    breakpoint
+    println(show(view moved))
+    println(show(view original))
+    return nothing
+function main() returns nothing:
+    moved_values()
+    callback_values()
+    primitive_values()
+    state_values()
+    secret_values()
+    stored_values()
+    pending_values()
+    Named first = select(true)
+    Named second = select(false)
+    println(show(view first))
+    println(show(view second))
+    trace first
+    list[Named] items = list(User(label: "Grace"), Group(label: "crew"))
+    for item in items:
+        println(show(view item))
+    return nothing
