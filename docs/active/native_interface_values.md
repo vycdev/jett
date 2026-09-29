@@ -81,11 +81,8 @@ This does **not** close the full interface gate. Still required:
 - Audit remaining comptime callback specialization keys, particularly
   reflection-valued parameters and reflected-loop bindings. Generic type
   arguments and their alias reflection metadata are retained.
-- Checked expression types inside generic bodies must follow the active
-  specialization, not the last type stored under a shared source span. A probe
-  with `make_bump[T]` returning `function(value: T) returns T: return value + 1`,
-  instantiated for `int8` and `int64`, currently raises an interpreter range
-  error for the narrow callback at 127 instead of wrapping to -128.
+- Audit scoped expression facts in reflected-loop expansions and interpreter
+  source instances of compiler-owned facades that use different native helpers.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata and exact implementation identity are retained.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
@@ -167,11 +164,28 @@ Generic closure regressions now cover multiple concrete instantiations sharing a
 body and callable signature, aliases of an existing type, captured values, empty
 capture environments with type-dependent calls, nested factories, and calls from
 a different generic context. Interpreter restoration also runs after argument
-normalization failure. Boxing the captured type context preserves the established
-stack budget for recursive JSON fixtures.
+normalization failure. Boxing the captured type context and separating actor and
+closure construction helpers preserve the stack budget for recursive JSON fixtures.
 
 Named function invocation resolves explicit type arguments in the caller, then
 executes in the callee's own type-parameter scope. A non-generic function sees
 its declaration's nominal types even when a generic caller uses the same type
 parameter name. Closures created by that callee capture only its lexical type
 bindings. Return and argument failures must restore the caller's type scope.
+
+Interpreter arithmetic normalization must use the checked expression map for the
+active generic specialization. The driver must retain those maps and their type
+argument, alias-reflection, and reflection-parameter identities instead of
+collapsing all instantiations into one span map. A named call selects its checked
+map before evaluation; a closure retains that map with its lexical context.
+Calls and failures restore the caller's map. Matching must reject conflicting
+checked identities rather than select whichever specialization was registered
+last. Reflected loop body expansions still require their own scoped selection.
+
+The `generic_integer_wrapping` linked regression now covers signed and unsigned
+closure arithmetic, named generic calls, and explicit comptime results. Checked
+maps survive closure capture; argument failures restore the caller's map.
+Generic spans are absent from the global fallback, including spans checked for
+only one concrete instance. Compiler-owned facade instances without matching
+source facts retain source interpretation without borrowing another instance's
+map. Conflicting matching maps are rejected in either registration order.

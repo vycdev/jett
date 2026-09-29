@@ -1,5 +1,7 @@
+use jett_common::Span;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 use jett_parser::ast::{Block, Param, TypeExpr};
 use jett_types::ReflectionTypeInfo;
@@ -7,6 +9,7 @@ use jett_types::ReflectionTypeInfo;
 /// Lexical generic context retained by an evaluated closure.
 #[derive(Debug, Clone, Default)]
 pub struct ClosureTypeContext {
+    pub expression_types: Option<Arc<HashMap<Span, String>>>,
     pub bindings: HashMap<String, TypeExpr>,
     pub arguments: Vec<ClosureTypeArgument>,
 }

@@ -1,3 +1,4 @@
+use jett_comptime::checked_types::{CheckedExpressionTypes, CheckedFunctionTypes};
 mod native_constants;
 mod native_property_cases;
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
@@ -61,7 +62,7 @@ pub struct BuildResult {
     /// Checked reflection metadata for runtime reflection/JSON hooks.
     pub reflection_metadata: Option<Arc<ReflectionMetadata>>,
     /// Checked expression type names for runtime normalization at expression-only sites.
-    pub checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+    pub checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
     /// Values baked by explicit `comptime` expressions.
     pub explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
 }
@@ -91,7 +92,7 @@ pub struct BackendLoweringResult {
     pub interner: jett_types::TypeInterner,
     pub source_origins: HashMap<FileId, SourceOrigin>,
     pub reflection_metadata: Arc<ReflectionMetadata>,
-    pub checked_expression_types: Arc<HashMap<Span, String>>,
+    pub checked_expression_types: Arc<CheckedExpressionTypes>,
     pub explicit_comptime_values: Arc<HashMap<Span, Value>>,
 }
 
@@ -583,7 +584,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
     let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
         &parse_result.module,
         reflection_metadata.clone(),
@@ -2739,7 +2740,7 @@ fn lower_file_for_backend_inner(
     let build_failure =
         |diagnostics: Vec<Diagnostic>,
          reflection_metadata: Option<Arc<ReflectionMetadata>>,
-         checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+         checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
          explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>| {
             BackendLoweringError::Build(BuildResult {
                 diagnostics,
@@ -2795,7 +2796,7 @@ fn lower_file_for_backend_inner(
     }
 
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
     let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
         &parse_result.module,
         reflection_metadata.clone(),
@@ -2998,7 +2999,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
     let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
         &parse_result.module,
         reflection_metadata.clone(),
@@ -3158,31 +3159,53 @@ fn query_diagnostic_sources(
     sources
 }
 
-fn expression_type_names(check_result: &CheckResult) -> HashMap<Span, String> {
+fn expression_type_names(
+    check_result: &CheckResult,
+    resolve_result: &jett_resolve::ResolveResult,
+) -> CheckedExpressionTypes {
     let mut names = check_result
         .type_map
         .iter()
         .map(|(span, ty_id)| (*span, check_result.interner.type_name(*ty_id)))
         .collect::<HashMap<_, _>>();
-    // One source expression in a generic body can have several concrete types.
-    // The root type map retains only the last check, so it cannot normalize
-    // that expression during interpretation of another instantiation.
-    let mut generic_types = HashMap::new();
-    let mut ambiguous = HashSet::new();
-    for instantiation in &check_result.generic_function_instantiations {
-        for (&span, &ty) in &instantiation.type_map {
-            if generic_types
-                .insert(span, ty)
-                .is_some_and(|previous| previous != ty)
-            {
-                ambiguous.insert(span);
-            }
+    // Generic body facts belong only to their selected instance, even when
+    // the checker has seen just one instance so far. Compiler-owned facades
+    // can execute other interpreter source instances without checking them.
+    for instance in &check_result.generic_function_instantiations {
+        for span in instance.type_map.keys() {
+            names.remove(span);
         }
     }
-    for span in ambiguous {
-        names.remove(&span);
+    let mut functions: HashMap<Span, Vec<CheckedFunctionTypes>> = HashMap::new();
+    for instance in &check_result.generic_function_instantiations {
+        let facts = &instance.specialization;
+        functions
+            .entry(resolve_result.scope_table.def(instance.definition).span)
+            .or_default()
+            .push(CheckedFunctionTypes {
+                type_arguments: instance
+                    .concrete_args
+                    .iter()
+                    .map(|ty| check_result.interner.type_name(*ty))
+                    .collect(),
+                type_argument_reflections: facts.type_argument_reflections.clone(),
+                type_info_kinds: facts.type_info_kinds.clone(),
+                type_info_primitives: facts.type_info_primitives.clone(),
+                type_kind_values: facts.type_kind_values.clone(),
+                type_primitive_values: facts.type_primitive_values.clone(),
+                expressions: Arc::new(
+                    instance
+                        .type_map
+                        .iter()
+                        .map(|(span, ty)| (*span, check_result.interner.type_name(*ty)))
+                        .collect(),
+                ),
+            });
     }
-    names
+    CheckedExpressionTypes {
+        expressions: names,
+        functions,
+    }
 }
 
 fn update_current_namespace(
@@ -4257,7 +4280,7 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         return Err(format!("type errors:\n{}", type_errors.join("\n")));
     }
 
-    let checked_expression_types = Arc::new(expression_type_names(&check_result));
+    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
     let results = run_verify_blocks_detailed_with_metadata_and_expression_types(
         &parse_result.module,
         Some(check_result.reflection_metadata),

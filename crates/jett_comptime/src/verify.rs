@@ -1,3 +1,4 @@
+use crate::checked_types::CheckedExpressionTypes;
 use jett_common::{FileId, Span};
 use jett_diagnostics::Diagnostic;
 use jett_parser::ast::{
@@ -234,7 +235,7 @@ pub fn run_verify_blocks_with_metadata(
 pub fn run_verify_blocks_with_metadata_and_expression_types(
     module: &Module,
     metadata: Arc<ReflectionMetadata>,
-    expression_types: Arc<HashMap<Span, String>>,
+    expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed_with_metadata_and_expression_types(
@@ -283,7 +284,7 @@ pub fn run_verify_blocks_detailed_with_metadata(
 pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
-    expression_types: Option<Arc<HashMap<Span, String>>>,
+    expression_types: Option<Arc<CheckedExpressionTypes>>,
     breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
 ) -> Vec<VerifyResult> {
     run_verification(
@@ -303,7 +304,7 @@ pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
 pub fn collect_property_cases_with_metadata_and_expression_types(
     module: &Module,
     metadata: Arc<ReflectionMetadata>,
-    expression_types: Arc<HashMap<Span, String>>,
+    expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> Vec<PropertyCase> {
     run_verification(
@@ -319,7 +320,7 @@ pub fn collect_property_cases_with_metadata_and_expression_types(
 fn run_verification(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
-    expression_types: Option<Arc<HashMap<Span, String>>>,
+    expression_types: Option<Arc<CheckedExpressionTypes>>,
     breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
     collect_cases: bool,
 ) -> VerificationRun {
@@ -356,7 +357,7 @@ fn run_verification(
 fn run_verify_blocks_detailed_inner(
     module: &Module,
     metadata: Option<Arc<ReflectionMetadata>>,
-    expression_types: Option<Arc<HashMap<Span, String>>>,
+    expression_types: Option<Arc<CheckedExpressionTypes>>,
     breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
     collect_cases: bool,
 ) -> VerificationRun {

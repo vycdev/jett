@@ -1,3 +1,4 @@
+use crate::checked_types::CheckedExpressionTypes;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ type CollectedExpression<'a> = (Option<String>, HashMap<String, String>, &'a Exp
 pub fn evaluate_explicit_comptime_expressions(
     module: &Module,
     reflection_metadata: Arc<ReflectionMetadata>,
-    checked_expression_types: Arc<HashMap<Span, String>>,
+    checked_expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> (HashMap<Span, Value>, Vec<Diagnostic>) {
     let mut expressions = Vec::new();

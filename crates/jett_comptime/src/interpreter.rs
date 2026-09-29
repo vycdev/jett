@@ -1,3 +1,4 @@
+use crate::checked_types::CheckedExpressionTypes;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -638,7 +639,8 @@ pub struct Interpreter {
     reflection_metadata: Option<Arc<ReflectionMetadata>>,
     /// Checked expression type names keyed by source span, when supplied by
     /// the driver after type checking.
-    checked_expression_types: Option<Arc<HashMap<Span, String>>>,
+    checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
+    active_expression_types: Option<Arc<HashMap<Span, String>>>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
     explicit_comptime_values: Option<Arc<HashMap<Span, Value>>>,
@@ -706,6 +708,7 @@ impl Interpreter {
             reflected_machine_state_scopes: Vec::new(),
             reflection_metadata: None,
             checked_expression_types: None,
+            active_expression_types: None,
             breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
             actor_instances: HashMap::new(),
@@ -785,7 +788,7 @@ impl Interpreter {
     }
 
     /// Attach checked expression type names produced by the typechecker.
-    pub fn set_checked_expression_types(&mut self, types: Arc<HashMap<Span, String>>) {
+    pub fn set_checked_expression_types(&mut self, types: Arc<CheckedExpressionTypes>) {
         self.checked_expression_types = Some(types);
     }
 
@@ -1701,10 +1704,31 @@ impl Interpreter {
         }
     }
 
+    fn checked_expression_type(&self, span: Span) -> Option<&String> {
+        self.active_expression_types
+            .as_ref()
+            .and_then(|types| types.get(&span))
+            .or_else(|| {
+                self.checked_expression_types
+                    .as_ref()
+                    .and_then(|types| types.get(&span))
+            })
+    }
+
+    fn captured_type_arguments(&self, args: &[TypeExpr]) -> Vec<ClosureTypeArgument> {
+        args.iter()
+            .map(|ty| ClosureTypeArgument {
+                ty: ty.clone(),
+                canonical_name: self.concrete_type_display(ty),
+                reflection: self.checked_type_info(ty).cloned(),
+            })
+            .collect()
+    }
+
     fn normalize_value_for_checked_expr(&self, expr: &Expr, value: Value) -> Result<Value, String> {
-        // A generic body can be checked for several concrete instantiations,
-        // but the span map stores only one type per source expression. A live
-        // binding carries the type of this invocation and wins for identifiers.
+        // A live binding also has its invocation's type when a compiler-owned
+        // facade has no checked source instance. Other expressions use the
+        // selected body map rather than another generic instantiation.
         let mut binding_expr = expr;
         while let Expr::View(inner, _) | Expr::Paren(inner, _) = binding_expr {
             binding_expr = inner;
@@ -1716,9 +1740,7 @@ impl Interpreter {
             None
         };
         let Some(type_name) = binding_type.as_deref().or_else(|| {
-            self.checked_expression_types
-                .as_ref()
-                .and_then(|types| types.get(&expr.span()))
+            self.checked_expression_type(expr.span())
                 .map(String::as_str)
         }) else {
             return Ok(value);
@@ -2166,21 +2188,14 @@ impl Interpreter {
             .collect();
         Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                expression_types: self.active_expression_types.clone(),
                 bindings: self
                     .type_arg_scopes
                     .iter()
                     .flat_map(|scope| scope.iter())
                     .map(|(name, ty)| (name.clone(), self.substitute_type_expr(ty)))
                     .collect(),
-                arguments: self
-                    .current_type_arguments
-                    .iter()
-                    .map(|ty| ClosureTypeArgument {
-                        ty: ty.clone(),
-                        canonical_name: self.concrete_type_display(ty),
-                        reflection: self.checked_type_info(ty).cloned(),
-                    })
-                    .collect(),
+                arguments: self.captured_type_arguments(&self.current_type_arguments),
             }),
             params: params.to_vec(),
             body: body.clone(),
@@ -2415,9 +2430,7 @@ impl Interpreter {
                 *span,
             )),
             _ => self.named_function_argument_type(expression).or_else(|| {
-                self.checked_expression_types
-                    .as_ref()
-                    .and_then(|types| types.get(&expression.span()))
+                self.checked_expression_type(expression.span())
                     .and_then(|type_name| {
                         Self::simple_type_expr_from_name(type_name, expression.span())
                     })
@@ -2825,9 +2838,7 @@ impl Interpreter {
 
         let mut actual_types = Vec::with_capacity(extra_args.len() + 1);
         if let Some(piped_type) = self
-            .checked_expression_types
-            .as_ref()
-            .and_then(|types| types.get(&step.span))
+            .checked_expression_type(step.span)
             .and_then(|type_name| Self::simple_type_expr_from_name(type_name, step.span))
         {
             actual_types.push(piped_type);
@@ -10570,11 +10581,23 @@ impl Interpreter {
         }
 
         let type_scope = self.type_scope_for_function(&func, type_args)?;
-        let arguments = func
+        let arguments: Vec<TypeExpr> = func
             .type_params
             .iter()
             .map(|param| type_scope[&param.name].clone())
             .collect();
+        let expression_types = match &self.checked_expression_types {
+            Some(types) => types
+                .select(
+                    func.name.span,
+                    &self.captured_type_arguments(&arguments),
+                    &args,
+                )
+                .map_err(|error| format!("{resolved_name}: {error}"))?,
+            None => None,
+        };
+        let saved_expression_types =
+            std::mem::replace(&mut self.active_expression_types, expression_types);
         let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
         // Resolve arguments above in the caller, then keep its type bindings
         // out of the callee's lexical scope, including non-generic callees.
@@ -10622,6 +10645,7 @@ impl Interpreter {
         self.lexical_scope_floor = saved_scope_floor;
         self.type_arg_scopes = saved_type_scopes;
         self.current_type_arguments = saved_type_arguments;
+        self.active_expression_types = saved_expression_types;
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
         call_result
@@ -10803,6 +10827,10 @@ impl Interpreter {
                         args.len()
                     ));
                 }
+                let saved_expression_types = std::mem::replace(
+                    &mut self.active_expression_types,
+                    type_context.expression_types,
+                );
                 let saved_type_scopes =
                     std::mem::replace(&mut self.type_arg_scopes, vec![type_context.bindings]);
                 let saved_type_arguments = std::mem::replace(
@@ -10847,6 +10875,7 @@ impl Interpreter {
                 self.current_namespace = saved_namespace;
                 self.type_arg_scopes = saved_type_scopes;
                 self.current_type_arguments = saved_type_arguments;
+                self.active_expression_types = saved_expression_types;
                 Ok(match result? {
                     Some(Signal::Return(v)) => v,
                     _ => Value::Nothing,
@@ -16106,6 +16135,11 @@ mod tests {
     #[test]
     fn named_function_type_context_restores_caller_after_argument_failure() {
         let mut interp = Interpreter::new();
+        let caller_types = Arc::new(HashMap::from([(
+            Span::new(FileId::new(0), 99, 100),
+            "uint64".into(),
+        )]));
+        interp.active_expression_types = Some(caller_types.clone());
         let echo = func_def(
             "echo",
             vec![("value", "int8")],
@@ -16137,12 +16171,21 @@ mod tests {
             );
             assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
             assert!(interp.current_function_trusted_stdlib);
+            assert!(Arc::ptr_eq(
+                interp.active_expression_types.as_ref().unwrap(),
+                &caller_types
+            ));
         }
     }
 
     #[test]
     fn closure_type_context_restores_caller_after_argument_failure() {
         let mut interp = Interpreter::new();
+        let caller_types = Arc::new(HashMap::from([(
+            Span::new(FileId::new(0), 99, 100),
+            "uint64".into(),
+        )]));
+        interp.active_expression_types = Some(caller_types.clone());
         interp
             .type_arg_scopes
             .push(HashMap::from([("T".into(), type_named("string"))]));
@@ -16151,6 +16194,7 @@ mod tests {
         interp.current_function_trusted_stdlib = true;
         let closure = Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                expression_types: None,
                 bindings: HashMap::from([("T".into(), type_named("int8"))]),
                 arguments: Vec::new(),
             }),
@@ -16188,6 +16232,10 @@ mod tests {
             );
             assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
             assert!(interp.current_function_trusted_stdlib);
+            assert!(Arc::ptr_eq(
+                interp.active_expression_types.as_ref().unwrap(),
+                &caller_types
+            ));
         }
     }
 
@@ -17216,7 +17264,7 @@ function main() returns nothing:
         let (values, diagnostics) = crate::evaluate_explicit_comptime_expressions(
             &parsed.module,
             Arc::new(ReflectionMetadata::new()),
-            Arc::new(HashMap::new()),
+            Arc::new(CheckedExpressionTypes::default()),
             Arc::new(HashMap::new()),
         );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");

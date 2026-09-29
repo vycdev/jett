@@ -1,0 +1,22 @@
+function bump[T](value: T) returns T:
+    return value + 1
+function make_bump[T]() returns function(T) returns T:
+    return function(value: T) returns T: return value + 1
+function main() returns nothing:
+    function(int8) returns int8 narrow = make_bump[int8]()
+    function(int64) returns int64 wide = make_bump[int64]()
+    function(uint8) returns uint8 small_unsigned = make_bump[uint8]()
+    function(uint64) returns uint64 large_unsigned = make_bump[uint64]()
+    println(narrow(127))
+    println(wide(127))
+    println(small_unsigned(255))
+    println(large_unsigned(18446744073709551615))
+    println(bump[int8](127))
+    println(bump[int64](127))
+    function(int8) returns int8 baked_narrow = comptime make_bump[int8]()
+    function(int64) returns int64 baked_wide = comptime make_bump[int64]()
+    println(baked_narrow(127))
+    println(baked_wide(127))
+    println(comptime bump[int8](127))
+    println(comptime bump[int64](127))
+    return nothing

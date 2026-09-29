@@ -9,9 +9,7 @@ impl Interpreter {
         fallback: Option<&TypeExpr>,
     ) {
         let ty = self
-            .checked_expression_types
-            .as_ref()
-            .and_then(|types| types.get(&name.span))
+            .checked_expression_type(name.span)
             .and_then(|name| Self::debug_type(name))
             .or_else(|| fallback.cloned());
         if let Some(ty) = ty {

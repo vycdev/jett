@@ -2852,7 +2852,13 @@ conversions before ownership analysis. Generic closures carry their lexical type
 bindings, ordered enclosing type arguments, and alias reflection metadata so
 materialization can select the checked body even when signatures coincide.
 Named calls resolve explicit type arguments in the caller before isolating the
-callee's type bindings. Both normal returns and failures restore the caller. The
+callee's type bindings. Both normal returns and failures restore the caller.
+The driver retains expression maps by generic declaration and checked
+specialization, including alias reflection and reflection-valued parameters.
+An invocation selects its map; a closure captures it through shared ownership.
+Generic body entries are excluded from the global fallback map. Compiler-owned
+facades may execute interpreter source instances without a checked map, while
+conflicting matching maps fail explicitly. The
 metadata is boxed to avoid inflating every interpreter value and recursive frame.
 Actor and closure construction use separate evaluator helpers so their temporary
 state does not enlarge every recursive expression frame. The nested JSON machine

@@ -137,6 +137,24 @@ fn run_bounded_with_env(
 }
 
 #[test]
+fn native_generic_integer_wrapping_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/generic_integer_wrapping.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("generic wrapping oracle");
+    assert_eq!(
+        expected.stdout,
+        "-128\n128\n0\n0\n-128\n128\n-128\n128\n-128\n128\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("generic_integer_wrapping.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native generic wrapping");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_lexical_type_scope_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_lexical_type_scope.jett");
