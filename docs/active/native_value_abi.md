@@ -649,9 +649,9 @@ only initialized fields and the still-owned expression temporaries.
 
 Scalar field bits use the existing exact payload packing (including float32,
 float64 and narrow integers). Field access implicitly borrows its parent.
-Scalar fields copy and string fields retain; move-only fields remain bounded
-views, not implicit deep copies or partial moves. A nested projection keeps its
-root owner live. Call loans prevent moving that root during evaluation of a
+Scalar fields copy and string fields retain. An owned field read clones the
+selected move-only value; an explicit projected view remains a bounded borrow.
+A nested projected view keeps its root owner live. Call loans prevent moving that root during evaluation of a
 later argument. Explicit clone recursively copies the selected owned field or
 whole record, and leaves the source intact. A failed deep clone destroys its
 initialized cloned prefix. Whole-record calls, returns, rebindings and cleanup

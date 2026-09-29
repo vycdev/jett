@@ -1302,12 +1302,27 @@ function main() returns nothing:
 }
 
 #[test]
+fn native_owned_field_read_copies_before_parent_is_consumed() {
+    let output = run_source(
+        r#"
+struct Packet:
+    data: bytes
+function consume(value: Packet) returns nothing:
+    println(bytes.to_hex(view value.data))
+function main() returns nothing:
+    Packet item = Packet(data: bytes.from_string("ab"))
+    bytes copied = item.data
+    consume(item)
+    bytes combined = bytes.concat(copied, bytes.from_string("c"))
+    println(bytes.to_hex(view combined))
+"#,
+    );
+    assert_eq!(output.stdout, b"6162\n616263\n");
+}
+
+#[test]
 fn native_user_struct_projection_loans_cannot_escape_or_conflict() {
     for (body, expected) in [
-        (
-            "bytes stolen = item.data",
-            "projection requires a view or explicit clone",
-        ),
         ("bytes stolen = view item.data", "view cannot escape"),
         ("consume(view item.data, item)", "while borrowed"),
         ("Packet moved = item\n    println(item.label)", "moved"),
@@ -1395,6 +1410,8 @@ function probe(seed: int64) returns nothing:
     std::fs::write(&object_path, object.bytes).unwrap();
     // Test-only adapter exposes a generated local symbol; production ABI and
     // entry restrictions are unchanged. No code or data bytes are rewritten.
+    // Generated functions receive an environment handle before source arguments,
+    // and scalar parameters include a pending-depth lane. Both are zero here.
     let expose = Command::new("objcopy")
         .arg(format!("--globalize-symbol={symbol}"))
         .arg(&object_path)
@@ -1408,12 +1425,12 @@ function probe(seed: int64) returns nothing:
             r#"
 #include <stdint.h>
 #include <stdlib.h>
-extern void {symbol}(void *, int64_t);
+extern void {symbol}(void *, uint64_t, int64_t, uint64_t);
 extern uint32_t jett_rt_v1_value_status(void *);
 uint32_t jett_aot_v1_entry(void *context) {{
     const char *input = getenv("JETT_NATIVE_TEST_INPUT");
     if (!input) return 1;
-    {symbol}(context, strtoll(input, 0, 10));
+    {symbol}(context, 0, strtoll(input, 0, 10), 0);
     return jett_rt_v1_value_status(context);
 }}
 "#
