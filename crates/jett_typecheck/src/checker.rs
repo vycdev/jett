@@ -198,6 +198,7 @@ pub struct CheckedStructConstruction {
 /// The result of type checking.
 #[derive(Debug)]
 pub struct CheckResult {
+    pub release: bool,
     /// Source bindings unavailable for observation after checked consumption.
     pub breakpoint_exclusions: HashMap<Span, HashSet<String>>,
     /// Diagnostics (errors and warnings) emitted during type checking.
@@ -299,6 +300,7 @@ pub fn check_with_options(
         .collect();
 
     CheckResult {
+        release: options.release,
         breakpoint_exclusions,
         diagnostics,
         type_map: checker.type_map,

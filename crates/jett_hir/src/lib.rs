@@ -2598,6 +2598,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
             Stmt::Use(_) => return None,
         };
+        if self.parent.check.release
+            && matches!(
+                kind,
+                StatementKind::Trace(_) | StatementKind::Breakpoint { .. }
+            )
+        {
+            // Lower first to consume checked nested-body facts, then discard
+            // the entire observation before MIR can expand its condition.
+            return None;
+        }
         Some(Statement { kind, span })
     }
 

@@ -1,0 +1,10 @@
+namespace app
+function observe(view stdout: Stdout) returns bool:
+    Stdout.write(view stdout, "condition evaluated\n")
+    return true
+function main(stdout: Stdout) returns nothing:
+    int64 value = 7
+    trace value
+    breakpoint observe(view stdout)
+    Stdout.write(view stdout, "program output\n")
+    return nothing

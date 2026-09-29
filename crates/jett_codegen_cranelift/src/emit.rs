@@ -39,6 +39,12 @@ pub struct ObjectArtifact {
     pub bytes: Vec<u8>,
 }
 
+/// Backend policy independent of source-language checking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodegenOptions {
+    pub optimize: bool,
+}
+
 /// Version 1 exported C symbol used by a launcher to enter one AOT Jett object.
 pub const JETT_AOT_ENTRY_SYMBOL_V1: &str = "jett_aot_v1_entry";
 
@@ -121,7 +127,7 @@ pub fn emit_host_object(
     program: &Program,
     types: &TypeInterner,
 ) -> Result<ObjectArtifact, CodegenError> {
-    emit_for_triple(program, types, HOST, None)
+    emit_for_triple(program, types, HOST, None, CodegenOptions::default())
 }
 
 /// Emit a host object with one exported versioned program-entry wrapper.
@@ -136,7 +142,16 @@ pub fn emit_host_program_object(
     types: &TypeInterner,
     entry: FunctionId,
 ) -> Result<ObjectArtifact, CodegenError> {
-    emit_for_triple(program, types, HOST, Some(entry))
+    emit_host_program_object_with_options(program, types, entry, CodegenOptions::default())
+}
+
+pub fn emit_host_program_object_with_options(
+    program: &Program,
+    types: &TypeInterner,
+    entry: FunctionId,
+    options: CodegenOptions,
+) -> Result<ObjectArtifact, CodegenError> {
+    emit_for_triple(program, types, HOST, Some(entry), options)
 }
 
 /// Emit an object only when `requested_target` exactly matches the compiler
@@ -157,7 +172,7 @@ pub fn emit_object_for_target(
             supported: HOST.to_string(),
         });
     }
-    emit_for_triple(program, types, requested, None)
+    emit_for_triple(program, types, requested, None, CodegenOptions::default())
 }
 
 /// Emit a host-target object with an explicit checked MIR program entry.
@@ -181,7 +196,13 @@ pub fn emit_program_object_for_target(
             supported: HOST.to_string(),
         });
     }
-    emit_for_triple(program, types, requested, Some(entry))
+    emit_for_triple(
+        program,
+        types,
+        requested,
+        Some(entry),
+        CodegenOptions::default(),
+    )
 }
 
 fn emit_for_triple(
@@ -189,6 +210,7 @@ fn emit_for_triple(
     types: &TypeInterner,
     target: Triple,
     entry: Option<FunctionId>,
+    options: CodegenOptions,
 ) -> Result<ObjectArtifact, CodegenError> {
     if let Some(entry) = entry {
         validate_program_entry_contract(program, types, entry)?;
@@ -205,7 +227,13 @@ fn emit_for_triple(
             function_id: entry.index(),
         });
     }
-    let flag_builder = settings::builder();
+    let mut flag_builder = settings::builder();
+    if options.optimize {
+        use cranelift_codegen::settings::Configurable;
+        flag_builder
+            .set("opt_level", "speed")
+            .map_err(|error| CodegenError::Backend(error.to_string()))?;
+    }
     let flags = settings::Flags::new(flag_builder);
     let isa_builder = isa::lookup(target.clone()).map_err(|error| {
         CodegenError::Backend(format!(

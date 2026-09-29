@@ -15,13 +15,12 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use jett_codegen_cranelift::{CodegenError, emit_host_object, emit_host_program_object};
+use jett_codegen_cranelift::{CodegenError, emit_host_object};
 use jett_hir::FunctionId;
 
 use crate::{
-    BackendLoweringError, BackendLoweringResult, lower_file_for_backend,
-    lower_file_for_native_property_suite, lower_file_for_native_tests,
-    lower_file_for_native_verify_suite,
+    BackendLoweringError, BackendLoweringResult, lower_file_for_native_property_suite,
+    lower_file_for_native_tests, lower_file_for_native_verify_suite,
 };
 
 /// The sole target accepted by the version 1 native Windows linker.
@@ -563,14 +562,28 @@ pub fn emit_host_object_for_file(
 pub fn emit_host_program_object_for_file(
     source_path: &Path,
 ) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
-    let lowered = lower_checked_file(source_path)?;
+    emit_host_program_object_for_file_with_options(source_path, crate::BuildOptions::default())
+}
+
+pub fn emit_host_program_object_for_file_with_options(
+    source_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
+    let lowered =
+        crate::lower_file_for_backend_with_options(source_path, options).map_err(|source| {
+            NativeBuildError::Lowering {
+                source_path: source_path.to_path_buf(),
+                source: Box::new(source),
+            }
+        })?;
     let program_entry =
         lowered
             .program_entry
             .ok_or_else(|| NativeBuildError::MissingProgramEntry {
                 source_path: source_path.to_path_buf(),
             })?;
-    emit_program_object_from_lowering(source_path, lowered, program_entry)
+    emit_program_object_from_lowering(source_path, lowered, program_entry, options.release)
 }
 
 /// Emit one launcher-compatible object that calls every checked `verify` body
@@ -591,7 +604,7 @@ pub fn emit_host_verify_suite_object_for_file(
             .ok_or_else(|| NativeBuildError::MissingVerifyBodies {
                 source_path: source_path.to_path_buf(),
             })?;
-    emit_program_object_from_lowering(source_path, lowered, entry)
+    emit_program_object_from_lowering(source_path, lowered, entry, false)
 }
 
 /// Emit one launcher-compatible object that calls each checked property body
@@ -612,31 +625,28 @@ pub fn emit_host_property_suite_object_for_file(
             .ok_or_else(|| NativeBuildError::MissingPropertyBodies {
                 source_path: source_path.to_path_buf(),
             })?;
-    emit_program_object_from_lowering(source_path, lowered, entry)
+    emit_program_object_from_lowering(source_path, lowered, entry, false)
 }
 
 fn emit_program_object_from_lowering(
     source_path: &Path,
     lowered: BackendLoweringResult,
     program_entry: FunctionId,
+    optimize: bool,
 ) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
-    let object = emit_host_program_object(&lowered.mir, &lowered.interner, program_entry).map_err(
-        |source| NativeBuildError::Codegen {
-            source_path: source_path.to_path_buf(),
-            source,
-        },
-    )?;
+    let object = jett_codegen_cranelift::emit_host_program_object_with_options(
+        &lowered.mir,
+        &lowered.interner,
+        program_entry,
+        jett_codegen_cranelift::CodegenOptions { optimize },
+    )
+    .map_err(|source| NativeBuildError::Codegen {
+        source_path: source_path.to_path_buf(),
+        source,
+    })?;
     Ok(NativeProgramObjectArtifact {
         object: native_object(object.target, object.symbols, object.bytes)?,
         program_entry,
-    })
-}
-
-fn lower_checked_file(source_path: &Path) -> Result<BackendLoweringResult, NativeBuildError> {
-    validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
-    lower_file_for_backend(source_path).map_err(|source| NativeBuildError::Lowering {
-        source_path: source_path.to_path_buf(),
-        source: Box::new(source),
     })
 }
 
@@ -664,7 +674,22 @@ pub fn build_host_executable(
     launcher: &NativeLauncherBundle,
     output_path: &Path,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
-    let object = emit_host_program_object_for_file(source_path)?;
+    build_host_executable_with_options(
+        source_path,
+        launcher,
+        output_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source release policy and backend optimization before atomic linking.
+pub fn build_host_executable_with_options(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_program_object_for_file_with_options(source_path, options)?;
     link_host_object(&object, launcher, output_path)
 }
 

@@ -2802,6 +2802,10 @@ fixture-gate result is distinct from a complete native release audit.
 The CLI validates explicit build targets before loading source, accepting only
 the current supported host. CLI frontend validation and native driver artifact
 generation remain separate until runtime bundle packaging is integrated.
+The native driver accepts `BuildOptions` for artifact generation. Release mode
+applies frontend debug-print restrictions, discards trace/breakpoint HIR nodes
+before MIR expands their expressions, and enables Cranelift speed optimization.
+Breakpoint conditions therefore have no release execution or output.
 
 All eleven checked capability types have native entry grants and value
 representations. Stderr, Stdin, Filesystem, Network, Process, and Log use

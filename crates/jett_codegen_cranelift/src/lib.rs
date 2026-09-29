@@ -13,8 +13,9 @@ mod values;
 mod verify;
 
 pub use emit::{
-    JETT_AOT_ENTRY_SUCCESS_V1, JETT_AOT_ENTRY_SYMBOL_V1, ObjectArtifact, emit_host_object,
-    emit_host_program_object, emit_object_for_target, emit_program_object_for_target, host_target,
+    CodegenOptions, JETT_AOT_ENTRY_SUCCESS_V1, JETT_AOT_ENTRY_SYMBOL_V1, ObjectArtifact,
+    emit_host_object, emit_host_program_object, emit_host_program_object_with_options,
+    emit_object_for_target, emit_program_object_for_target, host_target,
 };
 pub use error::CodegenError;
 pub use mangle::symbol_name;

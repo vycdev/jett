@@ -6183,7 +6183,7 @@ The trace data is part of the agent TOON payload. The LLM receives it directly i
 5. Fixes the function.
 6. Removes the `trace` statement.
 
-The compiler can optionally warn about `trace` statements left in code during release builds. `trace` statements are compiled out entirely in `--release` mode — they produce no runtime overhead and no output in production.
+The compiler can optionally warn about `trace` statements left in code during release builds. `trace` statements are compiled out entirely in `--release` mode — they produce no runtime overhead and no output in production. Native release artifact generation also discards breakpoint conditions before executable control flow is lowered.
 
 #### Combining Trace with Property Testing
 

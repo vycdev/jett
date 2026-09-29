@@ -3025,6 +3025,52 @@ fn native_breakpoints_preserve_lexical_frames_and_capture_types() {
 }
 
 #[test]
+fn native_release_strips_debug_observations_and_their_conditions() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/release_debug_observations.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("release_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &fixture,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .unwrap();
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        if release {
+            assert_eq!(actual.stdout, b"program output\n");
+            assert!(actual.stderr.is_empty(), "{actual:?}");
+        } else {
+            assert_eq!(actual.stdout, expected.stdout.as_bytes());
+            assert_eq!(
+                String::from_utf8_lossy(&actual.stderr),
+                format!("{}\n", expected.debug_output.join("\n"))
+            );
+        }
+    }
+    let source = directory.path().join("debug_print.jett");
+    std::fs::write(
+        &source,
+        "function main() returns nothing:\n    println(7)\n",
+    )
+    .unwrap();
+    let output = directory.path().join("rejected.exe");
+    let error = jett_driver::native::build_host_executable_with_options(
+        &source,
+        launcher(),
+        &output,
+        jett_driver::BuildOptions { release: true },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("E0362"), "{error}");
+    assert!(!output.exists());
+}
+
+#[test]
 fn native_breakpoints_omit_consumed_bindings() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/breakpoint_consumed_bindings.jett");

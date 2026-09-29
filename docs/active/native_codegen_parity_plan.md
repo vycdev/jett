@@ -1474,3 +1474,16 @@ reinitialization, copyable aliases, and actor handlers. Actor snapshots now
 exclude caller locals and restore the caller frame after handler completion or
 failure. This closes the consumed-binding observation decision; it does not
 establish the remaining full-release gates.
+
+
+### Native release policy
+
+`build_host_executable_with_options` and its program-object counterpart now
+apply the same release checker policy as frontend builds. HIR discards complete
+trace/breakpoint observations before MIR lowering, including breakpoint condition
+effects, while retaining validation of their checked source. Cranelift uses its
+speed optimization setting for release objects. The linked release differential
+fixture proves debug-condition output is absent, application capability output
+remains, debug builds match the interpreter, and forbidden debug printing cannot
+publish a release artifact. Runtime bundle selection and CLI packaging remain
+the next release gate.
