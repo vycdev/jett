@@ -7672,7 +7672,9 @@ including reflected construction and comptime evaluation. Typed observations
 therefore redact secret generic fields while keeping the base struct display name.
 Interface implementations use the full instantiated struct identity, so
 `Box[int64]` and `Box[string]` dispatch independently. Transparent type aliases
-retain that identity for concrete method calls and method values.
+retain that identity for concrete method calls and method values. A bare
+generic owner such as `Box.name` is rejected for missing type arguments; name
+a concrete instantiation with a type alias before accessing its methods.
 Actor constructor parameters are retained before state initializers run; an
 initializer consuming its working parameter does not consume the actor's capture.
 

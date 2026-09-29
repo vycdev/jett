@@ -92,9 +92,11 @@ on the value. Implementations for `Box[int64]`, `Box[string]`, and
 qualification and transparent aliases normalize before matching. Concrete method
 aliases use the fully instantiated owner, including through a transparent type
 alias such as `type IntBox = Box[int64]`. An inherent method keeps its own source
-identity. A bare generic owner such as `Box.name` currently escapes checking with
-an error type and must receive a source diagnostic; it is not a concrete method
-identity. This checker diagnostic remains an open gate. Pending interface receivers retain the
+identity. A bare generic owner such as `Box.name` has no instantiated type and must
+receive the same missing-type-arguments diagnostic as other incomplete generic
+types. Use a concrete type alias for a method call or value; inferring the owner
+from a receiver would introduce a new inference rule. The checker must reject
+this source before HIR lowering instead of silently returning an error type. Pending interface receivers retain the
 existing failure behavior until joined.
 
 Comptime callback materialization must reconstruct the evaluated source function

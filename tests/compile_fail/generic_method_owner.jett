@@ -1,0 +1,22 @@
+# ERROR: E0309 x4
+namespace records
+export interface Named:
+    function name(view self: Named) returns string
+export struct Box[T]:
+    item: T
+implement Named for Box[int64]:
+    function name(view self: Box[int64]) returns string:
+        return "integer"
+function local(view value: Box[int64]) returns string:
+    return Box.name(view value)
+namespace app
+function qualified(view value: records.Box[int64]) returns string:
+    use records
+    return records.Box.name(view value)
+function aliased(view value: records.Box[int64]) returns string:
+    use records as r
+    return r.Box.name(view value)
+function stored(view value: records.Box[int64]) returns string:
+    use records
+    function(view records.Box[int64]) returns string callback = records.Box.name
+    return callback(view value)

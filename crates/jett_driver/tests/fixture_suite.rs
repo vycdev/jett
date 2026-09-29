@@ -2996,3 +2996,8 @@ fn stdlib_loaded_for_test_file() {
         .unwrap_or_else(|err| panic!("expected jett test path to load stdlib: {err}"));
     assert_eq!(result.failed, 0);
 }
+
+compile_fail_fixture!(
+    compile_fail_generic_method_owner,
+    "generic_method_owner.jett"
+);

@@ -13268,6 +13268,30 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_field_access(&mut self, base: &Expr, field: &ast::Ident, span: Span) -> TypeId {
+        let owner_span = if self.resolve.resolutions.contains_key(&base.span()) {
+            base.span()
+        } else {
+            span
+        };
+        if let Some(owner) = Self::extract_dotted_name(base)
+            && let owner = self.resolved_or_expanded_name(&owner, owner_span)
+            && self.generic_struct_templates.contains_key(&owner)
+            && self
+                .resolve
+                .resolutions
+                .get(&owner_span)
+                .is_none_or(|definition| {
+                    matches!(
+                        self.resolve.scope_table.def(*definition).kind,
+                        DefKind::Struct | DefKind::Namespace
+                    )
+                })
+        {
+            // A generic declaration is not a concrete method owner. Reuse the
+            // missing-type-arguments diagnostic instead of letting an untyped
+            // namespace path escape into the backend as an error type.
+            return self.monomorphize_struct(&owner, &[], base.span());
+        }
         if !span.file.is_stdlib()
             && let Some(prefix) = Self::extract_dotted_name(base)
             && self.resolved_or_expanded_name(&format!("{prefix}.{}", field.name), span)
