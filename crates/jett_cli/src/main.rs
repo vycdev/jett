@@ -2006,6 +2006,14 @@ fn build_command(
             return report_error(&error.to_string());
         }
     };
+    if !agent {
+        for diagnostic in object.diagnostics() {
+            eprint!(
+                "{}",
+                jett_diagnostics::render::render_diagnostic(diagnostic, object.source(), file)
+            );
+        }
+    }
     let host = jett_driver::native::host_target();
     let profile = if release { "release" } else { "debug" };
     let manifest = runtime_bundle
@@ -2058,8 +2066,16 @@ fn build_command(
     match jett_driver::native::link_host_object(&object, &bundle, &destination) {
         Ok(artifact) => {
             if agent {
+                print!(
+                    "{}",
+                    jett_diagnostics::toon::render_toon(
+                        object.diagnostics(),
+                        object.source(),
+                        file
+                    )
+                );
                 println!(
-                    "status: ok\nartifact: {}\ntarget: {}",
+                    "artifact: {}\ntarget: {}",
                     escape_toon_scalar(&artifact.path.display().to_string()),
                     escape_toon_scalar(&artifact.target)
                 );

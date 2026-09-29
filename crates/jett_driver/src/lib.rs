@@ -74,6 +74,9 @@ pub struct BuildResult {
 /// file IDs.
 #[derive(Debug)]
 pub struct BackendLoweringResult {
+    /// Frontend observations retained for successful artifact builds.
+    pub diagnostics: Vec<Diagnostic>,
+    pub source: String,
     pub hir: jett_hir::Program,
     pub mir: jett_mir::Program,
     /// Exact checked HIR/MIR identity of the primary source file's `main`
@@ -2868,6 +2871,8 @@ fn lower_file_for_backend_inner(
     jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;
 
     Ok(BackendLoweringResult {
+        diagnostics,
+        source,
         hir,
         mir,
         program_entry,

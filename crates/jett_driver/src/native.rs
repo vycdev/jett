@@ -237,13 +237,23 @@ impl NativeObjectArtifact {
 }
 
 /// Native object containing the exported launcher entry wrapper.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct NativeProgramObjectArtifact {
     object: NativeObjectArtifact,
     program_entry: FunctionId,
+    diagnostics: Vec<jett_diagnostics::Diagnostic>,
+    source: String,
 }
 
 impl NativeProgramObjectArtifact {
+    pub fn diagnostics(&self) -> &[jett_diagnostics::Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
     pub fn target(&self) -> &str {
         self.object.target()
     }
@@ -735,6 +745,8 @@ fn emit_program_object_from_lowering(
     Ok(NativeProgramObjectArtifact {
         object: native_object(object.target, object.symbols, object.bytes)?,
         program_entry,
+        diagnostics: lowered.diagnostics,
+        source: lowered.source,
     })
 }
 

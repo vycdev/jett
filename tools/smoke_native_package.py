@@ -37,6 +37,7 @@ def main() -> None:
             work = Path(temporary)
             source = work / "hello.jett"
             source_text = ('function main(stdout: Stdout) returns nothing:\n'
+                           '    int64 unused = 42\n'
                            '    string marker = package_smoke_probe.message()\n'
                            '    trace marker\n'
                            '    Stdout.write(view stdout, "{marker}\\n")\n')
@@ -46,7 +47,8 @@ def main() -> None:
                 build = [compiler, "build", source, "-o", binary]
                 if release:
                     build.append("--release")
-                command(build, work, env)
+                compiled = command(build, work, env)
+                assert "warning[E0202]" in compiled.stderr, compiled
                 source.unlink()
                 result = command([binary], work, env)
                 assert result.stdout == "installed stdlib\n", result
@@ -71,6 +73,7 @@ def main() -> None:
             # Agent mode identifies the artifact, and default paths separate profiles.
             result = command([compiler, "build", source, "--agent"], work, env)
             assert "status: ok" in result.stdout and "artifact:" in result.stdout, result
+            assert "E0202" in result.stdout and "unused" in result.stdout, result
             name = "hello.exe" if os.name == "nt" else "hello"
             assert (work / "target" / metadata["target"] / "debug" / name).is_file()
             command([compiler, "build", source, "--check"], work, env)
