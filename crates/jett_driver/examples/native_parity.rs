@@ -193,16 +193,32 @@ fn suite_behavior(
     launcher: &NativeLauncherBundle,
     property: bool,
 ) -> Result<Value, String> {
+    if property {
+        let result = native::run_host_property_suite(
+            source,
+            launcher,
+            native::NativePropertyOptions::default(),
+        )
+        .map_err(|error| error.to_string())?;
+        let failure = result.failure.as_ref().map(|failure| json!({
+            "property": failure.name, "trial": failure.trial, "counterexample": failure.counterexample,
+        }));
+        return Ok(json!({
+            "passed": result.failure.is_none(),
+            "exit_code": if result.failure.is_none() { 0 } else { 71 },
+            "stdout": String::from_utf8_lossy(&result.stdout),
+            "stderr": String::from_utf8_lossy(&result.stderr),
+            "cleanup_verified": true,
+            "trials": result.trials,
+            "failure": failure,
+        }));
+    }
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let binary = directory
         .path()
         .join(if cfg!(windows) { "suite.exe" } else { "suite" });
-    let build = if property {
-        native::build_host_property_suite_executable
-    } else {
-        native::build_host_verify_suite_executable
-    };
-    build(source, launcher, &binary).map_err(|error| error.to_string())?;
+    native::build_host_verify_suite_executable(source, launcher, &binary)
+        .map_err(|error| error.to_string())?;
     let actual = execute(&binary, directory.path(), None, None, None, None)?;
     Ok(json!({
         "passed": actual.status.success(),

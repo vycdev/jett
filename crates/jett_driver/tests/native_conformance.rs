@@ -1066,7 +1066,6 @@ fn native_property_suites_execute_for_all_run_pass_fixtures() {
         })
         .collect::<Vec<_>>();
     sources.sort();
-    let directory = tempfile::tempdir().expect("property audit directory");
     let mut attempted = 0;
     let mut property_blocks = 0;
     let mut passed = 0;
@@ -1085,19 +1084,21 @@ fn native_property_suites_execute_for_all_run_pass_fixtures() {
         }
         attempted += 1;
         property_blocks += count;
-        let executable = directory.path().join(format!(
-            "{}.exe",
-            source.file_stem().expect("fixture stem").to_string_lossy()
-        ));
-        match build_host_property_suite_executable(&source, launcher(), &executable) {
-            Ok(artifact) => {
-                let output = run_bounded(&artifact.path, directory.path());
-                if output.status.success() {
+        match jett_driver::native::run_host_property_suite(
+            &source,
+            launcher(),
+            jett_driver::native::NativePropertyOptions::default(),
+        ) {
+            Ok(result) => {
+                if result.failure.is_none() {
+                    assert_eq!(
+                        result.trials,
+                        count * jett_comptime::verify::PROPERTY_DEFAULT_ITERATIONS
+                    );
                     passed += 1;
                 } else {
-                    failures.push(format!("{}: {output:?}", source.display()));
+                    failures.push(format!("{}: {result:?}", source.display()));
                 }
-                fs::remove_file(&artifact.path).expect("remove finished property executable");
             }
             Err(error) => failures.push(format!("{}: {error}", source.display())),
         }

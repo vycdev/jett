@@ -24,6 +24,7 @@ use jett_query::{QueryDatabase, SourceOrigin};
 use jett_resolve::resolve;
 use jett_typecheck::{CheckOptions, CheckResult, check, check_with_options};
 use jett_types::ReflectionMetadata;
+pub use native_property_cases::NativePropertyPlan;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -92,6 +93,8 @@ pub struct BackendLoweringResult {
     pub native_verify_entry: Option<jett_hir::FunctionId>,
     /// Compiler-owned entry for generated native `property` trials.
     pub native_property_entry: Option<jett_hir::FunctionId>,
+    /// Retained checked-session inputs for native property replay.
+    pub native_property_plan: Option<NativePropertyPlan>,
     pub interner: jett_types::TypeInterner,
     pub source_origins: HashMap<FileId, SourceOrigin>,
     pub reflection_metadata: Arc<ReflectionMetadata>,
@@ -2852,7 +2855,7 @@ fn lower_file_for_backend_inner(
     } else {
         None
     };
-    let native_property_entry = if mode == BackendLoweringMode::PropertySuite {
+    let native_property_plan = if mode == BackendLoweringMode::PropertySuite {
         let cases = collect_property_cases_with_metadata_and_expression_types(
             &parse_result.module,
             reflection_metadata.clone(),
@@ -2872,6 +2875,7 @@ fn lower_file_for_backend_inner(
     } else {
         None
     };
+    let native_property_entry = native_property_plan.as_ref().map(|plan| plan.entry);
     let program_entry = lowered_program_entry(&hir, source_program_entry)?;
     jett_hir::complete_value_conversions(&mut hir, &check_result.interner)
         .map_err(BackendLoweringError::Hir)?;
@@ -2886,6 +2890,7 @@ fn lower_file_for_backend_inner(
         program_entry,
         native_verify_entry,
         native_property_entry,
+        native_property_plan,
         interner: check_result.interner,
         source_origins,
         reflection_metadata,

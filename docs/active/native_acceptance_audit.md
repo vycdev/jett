@@ -65,9 +65,8 @@ The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
 Passing its growing regression suite does not remove those audit obligations.
 
-Native property failure shrinking remains open in the accepted plan. Normal
-native builds already run frontend verify/property
-checks before emission; a source-level failed property cannot be silently
+Normal native builds run frontend verify/property checks before emission; a
+source-level failed property cannot be silently
 bypassed to claim native failure coverage.
 `native_builds_preserve_shrunk_property_diagnostics_and_existing_artifacts`
 pins that public pre-emission contract: a property fails on its fourth generated
@@ -82,10 +81,24 @@ that the frontend did not encounter. Both debug and optimized linked suites
 report the second property's name, trial 4, and original assertion text, with
 successful owned-value cleanup. A failure injected after a successful suite
 checks that the compiled calls cleared their context. Runtime ABI tests cover
-context clearing,
-repeated/undersized failure copies, and caught predicate errors. This supplies
+context clearing, repeated/undersized failure copies, and caught predicate
+errors. This supplies
 case-specific diagnostics without skipping frontend validation or disclosing
-argument values; native shrinking is still unresolved.
+argument values.
+
+The native driver now retains checked input and function identities for replay
+and shares the interpreter's bounded shrink search. The property inventory gate
+and standalone parity report both use this driver. The regression
+`native_property_runner_shrinks_native_failures_from_the_checked_session` injects
+a checked-HIR assertion failure after frontend validation, then verifies native
+prefix search, isolated replay, and scalar/list shrinking in debug and optimized
+modes. It matches the interpreter's counterexample after deleting the source;
+original suite output stays separate from replay output. Additional regressions
+reject timeouts and an initial MIR fault that checked-HIR replay cannot reproduce.
+Candidate generation/order and backend-error propagation are covered by the
+shared shrink-search tests. Broader failing-input combinations, including
+refinements and narrow integer boundaries, still need auditing; passing the
+successful inventory does not prove every shrink candidate can be replayed.
 
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical

@@ -5883,7 +5883,12 @@ identifies the property name and one-based trial number before the original
 runtime error. This diagnostic metadata contains no generated argument values.
 Normal builds still reject failing properties during frontend validation, with
 the frontend's shrunk counterexample. Shrinking a failure encountered only in
-native execution remains unimplemented.
+native execution is performed by the native suite driver: it replays the failing
+case and evaluates the existing bounded shrink search using fresh native
+processes. A standalone suite executable reports the original failure; the
+driver returns the shrunk counterexample separately. Backend build errors,
+timeouts, unsuccessful cleanup, and unreproducible failures remain runner
+errors, not passing properties or accepted shrink candidates.
 
 #### Property Tests with Capability Mocks
 

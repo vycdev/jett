@@ -2838,7 +2838,17 @@ name and one-based trial context before materializing each case, then clears it
 after the call. The runtime copies that metadata independently of Jett value
 handles. Only terminal failure copies prepend it; errors caught during
 refinement checking retain their original text. Normal failure cleanup still
-runs. Frontend shrinking does not supply native runtime shrinking.
+runs. The native property driver retains the exact checked case/function
+identities and uses shorter native prefixes to locate the first failing case
+without parsing debug output. It confirms an isolated replay, then reuses the
+interpreter's ordered 50-step shrink search with a native execution predicate.
+Every replay clones the retained checked HIR, replaces only compiler-owned
+input construction, completes typed conversions, validates MIR, and compiles
+and links a fresh attempt. It does not reload source or execute property bodies
+in the interpreter. Every attempt has a fresh process/context and a deadline.
+Only exits 0 and 71 count as completed attempts; other exits, compilation/link
+errors, timeouts, and non-reproducible failures abort the runner. Initial suite
+stdout/stderr remain separate from replay output and the shrunk counterexample.
 The CLI validates explicit build targets before loading source, accepting only
 the current supported host. Native `build` invokes the driver object and link stages and publishes an
 executable atomically. `build --check` retains frontend-only validation. The

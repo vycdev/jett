@@ -876,7 +876,11 @@ then clears the context after the body returns. `PropertyCaseSet` copies this
 diagnostic prefix into runtime context storage; `PropertyCaseClear` removes it.
 Neither operation retains a Jett value. Terminal failure copies prepend this
 context without changing caught predicate errors or the static v1 result.
-Native counterexample shrinking remains follow-up work.
+The driver performs native counterexample shrinking by regenerating checked
+input constructions and invoking fresh native processes through the same
+launcher. It shares the interpreter's bounded shrink search, preserves the
+original suite output, and accepts failed candidates only after successful
+runtime cleanup. A standalone suite executable does not itself run this search.
 
 Evidence includes existing generic_struct and explicit_struct_equality fixture
 bodies executed with supplemental mains, nested owners and early returns,

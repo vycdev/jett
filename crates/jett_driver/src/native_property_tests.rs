@@ -1,6 +1,180 @@
 //! Inject a backend-only failure after ordinary frontend validation.
 use super::*;
 
+#[test]
+fn native_property_runner_shrinks_native_failures_from_the_checked_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("shrink.jett");
+    let text = "namespace app\nproperty first:\n    given value: int8\n    assert value == value\nproperty target:\n    given number: int8\n    given items: list[string]\n    assert number <= 127 \"backend sentinel\"\n";
+    fs::write(&source, text).unwrap();
+    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
+    let launcher = launcher();
+    let success =
+        run_host_property_suite(&source, &launcher, NativePropertyOptions::default()).unwrap();
+    assert!(success.failure.is_none());
+    assert_eq!(success.trials, 200);
+    assert!(success.stdout.is_empty() && success.stderr.is_empty());
+
+    // Keep frontend validation mandatory, then inject a backend-only failure
+    // into the retained checked HIR. All later executions are native.
+    let mut changed = 0;
+    for function in &mut lowered.hir.functions {
+        if function.identity.declaration.kind != jett_hir::DeclarationKind::Property {
+            continue;
+        }
+        for statement in &mut function.body.statements {
+            if let jett_hir::StatementKind::Assert { condition, .. } = &mut statement.kind {
+                if let jett_hir::ExpressionKind::Binary { right, .. } = &mut condition.kind {
+                    if right.kind == jett_hir::ExpressionKind::Int(127) {
+                        right.kind = jett_hir::ExpressionKind::Int(2);
+                        changed += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+
+    // The source oracle must reject the corresponding failing property, while
+    // a retained native session can replay even after its source is removed.
+    fs::write(&source, text.replace("<= 127", "<= 2")).unwrap();
+    let oracle = crate::test_file(&source).unwrap();
+    assert!(matches!(
+        run_host_property_suite(&source, &launcher, NativePropertyOptions::default()),
+        Err(NativePropertyRunError::Lowering(
+            BackendLoweringError::Build(_)
+        ))
+    ));
+    fs::remove_file(&source).unwrap();
+    for optimize in [false, true] {
+        let result = property_runner::run_lowered(
+            &source,
+            &lowered,
+            &launcher,
+            NativePropertyOptions {
+                optimize,
+                ..NativePropertyOptions::default()
+            },
+        )
+        .unwrap();
+        let failure = result.failure.expect("the native assertion must fail");
+        assert_eq!(result.trials, 104);
+        assert_eq!(failure.name, "target");
+        assert_eq!(failure.trial, 4);
+        assert_eq!(failure.counterexample, "number = 3, items = list()");
+        assert_eq!(failure.span.start as usize, text.find("target:").unwrap());
+        assert!(result.stdout.is_empty());
+        assert_eq!(
+            result.stderr,
+            b"runtime error: property 'target' trial 4: backend sentinel\n"
+        );
+        let expected = format!(
+            "backend sentinel (counterexample: {})",
+            failure.counterexample
+        );
+        assert_eq!(oracle.failed, 1);
+        assert_eq!(oracle.blocks[1].error.as_deref(), Some(expected.as_str()));
+        assert_eq!(oracle.blocks[1].iterations, Some(failure.trial));
+    }
+}
+
+#[test]
+fn native_property_runner_does_not_shrink_timeouts_or_unreproducible_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("replay.jett");
+    fs::write(&source, "property stable:\n    assert true\n").unwrap();
+    let launcher = launcher();
+    let mut lowered = lower_file_for_native_property_suite(&source).unwrap();
+    // A fault present only in the initial MIR cannot be reproduced by checked
+    // HIR replay. Do not return a passing result or fabricate a counterexample.
+    let property = lowered
+        .mir
+        .functions
+        .iter_mut()
+        .find(|function| {
+            function.identity.declaration.kind == jett_hir::DeclarationKind::Property
+                && !function
+                    .identity
+                    .declaration
+                    .name
+                    .starts_with("__native_property_suite:")
+        })
+        .unwrap();
+    let mut changed = 0;
+    for block in &mut property.blocks {
+        for statement in &mut block.statements {
+            if let jett_mir::StatementKind::Assert { condition, .. } = &mut statement.kind {
+                condition.kind = jett_hir::ExpressionKind::Bool(false);
+                changed += 1;
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+    let error = property_runner::run_lowered(
+        &source,
+        &lowered,
+        &launcher,
+        NativePropertyOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        &error,
+        NativePropertyRunError::ReplayPassed { .. }
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("runtime error: property 'stable' trial 1: assertion failed")
+    );
+
+    let property = lowered
+        .hir
+        .functions
+        .iter_mut()
+        .find(|function| {
+            function.identity.declaration.kind == jett_hir::DeclarationKind::Property
+                && !function
+                    .identity
+                    .declaration
+                    .name
+                    .starts_with("__native_property_suite:")
+        })
+        .unwrap();
+    property.body.statements.push(jett_hir::Statement {
+        kind: jett_hir::StatementKind::While {
+            condition: jett_hir::Expression {
+                kind: jett_hir::ExpressionKind::Bool(true),
+                ty: jett_types::TypeInterner::BOOL,
+                span: property.span,
+            },
+            body: jett_hir::Block {
+                statements: Vec::new(),
+                span: property.span,
+            },
+        },
+        span: property.span,
+    });
+    lowered.mir = jett_mir::lower(&lowered.hir, &lowered.interner).unwrap();
+    let error = property_runner::run_lowered(
+        &source,
+        &lowered,
+        &launcher,
+        NativePropertyOptions {
+            attempt_timeout: Duration::from_millis(25),
+            ..NativePropertyOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            NativePropertyRunError::Execution(NativeBuildError::LinkTimedOut { .. })
+        ),
+        "{error}"
+    );
+}
+
 fn launcher() -> NativeLauncherBundle {
     let executable = std::env::current_exe().unwrap();
     let profile_directory = executable.parent().unwrap().parent().unwrap();

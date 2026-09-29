@@ -6,6 +6,13 @@
 //! link stages accept explicit launcher metadata and invoke tools without a shell,
 //! and publishes an executable only after a successful bounded link.
 
+#[path = "native_property_runner.rs"]
+mod property_runner;
+pub use property_runner::{
+    NativePropertyFailure, NativePropertyOptions, NativePropertyRunError,
+    NativePropertySuiteResult, run_host_property_suite,
+};
+
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;

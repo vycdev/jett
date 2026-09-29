@@ -776,36 +776,43 @@ fn shrink_inputs(
     pb: &PropertyBlock,
     failing: Vec<Value>,
 ) -> Vec<Value> {
-    let mut current = failing;
+    let result = shrink_property_inputs(failing, |attempt| {
+        interp.push_scope_public();
+        for (given, value) in pb.givens.iter().zip(attempt.iter()) {
+            interp.set_variable_public(&given.name.name, value.clone());
+        }
+        let result = interp.exec_block_in_namespace(namespace, &pb.body);
+        interp.pop_scope_public();
+        Ok::<_, std::convert::Infallible>(result.is_err())
+    });
+    match result {
+        Ok(values) => values,
+        Err(never) => match never {},
+    }
+}
 
+/// Apply the interpreter's ordered, bounded shrink search using a supplied
+/// execution backend. `Ok(true)` accepts a failing candidate; backend errors
+/// abort the search and must not be treated as property counterexamples.
+pub fn shrink_property_inputs<E>(
+    failing: Vec<Value>,
+    mut fails: impl FnMut(&[Value]) -> Result<bool, E>,
+) -> Result<Vec<Value>, E> {
+    let mut current = failing;
     'outer: for _ in 0..SHRINK_MAX_STEPS {
-        // Try to shrink each input one at a time.
         for i in 0..current.len() {
-            let candidates = shrink_value(&current[i]);
-            for candidate in candidates {
+            for candidate in shrink_value(&current[i]) {
                 let mut attempt = current.clone();
                 attempt[i] = candidate;
-
-                // Run the property with the candidate inputs.
-                interp.push_scope_public();
-                for (given, value) in pb.givens.iter().zip(attempt.iter()) {
-                    interp.set_variable_public(&given.name.name, value.clone());
-                }
-                let result = interp.exec_block_in_namespace(namespace, &pb.body);
-                interp.pop_scope_public();
-
-                if result.is_err() {
-                    // Still fails — use the simpler version.
+                if fails(&attempt)? {
                     current = attempt;
                     continue 'outer;
                 }
             }
         }
-        // No further shrinking possible.
         break;
     }
-
-    current
+    Ok(current)
 }
 
 struct PropertyDefinitions<'a> {
@@ -4054,6 +4061,43 @@ mod tests {
             }),
             "expected generic struct type arguments to resolve in the use-site namespace"
         );
+    }
+
+    #[test]
+    fn shared_property_shrinker_preserves_search_order_and_counterexamples() {
+        let mut attempted = Vec::new();
+        let result = shrink_property_inputs(
+            vec![Value::Int64(42), Value::List(vec![Value::Int64(99)])],
+            |values| {
+                attempted.push(values.to_vec());
+                Ok::<_, ()>(matches!(values[0], Value::Int64(n) if n >= 2))
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec![Value::Int64(2), Value::List(vec![])]);
+        assert_eq!(attempted[0][0], Value::Int64(0));
+        assert_eq!(attempted[1][0], Value::Int64(21));
+    }
+
+    #[test]
+    fn shared_property_shrinker_propagates_backend_errors_and_keeps_the_step_bound() {
+        let mut attempts = 0;
+        let result = shrink_property_inputs(vec![Value::Int64(42)], |_| {
+            attempts += 1;
+            Err::<bool, _>("native cleanup failed")
+        });
+        assert_eq!(result.unwrap_err(), "native cleanup failed");
+        assert_eq!(attempts, 1);
+        // The existing float search can propose the same integral value again.
+        // Preserve its bounded behavior even when that candidate still fails.
+        attempts = 0;
+        let result = shrink_property_inputs(vec![Value::Float64(2.0)], |values| {
+            attempts += 1;
+            Ok::<_, ()>(values[0] == Value::Float64(2.0))
+        })
+        .unwrap();
+        assert_eq!(result, vec![Value::Float64(2.0)]);
+        assert_eq!(attempts, SHRINK_MAX_STEPS * 3);
     }
 
     #[test]

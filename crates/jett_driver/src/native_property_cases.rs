@@ -21,8 +21,9 @@ pub(super) fn append_property_suite(
     types: &TypeInterner,
     reflection: &ReflectionMetadata,
     method_value_definitions: &HashSet<Span>,
-) -> Result<Option<FunctionId>, Vec<jett_hir::LowerError>> {
+) -> Result<Option<NativePropertyPlan>, Vec<jett_hir::LowerError>> {
     let function_values = function_value_candidates(&hir.functions, method_value_definitions);
+    let mut trials = Vec::new();
     let mut statements = Vec::new();
     let mut locals = Vec::new();
     let mut first_identity = None;
@@ -65,42 +66,27 @@ pub(super) fn append_property_suite(
                     "generated property cases disagree with checked parameters or iteration order",
                 ));
             }
-            statements.push(property_case_context(
-                Some(jett_hir::NativePropertyCase {
-                    name: property.name.name.clone(),
-                    trial: case.iteration as u64 + 1,
-                }),
-                property.span,
-            ));
-            let mut context = ValueContext {
+            let trial = NativePropertyTrial {
+                name: property.name.name.clone(),
+                span: property.name.span,
+                function: function.id,
+                given_names: property
+                    .givens
+                    .iter()
+                    .map(|given| given.name.name.clone())
+                    .collect(),
+                case: case.clone(),
+            };
+            append_trial(
+                &trial,
+                function,
                 types,
                 reflection,
-                functions: &function_values,
-                locals: &mut locals,
-                bindings: &mut statements,
-            };
-            let args = case
-                .arguments
-                .iter()
-                .zip(&function.params)
-                .map(|(value, param)| {
-                    value_expression(value, param.ty, property.span, &mut context)
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|message| error(property.span, message))?;
-            statements.push(Statement {
-                kind: StatementKind::Expression(Expression {
-                    kind: ExpressionKind::Call {
-                        function: function.id,
-                        evaluation_order: (0..args.len()).collect(),
-                        args,
-                    },
-                    ty: TypeInterner::NOTHING,
-                    span: property.span,
-                }),
-                span: property.span,
-            });
-            statements.push(property_case_context(None, property.span));
+                &function_values,
+                &mut locals,
+                &mut statements,
+            )?;
+            trials.push(trial);
             count += 1;
         }
         if count != PROPERTY_DEFAULT_ITERATIONS {
@@ -142,7 +128,130 @@ pub(super) fn append_property_suite(
         body: Block { statements, span },
         span,
     });
-    Ok(Some(id))
+    Ok(Some(NativePropertyPlan {
+        entry: id,
+        trials,
+        function_values,
+    }))
+}
+
+/// Exact checked inputs and identities retained for native replay and shrinking.
+/// Its contents are compiler-owned and cannot be supplied by source programs.
+#[derive(Debug)]
+pub struct NativePropertyPlan {
+    pub(crate) entry: FunctionId,
+    pub(crate) trials: Vec<NativePropertyTrial>,
+    function_values: Vec<FunctionValueCandidate>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct NativePropertyTrial {
+    pub(crate) name: String,
+    pub(crate) span: Span,
+    pub(crate) function: FunctionId,
+    pub(crate) given_names: Vec<String>,
+    pub(crate) case: PropertyCase,
+}
+
+impl NativePropertyPlan {
+    pub(crate) fn replay_mir(
+        &self,
+        lowered: &crate::BackendLoweringResult,
+        trials: &[NativePropertyTrial],
+    ) -> Result<jett_mir::Program, crate::BackendLoweringError> {
+        let mut hir = lowered.hir.clone();
+        let mut locals = Vec::new();
+        let mut statements = Vec::new();
+        for trial in trials {
+            let function = hir
+                .functions
+                .iter()
+                .find(|function| function.id == trial.function)
+                .ok_or_else(|| {
+                    crate::BackendLoweringError::Hir(error(
+                        trial.span,
+                        "native property replay lost its checked function",
+                    ))
+                })?;
+            append_trial(
+                trial,
+                function,
+                &lowered.interner,
+                &lowered.reflection_metadata,
+                &self.function_values,
+                &mut locals,
+                &mut statements,
+            )
+            .map_err(crate::BackendLoweringError::Hir)?;
+        }
+        let suite = hir
+            .functions
+            .iter_mut()
+            .find(|function| function.id == self.entry)
+            .expect("checked property plan retains its suite entry");
+        suite.locals = locals;
+        suite.body.statements = statements;
+        jett_hir::complete_value_conversions(&mut hir, &lowered.interner)
+            .map_err(crate::BackendLoweringError::Hir)?;
+        let mir =
+            jett_mir::lower(&hir, &lowered.interner).map_err(crate::BackendLoweringError::Mir)?;
+        jett_mir::validate(&mir).map_err(crate::BackendLoweringError::MirValidation)?;
+        Ok(mir)
+    }
+}
+
+fn append_trial(
+    trial: &NativePropertyTrial,
+    function: &Function,
+    types: &TypeInterner,
+    reflection: &ReflectionMetadata,
+    functions: &[FunctionValueCandidate],
+    locals: &mut Vec<Local>,
+    statements: &mut Vec<Statement>,
+) -> Result<(), Vec<jett_hir::LowerError>> {
+    let span = trial.case.property_span;
+    if trial.case.arguments.len() != function.params.len() {
+        return Err(error(
+            span,
+            "native replay arguments disagree with checked parameters",
+        ));
+    }
+    statements.push(property_case_context(
+        Some(jett_hir::NativePropertyCase {
+            name: trial.name.clone(),
+            trial: trial.case.iteration as u64 + 1,
+        }),
+        span,
+    ));
+    let mut context = ValueContext {
+        types,
+        reflection,
+        functions,
+        locals,
+        bindings: statements,
+    };
+    let args = trial
+        .case
+        .arguments
+        .iter()
+        .zip(&function.params)
+        .map(|(value, param)| value_expression(value, param.ty, span, &mut context))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|message| error(span, message))?;
+    statements.push(Statement {
+        kind: StatementKind::Expression(Expression {
+            kind: ExpressionKind::Call {
+                function: function.id,
+                evaluation_order: (0..args.len()).collect(),
+                args,
+            },
+            ty: TypeInterner::NOTHING,
+            span,
+        }),
+        span,
+    });
+    statements.push(property_case_context(None, span));
+    Ok(())
 }
 
 fn property_case_context(case: Option<jett_hir::NativePropertyCase>, span: Span) -> Statement {
@@ -163,6 +272,7 @@ fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {
     }]
 }
 
+#[derive(Debug)]
 pub(super) struct FunctionValueCandidate {
     scoped_type_bindings: Vec<jett_hir::ScopedTypeBinding>,
     source_name: Option<String>,

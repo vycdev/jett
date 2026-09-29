@@ -32,8 +32,9 @@ count toward the 182-fixture lowering obligation. They do not enter the
 links and executes every checked top-level `verify` body in each of 155
 fixtures as a separate execution gate. A native property suite uses the
 interpreter's established deterministic `given` pools as test inputs, then
-executes the checked property bodies as native code. Native terminal failures identify the property and trial number; native
-failure-case shrinking remains follow-up work.
+executes the checked property bodies as native code. Native terminal failures identify the property and trial number. The native
+driver also replays and shrinks failed cases using the shared bounded search;
+it returns the original suite output and shrunk inputs separately.
 
 Compile-fail fixtures remain frontend contracts. Native work must not change
 their diagnostics, but rejected programs do not enter a backend denominator.
@@ -292,7 +293,8 @@ source assertion in a later body from publishing a native executable.
 The property diagnostic regression also requires the exact shrunk counterexample,
 diagnostic code, source span, and preservation of existing output artifacts for
 program, verify-suite, and property-suite builds. This is the required frontend
-validation path; native suite-level failure shrinking remains open.
+validation path. Native driver replay and shrinking are verified separately
+with a backend-injected failure after successful frontend validation.
 The `native_parity` example also discovers top-level verify/property bodies
 from parsed source and reports their fixture and body denominators. Its exit
 status and `fixture_gates_complete` field certify those fixture gates only;
@@ -1275,7 +1277,11 @@ property bodies across three run-pass fixtures execute 100 native trials each;
 terminal failures now identify the property and one-based trial number. A
 backend-injected assertion failure tests the fourth trial of the second
 property through linked debug and optimized objects, including cleanup of owned
-inputs. Native failure-case shrinking remains pending.
+inputs. The native suite driver now locates and replays failed cases, then
+uses the existing shrink search with native execution for every candidate.
+The scalar/list regression matches the interpreter counterexample in debug and
+optimized modes after source removal. Broader failing-input combinations still
+need the same semantic audit as the rest of native codegen.
 
 Direct bitfield constructors now route checked dynamic widths through the
 existing reflected construction validator, preserving the interpreter's
@@ -1565,3 +1571,21 @@ agent artifact reporting, default output paths, target/profile rejection, and
 preservation of an existing artifact after failed builds. The packaging tool
 includes dependency notices and a standalone smoke script for clean consumers.
 These local results do not substitute for the separate clean Windows/Linux jobs.
+
+
+### Native property shrinking implementation
+
+The driver retains the deterministic cases and their exact checked function
+identities in the same lowering session. After a full native suite fails with
+entry status 71 and successful cleanup, it can identify the earliest failing
+case by compiling and running shorter prefixes, then confirm that case alone.
+This avoids parsing human-readable trace or failure output as a control protocol.
+Each replay and shrink candidate runs in a new process and runtime context.
+The existing ordered, 50-step shrink search is shared with the interpreter;
+only the failure predicate differs. Compiler, linker, process, timeout, and
+cleanup failures abort shrinking rather than becoming candidate failures.
+Replay recompiles only compiler-owned input constructions against the retained
+checked HIR, with no source rechecking or runtime interpreter fallback. This
+initial implementation favors an exact existing contract over caching candidate
+objects. Normal source validation remains mandatory. A failure that cannot be
+reproduced in isolation must be reported, never converted to a passing suite.
