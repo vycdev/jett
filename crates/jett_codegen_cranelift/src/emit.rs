@@ -1652,9 +1652,9 @@ impl Translator<'_, '_> {
                 let type_info = self.scalar(lowered, terminator.span)?;
                 let dispatch_temporaries = self.next_temporary;
                 for arm in arms {
-                    let (expected, length) = self.static_bytes(&arm.canonical_identity)?;
+                    let (expected, length) = self.static_bytes(&arm.reflection_identity)?;
                     let matches = self.leaf(
-                        NativeLeaf::TypeInfoMatches,
+                        NativeLeaf::TypeInfoReflectionMatches,
                         &[type_info, expected, length],
                         true,
                     )?;

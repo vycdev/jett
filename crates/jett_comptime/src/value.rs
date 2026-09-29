@@ -10,10 +10,17 @@ use jett_types::ReflectionTypeInfo;
 #[derive(Debug, Clone, Default)]
 pub struct ClosureTypeContext {
     pub checked_scope: Option<Arc<CheckedScopedTypes>>,
-    pub scoped_type_bindings: Vec<(String, String)>,
+    pub scoped_type_bindings: Vec<ClosureScopedTypeBinding>,
     pub checked_function: Option<Arc<CheckedFunctionTypes>>,
     pub bindings: HashMap<String, TypeExpr>,
     pub arguments: Vec<ClosureTypeArgument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureScopedTypeBinding {
+    pub name: String,
+    pub canonical_name: String,
+    pub reflection: Option<ReflectionTypeInfo>,
 }
 
 #[derive(Debug, Clone)]

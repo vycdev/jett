@@ -39,7 +39,7 @@ use jett_types::{
     ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
 
-use crate::value::{ClosureTypeArgument, ClosureTypeContext, Value};
+use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeContext, Value};
 
 mod debug;
 mod graphics;
@@ -620,7 +620,7 @@ pub struct Interpreter {
     actor_defs: HashMap<String, ActorDef>,
     /// Active generic type argument substitutions for interpreted generic functions.
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
-    scoped_type_bindings: Vec<(String, String)>,
+    scoped_type_bindings: Vec<ClosureScopedTypeBinding>,
     /// Ordered arguments of the lexical function, retained by nested closures.
     current_type_arguments: Vec<TypeExpr>,
     /// Namespace of the qualified function body currently executing.
@@ -1737,10 +1737,15 @@ impl Interpreter {
             return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
         };
         let bound_type = self.concrete_type_display(&bound_type_expr);
-        let checked_scope = self.checked_scoped_types(bind.span, &bound_type)?;
+        let reflection = Some(self.reflection_type_argument(&bound_type_expr)?);
+        let checked_scope =
+            self.checked_scoped_types(bind.span, &bound_type, reflection.as_ref())?;
         let saved_checked_scope = std::mem::replace(&mut self.active_checked_scope, checked_scope);
-        self.scoped_type_bindings
-            .push((bind.name.name.clone(), bound_type));
+        self.scoped_type_bindings.push(ClosureScopedTypeBinding {
+            name: bind.name.name.clone(),
+            canonical_name: bound_type,
+            reflection,
+        });
         let mut scope = HashMap::new();
         scope.insert(bind.name.name.clone(), bound_type_expr);
         self.type_arg_scopes.push(scope);
@@ -1771,6 +1776,7 @@ impl Interpreter {
         &self,
         span: Span,
         bound_type: &str,
+        reflection: Option<&ReflectionTypeInfo>,
     ) -> Result<Option<Arc<CheckedScopedTypes>>, String> {
         let bindings = if let Some(scope) = &self.active_checked_scope {
             &scope.bindings
@@ -1781,7 +1787,26 @@ impl Interpreter {
         } else {
             return Ok(None);
         };
-        select_scoped_types(bindings, span, bound_type)
+        select_scoped_types(bindings, span, bound_type, reflection)
+    }
+
+    fn reflection_type_argument(&self, ty: &TypeExpr) -> Result<ReflectionTypeInfo, String> {
+        if let Some(info) = self.checked_type_info(ty) {
+            return Ok(info.clone());
+        }
+        let name = type_expr_display(ty);
+        if let Some(info) = self
+            .scoped_type_bindings
+            .iter()
+            .rev()
+            .filter_map(|binding| binding.reflection.as_ref())
+            .find(|info| info.type_name == name)
+        {
+            return Ok(info.clone());
+        }
+        // Nested source spellings such as list[Alias] may have no global
+        // TypeInfo entry. Retain their source metadata for callee selection.
+        Self::reflection_info_from_value(&self.type_info_value(ty))
     }
 
     fn captured_type_arguments(&self, args: &[TypeExpr]) -> Vec<ClosureTypeArgument> {
@@ -1789,7 +1814,7 @@ impl Interpreter {
             .map(|ty| ClosureTypeArgument {
                 ty: ty.clone(),
                 canonical_name: self.concrete_type_display(ty),
-                reflection: self.checked_type_info(ty).cloned(),
+                reflection: self.reflection_type_argument(ty).ok(),
             })
             .collect()
     }
@@ -8746,6 +8771,48 @@ impl Interpreter {
         ))
     }
 
+    fn reflection_info_from_value(value: &Value) -> Result<ReflectionTypeInfo, String> {
+        let type_name = Self::type_info_metadata(value)?;
+        let Value::Struct { fields, .. } = value else {
+            unreachable!()
+        };
+        let field = |name: &str| {
+            fields
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value)
+                .ok_or_else(|| format!("TypeInfo is missing '{name}'"))
+        };
+        let Value::String(kind) = field("kind")? else {
+            return Err("TypeInfo.kind must be string".into());
+        };
+        let Value::Bool(has_secret) = field("has_secret")? else {
+            return Err("TypeInfo.has_secret must be bool".into());
+        };
+        let Value::List(args) = field("args")? else {
+            return Err("TypeInfo.args must be a list".into());
+        };
+        let primitive_tag = match field("primitive_tag")? {
+            Value::OptionalNone => None,
+            Value::OptionalSome(value) => match value.as_ref() {
+                Value::Enum {
+                    type_name, variant, ..
+                } if type_name == "TypePrimitive" => Some(variant.clone()),
+                _ => return Err("TypeInfo.primitive_tag must contain TypePrimitive".into()),
+            },
+            _ => return Err("TypeInfo.primitive_tag must be optional".into()),
+        };
+        Ok(ReflectionTypeInfo::new(
+            type_name,
+            kind,
+            primitive_tag,
+            *has_secret,
+            args.iter()
+                .map(Self::reflection_info_from_value)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+
     fn type_info_metadata(value: &Value) -> Result<String, String> {
         let Value::Struct {
             concrete_type: _,
@@ -12837,7 +12904,11 @@ mod tests {
         interp
             .type_arg_scopes
             .push(HashMap::from([("Outer".into(), type_named("int64"))]));
-        interp.scoped_type_bindings = vec![("Outer".into(), "int64".into())];
+        interp.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Outer".into(),
+            canonical_name: "int64".into(),
+            reflection: None,
+        }];
         for failing in [false, true] {
             let body = if failing {
                 var("missing")
@@ -12876,7 +12947,11 @@ mod tests {
             assert_eq!(interp.type_arg_scopes.len(), 1);
             assert_eq!(
                 interp.scoped_type_bindings,
-                vec![("Outer".into(), "int64".into())]
+                vec![ClosureScopedTypeBinding {
+                    name: "Outer".into(),
+                    canonical_name: "int64".into(),
+                    reflection: None
+                }]
             );
         }
     }
@@ -16258,7 +16333,11 @@ mod tests {
         interp.active_checked_function = Some(caller_types.clone());
         let caller_scope = Arc::new(CheckedScopedTypes::default());
         interp.active_checked_scope = Some(caller_scope.clone());
-        interp.scoped_type_bindings = vec![("Field".into(), "string".into())];
+        interp.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "string".into(),
+            reflection: None,
+        }];
         let echo = func_def(
             "echo",
             vec![("value", "int8")],
@@ -16282,7 +16361,11 @@ mod tests {
             }
             assert_eq!(
                 interp.scoped_type_bindings,
-                vec![("Field".into(), "string".into())]
+                vec![ClosureScopedTypeBinding {
+                    name: "Field".into(),
+                    canonical_name: "string".into(),
+                    reflection: None
+                }]
             );
             assert!(Arc::ptr_eq(
                 interp.active_checked_scope.as_ref().unwrap(),
@@ -16318,7 +16401,11 @@ mod tests {
         interp.active_checked_function = Some(caller_types.clone());
         let caller_scope = Arc::new(CheckedScopedTypes::default());
         interp.active_checked_scope = Some(caller_scope.clone());
-        interp.scoped_type_bindings = vec![("Field".into(), "string".into())];
+        interp.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "string".into(),
+            reflection: None,
+        }];
         interp
             .type_arg_scopes
             .push(HashMap::from([("T".into(), type_named("string"))]));
@@ -16359,7 +16446,11 @@ mod tests {
             }
             assert_eq!(
                 interp.scoped_type_bindings,
-                vec![("Field".into(), "string".into())]
+                vec![ClosureScopedTypeBinding {
+                    name: "Field".into(),
+                    canonical_name: "string".into(),
+                    reflection: None
+                }]
             );
             assert!(Arc::ptr_eq(
                 interp.active_checked_scope.as_ref().unwrap(),

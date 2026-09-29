@@ -1062,9 +1062,22 @@ fn symbols_use_structural_types_instead_of_session_local_type_ids() {
     );
 
     let mut first_scoped = first.clone();
-    first_scoped.scoped_type_bindings = vec![("Field".into(), first_argument)];
+    first_scoped.scoped_type_bindings = vec![jett_hir::ScopedTypeBinding {
+        name: "Field".into(),
+        ty: first_argument,
+        reflection: jett_types::ReflectionTypeInfo::new(
+            "list[int64]",
+            "list",
+            None,
+            false,
+            Vec::new(),
+        ),
+    }];
     let mut second_scoped = second.clone();
-    second_scoped.scoped_type_bindings = vec![("Field".into(), second_argument)];
+    second_scoped.scoped_type_bindings = vec![jett_hir::ScopedTypeBinding {
+        ty: second_argument,
+        ..first_scoped.scoped_type_bindings[0].clone()
+    }];
     assert_eq!(
         symbol_name(&first_scoped, &first_types).unwrap(),
         symbol_name(&second_scoped, &second_types).unwrap(),
@@ -1073,7 +1086,19 @@ fn symbols_use_structural_types_instead_of_session_local_type_ids() {
         symbol_name(&first_scoped, &first_types).unwrap(),
         first_symbol
     );
-    second_scoped.scoped_type_bindings[0].1 = TypeInterner::STRING;
+    let mut aliased = first_scoped.clone();
+    aliased.scoped_type_bindings[0].reflection = jett_types::ReflectionTypeInfo::new(
+        "Items",
+        "alias",
+        None,
+        false,
+        vec![first_scoped.scoped_type_bindings[0].reflection.clone()],
+    );
+    assert_ne!(
+        symbol_name(&first_scoped, &first_types).unwrap(),
+        symbol_name(&aliased, &first_types).unwrap()
+    );
+    second_scoped.scoped_type_bindings[0].ty = TypeInterner::STRING;
     assert_ne!(
         symbol_name(&first_scoped, &first_types).unwrap(),
         symbol_name(&second_scoped, &second_types).unwrap(),
@@ -1147,7 +1172,7 @@ function choose(value: bool) returns int64:
         arms: vec![ReflectedTypeDispatchArm {
             iteration_index: 0,
             bound_type: TypeInterner::BOOL,
-            canonical_identity: "4:bool0:0:0".to_string(),
+            reflection_identity: "4:bool0:0:0".to_string(),
             target,
         }],
         otherwise,

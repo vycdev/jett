@@ -143,7 +143,7 @@ fn error(span: Span, message: impl Into<String>) -> Vec<jett_hir::LowerError> {
 }
 
 pub(super) struct FunctionValueCandidate {
-    scoped_type_bindings: Vec<(String, TypeId)>,
+    scoped_type_bindings: Vec<jett_hir::ScopedTypeBinding>,
     source_name: Option<String>,
     kind: DeclarationKind,
     body_span: Span,
@@ -163,8 +163,10 @@ impl FunctionValueCandidate {
                 .scoped_type_bindings
                 .iter()
                 .zip(&context.scoped_type_bindings)
-                .all(|((name, ty), (actual_name, actual_type))| {
-                    name == actual_name && types.type_name(*ty) == *actual_type
+                .all(|(expected, actual)| {
+                    expected.name == actual.name
+                        && types.type_name(expected.ty) == actual.canonical_name
+                        && actual.reflection.as_ref() == Some(&expected.reflection)
                 })
             && self.type_arguments.len() == context.arguments.len()
             && self

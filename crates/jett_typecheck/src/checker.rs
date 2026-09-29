@@ -84,11 +84,13 @@ pub struct CheckedComptimeTypeBinding {
     ///
     /// Lowering must not execute every exported reflected-iteration body for
     /// every runtime loop iteration. It may statically unroll the reflected
-    /// loop or emit a compiler-owned dispatch on canonical reflected type
+    /// loop or emit a compiler-owned dispatch on source-visible reflected type
     /// identity (with the iteration index retained for stable ordering).
     pub selection: CheckedComptimeTypeSelection,
     /// The concrete type bound to the statement's scoped type name.
     pub bound_type: TypeId,
+    /// Source-visible reflection facts, including transparent aliases.
+    pub reflection: ReflectionTypeInfo,
     /// Facts produced while checking the body under `bound_type`.
     pub body: CheckedBodyFacts,
 }
@@ -558,7 +560,7 @@ struct TypeChecker<'a> {
     /// Trusted field types currently available from direct `type.fields[T]()` loops.
     reflected_field_type_scopes: Vec<HashMap<String, Vec<(TypeId, ReflectionTypeInfo)>>>,
     /// Trusted TypeInfo types currently available from direct reflected `args` loops.
-    reflected_type_info_scopes: Vec<HashMap<String, Vec<TypeId>>>,
+    reflected_type_info_scopes: Vec<HashMap<String, Vec<(TypeId, ReflectionTypeInfo)>>>,
     /// Trusted TypeVariant owners currently available from direct `type.variants[T]()` loops.
     reflected_variant_type_scopes: Vec<HashMap<String, TypeId>>,
     /// Trusted TypeMachineState owners currently available from direct `type.machine_states[T]()` loops.
@@ -7992,7 +7994,7 @@ impl<'a> TypeChecker<'a> {
             let body = self.check_comptime_type_bind_body(
                 &bind.name.name,
                 bound_ty,
-                reflection,
+                reflection.clone(),
                 &bind.body,
             );
             self.record_comptime_type_bindings(
@@ -8000,6 +8002,7 @@ impl<'a> TypeChecker<'a> {
                 vec![CheckedComptimeTypeBinding {
                     selection: CheckedComptimeTypeSelection::Unconditional,
                     bound_type: bound_ty,
+                    reflection,
                     body,
                 }],
             );
@@ -8033,7 +8036,7 @@ impl<'a> TypeChecker<'a> {
                     let body = self.check_comptime_type_bind_body(
                         &bind.name.name,
                         bound_ty,
-                        reflection,
+                        reflection.clone(),
                         &bind.body,
                     );
                     self.record_comptime_type_bindings(
@@ -8041,6 +8044,7 @@ impl<'a> TypeChecker<'a> {
                         vec![CheckedComptimeTypeBinding {
                             selection: CheckedComptimeTypeSelection::Unconditional,
                             bound_type: bound_ty,
+                            reflection,
                             body,
                         }],
                     );
@@ -8063,7 +8067,7 @@ impl<'a> TypeChecker<'a> {
                         let body = self.check_comptime_type_bind_body(
                             &bind.name.name,
                             field_ty,
-                            reflection,
+                            reflection.clone(),
                             &bind.body,
                         );
                         bindings.push(CheckedComptimeTypeBinding {
@@ -8071,6 +8075,7 @@ impl<'a> TypeChecker<'a> {
                                 iteration_index,
                             ),
                             bound_type: field_ty,
+                            reflection,
                             body,
                         });
                     }
@@ -8083,12 +8088,12 @@ impl<'a> TypeChecker<'a> {
         if let Some(info_name) = reflected_type_info_binding(&bind.value) {
             if let Some(info_types) = self.reflected_type_info_types_for_name(info_name) {
                 let mut bindings = Vec::new();
-                for (iteration_index, info_ty) in info_types.into_iter().enumerate() {
+                for (iteration_index, (info_ty, reflection)) in info_types.into_iter().enumerate() {
                     if info_ty != TypeInterner::ERROR {
                         let body = self.check_comptime_type_bind_body(
                             &bind.name.name,
                             info_ty,
-                            self.reflection_type_info_for_type(info_ty),
+                            reflection.clone(),
                             &bind.body,
                         );
                         bindings.push(CheckedComptimeTypeBinding {
@@ -8096,6 +8101,7 @@ impl<'a> TypeChecker<'a> {
                                 iteration_index,
                             ),
                             bound_type: info_ty,
+                            reflection,
                             body,
                         });
                     }
@@ -8147,14 +8153,6 @@ impl<'a> TypeChecker<'a> {
         self.checked_body_facts(body.span)
     }
 
-    fn reflected_field_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
-        self.reflected_field_type_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name))
-            .map(|candidates| candidates.iter().map(|(ty, _)| *ty).collect())
-    }
-
     fn reflected_field_candidates_for_name(
         &self,
         name: &str,
@@ -8166,7 +8164,10 @@ impl<'a> TypeChecker<'a> {
             .cloned()
     }
 
-    fn reflected_type_info_types_for_name(&self, name: &str) -> Option<Vec<TypeId>> {
+    fn reflected_type_info_types_for_name(
+        &self,
+        name: &str,
+    ) -> Option<Vec<(TypeId, ReflectionTypeInfo)>> {
         self.reflected_type_info_scopes
             .iter()
             .rev()
@@ -8438,22 +8439,51 @@ impl<'a> TypeChecker<'a> {
     fn reflected_type_info_arg_types_for_iterable(
         &mut self,
         iterable: &Expr,
-    ) -> Option<Vec<TypeId>> {
+    ) -> Option<Vec<(TypeId, ReflectionTypeInfo)>> {
         let source = reflected_type_info_args_source(iterable)?;
         let source_types = match source {
-            ReflectedTypeInfoSource::Direct(ty) => vec![self.resolve_type_expr(ty)],
+            ReflectedTypeInfoSource::Direct(ty) => {
+                let concrete = self.resolve_type_expr(ty);
+                let namespace = self.current_function_name.as_deref().and_then(|name| {
+                    name.rsplit_once('.')
+                        .map(|(namespace, _)| namespace.to_string())
+                });
+                vec![(
+                    concrete,
+                    self.reflection_type_info_for_type_expr(ty, namespace.as_deref(), concrete),
+                )]
+            }
             ReflectedTypeInfoSource::Field(field_name) => {
-                self.reflected_field_types_for_name(field_name)?
+                self.reflected_field_candidates_for_name(field_name)?
             }
             ReflectedTypeInfoSource::TypeInfo(info_name) => {
                 self.reflected_type_info_types_for_name(info_name)?
             }
         };
-
         Some(
             source_types
                 .into_iter()
-                .flat_map(|ty| self.type_info_arg_types_for_type(ty))
+                .flat_map(|(ty, reflection)| {
+                    // An alias exposes its base as one reflection argument even when
+                    // canonical interning has already erased that alias layer.
+                    let types = if reflection.kind == "alias" {
+                        vec![ty]
+                    } else {
+                        self.type_info_arg_types_for_type(ty)
+                    };
+                    types
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, ty)| {
+                            let info = reflection
+                                .args
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_else(|| self.reflection_type_info_for_type(ty));
+                            (ty, info)
+                        })
+                        .collect::<Vec<_>>()
+                })
                 .collect(),
         )
     }
@@ -8549,7 +8579,11 @@ impl<'a> TypeChecker<'a> {
         self.reflected_field_type_scopes.pop();
     }
 
-    fn push_reflected_type_info_scope(&mut self, info_name: &str, info_types: Vec<TypeId>) {
+    fn push_reflected_type_info_scope(
+        &mut self,
+        info_name: &str,
+        info_types: Vec<(TypeId, ReflectionTypeInfo)>,
+    ) {
         let mut scope = HashMap::new();
         scope.insert(info_name.to_string(), info_types);
         self.reflected_type_info_scopes.push(scope);

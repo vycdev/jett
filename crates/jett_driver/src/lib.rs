@@ -3245,6 +3245,7 @@ fn checked_body_type_names(
                         );
                         Arc::new(CheckedScopedTypes {
                             bound_type: interner.type_name(binding.bound_type),
+                            reflection: Some(binding.reflection.clone()),
                             expressions,
                             bindings,
                         })

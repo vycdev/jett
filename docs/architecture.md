@@ -2866,9 +2866,17 @@ An invocation selects its checked function context; a closure retains the whole
 context through shared ownership. Native materialization matches reflection
 parameter facts alongside concrete type arguments and alias metadata. HIR
 inline functions retain their enclosing scoped type binding chain through
-extraction, including unconditional and reflected-loop bindings. Evaluated
-closures preserve the same canonical chain; native materialization matches it
-and native symbol encoding uses its structural types rather than local TypeIds.
+extraction, including unconditional and reflected-loop bindings. Each binding
+retains both its canonical type and its source-visible reflection metadata.
+Evaluated closures preserve the same chain; native materialization matches it
+and native symbols encode structural types and alias-sensitive reflection.
+Reflected dispatch uses alias-preserving identity through the dedicated
+`TypeInfoReflectionMatches` leaf; the alias-transparent `TypeInfoMatches` ABI
+operation remains available. `TypeInfo.args` loops retain each argument's
+reflection metadata, including arguments reached through fields or other
+argument loops. Generic argument selection can retain reflection from the
+lexical scope or the interpreter's existing type reflection representation
+when a nested source spelling lacks its own global metadata entry.
 Named calls isolate the chain and restore it on success or failure.
 The driver also exports recursive scoped expression maps from each checked
 `comptime type` expansion. Execution selects the bound type's scope, and

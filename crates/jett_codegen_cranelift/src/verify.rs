@@ -1117,11 +1117,11 @@ impl Verifier<'_> {
                     if self.types.resolve_struct(*id).name == "TypeInfo");
                 let identities = arms
                     .iter()
-                    .map(|arm| arm.canonical_identity.as_str())
+                    .map(|arm| arm.reflection_identity.as_str())
                     .collect::<std::collections::HashSet<_>>();
                 if valid_type_info
                     && !arms.is_empty()
-                    && arms.iter().all(|arm| !arm.canonical_identity.is_empty())
+                    && arms.iter().all(|arm| !arm.reflection_identity.is_empty())
                     && identities.len() == arms.len()
                 {
                     Ok(())

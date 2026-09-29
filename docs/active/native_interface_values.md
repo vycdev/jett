@@ -78,9 +78,12 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Audit alias reflection identity within scoped reflected-loop bindings.
-  Canonical scoped type chains now distinguish callbacks for different field
-  types, including repeated types, nested bindings, and nested closures.
+- Audit trusted reflection guards inside closures. A generic factory whose
+  callback tests `type.kind_tag[T]() == TypeKind.list_type` currently checks
+  its unreachable list-only branch for `T = int64` and reports E0311. Concrete
+  generic checking is retained, but proof specialization still depends on a
+  whole-function reflection placement classifier.
+
 - Audit interpreter source instances of compiler-owned facades that use
   different native helpers and lack checked source bodies.
 - Remaining comptime payload shapes and reflected interface fields. Generic
@@ -224,3 +227,22 @@ matching scope facts fail rather than choosing an expansion by registration
 order. `reflected_integer_wrapping` checks signed and unsigned field widths
 through ordinary and generic functions, nested bindings, and runtime or baked
 callbacks, including repeated field types.
+
+The scoped alias audit found and fixed native dispatch merging `Label` (an
+alias of `string`) with `string`: it printed `alias`, `alias` instead of
+`alias`, `primitive`. Checked bindings now export their source-visible
+reflection metadata. Scoped expression selection, callback materialization,
+native symbols, and runtime dispatch preserve that metadata. The dedicated
+alias-preserving reflection match leaf keeps the earlier alias-transparent
+identity operation available. Argument-loop facts retain alias metadata from
+direct `TypeInfo` sources, fields, and other argument loops.
+`reflected_alias_callbacks` exercises runtime and baked callbacks, repeated
+aliases, distinct aliases of the same base, nested container aliases, direct
+`type.arg` bindings, and nested argument sources.
+
+The alias regression also covers a generic callee receiving a scoped
+`list[Small]` argument where `Small` aliases `int8`. Nested source spellings
+may have no global reflection-table entry, so argument selection now retains
+metadata from the lexical scope or from the interpreter's existing type
+reflection representation. This prevents a missing callee context from
+evaluating `127 + 1` as 128 instead of -128.

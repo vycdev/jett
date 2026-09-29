@@ -179,7 +179,7 @@ pub struct ReflectedTypeDispatchArm {
     /// Canonical concrete type identity matched against the runtime `TypeInfo`.
     pub bound_type: TypeId,
     /// Checker-owned structural identity for native runtime selection.
-    pub canonical_identity: String,
+    pub reflection_identity: String,
     pub target: BlockId,
 }
 
@@ -206,7 +206,7 @@ pub enum TerminatorKind {
         body: BlockId,
         exit: BlockId,
     },
-    /// Select exactly one checker-specialized arm by canonical reflected type
+    /// Select exactly one checker-specialized arm by source-visible reflected type
     /// identity. `otherwise` is a defensive edge for malformed runtime
     /// `TypeInfo` values and normally leads to `Unreachable`.
     ReflectedTypeDispatch {
@@ -549,7 +549,7 @@ impl FunctionValidator<'_, '_> {
                 let mut bound_types = std::collections::HashSet::new();
                 let mut targets = std::collections::HashSet::new();
                 for arm in arms {
-                    if arm.canonical_identity.is_empty() {
+                    if arm.reflection_identity.is_empty() {
                         self.error(
                             terminator.span,
                             "reflected type dispatch arm has no checked identity",
@@ -561,10 +561,10 @@ impl FunctionValidator<'_, '_> {
                             "reflected type dispatch contains a duplicate iteration index",
                         );
                     }
-                    if !bound_types.insert(arm.bound_type) {
+                    if !bound_types.insert(&arm.reflection_identity) {
                         self.error(
                             terminator.span,
-                            "reflected type dispatch contains a duplicate bound type",
+                            "reflected type dispatch contains a duplicate reflected type identity",
                         );
                     }
                     targets.insert(arm.target);
@@ -677,10 +677,10 @@ impl FunctionValidator<'_, '_> {
                             "nested reflected type dispatch contains a duplicate iteration index",
                         );
                     }
-                    if !bound_types.insert(arm.bound_type) {
+                    if !bound_types.insert(&arm.reflection_identity) {
                         self.error(
                             statement.span,
-                            "nested reflected type dispatch contains a duplicate bound type",
+                            "nested reflected type dispatch contains a duplicate reflected type identity",
                         );
                     }
                     self.hir_block(&arm.body);
@@ -1272,7 +1272,7 @@ impl<'a> Builder<'a> {
             .map(|(arm, target)| ReflectedTypeDispatchArm {
                 iteration_index: arm.iteration_index,
                 bound_type: arm.bound_type,
-                canonical_identity: arm.canonical_identity.clone(),
+                reflection_identity: arm.reflection_identity.clone(),
                 target: *target,
             })
             .collect();
@@ -1834,6 +1834,7 @@ function first(left: int64, right: int64) returns int64:
         };
         arms[1].iteration_index = arms[0].iteration_index;
         arms[1].bound_type = arms[0].bound_type;
+        arms[1].reflection_identity = arms[0].reflection_identity.clone();
 
         let errors = validate(&program).expect_err("duplicate arm metadata must be rejected");
         let messages = errors
@@ -1841,7 +1842,10 @@ function first(left: int64, right: int64) returns int64:
             .map(|error| error.message.as_str())
             .collect::<Vec<_>>();
         assert!(messages.contains(&"reflected type dispatch contains a duplicate iteration index"));
-        assert!(messages.contains(&"reflected type dispatch contains a duplicate bound type"));
+        assert!(
+            messages
+                .contains(&"reflected type dispatch contains a duplicate reflected type identity")
+        );
     }
 
     #[test]

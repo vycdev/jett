@@ -220,11 +220,21 @@ pub struct ReflectionTypeInfo {
 }
 
 impl ReflectionTypeInfo {
-    /// Structural identity used by native dispatch for compiler-produced
-    /// `TypeInfo` values. Source aliases are transparent to the bound type.
+    /// Structural value identity for compiler-produced `TypeInfo` values.
+    /// Source aliases are transparent; reflection-specialized dispatch uses
+    /// `reflection_identity` instead.
     pub fn canonical_identity(&self) -> String {
-        if self.kind == "alias" && self.args.len() == 1 {
-            return self.args[0].canonical_identity();
+        self.identity(false)
+    }
+
+    /// Identity for bodies specialized by source-visible reflection facts.
+    pub fn reflection_identity(&self) -> String {
+        self.identity(true)
+    }
+
+    fn identity(&self, preserve_aliases: bool) -> String {
+        if !preserve_aliases && self.kind == "alias" && self.args.len() == 1 {
+            return self.args[0].identity(false);
         }
         let name = match self.kind.as_str() {
             "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
@@ -244,7 +254,7 @@ impl ReflectionTypeInfo {
             self.args.len(),
         );
         for argument in &self.args {
-            identity.push_str(&argument.canonical_identity());
+            identity.push_str(&argument.identity(preserve_aliases));
         }
         identity
     }
@@ -510,6 +520,10 @@ mod tests {
         assert_eq!(
             canonical.canonical_identity(),
             with_alias.canonical_identity()
+        );
+        assert_ne!(
+            canonical.reflection_identity(),
+            with_alias.reflection_identity()
         );
         assert_ne!(
             info("app.First", "struct").canonical_identity(),

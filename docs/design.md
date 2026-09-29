@@ -71,7 +71,10 @@ struct or collection. Inline function identities also carry their enclosing
 remain distinct when reflected field types differ. Nested closures retain that
 lexical chain, while named function calls start their own. Expression types
 inside each binding belong to its concrete expansion, including when captured
-by a closure; another field's expansion cannot determine arithmetic width.
+by a closure; another field's expansion cannot determine arithmetic width. Scoped identity
+also retains alias-visible reflection metadata: an alias and its base may
+share a value type while selecting different reflected bodies. This applies
+to field loops, `TypeInfo.args` loops, and nested argument metadata.
 
 Named call arguments reach HIR only as a checked permutation into canonical
 parameter order. Struct construction likewise carries canonical field order

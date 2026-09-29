@@ -103,9 +103,10 @@ pub fn symbol_name(
             "scoped-type-bindings",
             identity.scoped_type_bindings.len(),
         );
-        for (name, ty) in &identity.scoped_type_bindings {
-            push_component(&mut canonical, name);
-            push_component(&mut canonical, &canonical_type(*ty, types)?);
+        for binding in &identity.scoped_type_bindings {
+            push_component(&mut canonical, &binding.name);
+            push_component(&mut canonical, &canonical_type(binding.ty, types)?);
+            encode_reflection_type_info(&mut canonical, &binding.reflection);
         }
     }
 

@@ -71,11 +71,11 @@ impl BackendTypeValidator<'_> {
                 format!("function `{function_name}` type argument {index}"),
             );
         }
-        for (name, ty) in &function.identity.scoped_type_bindings {
+        for binding in &function.identity.scoped_type_bindings {
             self.type_id(
-                *ty,
+                binding.ty,
                 function.span,
-                format!("function `{function_name}` scoped type `{name}`"),
+                format!("function `{function_name}` scoped type `{}`", binding.name),
             );
         }
         for parameter in &function.params {
@@ -369,11 +369,14 @@ impl BackendTypeValidator<'_> {
                 body,
                 ..
             } => {
-                for (name, ty) in scoped_type_bindings {
+                for binding in scoped_type_bindings {
                     self.type_id(
-                        *ty,
+                        binding.ty,
                         expression.span,
-                        format!("function `{function_name}` inline scoped type `{name}`"),
+                        format!(
+                            "function `{function_name}` inline scoped type `{}`",
+                            binding.name
+                        ),
                     );
                 }
                 self.block(body, function_name);

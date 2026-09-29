@@ -1,0 +1,73 @@
+type Label = string
+type Other = string
+type Small = int8
+struct Wrapped:
+    items: list[Small]
+struct Record:
+    aliased: Label
+    plain: string
+    other: Other
+    repeated: Label
+    nested_alias: list[Label]
+    nested_plain: list[string]
+function describe[T]() returns string:
+    return "{type.kind[T]()}:{type.name[T]()}"
+function make[T]() returns list[function() returns string]:
+    mutable list[function() returns string] callbacks = list.new[function() returns string]()
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            callbacks = list.append[function() returns string](callbacks, function() returns string: return describe[Field]())
+    return callbacks
+function direct() returns function() returns string:
+    comptime type Element = type.arg[list[Label]](0):
+        return function() returns string: return describe[Element]()
+function arguments() returns string:
+    mutable list[string] names = list.new[string]()
+    for arg in type.info[map[Label, string]]().args:
+        comptime type Arg = arg:
+            names = list.append[string](names, describe[Arg]())
+    return string.join(names, ",")
+function nested_arguments() returns string:
+    mutable list[string] names = list.new[string]()
+    for arg in type.info[list[Label]]().args:
+        for base in arg.args:
+            comptime type Base = base:
+                names = list.append[string](names, describe[Base]())
+    return string.join(names, ",")
+function field_arguments() returns string:
+    mutable list[string] names = list.new[string]()
+    for field in type.fields[Record]():
+        for arg in field.type_info.args:
+            comptime type Arg = arg:
+                names = list.append[string](names, describe[Arg]())
+    return string.join(names, ",")
+function nested_width[T]() returns string:
+    comptime type Item = type.arg[T](0):
+        Item value = 127
+        return "{value + 1}"
+function wrapped_width() returns string:
+    mutable string found = "missing"
+    for field in type.fields[Wrapped]():
+        comptime type Field = field.type_info:
+            found = nested_width[Field]()
+    return found
+function print_callbacks(callbacks: list[function() returns string]) returns nothing:
+    for callback in callbacks:
+        println(callback())
+    return nothing
+function main() returns nothing:
+    print_callbacks(make[Record]())
+    print_callbacks(comptime make[Record]())
+    function() returns string first = direct()
+    function() returns string second = comptime direct()
+    println(first())
+    println(second())
+    println(arguments())
+    println(comptime arguments())
+    println(nested_arguments())
+    println(comptime nested_arguments())
+    println(field_arguments())
+    println(comptime field_arguments())
+    println(wrapped_width())
+    println(comptime wrapped_width())
+    return nothing

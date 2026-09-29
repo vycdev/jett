@@ -4818,7 +4818,12 @@ impl NativeValues {
         }
         Ok(index)
     }
-    fn type_info_identity(&self, value: u64, depth: usize) -> LeafResult<String> {
+    fn type_info_identity(
+        &self,
+        value: u64,
+        depth: usize,
+        preserve_aliases: bool,
+    ) -> LeafResult<String> {
         if depth >= 64 {
             return Err(INVALID_TYPE_INFO);
         }
@@ -4832,11 +4837,11 @@ impl NativeValues {
             .lists
             .get(&self.struct_field(value, 5)?.bits)
             .ok_or(INVALID_TYPE_INFO)?;
-        if kind == "alias" {
+        if !preserve_aliases && kind == "alias" {
             let [Some(base)] = arguments.elements.as_slice() else {
                 return Err(INVALID_TYPE_INFO);
             };
-            return self.type_info_identity(*base, depth + 1);
+            return self.type_info_identity(*base, depth + 1, false);
         }
         let name = match kind {
             "list" | "set" | "map" | "optional" | "result" | "secret" | "function" => "",
@@ -4855,8 +4860,11 @@ impl NativeValues {
             arguments.elements.len(),
         );
         for argument in &arguments.elements {
-            identity
-                .push_str(&self.type_info_identity(argument.ok_or(INVALID_TYPE_INFO)?, depth + 1)?);
+            identity.push_str(&self.type_info_identity(
+                argument.ok_or(INVALID_TYPE_INFO)?,
+                depth + 1,
+                preserve_aliases,
+            )?);
         }
         Ok(identity)
     }
@@ -5680,7 +5688,12 @@ leaves! {
         |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
             if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
             let expected = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(expected, length) } };
-            Ok(u32::from(s.type_info_identity(actual, 0)?.as_bytes() == expected)) };
+            Ok(u32::from(s.type_info_identity(actual, 0, false)?.as_bytes() == expected)) };
+    TypeInfoReflectionMatches, jett_rt_v1_type_info_reflection_matches, false, (actual: u64 => I64, expected: *const u8 => Pointer, length: u64 => I64), u32 => I32,
+        |s| { let length = usize::try_from(length).map_err(|_| INVALID_TYPE_INFO)?;
+            if length > isize::MAX as usize || (length != 0 && expected.is_null()) { return Err(INVALID_TYPE_INFO); }
+            let expected = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(expected, length) } };
+            Ok(u32::from(s.type_info_identity(actual, 0, true)?.as_bytes() == expected)) };
     TypeArgIndex, jett_rt_v1_type_arg_index, false, (index: i64 => I64, count: u64 => I64), u64 => I64,
         |_s| { let index = u64::try_from(index).map_err(|_| INVALID_TYPE_ARG_INDEX)?;
             if index >= count { return Err(INVALID_TYPE_ARG_INDEX); }

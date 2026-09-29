@@ -201,6 +201,33 @@ fn native_reflected_integer_wrapping_matches_interpreter() {
 }
 
 #[test]
+fn native_reflected_alias_callbacks_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/reflected_alias_callbacks.jett");
+    let expected =
+        jett_driver::run_file_capture_output(&fixture).expect("reflected alias callback oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "alias:Label\nprimitive:string\nalias:Other\nalias:Label\nlist:list[Label]\nlist:list[string]\n",
+            "alias:Label\nprimitive:string\nalias:Other\nalias:Label\nlist:list[Label]\nlist:list[string]\n",
+            "alias:Label\nalias:Label\nalias:Label,primitive:string\nalias:Label,primitive:string\n",
+            "primitive:string\nprimitive:string\n",
+            "primitive:string,primitive:string,primitive:string,alias:Label,primitive:string\n",
+            "primitive:string,primitive:string,primitive:string,alias:Label,primitive:string\n",
+            "-128\n-128\n",
+        )
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("reflected_alias_callbacks.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native reflected alias callbacks");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_generic_reflection_expressions_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_reflection_expressions.jett");

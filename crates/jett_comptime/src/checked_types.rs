@@ -30,6 +30,7 @@ pub struct CheckedFunctionTypes {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckedScopedTypes {
     pub bound_type: String,
+    pub reflection: Option<ReflectionTypeInfo>,
     pub expressions: HashMap<Span, String>,
     pub bindings: CheckedScopedBindings,
 }
@@ -40,13 +41,18 @@ pub(crate) fn select_scoped_types(
     bindings: &CheckedScopedBindings,
     span: Span,
     bound_type: &str,
+    reflection: Option<&ReflectionTypeInfo>,
 ) -> Result<Option<Arc<CheckedScopedTypes>>, String> {
     let Some(candidates) = bindings.get(&span) else {
         return Ok(None);
     };
-    let mut matching = candidates
-        .iter()
-        .filter(|types| types.bound_type == bound_type);
+    let mut matching = candidates.iter().filter(|types| {
+        types.bound_type == bound_type
+            && types
+                .reflection
+                .as_ref()
+                .is_none_or(|expected| Some(expected) == reflection)
+    });
     let Some(selected) = matching.next() else {
         return Ok(None);
     };
@@ -180,6 +186,48 @@ mod tests {
     use jett_common::FileId;
 
     #[test]
+    fn scoped_alias_and_base_select_distinct_facts() {
+        let span = Span::new(FileId::new(0), 1, 2);
+        let base_info = ReflectionTypeInfo::new(
+            "string",
+            "primitive",
+            Some("string_type".into()),
+            false,
+            vec![],
+        );
+        let alias_info =
+            ReflectionTypeInfo::new("Label", "alias", None, false, vec![base_info.clone()]);
+        let base = Arc::new(CheckedScopedTypes {
+            bound_type: "string".into(),
+            reflection: Some(base_info.clone()),
+            ..Default::default()
+        });
+        let alias = Arc::new(CheckedScopedTypes {
+            bound_type: "string".into(),
+            reflection: Some(alias_info.clone()),
+            ..Default::default()
+        });
+        for candidates in [
+            vec![base.clone(), alias.clone()],
+            vec![alias.clone(), base.clone()],
+        ] {
+            let bindings = HashMap::from([(span, candidates)]);
+            assert!(Arc::ptr_eq(
+                &select_scoped_types(&bindings, span, "string", Some(&base_info))
+                    .unwrap()
+                    .unwrap(),
+                &base
+            ));
+            assert!(Arc::ptr_eq(
+                &select_scoped_types(&bindings, span, "string", Some(&alias_info))
+                    .unwrap()
+                    .unwrap(),
+                &alias
+            ));
+        }
+    }
+
+    #[test]
     fn conflicting_scoped_widths_are_rejected_in_either_registration_order() {
         let span = Span::new(FileId::new(0), 1, 2);
         let narrow = Arc::new(CheckedScopedTypes {
@@ -195,12 +243,12 @@ mod tests {
         for candidates in [vec![narrow.clone(), wide.clone()], vec![wide, narrow]] {
             let types = HashMap::from([(span, candidates)]);
             assert!(
-                select_scoped_types(&types, span, "Record")
+                select_scoped_types(&types, span, "Record", None)
                     .unwrap_err()
                     .contains("conflicting")
             );
             assert!(
-                select_scoped_types(&types, span, "Other")
+                select_scoped_types(&types, span, "Other", None)
                     .unwrap()
                     .is_none()
             );

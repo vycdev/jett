@@ -128,10 +128,17 @@ pub enum DeclarationKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionIdentity {
     /// Lexical comptime type bindings, in enclosing-to-inner order.
-    pub scoped_type_bindings: Vec<(String, TypeId)>,
+    pub scoped_type_bindings: Vec<ScopedTypeBinding>,
     pub declaration: DeclarationId,
     pub type_arguments: Vec<TypeId>,
     pub specialization: CheckedGenericSpecialization,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScopedTypeBinding {
+    pub name: String,
+    pub ty: TypeId,
+    pub reflection: jett_types::ReflectionTypeInfo,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,7 +269,7 @@ pub enum StatementKind {
     /// the runtime `TypeInfo` value produced by a trusted reflection loop.
     ///
     /// This is compiler-owned control flow. Source cannot construct it, and a
-    /// backend must compare canonical reflected type identity rather than
+    /// backend must compare source-visible reflection identity rather than
     /// executing every arm for every loop element.
     ReflectedTypeDispatch {
         type_info: Expression,
@@ -276,9 +283,9 @@ pub struct ReflectedTypeArm {
     /// diagnostics and for backends that can dispatch on loop ordinals.
     pub iteration_index: usize,
     pub bound_type: TypeId,
-    /// Canonical identity of the checker-selected bound type, including
-    /// nested type arguments while treating source aliases transparently.
-    pub canonical_identity: String,
+    /// Source-visible reflection identity of the checker-selected bound type,
+    /// including aliases inside nested type arguments.
+    pub reflection_identity: String,
     pub body: Block,
 }
 
@@ -418,7 +425,7 @@ pub enum ExpressionKind {
     Join(Box<Expression>),
     Cancel(Box<Expression>),
     InlineFunction {
-        scoped_type_bindings: Vec<(String, TypeId)>,
+        scoped_type_bindings: Vec<ScopedTypeBinding>,
         params: Vec<LocalId>,
         view_params: Vec<LocalId>,
         /// First local allocated inside this closure. Earlier locals are captures.
@@ -2351,7 +2358,7 @@ struct BodyLowerer<'lowerer, 'program> {
     local_ids: HashMap<DefId, LocalId>,
     locals: Vec<Local>,
     visible_bindings: Vec<HashMap<String, LocalId>>,
-    scoped_type_bindings: Vec<(String, TypeId)>,
+    scoped_type_bindings: Vec<ScopedTypeBinding>,
 }
 
 impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
@@ -2827,28 +2834,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 unreachable!("selection kind checked above");
             };
             // Several reflected elements may have the same concrete type.
-            // Their source body is specialized by bound type, so one arm is
-            // canonical and is selected independently for every matching
-            // runtime element.
-            if !bound_types.insert(checked.bound_type) {
+            // Share an arm only when both canonical type and source-visible
+            // reflection agree; aliases can specialize the body differently.
+            let reflection_identity = checked.reflection.reflection_identity();
+            if !bound_types.insert((checked.bound_type, reflection_identity.clone())) {
                 continue;
             }
-            let Some(info) = self
-                .parent
-                .check
-                .reflection_metadata
-                .get_type_info_for_id(checked.bound_type)
-            else {
-                self.parent.error(
-                    binding.span,
-                    "reflected type dispatch has no checked bound-type metadata",
-                );
-                return None;
-            };
             arms.push(ReflectedTypeArm {
                 iteration_index,
                 bound_type: checked.bound_type,
-                canonical_identity: info.canonical_identity(),
+                reflection_identity,
                 body: self.lower_bound_type_body(binding, checked),
             });
         }
@@ -2860,8 +2855,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         binding: &ast::ComptimeTypeBindStmt,
         checked: CheckedComptimeTypeBinding,
     ) -> Block {
-        self.scoped_type_bindings
-            .push((binding.name.name.clone(), checked.bound_type));
+        self.scoped_type_bindings.push(ScopedTypeBinding {
+            name: binding.name.name.clone(),
+            ty: checked.bound_type,
+            reflection: checked.reflection.clone(),
+        });
         let body = self.lower_block_with_checked_facts(&binding.body, checked.body);
         self.scoped_type_bindings.pop();
         body
