@@ -1,6 +1,10 @@
 //! Exhaustive native fixture parity probe (separate from the full release audit).
 //! Usage: cargo run -p jett_driver --example native_parity -- LAUNCHER REPORT.json
 //! Every inventory row is attempted, irrespective of staged object_emit markers.
+#[path = "../tests/support/native_manifest_inputs.rs"]
+mod manifest_inputs;
+use manifest_inputs::{clock_samples, environment_snapshot, graphics_events, random_samples};
+
 use jett_common::FileId;
 use jett_driver::native::{self, NativeLauncherBundle};
 use jett_parser::ast::Item;
@@ -167,94 +171,6 @@ fn behavior(
                 "cleanup_contract":"native owning-value registry empty at checked context destruction"
         }),
     )
-}
-
-fn clock_samples(fixture: &Value) -> Result<Option<Vec<ClockTestSample>>, String> {
-    let Some(samples) = fixture.get("clock_test_samples") else {
-        return Ok(None);
-    };
-    let samples = samples
-        .as_array()
-        .ok_or("clock_test_samples must be an array")?;
-    samples
-        .iter()
-        .map(|sample| {
-            if sample == "unavailable" {
-                return Ok(ClockTestSample::Unavailable);
-            }
-            let wall = sample.get("wall").ok_or("invalid Clock sample")?;
-            let unix_seconds = wall["unix_seconds"]
-                .as_str()
-                .ok_or("Clock seconds must be a decimal string")?
-                .parse::<i128>()
-                .map_err(|_| "invalid Clock seconds")?;
-            let subsecond_nanoseconds = wall["nanoseconds"]
-                .as_u64()
-                .ok_or("Clock nanoseconds must be an unsigned integer")?
-                .try_into()
-                .map_err(|_| "Clock nanoseconds exceed u32")?;
-            Ok(ClockTestSample::Wall {
-                unix_seconds,
-                subsecond_nanoseconds,
-            })
-        })
-        .collect::<Result<Vec<_>, &str>>()
-        .map(Some)
-        .map_err(str::to_owned)
-}
-
-fn random_samples(fixture: &Value) -> Result<Option<Vec<RandomTestSample>>, String> {
-    let Some(samples) = fixture.get("random_test_samples") else {
-        return Ok(None);
-    };
-    let samples = samples
-        .as_array()
-        .ok_or("random_test_samples must be an array")?;
-    samples
-        .iter()
-        .map(|sample| {
-            let object = sample.as_object().ok_or("invalid Random sample")?;
-            if let Some(value) = object.get("bounded") {
-                return value
-                    .as_str()
-                    .ok_or("bounded Random sample must be a decimal string")?
-                    .parse::<u64>()
-                    .map(RandomTestSample::Bounded)
-                    .map_err(|_| "invalid bounded Random sample");
-            }
-            if let Some(value) = object.get("unit53") {
-                return value
-                    .as_str()
-                    .ok_or("unit53 Random sample must be a decimal string")?
-                    .parse::<u64>()
-                    .map(RandomTestSample::Unit53)
-                    .map_err(|_| "invalid unit53 Random sample");
-            }
-            if let Some(value) = object.get("boolean") {
-                return value
-                    .as_bool()
-                    .map(RandomTestSample::Boolean)
-                    .ok_or("invalid boolean Random sample");
-            }
-            Err("invalid Random sample")
-        })
-        .collect::<Result<Vec<_>, &str>>()
-        .map(Some)
-        .map_err(str::to_owned)
-}
-
-fn environment_snapshot(fixture: &Value) -> Result<Option<EnvironmentTestSnapshot>, String> {
-    fixture
-        .get("environment_test_snapshot")
-        .map(|value| environment::decode_test_snapshot(&value.to_string()).map_err(str::to_owned))
-        .transpose()
-}
-
-fn graphics_events(fixture: &Value) -> Result<Option<Vec<GraphicsTestEvent>>, String> {
-    fixture
-        .get("graphics_test_events")
-        .map(|events| graphics::decode_test_script(&events.to_string()).map(Vec::from))
-        .transpose()
 }
 
 /// Discover suites from syntax, so adding a test block automatically extends
@@ -446,7 +362,7 @@ fn main() -> ExitCode {
     let report = json!({"complete":false,"fixture_gates_complete":fixture_gates_complete,
         "target":native::host_target(),"counts":counts,"fixtures":rows,
         "suite_blocks":{"verify":suite_blocks[0],"property":suite_blocks[1]},
-        "pending_release_gates":["interface-typed values and dynamic dispatch", "full semantic audit", "clean Linux GNU and Windows MSVC distribution"]});
+        "pending_release_gates":["unresolved equality and erased-call contracts", "actor handles escaping comptime", "remaining semantic audit including property failure diagnostics", "full workspace and clean Linux GNU/Windows MSVC distribution at the release revision"]});
     fs::write(&args[1], serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     println!("{counts}");
     // Successful fixture gates do not certify the outstanding release gates.

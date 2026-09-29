@@ -49,9 +49,8 @@ are backend staging limits rather than semantic feature exclusions.
 ## Backend Strategy
 
 The first production path is a host ahead-of-time object backend using
-Cranelift. The Cranelift crates are pinned exactly to `0.132.3`, whose Rust
-version requirement is compatible with the repository's current Rust
-`1.93.1` toolchain:
+Cranelift. The Cranelift crates are pinned exactly to `0.132.3`. Native CI tests
+the compiler and packages with Rust `1.97.1`:
 
 ```toml
 cranelift-codegen = { version = "=0.132.3", default-features = false, features = ["std", "unwind", "x86", "arm64"] }
@@ -244,7 +243,7 @@ Progress is monotonic: a later gate includes all preceding checks, and a
 backend feature is not complete while its fixture is skipped or delegated to
 the runtime interpreter.
 
-1. **Baseline and harness:** freeze the three denominators, classify every
+1. **Baseline and harness:** freeze the fixture denominators, classify every
    fixture by required constructs and runtime hooks, and add differential
    harness support without changing current interpreter expectations.
 2. **Checked-program handoff:** publish and validate the closed semantic
@@ -269,7 +268,7 @@ the runtime interpreter.
    link. The 17 wrapping-success cases return their accepted values; the 8
    failure cases fail through the native runtime with the accepted message
    contract and release every live owned value and resource exactly once.
-9. **Full parity release gate:** all three denominators are complete with no
+9. **Full parity release gate:** all fixture denominators are complete with no
    skips other than explicitly unimplemented features; the full Cargo suite and
    clean-host native suite pass; artifacts run without the source tree; and the
    stable design, architecture, and progress documents are updated to describe
@@ -281,8 +280,14 @@ that merely lowers, code that executes successfully, and code that preserves
 failure semantics.
 
 The portable `native_conformance` integration suite runs on both supported
-x86-64 hosts (Linux GNU and Windows MSVC). It includes the exhaustive verify
-and property execution gates, plus failure probes that prevent a failed
+x86-64 hosts (Linux GNU and Windows MSVC). It includes manifest-driven execution
+of all 30 entry-point fixtures and 25 runtime-contract fixtures, with exact
+stdout/stderr and terminal status comparison against the interpreter. Provider
+scripts come from the inventory, using the same decoders as the standalone
+report tool. Successful runs and entry-failure status 71 both require successful
+runtime-context cleanup; cleanup failure cannot count as a matching entry error.
+The suite also includes the exhaustive verify and property execution gates,
+plus failure probes that prevent a failed
 source assertion in a later body from publishing a native executable.
 The `native_parity` example also discovers top-level verify/property bodies
 from parsed source and reports their fixture and body denominators. Its exit
@@ -291,6 +296,9 @@ status and `fixture_gates_complete` field certify those fixture gates only;
 Its object gate uses native test lowering, which roots checked verify/property
 bodies as well as program functions; ordinary program-only lowering can produce
 an empty object for a valid test-only fixture and is not the inventory gate.
+
+The [acceptance audit](native_acceptance_audit.md) maps these requirements to
+their executable gates and separates them from unresolved semantic contracts.
 
 ## Current Coverage Matrix
 

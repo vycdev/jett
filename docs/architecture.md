@@ -2823,8 +2823,11 @@ the interpreter's current behavior. The public entry ABI still returns runtime
 status. Sequential cancellation leaves the operand unchanged; asynchronous
 scheduling and capability cancellation checkpoints remain unimplemented.
 
-The portable `native_conformance` integration suite executes the verify and
-property inventories on both supported hosts. The `native_parity` example
+The portable `native_conformance` integration suite executes the 30 manifest
+entry points, 25 runtime contracts, and complete verify/property inventories on
+both supported hosts. Entry and runtime-contract gates compare exact stdout,
+stderr, and terminal status with the interpreter, using the manifest's scripted
+providers and requiring successful context cleanup. The `native_parity` example
 discovers those bodies from parsed source and includes their execution counts
 alongside lowering, object, main, and runtime-contract results. Its successful
 fixture-gate result is distinct from a complete native release audit.
