@@ -2843,6 +2843,8 @@ Existing lists, maps, optionals, and results convert recursively across compatib
 interface boundaries while preserving ownership and pending depth. Function
 signature adapters and other parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
+Explicit comptime interface values materialize from unambiguous checked concrete
+payload types; secret fields and pending wrappers remain part of the typed value.
 Actor constructor parameters are retained before state initializers run; an
 initializer consuming its working parameter does not consume the actor's capture.
 

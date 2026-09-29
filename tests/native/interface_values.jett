@@ -190,7 +190,28 @@ function empty_conversions() returns nothing:
     map[string, Named] inserted = map.insert[string, Named](entries, "key", Group(label: "after-empty-map"))
     trace inserted
     return nothing
+function static_items() returns list[Named]:
+    return list(User(label: "static-user"), Group(label: "static-group"))
+function static_pending() returns Named:
+    return run User(label: "static-pending")
+function static_vault() returns Named:
+    return Vault(token: "hidden-interface-token")
+function comptime_values() returns nothing:
+    Named vault = comptime static_vault()
+    trace vault
+    Named selected = comptime select(true)
+    println(show(view selected))
+    list[Named] items = comptime static_items()
+    for item in items:
+        println(show(view item))
+    Named pending = comptime static_pending()
+    trace pending
+    Named ready = join pending handle error:
+        return nothing
+    println(show(view ready))
+    return nothing
 function main() returns nothing:
+    comptime_values()
     empty_conversions()
     collection_conversions()
     nested_collection_conversions()

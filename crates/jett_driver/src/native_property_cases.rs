@@ -210,6 +210,41 @@ pub(super) struct ValueContext<'a> {
     pub(super) bindings: &'a mut Vec<Statement>,
 }
 
+fn erased_value_type(value: &Value, types: &TypeInterner) -> Option<TypeId> {
+    let primitive = match value {
+        Value::Int64(_) => Some(TypeInterner::INT64),
+        Value::Uint64(_) => Some(TypeInterner::UINT64),
+        Value::Float64(_) => Some(TypeInterner::FLOAT64),
+        Value::Bool(_) => Some(TypeInterner::BOOL),
+        Value::String(_) => Some(TypeInterner::STRING),
+        Value::Bytes(_) => Some(TypeInterner::BYTES),
+        Value::Nothing => Some(TypeInterner::NOTHING),
+        _ => None,
+    };
+    if primitive.is_some() {
+        return primitive;
+    }
+    let mut candidates = types
+        .type_ids()
+        .filter(|ty| match (types.resolve(*ty), value) {
+            (Type::Struct(id), Value::Struct { type_name, .. }) => {
+                types.resolve_struct(*id).name == *type_name
+            }
+            (Type::Bitfield(id), Value::Struct { type_name, .. }) => {
+                types.resolve_bitfield(*id).name == *type_name
+            }
+            (Type::Enum(id), Value::Enum { type_name, .. }) => {
+                types.resolve_enum(*id).name == *type_name
+            }
+            (Type::Machine(id), Value::Machine { type_name, .. }) => {
+                types.resolve_machine(*id).name == *type_name
+            }
+            _ => false,
+        });
+    let candidate = candidates.next()?;
+    candidates.next().is_none().then_some(candidate)
+}
+
 pub(super) fn value_expression(
     value: &Value,
     ty: TypeId,
@@ -218,6 +253,16 @@ pub(super) fn value_expression(
 ) -> Result<Expression, String> {
     let types = context.types;
     let kind = match (types.resolve(ty), value) {
+        (_, Value::Pending(inner)) => {
+            ExpressionKind::Run(Box::new(value_expression(inner, ty, span, context)?))
+        }
+        (Type::Interface(_), _) => {
+            let concrete = erased_value_type(value, types)
+                .ok_or("erased compile-time value has no unambiguous checked concrete type")?;
+            ExpressionKind::InterfaceCoerce(Box::new(value_expression(
+                value, concrete, span, context,
+            )?))
+        }
         (
             Type::Int8
             | Type::Int16
@@ -236,10 +281,6 @@ pub(super) fn value_expression(
         (Type::String, Value::String(text)) => ExpressionKind::String(text.clone()),
         (Type::Bool, Value::Bool(flag)) => ExpressionKind::Bool(*flag),
         (Type::Nothing, Value::Nothing) => ExpressionKind::Nothing,
-        (Type::Nothing, Value::Pending(inner)) => {
-            // Materialize the evaluated wrapper without re-running its source call.
-            ExpressionKind::Run(Box::new(value_expression(inner, ty, span, context)?))
-        }
         (
             Type::Function {
                 params,
@@ -358,6 +399,9 @@ pub(super) fn value_expression(
         (Type::Result(_, failure), Value::ResultFail(value)) => {
             ExpressionKind::ResultFail(Box::new(value_expression(value, *failure, span, context)?))
         }
+        (Type::Secret(inner), _) => ExpressionKind::InterfaceCoerce(Box::new(value_expression(
+            value, *inner, span, context,
+        )?)),
         (Type::Refinement { base, .. }, _) => ExpressionKind::RefinementValidated(Box::new(
             value_expression(value, *base, span, context)?,
         )),

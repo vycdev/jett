@@ -62,12 +62,15 @@ Existing list/map/optional/result values convert through compiler-described tree
 including nested containers, pending payloads, empty values, and later insertion.
 Allocation-failure tests verify cleanup of partial lists, maps, sums, and boxes;
 malformed conversion descriptors fail before touching source storage.
+Explicit comptime values with unambiguous checked primitive or nominal payloads
+materialize as typed boxes, including mixed lists, secret fields, and pending
+wrappers. Ambiguous erased generic metadata still fails closed.
 
 This does **not** close the full interface gate. Still required:
 
 - Compatible function signature adapters (including nested container boundaries).
-- Explicit comptime materialization of erased values, reflected construction,
-  and concrete generic identity/debug metadata after erasure.
+- Remaining comptime payload shapes, reflected construction, and concrete
+  generic identity/debug metadata after erasure.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
   identity rather than assuming every checked TypeId has a distinct runtime name.
 
@@ -77,3 +80,13 @@ receive independent working values. Native lowering must establish retained
 copies before evaluating initializers, so an initializer may consume its working
 binding without invalidating the later generated actor allocation. This is
 compiler-owned capture storage, not implicit source-level copying of interfaces.
+
+## Callback compatibility decision
+
+The checker currently compares function parameter types covariantly: it accepts
+`function(User)` as `function(Named)`. Calling the resulting value with another
+implementation can expose interpreter behavior for a value that violates the
+callee's checked nominal type. The user selected safe callback substitution:
+compare parameters contravariantly and returns covariantly. Reject unsafe
+parameter widening, accept safe narrowing, and generate native adapters for
+representation changes at accepted boundaries.
