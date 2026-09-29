@@ -1,7 +1,9 @@
 # Native Code Generation Parity Plan
 
-Status: accepted implementation strategy; checked-program, HIR, and MIR
-prerequisite work is in progress.
+Status: accepted implementation strategy; the native pipeline and fixture gates
+are implemented, with semantic and release acceptance work still open. The
+[acceptance audit](native_acceptance_audit.md) records current obligations;
+historical progress estimates below are not measured completion percentages.
 
 This plan defines when Jett may claim native-code parity with the current
 interpreter-backed language. It fixes the initial backend, the prerequisite IR
@@ -1665,3 +1667,12 @@ order, borrowed values across handlers, and cleanup without partial output after
 a later argument fails. Release rejection remains unchanged. Hidden-secret
 printing is a separate unresolved policy, recorded in
 `../open_design/debug_print_hidden_secrets.md`.
+
+### Direct collection comparison audit
+
+Direct equality of bytes, lists, maps, sets, optionals, and results reaches
+runtime errors in the interpreter but internal build errors in native code.
+This is an uncovered accepted-source contract, not a passing failure-parity
+case. The source-language choice between compile-time rejection and preserved
+runtime errors is recorded in
+[direct collection equality](../open_design/direct_collection_equality.md).

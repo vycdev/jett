@@ -61,6 +61,7 @@ The following decisions remain unresolved and prevent a full parity claim:
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
 - [Concrete-owner arguments in erased calls](../open_design/interface_same_owner_arguments.md): runtime validation versus rejecting unsafe erased calls statically.
 - [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
+- [Direct collection and sum equality](../open_design/direct_collection_equality.md): reject unsupported comparisons at compile time versus preserve their interpreter runtime errors.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
