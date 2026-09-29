@@ -13,6 +13,7 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         ExpressionKind::Clone(value) => has_extractable_handle(value),
         ExpressionKind::Run(value) | ExpressionKind::Join(value) => has_extractable_handle(value),
         ExpressionKind::Coarsen(value) | ExpressionKind::Declassify(value)
+        | ExpressionKind::RefinementValidated(value)
         | ExpressionKind::InterfaceCoerce { value, .. } | ExpressionKind::InterfaceType(value) => {
             has_extractable_handle(value)
         }
@@ -300,6 +301,11 @@ impl Builder<'_> {
         if let ExpressionKind::InterfaceType(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::InterfaceType(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::RefinementValidated(value) = &expression.kind {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::RefinementValidated(Box::new(self.lower_value(value)));
             return lowered;
         }
         if let ExpressionKind::View(value) = &expression.kind {

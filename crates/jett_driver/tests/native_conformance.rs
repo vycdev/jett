@@ -320,6 +320,24 @@ fn native_generic_interface_identity_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_opaque_identity_matches_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_opaque_identity.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("opaque interface oracle");
+    assert_eq!(
+        expected.stdout,
+        "first\n5\nfirst\n5\nfirst\n7\n2\nfirst\nsecond\nfirst\nchecked-builder\nchecked-builder\nrecord:7\nrecord:9\nbuilder\nchecked-builder\nrecord:9\nchecked-builder\nrecord:9\nchecked-builder\nchecked-builder\nbuilder\nchecked-builder\nbuilder\noutput\noutput\nreadyoutput\noutput\nstdout\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("interface_opaque_identity.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native opaque interfaces");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_interface_facade_identity_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_facade_identity.jett");

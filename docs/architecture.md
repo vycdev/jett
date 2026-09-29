@@ -2938,6 +2938,11 @@ erasure and refinement validation see the correct owner. That generated constant
 local is cloned at each use so repeated evaluation does not consume its seed.
 Enum, machine, and
 bitfield refinements retain nominal identity without changing their payloads.
+Actor references retain their declared owner through interface erasure; message
+dispatch reads the underlying actor ID. Construction-builder and capability
+refinements likewise retain their nominal implementation owner. MIR handler
+extraction traverses validated refinement wrappers, including reconstruction
+operations nested inside baked builders.
 Expected type context also passes through `run`: for example, initializing
 `result[int64, string]` with `run ok(17)` retains both declared result payload
 types in the checked body used by native lowering.

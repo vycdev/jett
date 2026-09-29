@@ -1731,11 +1731,16 @@ impl Interpreter {
             .split_once(" at ")
             .map_or(owner, |(machine, _)| machine);
         let is_concrete = base.starts_with("function(")
-            || matches!(owner, "list" | "map" | "set" | "optional" | "result")
+            || matches!(
+                owner,
+                "list" | "map" | "set" | "optional" | "result" | "TypeConstruction"
+            )
             || self.structs.contains_key(owner)
             || self.enums.contains_key(owner)
             || self.machines.contains_key(owner)
-            || self.bitfields.contains_key(owner);
+            || self.bitfields.contains_key(owner)
+            || self.actor_defs.contains_key(owner)
+            || jett_types::CapabilityKind::from_name(owner).is_some();
         // An interface destination retains the incoming concrete owner. A
         // concrete conversion replaces it, including covariant containers.
         if !is_concrete {
@@ -3827,8 +3832,8 @@ impl Interpreter {
                 return Err(format!("send/ask: actor expression returned signal: {s:?}"));
             }
         };
-        let actor_id = match actor_val {
-            Value::Actor(id) => id,
+        let actor_id = match actor_val.payload() {
+            Value::Actor(id) => *id,
             _ => return Err(format!("send/ask: expected actor value, got {actor_val}")),
         };
 
@@ -7576,7 +7581,7 @@ impl Interpreter {
             variant,
             state,
             fields: existing_fields,
-        } = builder
+        } = builder.payload()
         else {
             return Err(format!(
                 "type.construct_put: first argument must be TypeConstruction, got {}",
@@ -8147,7 +8152,7 @@ impl Interpreter {
             variant,
             state,
             fields,
-        } = builder
+        } = builder.payload()
         else {
             return Err(format!(
                 "type.construct_finish: first argument must be TypeConstruction, got {}",

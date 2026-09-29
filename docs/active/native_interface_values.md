@@ -84,9 +84,6 @@ This does **not** close the full interface gate. Still required:
   struct metadata and exact implementation identity are retained.
 - Audit remaining non-primitive refinements beyond the tested list, record,
   enum, machine, and bitfield shapes in runtime and comptime paths.
-- Preserve nominal actor owners through interface erasure. A checked probe
-  with implementations for two actor types works natively but the interpreter
-  currently dispatches both from the unqualified runtime carrier `actor`.
 
 Generic struct interface dispatch uses the concrete instantiated owner retained
 on the value. Implementations for `Box[int64]`, `Box[string]`, and
@@ -381,3 +378,21 @@ without explicit comptime expressions need no evaluation worker.
 redaction for runtime and baked JSON parser results, enum/bitfield/machine JSON
 round trips, and math facade results. It passes from the ordinary native test
 thread after explicit evaluation adopts the shared interpreter stack budget.
+
+Opaque carriers must also retain their checked concrete owners when erased to
+interfaces. Distinct actor declarations and refinements of `TypeConstruction`
+already dispatch independently in native code. Interpreter metadata must preserve
+those owners while actor messages and reflected construction operate on the
+underlying handle or builder payload. Converting a refined builder to its base
+selects the base implementation; erasure preserves the exposed refinement.
+Capability-backed refinements use the same checked owner rule. Explicit comptime
+builders nested inside a validated refinement still need their reconstruction
+handlers extracted into MIR control flow; the validated wrapper must not hide
+those handlers from lowering.
+
+`interface_opaque_identity` exercises distinct actor declarations, cloned and
+stored actor references, messages after annotation, pending actors and refined
+builders, runtime and baked refined builder erasure, and capability refinements.
+Builder completion explicitly coarsens the refinement as required by the checked
+intrinsic signature. MIR extracts reconstruction handlers through
+`RefinementValidated` so baked refined builders remain ordinary native values.
