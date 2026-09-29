@@ -35,6 +35,7 @@ fn build_accepts_explicit_supported_host() {
         .join("../../tests/run_pass/native_scalar_entry.jett");
     let output = Command::new(env!("CARGO_BIN_EXE_jett"))
         .arg("build")
+        .arg("--check")
         .arg(source)
         .args(["--target", &host])
         .output()

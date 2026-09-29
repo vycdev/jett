@@ -16,7 +16,7 @@
       "hidden": "hidden.jett",
       "candidate": "solution.jett",
       "grade_mode": "append",
-      "commands": [["{jett}", "build", "{candidate}"], ["{jett}", "test", "{candidate}"]],
+      "commands": [["{jett}", "build", "--check", "{candidate}"], ["{jett}", "test", "{candidate}"]],
       "forbidden_patterns": [{"pattern": "(?m)^\\s*(?:other|_)\\s*:", "message": "catch-all match arms are forbidden; handle every Jett enum variant explicitly"}]
     },
     "python": {

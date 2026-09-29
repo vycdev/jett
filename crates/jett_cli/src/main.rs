@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 
 /// The Jett programming language compiler
@@ -38,6 +38,18 @@ enum Command {
         /// Emit TOON agent output
         #[arg(long)]
         agent: bool,
+
+        /// Validate source without emitting an executable
+        #[arg(long, conflicts_with_all = ["output", "runtime_bundle"])]
+        check: bool,
+
+        /// Executable output path (default: target/<host>/<profile>/<source stem>)
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+
+        /// Launcher manifest (otherwise use the installed runtime bundle)
+        #[arg(long)]
+        runtime_bundle: Option<PathBuf>,
 
         /// Target triple (only the current supported native host is accepted)
         #[arg(long, value_parser = parse_build_target)]
@@ -259,46 +271,20 @@ fn main() {
             file,
             release,
             agent,
+            check,
+            output,
+            runtime_bundle,
             target: _,
         } => {
-            let path = Path::new(&file);
-            let result =
-                jett_driver::build_file_with_options(path, jett_driver::BuildOptions { release });
-
-            if agent {
-                // TOON agent output mode
-                let toon_output = jett_diagnostics::toon::render_toon(
-                    &result.diagnostics,
-                    &result.source,
-                    &result.file_path,
-                );
-                print!("{toon_output}");
-
-                if result.has_errors {
-                    process::exit(1);
-                }
-            } else {
-                // Human-readable output mode
-                for diag in &result.diagnostics {
-                    let rendered = jett_diagnostics::render::render_diagnostic(
-                        diag,
-                        &result.source,
-                        &result.file_path,
-                    );
-                    eprint!("{rendered}");
-                }
-
-                if result.has_errors {
-                    let error_count = result
-                        .diagnostics
-                        .iter()
-                        .filter(|d| d.severity == jett_diagnostics::Severity::Error)
-                        .count();
-                    eprintln!("build failed: {error_count} error(s)");
-                    process::exit(1);
-                } else {
-                    println!("build ok: {file} (type checked, no codegen yet)");
-                }
+            if !build_command(
+                &file,
+                release,
+                agent,
+                check,
+                output.as_deref(),
+                runtime_bundle.as_deref(),
+            ) {
+                process::exit(1);
             }
         }
         Command::Run {
@@ -1949,5 +1935,135 @@ mod tests {
             rendered,
             "status: ok\nfunction: json.parse\nfound: true\nfile: stdlib/json/90_public_api.jett\nreturns: result[T\\, string]\ntype_params[1]{name}:\n  T\nparams[1]{name,type,view,mutable}:\n  raw,string,false,false\n"
         );
+    }
+}
+
+fn render_build_diagnostics(result: &jett_driver::BuildResult, agent: bool) {
+    if agent {
+        print!(
+            "{}",
+            jett_diagnostics::toon::render_toon(
+                &result.diagnostics,
+                &result.source,
+                &result.file_path
+            )
+        );
+    } else {
+        for diagnostic in &result.diagnostics {
+            eprint!(
+                "{}",
+                jett_diagnostics::render::render_diagnostic(
+                    diagnostic,
+                    &result.source,
+                    &result.file_path
+                )
+            );
+        }
+    }
+}
+
+fn build_command(
+    file: &str,
+    release: bool,
+    agent: bool,
+    check: bool,
+    output: Option<&Path>,
+    runtime_bundle: Option<&Path>,
+) -> bool {
+    let options = jett_driver::BuildOptions { release };
+    if check {
+        let result = jett_driver::build_file_with_options(Path::new(file), options);
+        render_build_diagnostics(&result, agent);
+        if !agent && !result.has_errors {
+            println!("check ok: {file}");
+        }
+        return !result.has_errors;
+    }
+    let report_error = |message: &str| {
+        if agent {
+            print!("{}", render_run_agent_error(file, message));
+        } else {
+            eprintln!("build failed: {message}");
+        }
+        false
+    };
+    let object = match jett_driver::native::emit_host_program_object_for_file_with_options(
+        Path::new(file),
+        options,
+    ) {
+        Ok(object) => object,
+        Err(error) => {
+            if let jett_driver::native::NativeBuildError::Lowering { source, .. } = &error {
+                if let jett_driver::BackendLoweringError::Build(result) = source.as_ref() {
+                    render_build_diagnostics(result, agent);
+                    return false;
+                }
+            }
+            return report_error(&error.to_string());
+        }
+    };
+    let host = jett_driver::native::host_target();
+    let profile = if release { "release" } else { "debug" };
+    let manifest = runtime_bundle
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("JETT_NATIVE_RUNTIME_BUNDLE").map(PathBuf::from))
+        .or_else(|| {
+            std::env::current_exe().ok().and_then(|executable| {
+                executable.parent().and_then(Path::parent).map(|prefix| {
+                    prefix
+                        .join("lib")
+                        .join("jett")
+                        .join("runtime")
+                        .join(&host)
+                        .join(profile)
+                        .join("launcher.json")
+                })
+            })
+        });
+    let Some(manifest) = manifest else {
+        return report_error("cannot locate the native runtime; use --runtime-bundle");
+    };
+    let bundle = match jett_driver::native::NativeLauncherBundle::from_manifest(&manifest, release)
+    {
+        Ok(bundle) => bundle,
+        Err(error) => return report_error(&error),
+    };
+    let destination = if let Some(output) = output {
+        output.to_path_buf()
+    } else {
+        let stem = Path::new(file)
+            .file_stem()
+            .unwrap_or_else(|| std::ffi::OsStr::new("program"));
+        let mut destination = PathBuf::from("target").join(&host).join(profile).join(stem);
+        if cfg!(windows) {
+            destination.set_extension("exe");
+        }
+        destination
+    };
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            return report_error(&format!(
+                "cannot create output directory `{}`: {error}",
+                parent.display()
+            ));
+        }
+    }
+    match jett_driver::native::link_host_object(&object, &bundle, &destination) {
+        Ok(artifact) => {
+            if agent {
+                println!(
+                    "status: ok\nartifact: {}\ntarget: {}",
+                    escape_toon_scalar(&artifact.path.display().to_string()),
+                    escape_toon_scalar(&artifact.target)
+                );
+            } else {
+                println!("build ok: {}", artifact.path.display());
+            }
+            true
+        }
+        Err(error) => report_error(&error.to_string()),
     }
 }

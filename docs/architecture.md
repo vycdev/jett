@@ -2448,7 +2448,7 @@ Each crate has its own unit tests:
 
 ### Integration Tests (`tests/`)
 
-- **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build` and assert exit code 0.
+- **`compile_pass/`** — Jett programs that should compile without errors. Tests run `jett build --check` and assert exit code 0.
 - **`compile_fail/`** — Jett programs with intentional errors. Each test file declares its expected error-code multiset with comment annotations such as `# ERROR: E0601`; repeated diagnostics use the compact form `# ERROR: E0601 x3`. The harness rejects missing or malformed annotations, unexpected codes, and incorrect duplicate counts without depending on diagnostic order. Message text is not currently contractual.
 - **`run_pass/`** — Jett programs that should compile and execute successfully. Verify/property fixtures assert internally, and stdout-producing runtime fixtures can be pinned through the driver's captured-stdout test helper.
 - **`snapshots/`** — Source fixtures for the current direct AST snapshots tracked by [#162](https://github.com/vycdev/jett/issues/162); the committed `insta` outputs use the parser crate's conventional snapshot directory. HIR, MIR, and LLVM IR snapshots remain deferred until those representations exist.
@@ -2800,8 +2800,17 @@ discovers those bodies from parsed source and includes their execution counts
 alongside lowering, object, main, and runtime-contract results. Its successful
 fixture-gate result is distinct from a complete native release audit.
 The CLI validates explicit build targets before loading source, accepting only
-the current supported host. CLI frontend validation and native driver artifact
-generation remain separate until runtime bundle packaging is integrated.
+the current supported host. Native `build` invokes the driver object and link stages and publishes an
+executable atomically. `build --check` retains frontend-only validation. The
+installed layout is `bin/jett`, `lib/jett/stdlib`, and
+`lib/jett/runtime/<host>/<debug|release>/launcher.json` plus its archive.
+Runtime selection prefers `--runtime-bundle`, then `JETT_NATIVE_RUNTIME_BUNDLE`,
+then the installed manifest; validation checks compiler version, target, ABI,
+CRT, profile, archive filename, and ordered native libraries before linking.
+Stdlib lookup prefers `JETT_STDLIB_DIR`, the installed sibling directory, then
+the development tree. Packaging builds both runtime profiles outside the CLI;
+the compiler never invokes Cargo. Default artifacts use
+`target/<host>/<profile>/<stem>` (`.exe` on Windows), overridable with `-o`.
 The native driver accepts `BuildOptions` for artifact generation. Release mode
 applies frontend debug-print restrictions, discards trace/breakpoint HIR nodes
 before MIR expands their expressions, and enables Cranelift speed optimization.

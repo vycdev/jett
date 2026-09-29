@@ -85,8 +85,8 @@ impl fmt::Display for NativeCrtMode {
 /// Explicit metadata for one native launcher archive.
 ///
 /// Keeping this record separate from the archive path prevents the driver from
-/// guessing ABI, CRT, target, or transitive native-library requirements. A
-/// future on-disk launcher manifest can deserialize directly into this shape.
+/// guessing ABI, CRT, target, or transitive native-library requirements. The
+/// installed launcher manifest is validated before constructing this shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeLauncherBundle {
     pub archive_path: PathBuf,
@@ -97,6 +97,94 @@ pub struct NativeLauncherBundle {
 }
 
 impl NativeLauncherBundle {
+    /// Load explicit installed runtime metadata; paths are relative to the manifest.
+    pub fn from_manifest(path: &Path, release: bool) -> Result<Self, String> {
+        let text = fs::read_to_string(path).map_err(|error| format!("cannot read native runtime bundle `{}`: {error}; install the matching runtime or use --runtime-bundle", path.display()))?;
+        let manifest: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+            format!(
+                "invalid native runtime manifest `{}`: {error}",
+                path.display()
+            )
+        })?;
+        let field = |name: &str| {
+            manifest
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("native runtime manifest requires string `{name}`"))
+        };
+        if manifest
+            .get("manifest_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(1)
+        {
+            return Err("unsupported native runtime manifest version (expected 1)".into());
+        }
+        if field("compiler_version")? != env!("CARGO_PKG_VERSION") {
+            return Err(format!(
+                "native runtime compiler version must be {}",
+                env!("CARGO_PKG_VERSION")
+            ));
+        }
+        let profile = if release { "release" } else { "debug" };
+        if field("profile")? != profile {
+            return Err(format!(
+                "native runtime profile mismatch: expected {profile}"
+            ));
+        }
+        let archive = Path::new(field("archive")?);
+        if archive.components().count() != 1
+            || !matches!(
+                archive.components().next(),
+                Some(std::path::Component::Normal(_))
+            )
+        {
+            return Err("native runtime archive must be a filename beside its manifest".into());
+        }
+        let abi = manifest
+            .get("runtime_abi_version")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or("native runtime manifest requires a runtime_abi_version integer")?;
+        let libraries = manifest
+            .get("native_library_args")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("native runtime manifest requires native_library_args")?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(OsString::from)
+                    .ok_or("native library arguments must be strings")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let bundle = Self {
+            archive_path: path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(archive),
+            target: field("target")?.to_owned(),
+            runtime_abi_version: abi,
+            crt_mode: match field("crt_mode")? {
+                "static" => NativeCrtMode::Static,
+                "dynamic" => NativeCrtMode::Dynamic,
+                _ => return Err("native runtime CRT mode must be static or dynamic".into()),
+            },
+            native_library_args: libraries,
+        };
+        validate_host_launcher(&bundle).map_err(|error| error.to_string())?;
+        validate_regular_file(
+            &bundle.archive_path,
+            NativePathRole::LauncherArchive,
+            Some(if bundle.target == LINUX_GNU_NATIVE_TARGET {
+                "a"
+            } else {
+                "lib"
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(bundle)
+    }
+
     /// Describe a Linux GNU launcher archive built for the compiler host.
     pub fn linux_gnu_v1(archive_path: impl Into<PathBuf>) -> Self {
         Self {
@@ -1304,6 +1392,60 @@ fn publish_executable(from: &Path, to: &Path) -> Result<(), NativeBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_launcher_manifest_validates_identity_profile_and_archive_location() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = host_target();
+        let bundle = match host.as_str() {
+            LINUX_GNU_NATIVE_TARGET => {
+                NativeLauncherBundle::linux_gnu_v1(directory.path().join("launcher.a"))
+            }
+            WINDOWS_MSVC_NATIVE_TARGET => {
+                NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("launcher.lib"))
+            }
+            _ => return,
+        };
+        fs::write(&bundle.archive_path, b"test archive placeholder").unwrap();
+        let manifest = directory.path().join("launcher.json");
+        let value = serde_json::json!({
+            "manifest_version": 1,
+            "compiler_version": env!("CARGO_PKG_VERSION"),
+            "target": bundle.target,
+            "runtime_abi_version": bundle.runtime_abi_version,
+            "crt_mode": bundle.crt_mode.to_string(),
+            "profile": "debug",
+            "archive": bundle.archive_path.file_name().unwrap().to_str().unwrap(),
+            "native_library_args": bundle.native_library_args.iter().map(|arg| arg.to_str().unwrap()).collect::<Vec<_>>(),
+        });
+        fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            NativeLauncherBundle::from_manifest(&manifest, false).unwrap(),
+            bundle
+        );
+        assert!(
+            NativeLauncherBundle::from_manifest(&manifest, true)
+                .unwrap_err()
+                .contains("profile mismatch")
+        );
+        for (field, invalid) in [
+            ("manifest_version", serde_json::json!(99)),
+            ("compiler_version", serde_json::json!("incompatible")),
+            ("target", serde_json::json!("wasm32-unknown-unknown")),
+            ("runtime_abi_version", serde_json::json!(99)),
+            ("crt_mode", serde_json::json!("unknown")),
+            ("native_library_args", serde_json::json!([])),
+            ("archive", serde_json::json!("../outside.a")),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = invalid;
+            fs::write(&manifest, serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(
+                NativeLauncherBundle::from_manifest(&manifest, false).is_err(),
+                "{field}"
+            );
+        }
+    }
 
     #[test]
     fn unsupported_host_diagnostic_names_both_native_hosts() {

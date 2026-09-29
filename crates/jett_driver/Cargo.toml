@@ -23,11 +23,9 @@ jett_fmt.workspace = true
 jett_query.workspace = true
 jett_codegen_cranelift.workspace = true
 tempfile.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 find-msvc-tools.workspace = true
 same-file = "1"
 windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem"] }
-
-[dev-dependencies]
-serde_json.workspace = true

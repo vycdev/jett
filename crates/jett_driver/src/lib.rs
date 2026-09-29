@@ -3348,6 +3348,17 @@ fn discover_stdlib_modules_with_diagnostics() -> DiscoveredModules {
 }
 
 fn stdlib_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("JETT_STDLIB_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(prefix) = executable.parent().and_then(Path::parent) {
+            let installed = prefix.join("lib").join("jett").join("stdlib");
+            if installed.is_dir() {
+                return installed;
+            }
+        }
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

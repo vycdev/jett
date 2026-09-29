@@ -3568,7 +3568,7 @@ function start_server(view net: Network, view stdout: Stdout, port: int64) retur
 
 This code does not contain a single OS-specific reference. No `#ifdef`, no `cfg!()`, no `#[target_os]`. The LLM writes against the `Network` capability interface. The compiler does the rest.
 
-**What the compiler does at build time:**
+**Planned cross-platform provider mapping (not the current host-only implementation):**
 
 ```
 jett build server.jett --target linux-x86_64
@@ -3659,6 +3659,11 @@ If a genuinely platform-specific behavior is needed (rare, and only for advanced
 **Note on debug instrumentation:** Debug features like breakpoints and profiling annotations are automatically stripped by the compiler in production builds. This is not conditional compilation — the LLM never writes "if debug then X else Y." It writes the same code regardless of build mode, and the compiler silently removes debug instrumentation when building for release.
 
 #### Build Targets
+
+The following aliases and cross-compilation examples describe the roadmap.
+The implemented CLI accepts only its exact host triple:
+`x86_64-unknown-linux-gnu` or `x86_64-pc-windows-msvc`. Other targets,
+comma-separated targets, and shorthand aliases are rejected.
 
 ```
 # Build for the current platform:
@@ -7627,8 +7632,19 @@ Linux GNU and Windows MSVC. The standalone fixture report includes their
 separate execution denominators; passing fixture gates alone does not certify
 the remaining full-language and distribution release gates.
 An explicit `jett build --target` must equal the supported compiler host;
-unsupported targets are rejected before source loading. The current CLI build
-still performs frontend validation, while native driver APIs emit executables.
+unsupported targets are rejected before source loading. Native `build` emits
+an executable at `target/<host>/<debug|release>/<stem>` (`.exe` on Windows), or
+at `-o <path>`. `build --check` validates without an entry point or runtime bundle.
+Release builds reject debug printing and remove trace/breakpoint execution,
+including condition effects, while enabling native optimization.
+
+Installed packages contain the compiler, stdlib, and both runtime profiles.
+`--runtime-bundle` or `JETT_NATIVE_RUNTIME_BUNDLE` selects an explicit launcher
+manifest; otherwise it comes from `lib/jett/runtime/<host>/<profile>` relative
+to the installation prefix. The manifest must match compiler version, target,
+ABI, CRT, profile, and required system libraries. The compiler never invokes
+Cargo and preserves existing output on a failed build. Stdlib lookup prefers
+`JETT_STDLIB_DIR`, then installed `lib/jett/stdlib`, then the development tree.
 
 The full native parity gate is still incomplete: the current object count is
 recorded in `active/native_codegen_parity_plan.md`, alongside 30/30 main

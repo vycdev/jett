@@ -99,9 +99,9 @@ target-specific and tested.
 
 The CLI now validates an explicit `build --target` before reading source and
 accepts only the current supported native host (Linux GNU or Windows MSVC on
-x86-64). The existing CLI build command still performs frontend validation;
-executable generation currently uses the native driver API and explicit runtime
-bundle. Connecting packaged native artifacts to the CLI remains a release gate.
+x86-64). The CLI emits native artifacts using validated installed runtime
+manifests; `build --check` retains frontend-only validation. Clean supported-host
+package verification remains a release gate.
 
 ## Required Compiler Handoff
 
@@ -1485,5 +1485,30 @@ effects, while retaining validation of their checked source. Cranelift uses its
 speed optimization setting for release objects. The linked release differential
 fixture proves debug-condition output is absent, application capability output
 remains, debug builds match the interpreter, and forbidden debug printing cannot
-publish a release artifact. Runtime bundle selection and CLI packaging remain
-the next release gate.
+publish a release artifact. Runtime bundle selection and CLI packaging are
+implemented below; clean supported-host verification remains a release gate.
+
+### Packaged CLI artifact layout
+
+The native CLI uses an explicit versioned launcher manifest, either supplied
+with `--runtime-bundle` (or `JETT_NATIVE_RUNTIME_BUNDLE`) or installed at
+`lib/jett/runtime/<host>/<debug|release>/launcher.json` beside the package's
+`bin/jett`. Each manifest records the compiler package version, native ABI,
+target, profile, CRT mode, archive filename, and ordered native link libraries.
+The loader validates those inputs against this compiler before linking.
+
+A package also carries `lib/jett/stdlib`; discovery prefers an explicit
+`JETT_STDLIB_DIR`, then the installed sibling directory, then the development
+source tree. Native `build` publishes `target/<host>/<profile>/<stem>` by default
+(with `.exe` on Windows), with `-o` for an explicit output. `build --check`
+retains frontend validation without requiring a launcher or entry point.
+Packaging builds both runtime profiles and keeps compilation outside the CLI;
+the installed compiler never starts Cargo to obtain its runtime.
+
+
+Local Linux package smoke checks pass from an unrelated working directory:
+installed-stdlib discovery, linked debug/release output after source removal,
+agent artifact reporting, default output paths, target/profile rejection, and
+preservation of an existing artifact after failed builds. The packaging tool
+includes dependency notices and a standalone smoke script for clean consumers.
+These local results do not substitute for the separate clean Windows/Linux jobs.

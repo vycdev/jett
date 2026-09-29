@@ -23,6 +23,7 @@
         [
           "{jett}",
           "build",
+          "--check",
           "{candidate}"
         ],
         [
