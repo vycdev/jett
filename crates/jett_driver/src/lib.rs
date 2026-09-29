@@ -1,6 +1,7 @@
 use jett_comptime::checked_types::{
     CheckedExpressionTypes, CheckedFunctionTypes, CheckedScopedBindings, CheckedScopedTypes,
 };
+mod native_builder_constants;
 mod native_constants;
 mod native_property_cases;
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
@@ -2842,6 +2843,7 @@ fn lower_file_for_backend_inner(
         &mut hir,
         &explicit_comptime_values,
         &check_result.interner,
+        &check_result.reflection_metadata,
         &check_result.method_value_definitions,
     )
     .map_err(BackendLoweringError::Hir)?;
@@ -2863,6 +2865,7 @@ fn lower_file_for_backend_inner(
             entry_file,
             &cases,
             &check_result.interner,
+            &check_result.reflection_metadata,
             &check_result.method_value_definitions,
         )
         .map_err(BackendLoweringError::Hir)?

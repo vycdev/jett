@@ -7695,6 +7695,11 @@ specialization keys and parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
+Explicit comptime construction builders preserve their owner, selected variant
+or state, and provided fields. Programs can clone, store, erase, join, and finish
+them at runtime. Baking a partially filled builder does not validate or finish
+it: missing fields, refinement predicates, and bitfield widths retain their
+ordinary `type.construct_finish` checks.
 Primitive interface values retain their checked concrete identity even when
 runtime storage shares a wider carrier. Integer widths, `float32`, and nominal
 primitive refinements dispatch to their own implementations through collections,

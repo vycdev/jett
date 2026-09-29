@@ -6,6 +6,8 @@ use crate::TypeId;
 /// comptime reflection builtins.
 #[derive(Debug, Clone, Default)]
 pub struct ReflectionMetadata {
+    source_type_ids: HashMap<String, TypeId>,
+    source_type_infos: HashMap<String, ReflectionTypeInfo>,
     type_ids_by_name: HashMap<String, TypeId>,
     type_infos_by_id: HashMap<TypeId, ReflectionTypeInfo>,
     type_fields_by_id: HashMap<TypeId, Vec<ReflectionFieldInfo>>,
@@ -63,6 +65,27 @@ impl ReflectionMetadata {
 
     pub fn get_type_info_for_id(&self, type_id: TypeId) -> Option<&ReflectionTypeInfo> {
         self.type_infos_by_id.get(&type_id)
+    }
+
+    /// Source-visible metadata without replacing an alias by another name
+    /// sharing its canonical type ID.
+    pub fn get_source_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {
+        self.source_type_infos
+            .get(type_name)
+            .or_else(|| self.type_infos.get(type_name))
+    }
+
+    /// Retain a checked reflection operand without changing canonical lookup.
+    pub fn insert_source_type_info(&mut self, ty: TypeId, info: ReflectionTypeInfo) {
+        self.source_type_ids.insert(info.type_name.clone(), ty);
+        self.source_type_infos.insert(info.type_name.clone(), info);
+    }
+
+    pub fn source_type_id_for_name(&self, type_name: &str) -> Option<TypeId> {
+        self.source_type_ids
+            .get(type_name)
+            .copied()
+            .or_else(|| self.type_id_for_name(type_name))
     }
 
     pub fn get_type_info(&self, type_name: &str) -> Option<&ReflectionTypeInfo> {

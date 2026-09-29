@@ -4427,6 +4427,47 @@ fn native_refined_binary_nested_handle_matches_interpreter() {
 }
 
 #[test]
+fn native_comptime_builders_match_interpreter() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/comptime_builders.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("comptime builder oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "type.construct_finish: 'app.Record' is missing required field 'count'\n",
+            "record:5:runtime\n",
+            "type.construct_finish: 'app.Record' is missing required field 'label'\n",
+            "refinement type constraint failed for 'app.Positive'\n",
+            "record:8:runtime\nrecord:1:runtime\nrecord:2:runtime\nrecord:9:runtime\nbuilder\n",
+            "127\nalias\ndeclared-alias\nrecord:12:runtime\nrecord:14:runtime\n7\nheader:3\n",
+            "bitfield 'app.Header' field 'kind' is 8 bit(s) wide and cannot hold '256'\n",
+        )
+    );
+    assert!(
+        expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("[redacted]"))
+    );
+    assert!(
+        !expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("hidden-baked-builder"))
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("comptime_builders.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native comptime builders");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        format!("{}\n", expected.debug_output.join("\n"))
+    );
+}
+
+#[test]
 fn native_comptime_composites_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/comptime_composites.jett");

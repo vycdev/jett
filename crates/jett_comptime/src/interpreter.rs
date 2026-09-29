@@ -6706,7 +6706,8 @@ impl Interpreter {
         ))
     }
 
-    fn reflection_field_info_value(
+    /// Encode checked field metadata for reflection and native constant baking.
+    pub fn reflection_field_info_value(
         owner_type: &str,
         owner_member: Option<&str>,
         field: &ReflectionFieldInfo,
@@ -6895,7 +6896,8 @@ impl Interpreter {
         }
     }
 
-    fn reflection_machine_state_info_value(
+    /// Encode checked state metadata without evaluating source code.
+    pub fn reflection_machine_state_info_value(
         owner_type: &str,
         state: &ReflectionMachineStateInfo,
     ) -> Value {
@@ -6966,7 +6968,11 @@ impl Interpreter {
         ))
     }
 
-    fn reflection_variant_info_value(owner_type: &str, variant: &ReflectionVariantInfo) -> Value {
+    /// Encode checked variant metadata without evaluating source code.
+    pub fn reflection_variant_info_value(
+        owner_type: &str,
+        variant: &ReflectionVariantInfo,
+    ) -> Value {
         let owner_member = variant.name.as_str();
         let fields = variant
             .fields

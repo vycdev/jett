@@ -2900,6 +2900,14 @@ Other reflection specialization keys and parity edges remain open; see
 `active/native_interface_values.md`.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
+Construction builders materialize through the existing typed start/put
+intrinsics using checked reflection layouts. The checker exports source-aware
+reflection operands from ordinary, generic, and scoped bodies separately from
+canonical metadata, retaining names such as `Box[Label]` without changing the
+canonical `Box[string]` layout. Shared reflection-value encoders produce field,
+variant, and state metadata. Builder payloads use their storage types and defer
+refinement and width validation to runtime finish; no source computation is
+re-executed to recreate a builder.
 Primitive interface values retain their checked concrete identity even when
 runtime storage shares a wider carrier. Integer widths, `float32`, and nominal
 primitive refinements dispatch to their own implementations through collections,

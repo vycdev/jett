@@ -1796,6 +1796,28 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn build_reflection_metadata(&mut self) -> ReflectionMetadata {
+        fn source_operands(
+            metadata: &mut ReflectionMetadata,
+            types: &HashMap<Span, Vec<TypeId>>,
+            reflection: &HashMap<Span, Vec<ReflectionTypeInfo>>,
+            bindings: &HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+        ) {
+            for (span, infos) in reflection {
+                if let Some(args) = types.get(span) {
+                    for (ty, info) in args.iter().zip(infos) {
+                        metadata.insert_source_type_info(*ty, info.clone());
+                    }
+                }
+            }
+            for binding in bindings.values().flatten() {
+                source_operands(
+                    metadata,
+                    &binding.body.intrinsic_type_arguments,
+                    &binding.body.intrinsic_reflection_arguments,
+                    &binding.body.comptime_type_bindings,
+                );
+            }
+        }
         let mut metadata = ReflectionMetadata::new();
 
         let type_ids = self.interner.type_ids().collect::<Vec<_>>();
@@ -1833,6 +1855,20 @@ impl<'a> TypeChecker<'a> {
             metadata.insert_type_variants_for_id(type_id, type_name, variants);
         }
 
+        source_operands(
+            &mut metadata,
+            &self.intrinsic_type_arguments,
+            &self.intrinsic_reflection_arguments,
+            &self.comptime_type_bindings,
+        );
+        for instance in &self.generic_function_instantiations {
+            source_operands(
+                &mut metadata,
+                &instance.intrinsic_type_arguments,
+                &instance.intrinsic_reflection_arguments,
+                &instance.comptime_type_bindings,
+            );
+        }
         metadata
     }
 
@@ -17178,6 +17214,49 @@ export bitfield Header:
                 .expect("legacy variant lookup should bridge through TypeId")[1]
                 .discriminant,
             17
+        );
+    }
+
+    #[test]
+    fn reflection_operands_preserve_generic_aliases_without_replacing_canonical_metadata() {
+        let result = check_source_result(
+            r#"
+type Label = string
+struct Box[T]:
+    item: T
+function builder[T]() returns TypeConstruction:
+    comptime type Owner = type.info[Box[T]]():
+        return type.construct_start[Owner]()
+function main() returns nothing:
+    TypeConstruction value = builder[Label]()
+    return nothing
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let metadata = &result.reflection_metadata;
+        let owner = metadata
+            .source_type_id_for_name("Box[Label]")
+            .expect("checked alias owner");
+        let source = metadata
+            .get_source_type_info("Box[Label]")
+            .expect("source reflection operand");
+        assert_eq!(source.args[0].kind, "alias");
+        assert_eq!(source.args[0].type_name, "Label");
+        let canonical = metadata
+            .get_type_info_for_id(owner)
+            .expect("canonical owner metadata");
+        assert_eq!(canonical.args[0].kind, "primitive");
+        assert_eq!(canonical.args[0].type_name, "string");
+        assert_eq!(
+            metadata.get_type_fields_for_id(owner).unwrap()[0].type_name,
+            "string"
         );
     }
 

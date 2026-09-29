@@ -9,7 +9,7 @@ use jett_hir::{
     Block, Expression, ExpressionKind as E, Local, LowerError, Program, Statement,
     StatementKind as S, StringSegment,
 };
-use jett_types::TypeInterner;
+use jett_types::{ReflectionMetadata, TypeInterner};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -21,6 +21,7 @@ pub(crate) fn bake_values(
     program: &mut Program,
     values: &HashMap<Span, Value>,
     types: &TypeInterner,
+    reflection: &ReflectionMetadata,
     method_value_definitions: &HashSet<Span>,
 ) -> Result<(), Vec<LowerError>> {
     let function_values = function_value_candidates(&program.functions, method_value_definitions);
@@ -29,6 +30,7 @@ pub(crate) fn bake_values(
         let mut baker = Baker {
             values,
             types,
+            reflection,
             function_values: &function_values,
             locals: &mut function.locals,
             bindings: Vec::new(),
@@ -48,6 +50,7 @@ pub(crate) fn bake_values(
 struct Baker<'a> {
     values: &'a HashMap<Span, Value>,
     types: &'a TypeInterner,
+    reflection: &'a ReflectionMetadata,
     function_values: &'a [FunctionValueCandidate],
     locals: &'a mut Vec<Local>,
     bindings: Vec<Statement>,
@@ -126,6 +129,7 @@ impl Baker<'_> {
                     expr.span,
                     &mut ValueContext {
                         types: self.types,
+                        reflection: self.reflection,
                         functions: self.function_values,
                         locals: &mut *self.locals,
                         bindings: &mut self.bindings,

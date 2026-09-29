@@ -342,3 +342,20 @@ reflected state-qualified fields, and enum/machine/bitfield refinements. Runtime
 and baked mixed interface lists retain the same dispatch and recursive secret
 redaction. Materialized bare machines use an explicit typed local after state
 construction, preserving both the requested owner and validated refinement base.
+
+Explicit comptime construction builders are accepted pure values. Native
+materialization must recreate the evaluated owner, selected variant or state,
+provided field order, and stored payloads from checked reflection metadata. It
+must retain incomplete builders and defer refinement/width validation until the
+same runtime finish boundary as an ordinary builder. Reconstruction may use the
+existing typed builder intrinsics, but must not execute the source computation
+or invent layouts from source spellings. Nested, pending, and erased builders
+must retain the same ownership and recursive secret redaction contracts.
+
+`comptime_builders` covers empty and partially filled records, generic and
+alias-bearing owners, nested builders, variant/state builders, bitfields,
+cloning, lists, stored values, pending and erased builders, and provided fields
+in a different order from the declaration. Missing-field, refinement, and width
+errors remain deferred to runtime finish. Source reflection operands are
+exported separately from canonical metadata; equivalent aliases compare by
+their checked type ID without discarding the builder's source owner name.

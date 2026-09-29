@@ -1,0 +1,178 @@
+namespace app
+type Positive = int64 where value > 0
+struct Record:
+    count: Positive
+    token: secret[string]
+    label: string
+function partial(number: int64) returns TypeConstruction:
+    mutable TypeConstruction builder = type.construct_start[Record]()
+    for field in type.fields[Record]():
+        if field.name == "count":
+            builder = type.construct_put[Record, int64](builder, view field, number) handle error:
+                return type.construct_start[Record]()
+        if field.name == "token":
+            secret[string] token = "hidden-baked-builder"
+            builder = type.construct_put[Record, secret[string]](builder, view field, token) handle error:
+                return type.construct_start[Record]()
+    return builder
+function finish_record(builder: TypeConstruction) returns string:
+    Record value = type.construct_finish[Record](builder) handle error:
+        return error
+    return "record:{coarsen value.count}:{value.label}"
+function complete(builder: TypeConstruction) returns TypeConstruction:
+    mutable TypeConstruction current = builder
+    for field in type.fields[Record]():
+        if field.name == "label":
+            current = type.construct_put[Record, string](current, view field, "runtime") handle error:
+                return type.construct_start[Record]()
+    return current
+enum Event:
+    idle
+    named(token: secret[string])
+function event_builder() returns TypeConstruction:
+    TypeVariant variant = list.get[TypeVariant](type.variants[Event](), 1) handle:
+        return type.construct_start[Record]()
+    mutable TypeConstruction builder = type.construct_variant_start[Event](view variant) handle error:
+        return type.construct_start[Record]()
+    for field in variant.fields:
+        secret[string] token = "hidden-baked-builder"
+        builder = type.construct_put[Event, secret[string]](builder, view field, token) handle error:
+            return type.construct_start[Record]()
+    return builder
+machine Session:
+    states:
+        empty
+        active(count: int64)
+    transitions:
+        empty to active
+function state_builder() returns TypeConstruction:
+    TypeMachineState state = list.get[TypeMachineState](type.machine_states[Session](), 1) handle:
+        return type.construct_start[Record]()
+    mutable TypeConstruction builder = type.construct_machine_start[Session at active](view state) handle error:
+        return type.construct_start[Record]()
+    for field in state.fields:
+        builder = type.construct_put[Session at active, int64](builder, view field, 7) handle error:
+            return type.construct_start[Record]()
+    return builder
+bitfield Header:
+    kind: 8 bits
+function header_builder(number: int64) returns TypeConstruction:
+    mutable TypeConstruction builder = type.construct_start[Header]()
+    for field in type.fields[Header]():
+        builder = type.construct_put[Header, int64](builder, view field, number) handle error:
+            return type.construct_start[Header]()
+    return builder
+function finish_header(builder: TypeConstruction) returns string:
+    Header value = type.construct_finish[Header](builder) handle error:
+        return error
+    return "header:{value.kind}"
+interface Named:
+    function name(view self: Named) returns string
+implement Named for TypeConstruction:
+    function name(view self: TypeConstruction) returns string:
+        return "builder"
+struct Holder:
+    builder: TypeConstruction
+struct Box[T]:
+    item: T
+function boxed[T](value: T) returns TypeConstruction:
+    mutable TypeConstruction builder = type.construct_start[Box[T]]()
+    for field in type.fields[Box[T]]():
+        builder = type.construct_put[Box[T], T](builder, view field, value) handle error:
+            return type.construct_start[Box[T]]()
+    return builder
+type Label = string
+type DeclaredLabel = string
+struct AliasRecord:
+    label: DeclaredLabel
+function alias_builder() returns TypeConstruction:
+    mutable TypeConstruction builder = type.construct_start[AliasRecord]()
+    for field in type.fields[AliasRecord]():
+        builder = type.construct_put[AliasRecord, string](builder, view field, "declared-alias") handle error:
+            return type.construct_start[AliasRecord]()
+    return builder
+function nested_builder() returns TypeConstruction:
+    mutable TypeConstruction builder = type.construct_start[Holder]()
+    for field in type.fields[Holder]():
+        builder = type.construct_put[Holder, TypeConstruction](builder, view field, partial(12)) handle error:
+            return type.construct_start[Holder]()
+    return builder
+function reordered() returns TypeConstruction:
+    mutable TypeConstruction builder = type.construct_start[Record]()
+    TypeField token_field = list.get[TypeField](type.fields[Record](), 1) handle:
+        return type.construct_start[Record]()
+    secret[string] token = "hidden-baked-builder"
+    builder = type.construct_put[Record, secret[string]](builder, view token_field, token) handle error:
+        return type.construct_start[Record]()
+    TypeField count_field = list.get[TypeField](type.fields[Record](), 0) handle:
+        return type.construct_start[Record]()
+    return type.construct_put[Record, int64](builder, view count_field, 14) handle error:
+        return type.construct_start[Record]()
+function additional_builders() returns nothing:
+    TypeConstruction small = comptime boxed[int8](127)
+    Box[int8] small_value = type.construct_finish[Box[int8]](small) handle error:
+        return nothing
+    println(small_value.item)
+    TypeConstruction alias = comptime boxed[Label]("alias")
+    trace alias
+    Box[Label] alias_value = type.construct_finish[Box[Label]](alias) handle error:
+        return nothing
+    println(alias_value.item)
+    TypeConstruction declared_alias = comptime alias_builder()
+    AliasRecord declared = type.construct_finish[AliasRecord](declared_alias) handle error:
+        return nothing
+    println(declared.label)
+    TypeConstruction nested = comptime nested_builder()
+    trace nested
+    Holder holder = type.construct_finish[Holder](nested) handle error:
+        return nothing
+    println(finish_record(complete(holder.builder)))
+    TypeConstruction ordered = comptime reordered()
+    trace ordered
+    println(finish_record(complete(ordered)))
+    return nothing
+function records() returns nothing:
+    TypeConstruction empty = comptime type.construct_start[Record]()
+    trace empty
+    println(finish_record(empty))
+    TypeConstruction partial_value = comptime partial(5)
+    trace partial_value
+    TypeConstruction copied = clone partial_value
+    println(finish_record(complete(copied)))
+    println(finish_record(partial_value))
+    TypeConstruction invalid = comptime partial(0)
+    println(finish_record(complete(invalid)))
+    Holder stored = comptime Holder(builder: partial(8))
+    trace stored
+    println(finish_record(complete(stored.builder)))
+    list[TypeConstruction] items = comptime list(partial(1), partial(2))
+    for value in items:
+        println(finish_record(complete(value)))
+    TypeConstruction later = comptime run partial(9)
+    trace later
+    TypeConstruction ready = join later handle error:
+        return nothing
+    println(finish_record(complete(ready)))
+    Named erased = comptime partial(6)
+    trace erased
+    println(Named.name(view erased))
+    return nothing
+function main() returns nothing:
+    records()
+    additional_builders()
+    TypeConstruction event = comptime event_builder()
+    trace event
+    Event built_event = type.construct_finish[Event](event) handle error:
+        return nothing
+    trace built_event
+    TypeConstruction state = comptime state_builder()
+    trace state
+    Session at active built_state = type.construct_finish[Session at active](state) handle error:
+        return nothing
+    println(built_state.count)
+    TypeConstruction header = comptime header_builder(3)
+    trace header
+    println(finish_header(header))
+    TypeConstruction invalid_header = comptime header_builder(256)
+    println(finish_header(invalid_header))
+    return nothing

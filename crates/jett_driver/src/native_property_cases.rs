@@ -10,7 +10,7 @@ use jett_hir::{
     StateId, Statement, StatementKind, VariantId,
 };
 use jett_parser::ast::{Item, Module};
-use jett_types::{Type, TypeId, TypeInterner};
+use jett_types::{ReflectionMetadata, Type, TypeId, TypeInterner};
 use std::collections::HashSet;
 
 pub(super) fn append_property_suite(
@@ -19,6 +19,7 @@ pub(super) fn append_property_suite(
     entry_file: FileId,
     cases: &[PropertyCase],
     types: &TypeInterner,
+    reflection: &ReflectionMetadata,
     method_value_definitions: &HashSet<Span>,
 ) -> Result<Option<FunctionId>, Vec<jett_hir::LowerError>> {
     let function_values = function_value_candidates(&hir.functions, method_value_definitions);
@@ -66,6 +67,7 @@ pub(super) fn append_property_suite(
             }
             let mut context = ValueContext {
                 types,
+                reflection,
                 functions: &function_values,
                 locals: &mut locals,
                 bindings: &mut statements,
@@ -260,6 +262,7 @@ pub(super) fn function_value_candidates(
 
 pub(super) struct ValueContext<'a> {
     pub(super) types: &'a TypeInterner,
+    pub(super) reflection: &'a ReflectionMetadata,
     pub(super) functions: &'a [FunctionValueCandidate],
     pub(super) locals: &'a mut Vec<Local>,
     pub(super) bindings: &'a mut Vec<Statement>,
@@ -281,6 +284,7 @@ fn erased_value_type(value: &Value, types: &TypeInterner) -> Option<TypeId> {
         Value::String(_) => Some(TypeInterner::STRING),
         Value::Bytes(_) => Some(TypeInterner::BYTES),
         Value::Nothing => Some(TypeInterner::NOTHING),
+        Value::TypeConstruction { .. } => Some(TypeInterner::TYPE_CONSTRUCTION),
         _ => None,
     };
     if primitive.is_some() {
@@ -331,6 +335,9 @@ pub(super) fn value_expression(
             )?))
         }
         (_, Value::Typed { value, .. }) => return value_expression(value, ty, span, context),
+        (Type::TypeConstruction, Value::TypeConstruction { .. }) => {
+            return crate::native_builder_constants::builder_expression(value, span, context);
+        }
         (
             Type::Int8
             | Type::Int16
