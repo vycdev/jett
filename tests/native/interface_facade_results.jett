@@ -1,0 +1,58 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+function describe[T](view source: result[T, string]) returns string:
+    T value = clone source handle error:
+        return "fail:{error}"
+    return "ok"
+implement Named for result[int8, string]:
+    function name(view self: result[int8, string]) returns string:
+        return "small:{describe[int8](view self)}"
+implement Named for result[int64, string]:
+    function name(view self: result[int64, string]) returns string:
+        return "wide:{describe[int64](view self)}"
+implement Named for result[float32, string]:
+    function name(view self: result[float32, string]) returns string:
+        return "float32:{describe[float32](view self)}"
+type Positive = int8 where value > 0
+implement Named for result[Positive, string]:
+    function name(view self: result[Positive, string]) returns string:
+        return "positive:{describe[Positive](view self)}"
+struct Record:
+    count: int8
+    token: secret[string]
+implement Named for result[Record, string]:
+    function name(view self: result[Record, string]) returns string:
+        return "record:{describe[Record](view self)}"
+implement Named for result[json.JsonTree, string]:
+    function name(view self: result[json.JsonTree, string]) returns string:
+        return "tree:{describe[json.JsonTree](view self)}"
+implement Named for result[optional[json.JsonTree], string]:
+    function name(view self: result[optional[json.JsonTree], string]) returns string:
+        return "maybe-tree:{describe[optional[json.JsonTree]](view self)}"
+function typed_results() returns list[Named]:
+    return list(json.parse[int8]("7"), json.parse[int8]("128"), json.parse[int64]("128"), json.parse[int64]("null"), json.parse[float32]("1.5"), json.parse[float32]("false"), json.parse[Positive]("9"), json.parse[Positive]("0"), json.parse[Record]("{{\"count\":11,\"token\":\"hidden-facade-result\"}}"), json.parse[Record]("{{\"count\":128,\"token\":\"hidden-facade-result\"}}"), json.parse_exact[Record]("{{\"count\":7,\"token\":\"hidden-facade-result\",\"extra\":1}}"))
+function raw_results() returns list[Named]:
+    json.JsonTree text = json.parse_raw("\"wrong\"") handle error:
+        return list()
+    json.JsonTree empty = json.parse_raw("[]") handle error:
+        return list()
+    return list(json.parse_raw("["), json.as_int64(view text), json.require_index(view empty, 0), json.array_index(view empty, 0), json.object_field(view empty, "missing"))
+function main() returns nothing:
+    list[Named] live = typed_results()
+    trace live
+    for item in live:
+        println(Named.name(view item))
+    list[Named] baked = comptime typed_results()
+    trace baked
+    for item in baked:
+        println(Named.name(view item))
+    list[Named] raw = raw_results()
+    trace raw
+    for item in raw:
+        println(Named.name(view item))
+    list[Named] baked_raw = comptime raw_results()
+    trace baked_raw
+    for item in baked_raw:
+        println(Named.name(view item))
+    return nothing

@@ -423,3 +423,11 @@ body or captures.
 function owners, including both sum branches, named and captured functions,
 cloning, pending callbacks, and coarsening back to the base function signature.
 Runtime and baked heterogeneous interface lists match in calls and traces.
+
+`interface_facade_results` extends the facade audit to erased result values on
+success and failure paths. Typed JSON parsing covers numeric widths, refinement
+failure, secret-bearing records, field errors, and exact unknown-field checks;
+raw JSON access covers malformed input, wrong-kind errors, missing items, and
+successful absent optionals. Runtime and baked lists retain their full result
+owner even when the active payload is only an error string, and traces preserve
+recursive secret redaction.
