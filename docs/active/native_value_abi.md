@@ -18,6 +18,13 @@ formatting. The leaf does not expose a
 debugger pause or evaluate arbitrary values.
 Stdout authority is a separate context-bound token, supplied only for checked
 Stdout entry parameters and passed explicitly to printing leaf operations.
+Stderr, Stdin, Filesystem, Network, Process, and Log also receive distinct,
+context-bound tokens when declared on the checked entry. Their currently
+implemented value operations (moves, views, direct/indirect calls, debug output,
+and sequential run/join/cancel) follow the interpreter's opaque capability
+behavior. These grants do not implement the pending I/O providers or authorize
+any other capability's leaves. Repeated grants in one context retain identity;
+tokens differ across capability kinds and contexts.
 Clock authority is likewise a distinct context-bound token. The native entry
 grants it only for checked Clock parameters; `Clock.__now` validates the token
 and samples the wall clock through the same pre-epoch flooring and int64

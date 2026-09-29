@@ -35,6 +35,7 @@ pub(crate) enum ScalarKind {
     Random,
     Environment,
     Graphics,
+    OpaqueCapability,
 }
 
 pub(crate) fn known_unit_enum_variant(expression: &Expression) -> bool {
@@ -405,6 +406,14 @@ fn scalar_kind_inner(
         Type::Capability(jett_types::CapabilityKind::Random) => ScalarKind::Random,
         Type::Capability(jett_types::CapabilityKind::Environment) => ScalarKind::Environment,
         Type::Capability(jett_types::CapabilityKind::Graphics) => ScalarKind::Graphics,
+        Type::Capability(
+            jett_types::CapabilityKind::Stderr
+            | jett_types::CapabilityKind::Stdin
+            | jett_types::CapabilityKind::Filesystem
+            | jett_types::CapabilityKind::Network
+            | jett_types::CapabilityKind::Process
+            | jett_types::CapabilityKind::Log,
+        ) => ScalarKind::OpaqueCapability,
         unsupported => {
             return Err(CodegenError::UnsupportedType {
                 type_name: types.type_name(ty),
@@ -2767,6 +2776,7 @@ impl Verifier<'_> {
                         | ScalarKind::Random
                         | ScalarKind::Environment
                         | ScalarKind::Graphics
+                        | ScalarKind::OpaqueCapability
                         | ScalarKind::Bytes
                         | ScalarKind::Sum
                         | ScalarKind::List

@@ -342,6 +342,12 @@ fn validate_program_entry_contract(
             !matches!(
                 p.ty,
                 TypeInterner::STDOUT
+                    | TypeInterner::STDERR
+                    | TypeInterner::STDIN
+                    | TypeInterner::FILESYSTEM
+                    | TypeInterner::NETWORK
+                    | TypeInterner::PROCESS
+                    | TypeInterner::LOG
                     | TypeInterner::CLOCK
                     | TypeInterner::RANDOM
                     | TypeInterner::ENVIRONMENT
@@ -457,6 +463,12 @@ fn translate_program_entry_wrapper(
     for parameter in &entry_function.parameter_types {
         let grant = match *parameter {
             TypeInterner::STDOUT => NativeLeaf::GrantStdout,
+            TypeInterner::STDERR => NativeLeaf::GrantStderr,
+            TypeInterner::STDIN => NativeLeaf::GrantStdin,
+            TypeInterner::FILESYSTEM => NativeLeaf::GrantFilesystem,
+            TypeInterner::NETWORK => NativeLeaf::GrantNetwork,
+            TypeInterner::PROCESS => NativeLeaf::GrantProcess,
+            TypeInterner::LOG => NativeLeaf::GrantLog,
             TypeInterner::CLOCK => NativeLeaf::GrantClock,
             TypeInterner::RANDOM => NativeLeaf::GrantRandom,
             TypeInterner::ENVIRONMENT => NativeLeaf::GrantEnvironment,
@@ -594,7 +606,8 @@ fn clif_type(
         | ScalarKind::Clock
         | ScalarKind::Random
         | ScalarKind::Environment
-        | ScalarKind::Graphics => Some(ir::types::I64),
+        | ScalarKind::Graphics
+        | ScalarKind::OpaqueCapability => Some(ir::types::I64),
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -2818,7 +2831,8 @@ impl Translator<'_, '_> {
             | ScalarKind::Clock
             | ScalarKind::Random
             | ScalarKind::Environment
-            | ScalarKind::Graphics => {
+            | ScalarKind::Graphics
+            | ScalarKind::OpaqueCapability => {
                 return Err(contract_error(
                     self.symbol,
                     span,

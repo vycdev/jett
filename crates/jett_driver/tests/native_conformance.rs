@@ -190,6 +190,63 @@ fn native_suites_reject_failing_source_assertions() {
 }
 
 #[test]
+fn native_opaque_capability_values_match_interpreter() {
+    for capability in ["Stderr", "Stdin", "Filesystem", "Network", "Process", "Log"] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("capability.jett");
+        fs::write(
+            &source,
+            format!(
+                r#"namespace test
+function observe(view value: {capability}) returns nothing:
+    trace value
+    return nothing
+function main(authority: {capability}) returns nothing:
+    function(view {capability}) returns nothing callback = observe
+    callback(view authority)
+    {capability} moved = authority
+    {capability} pending = run moved
+    {capability} nested = run pending
+    trace nested
+    {capability} inner = join nested handle error:
+        return nothing
+    {capability} joined = join inner handle error:
+        return nothing
+    observe(view joined)
+    {capability} cancelled = join joined handle error:
+        println(error)
+        return nothing
+    trace cancelled
+    return nothing
+"#
+            ),
+        )
+        .unwrap();
+        let expected = jett_driver::run_file_capture_output(&source).unwrap();
+        assert_eq!(expected.stdout, "task was cancelled\n");
+        assert_eq!(
+            expected.debug_output,
+            [
+                format!("trace value: {capability} = nothing"),
+                format!("trace nested: {capability} = pending(pending(nothing))"),
+                format!("trace value: {capability} = nothing"),
+            ]
+        );
+        let binary = directory.path().join("capability.exe");
+        build_host_executable(&source, launcher(), &binary)
+            .unwrap_or_else(|error| panic!("{capability}: {error}"));
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{capability}: {actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{capability}");
+        assert_eq!(
+            String::from_utf8_lossy(&actual.stderr),
+            format!("{}\n", expected.debug_output.join("\n")),
+            "{capability}"
+        );
+    }
+}
+
+#[test]
 fn native_bitfield_constructor_checks_dynamic_widths() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/bitfield_roundtrip.jett");

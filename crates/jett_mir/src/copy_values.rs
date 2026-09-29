@@ -4,7 +4,7 @@
 //! move/borrow/drop analysis before their backend support can be enabled.
 use crate::{ControlFlowGraph, Function, StatementKind, TerminatorKind};
 use jett_hir::{Expression, ExpressionKind, IntrinsicId, StringSegment};
-use jett_types::{CapabilityKind, Type, TypeId, TypeInterner};
+use jett_types::{Type, TypeId, TypeInterner};
 use std::collections::BTreeSet;
 type Set = BTreeSet<usize>;
 
@@ -741,11 +741,7 @@ fn copy_plan_type(types: &TypeInterner, ty: TypeId) -> Result<(), String> {
             | Type::Bool
             | Type::Nothing
             | Type::String
-            | Type::Capability(CapabilityKind::Stdout)
-            | Type::Capability(CapabilityKind::Clock)
-            | Type::Capability(CapabilityKind::Random)
-            | Type::Capability(CapabilityKind::Environment)
-            | Type::Capability(CapabilityKind::Graphics)
+            | Type::Capability(_)
             | Type::Actor(_)
     ) {
         return Ok(());

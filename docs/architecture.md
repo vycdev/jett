@@ -2803,6 +2803,12 @@ The CLI validates explicit build targets before loading source, accepting only
 the current supported host. CLI frontend validation and native driver artifact
 generation remain separate until runtime bundle packaging is integrated.
 
+All eleven checked capability types have native entry grants and value
+representations. Stderr, Stdin, Filesystem, Network, Process, and Log use
+context-bound opaque tokens for their implemented move/view/call/task/debug
+behavior; this does not implement their pending I/O providers. Provider leaves
+continue to validate the exact authority granted to their context.
+
 One-line breakpoint snapshots use the current lexical function frame in both
 execution paths. The interpreter applies its name-lookup scope floor when
 collecting bindings and preserves closure capture type metadata; native code

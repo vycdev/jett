@@ -7602,6 +7602,13 @@ comparison failures also match. This implementation parity does not establish
 the concurrent scheduling and cancellation checkpoints described in Rule Set 10;
 the current sequential `cancel` leaves its pending operand unchanged.
 
+Native entry grants cover all eleven checked capability types for the value
+operations already implemented by the interpreter, including direct and
+indirect calls, views, debug output, and task wrapping. Stderr, Stdin,
+Filesystem, Network, Process, and Log remain opaque tokens without implemented
+I/O providers. Their tokens cannot be substituted for another capability's
+authority or used in another runtime context.
+
 Native conformance runs the same exhaustive verify/property suite gates on
 Linux GNU and Windows MSVC. The standalone fixture report includes their
 separate execution denominators; passing fixture gates alone does not certify

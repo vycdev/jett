@@ -1327,6 +1327,7 @@ pub(super) struct NativeValues {
     structs: HashMap<NativeHandle, NativeStruct>,
     actors: HashMap<NativeHandle, u64>,
     capability_tasks: HashMap<NativeHandle, (u64, u64)>,
+    opaque_capabilities: HashMap<&'static str, u64>,
     next_actor_ordinal: u64,
     builders: HashMap<NativeHandle, NativeBuilderInfo>,
     structs_created: u64,
@@ -1356,6 +1357,17 @@ pub(super) struct NativeValues {
     graphics_session: Option<u64>,
 }
 impl NativeValues {
+    // These capability families currently have no interpreter I/O provider.
+    // Their checked values still support moves, views, calls, and task wrapping.
+    fn grant_opaque_capability(&mut self, kind: &'static str) -> LeafResult<u64> {
+        if let Some(&authority) = self.opaque_capabilities.get(kind) {
+            return Ok(authority);
+        }
+        let authority = next_identity()?;
+        self.opaque_capabilities.insert(kind, authority);
+        Ok(authority)
+    }
+
     fn capability_authority(&self, value: u64) -> LeafResult<(u64, u64)> {
         let (authority, depth) = self
             .capability_tasks
@@ -1371,6 +1383,7 @@ impl NativeValues {
         ]
         .into_iter()
         .flatten()
+        .chain(self.opaque_capabilities.values().copied())
         .any(|token| token == authority)
         {
             Ok((authority, depth))
@@ -6053,6 +6066,18 @@ leaves! {
         |s| if value > 1 { Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"invalid native bool")) } else { s.insert((value != 0).to_string()) };
     GrantStdout, jett_rt_v1_grant_stdout, false, (), u64 => I64,
         |s| { if let Some(token) = s.stdout { return Ok(token); } let token = next_identity()?; s.stdout = Some(token); Ok(token) };
+    GrantStderr, jett_rt_v1_grant_stderr, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Stderr");
+    GrantStdin, jett_rt_v1_grant_stdin, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Stdin");
+    GrantFilesystem, jett_rt_v1_grant_filesystem, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Filesystem");
+    GrantNetwork, jett_rt_v1_grant_network, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Network");
+    GrantProcess, jett_rt_v1_grant_process, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Process");
+    GrantLog, jett_rt_v1_grant_log, false, (), u64 => I64,
+        |s| s.grant_opaque_capability("Log");
     GrantClock, jett_rt_v1_grant_clock, false, (), u64 => I64,
         |s| { if let Some(token) = s.clock { return Ok(token); } let token = next_identity()?; s.clock = Some(token); Ok(token) };
     ClockNow, jett_rt_v1_clock_now, false, (authority: u64 => I64), i64 => I64,
@@ -6553,6 +6578,30 @@ mod tests {
         assert_eq!(value.tag, SUM_SUCCESS);
         assert_eq!(value.bits, environment);
         values.drop_value(resolved).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn opaque_capability_grants_are_nominal_and_context_bound() {
+        let mut values = NativeValues::default();
+        let mut other = NativeValues::default();
+        let mut authorities = std::collections::HashSet::new();
+        for kind in ["Stderr", "Stdin", "Filesystem", "Network", "Process", "Log"] {
+            let authority = values.grant_opaque_capability(kind).unwrap();
+            assert!(authorities.insert(authority));
+            assert_eq!(values.grant_opaque_capability(kind).unwrap(), authority);
+            assert_ne!(other.grant_opaque_capability(kind).unwrap(), authority);
+            assert!(other.capability_authority(authority).is_err());
+            let task = values.run_capability(authority).unwrap();
+            assert_eq!(
+                values.debug_capability(task, kind).unwrap(),
+                "pending(nothing)"
+            );
+            let result = values.join_capability(task).unwrap();
+            assert_eq!(values.sums.get(&result).unwrap().bits, authority);
+            values.drop_value(result).unwrap();
+        }
+        assert!(values.capability_tasks.is_empty());
         assert!(values.is_empty());
     }
 
