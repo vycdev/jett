@@ -4364,6 +4364,78 @@ fn native_actor_message_arguments_nested_handlers_match_interpreter() {
 }
 
 #[test]
+fn native_float_remainder_matches_interpreter_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/float_remainder.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "1.5 -1.5 1.5 -1.5\n1.5\n",
+            "1.5 -1.5 1.5 -1.5\n1.5\n",
+            "true true true true true true\n",
+            "true true true true true true\n",
+            "1.5 -1.5\ntrue\n",
+        )
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("remainder.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let mut executables = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("remainder_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .unwrap();
+        executables.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for executable in executables {
+        let actual = run_bounded(&executable, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_float_remainder_rejects_pending_operands_and_cleans_owners() {
+    for width in ["float32", "float64"] {
+        for (left, right) in [("run run 5.5", "2.0"), ("5.5", "run run 2.0")] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("pending_remainder.jett");
+            fs::write(&source, format!(
+                "namespace app\nfunction main() returns nothing:\n    list[string] owners = list(\"left\", \"right\")\n    {width} left = {left}\n    {width} right = {right}\n    {width} remainder = left modulo right\n"
+            )).unwrap();
+            let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+            assert!(
+                expected.message.contains("unsupported binary operation:"),
+                "{expected:?}"
+            );
+            assert!(expected.message.contains("Modulo"), "{expected:?}");
+            for release in [false, true] {
+                let binary = directory.path().join(format!("pending_{release}.exe"));
+                jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    launcher(),
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .unwrap();
+                let actual = run_bounded(&binary, directory.path());
+                assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+                assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+                assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+            }
+        }
+    }
+}
+
+#[test]
 fn native_arithmetic_width_matrix_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/arithmetic_matrix.jett");

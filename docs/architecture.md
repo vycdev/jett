@@ -2803,6 +2803,12 @@ String handles have explicit retain/release ownership and are destroyed at last
 release. MIR definite-initialization and liveness facts drive local and temporary
 cleanup through branches, loops, overwrites, returns, and terminal failures.
 
+Floating-point `modulo` emits the typed `FloatRemainder` runtime leaf after the
+ordinary pending-operand checks. Its binary64 operands and result use the same
+remainder operation as the interpreter. Binary32 operands widen exactly for the
+call, and the result rounds back to binary32 at the checked expression boundary.
+NaN and infinity outcomes remain floating values rather than runtime failures.
+
 Terminal runtime failure is a context-local first error, not `result.fail` data.
 Compiled calls test that channel before using a return value; failure edges release
 frame owners and propagate it to the launcher. Context destruction checks for leaked

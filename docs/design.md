@@ -7130,7 +7130,10 @@ width, including signed minimum divided by `-1`. Integer division and modulo
 are accepted only when the divisor is statically proven nonzero by its
 refinement, a nonzero literal or immutable binding, or a visible equality
 guard. Floating-point arithmetic follows IEEE behavior, including infinity and
-NaN for division by zero. A float32 expression rounds to 32-bit precision at
+NaN for division by zero. Floating-point `modulo` uses a truncated-quotient
+remainder with the dividend's sign, including negative zero. A zero divisor,
+infinite dividend, or NaN operand produces NaN; a finite dividend modulo infinity
+returns that dividend. A float32 expression rounds to 32-bit precision at
 each expression result, including literals and intermediate arithmetic, in both
 runtime and explicit comptime evaluation. Its current string conversion formats
 that value exactly widened to the shared float64 display carrier; it does not

@@ -130,6 +130,15 @@ losing the owner during field shrinking would instead introduce a dispatch error
 and wrongly accept a singleton. Native debug and optimized replay must match the
 interpreter's exact counterexample after source removal.
 
+The rejection-path audit found and addressed floating `modulo`, which was
+accepted by the checker and interpreter but rejected by native binary validation.
+`native_float_remainder_matches_interpreter_in_both_profiles` compares both
+widths, signs, signed zero, NaN/infinity/zero-divisor cases, generic functions,
+joined tasks, and explicit comptime results after source removal. Its pending
+operand companion requires matching diagnostics and exit 71 with owned locals
+on both operand sides and both profiles. The runtime leaf test also covers
+subnormal values and verifies that NaN results do not set runtime failure.
+
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical
 85% planning estimate is not a measured code-coverage or completion result.

@@ -6125,6 +6125,8 @@ leaves! {
         |_| Ok(first.min(second));
     FloatMax, jett_rt_v1_math_floatmax, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
         |_| Ok(first.max(second));
+    FloatRemainder, jett_rt_v1_float_remainder, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
+        |_| Ok(first % second);
     Pow, jett_rt_v1_math_pow, false, (first: f64 => F64, second: f64 => F64), f64 => F64,
         |_| Ok(first.powf(second));
     Pi, jett_rt_v1_math_pi, false, (), f64 => F64,
@@ -6652,6 +6654,35 @@ fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
 mod tests {
     use super::*;
     use std::mem::MaybeUninit;
+
+    #[test]
+    fn float_remainder_leaf_preserves_ieee_values_without_runtime_failure() {
+        let context = Context::new();
+        for (left, right, expected) in [
+            (5.5, 2.0, 1.5_f64),
+            (-5.5, 2.0, -1.5),
+            (5.5, -2.0, 1.5),
+            (-5.5, -2.0, -1.5),
+            (-0.0, 3.0, -0.0),
+            (1.0, f64::INFINITY, 1.0),
+            (f64::MAX, f64::MIN_POSITIVE, 0.0),
+            (-f64::MAX, f64::MIN_POSITIVE, -0.0),
+            (f64::from_bits(5), f64::from_bits(2), f64::from_bits(1)),
+        ] {
+            let actual = unsafe { jett_rt_v1_float_remainder(context.pointer(), left, right) };
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+        for (left, right) in [
+            (1.0, 0.0),
+            (f64::INFINITY, 2.0),
+            (f64::NAN, 2.0),
+            (2.0, f64::NAN),
+        ] {
+            assert!(unsafe { jett_rt_v1_float_remainder(context.pointer(), left, right) }.is_nan());
+        }
+        assert_eq!(unsafe { jett_rt_v1_value_status(context.pointer()) }, 0);
+    }
+
     struct Context(Box<JettRuntimeContextV1>);
     impl Context {
         fn new() -> Self {

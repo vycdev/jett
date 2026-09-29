@@ -2911,7 +2911,7 @@ impl Verifier<'_> {
             BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
                 operand.is_numeric() && result == operand
             }
-            BinaryOp::Modulo => operand.is_integer() && result == operand,
+            BinaryOp::Modulo => operand.is_numeric() && result == operand,
             BinaryOp::Equal | BinaryOp::NotEqual => {
                 !matches!(
                     operand,

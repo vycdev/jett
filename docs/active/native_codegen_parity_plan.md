@@ -1640,3 +1640,14 @@ arguments, and field shrinking preserves that identity. The regression covers
 two implementations, a transparent argument alias, list erasure, and shrinking
 that keeps two simplified records as the smallest failure. Debug and optimized
 native replay must match the interpreter after the source is removed.
+
+### Floating remainder
+
+The rejection-path audit found that the checker and interpreter accept floating
+`modulo`, but native binary validation admitted only integer operands. Native
+validation and emission now cover both float widths through a typed binary64
+remainder leaf, with explicit binary32 widening and result rounding. This uses
+the established interpreter operation, including signed zero, NaN, infinity,
+and zero-divisor behavior. Pending operands still fail before arithmetic and
+follow ordinary owned-value cleanup. Linked tests compare debug and optimized
+execution, generic calls, explicit comptime results, and pending tasks.

@@ -2,6 +2,13 @@
 
 This is an implementation contract, not a full-parity claim.
 
+The additive `jett_rt_v1_float_remainder(context, f64, f64) -> f64` leaf implements
+floating `modulo` using the same `%` operation as the interpreter. It allocates
+no owned values, preserves the context's first-error handling, and treats NaN
+results as ordinary floating values. Codegen promotes binary32 operands and
+demotes the result explicitly; both source widths retain the existing pending
+operand checks before entering this leaf.
+
 Immutable UTF-8 strings use nonzero u64 context-associated handles. Zero is an
 uninitialized slot, never a language string. Each owning slot holds one reference.
 Literal creation, concatenation and formatting create one reference; retain

@@ -2853,11 +2853,29 @@ impl Translator<'_, '_> {
                     ));
                 }
             },
-            ScalarKind::Float(_) => match op {
+            ScalarKind::Float(bits) => match op {
                 BinaryOp::Add => self.builder.ins().fadd(left, right),
                 BinaryOp::Subtract => self.builder.ins().fsub(left, right),
                 BinaryOp::Multiply => self.builder.ins().fmul(left, right),
                 BinaryOp::Divide => self.builder.ins().fdiv(left, right),
+                BinaryOp::Modulo => {
+                    // Match the interpreter's binary64 carrier, rounding back
+                    // to binary32 at the checked expression boundary.
+                    let (left, right) = if bits == 32 {
+                        (
+                            self.builder.ins().fpromote(ir::types::F64, left),
+                            self.builder.ins().fpromote(ir::types::F64, right),
+                        )
+                    } else {
+                        (left, right)
+                    };
+                    let result = self.leaf(NativeLeaf::FloatRemainder, &[left, right], true)?;
+                    if bits == 32 {
+                        self.builder.ins().fdemote(ir::types::F32, result)
+                    } else {
+                        result
+                    }
+                }
                 BinaryOp::Equal => self.builder.ins().fcmp(FloatCC::Equal, left, right),
                 BinaryOp::NotEqual => self.builder.ins().fcmp(FloatCC::NotEqual, left, right),
                 BinaryOp::Less => self.builder.ins().fcmp(FloatCC::LessThan, left, right),
@@ -2872,7 +2890,7 @@ impl Translator<'_, '_> {
                         .ins()
                         .fcmp(FloatCC::GreaterThanOrEqual, left, right)
                 }
-                BinaryOp::Modulo | BinaryOp::And | BinaryOp::Or => {
+                BinaryOp::And | BinaryOp::Or => {
                     return Err(contract_error(
                         self.symbol,
                         span,
