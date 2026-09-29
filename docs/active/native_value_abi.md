@@ -879,3 +879,19 @@ partial construction terminal cleanup (exit 71), runtime clone fault boundaries,
 malformed MIR rejection, and one generated object executed with four distinct
 process inputs through a test-only scalar input adapter. Allocation tests cover
 returned leaf failures, not allocator abort, OS termination or resource finalizers.
+
+
+## Callback conversion descriptors
+
+Nested interface-compatible container conversions carry a finite compiler-owned
+conversion tree. Its callback leaf (tag 7) contains an eight-byte linked function
+address. Object emission clears the placeholder function ID and writes a native
+function relocation at the recorded byte offset. The host linker resolves it;
+the runtime never interprets a function ID or looks up source declarations.
+
+Each converted callback owns an adapter descriptor retaining its original
+function, captures, debug label, and pending depth. Container allocation failure
+releases every completed adapter and partial owner, while the source stays valid.
+The checked HIR descriptor retains source/target signatures and the generated
+function ID so reachability and MIR signature validation cover all relocated
+bodies, including adapters nested inside higher-order callback parameters.

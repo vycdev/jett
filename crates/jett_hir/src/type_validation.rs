@@ -189,13 +189,27 @@ impl BackendTypeValidator<'_> {
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::FunctionAdapter { value, .. }
-            | ExpressionKind::InterfaceCoerce(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value)
             | ExpressionKind::View(value)
             | ExpressionKind::Clone(value) => self.expression(value, function_name),
+            ExpressionKind::InterfaceCoerce { value, adapters } => {
+                self.expression(value, function_name);
+                for entry in adapters {
+                    self.type_id(
+                        entry.source,
+                        expression.span,
+                        "container callback source".into(),
+                    );
+                    self.type_id(
+                        entry.target,
+                        expression.span,
+                        "container callback target".into(),
+                    );
+                }
+            }
             ExpressionKind::Call { args, .. } => {
                 for argument in args {
                     self.expression(argument, function_name);

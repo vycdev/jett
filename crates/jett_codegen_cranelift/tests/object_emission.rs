@@ -237,6 +237,85 @@ fn rejects_secret_lifted_calls_with_untainted_mir_results() {
 }
 
 #[test]
+fn container_callback_adapters_have_native_data_relocations() {
+    let (mut program, types) = lower_source(CONTAINER_CALLBACK_SOURCE);
+    let adapter = program
+        .functions
+        .iter_mut()
+        .find(|function| {
+            function
+                .identity
+                .declaration
+                .name
+                .starts_with("$interface.adapter.")
+        })
+        .expect("generated container callback adapter");
+    // It must remain reachable through the descriptor, independently of project roots.
+    adapter.identity.declaration.origin = SourceOrigin::Stdlib;
+    let symbol = symbol_name(&adapter.identity, &types).unwrap();
+    let target = host_target().to_string();
+    {
+        let emitted = emit_object_for_target(&program, &types, &target).unwrap();
+        let object = object::File::parse(emitted.bytes.as_slice()).unwrap();
+        let mut found = false;
+        for section in object
+            .sections()
+            .filter(|section| section.kind() != object::SectionKind::Text)
+        {
+            for (_, relocation) in section.relocations() {
+                if let RelocationTarget::Symbol(index) = relocation.target()
+                    && object.symbol_by_index(index).unwrap().name().unwrap() == symbol
+                {
+                    assert_eq!(relocation.size(), 64);
+                    found = true;
+                }
+            }
+        }
+        assert!(
+            found,
+            "{target} omitted the callback descriptor relocation for {symbol}"
+        );
+    }
+}
+
+const CONTAINER_CALLBACK_SOURCE: &str = "type Source = function(secret[int64]) returns secret[int64]\ntype Target = function(int64) returns secret[int64]\nfunction convert(items: list[Source]) returns list[Target]:\n    return items\n";
+
+#[test]
+fn container_callback_adapters_reject_missing_or_invalid_checked_metadata() {
+    for mutation in 0..4 {
+        let (mut program, types) = lower_source(CONTAINER_CALLBACK_SOURCE);
+        let convert = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "convert")
+            .unwrap();
+        let TerminatorKind::Return(Some(expression)) = &mut convert.blocks
+            [convert.entry.index() as usize]
+            .terminator
+            .kind
+        else {
+            panic!("expected a returned container conversion");
+        };
+        let jett_hir::ExpressionKind::InterfaceCoerce { adapters, .. } = &mut expression.kind
+        else {
+            panic!("expected container callback metadata");
+        };
+        assert_eq!(adapters.len(), 1);
+        match mutation {
+            0 => adapters.clear(),
+            1 => adapters[0].function = convert.id,
+            2 => adapters[0].target = adapters[0].source,
+            _ => adapters.push(adapters[0]),
+        }
+        let error = emit_host_object(&program, &types).expect_err("malformed callback conversion");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { .. }),
+            "{mutation}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn interface_coercion_cannot_remove_secret_call_result_taint() {
     let source = "function identity(value: int64) returns int64:\n    return value\nfunction caller(value: secret[int64]) returns secret[int64]:\n    return identity(value)\n";
     let (mut program, types) = lower_source(source);
@@ -247,7 +326,7 @@ fn interface_coercion_cannot_remove_secret_call_result_taint() {
         .unwrap();
     caller.return_type = TypeInterner::INT64;
     let value = returned_call_mut(caller);
-    value.kind = jett_hir::ExpressionKind::InterfaceCoerce(Box::new(value.clone()));
+    value.kind = jett_hir::ExpressionKind::interface_coerce(Box::new(value.clone()));
     value.ty = TypeInterner::INT64;
     let error = emit_host_object(&program, &types)
         .expect_err("interface coercion cannot declassify a secret");

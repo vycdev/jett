@@ -263,13 +263,20 @@ fn collect_expression_references(
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
-        | ExpressionKind::InterfaceCoerce(value)
         | ExpressionKind::InterfaceType(value)
         | ExpressionKind::Run(value)
         | ExpressionKind::Join(value)
         | ExpressionKind::Cancel(value)
         | ExpressionKind::View(value)
         | ExpressionKind::Clone(value) => collect_expression_references(value, references),
+        ExpressionKind::InterfaceCoerce { value, adapters } => {
+            collect_expression_references(value, references);
+            references.extend(
+                adapters
+                    .iter()
+                    .map(|entry| (entry.function, expression.span)),
+            );
+        }
         ExpressionKind::Intrinsic {
             intrinsic: _,
             type_arguments: _,

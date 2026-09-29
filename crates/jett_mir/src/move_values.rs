@@ -562,7 +562,7 @@ impl Flow<'_> {
             | ExpressionKind::OptionalSome(value) => self.expr(value, false)?,
             ExpressionKind::InterfaceType(value) => self.expr(value, true)?,
             ExpressionKind::FunctionAdapter { value, .. } => self.expr(value, false)?,
-            ExpressionKind::InterfaceCoerce(inner) => {
+            ExpressionKind::InterfaceCoerce { value: inner, .. } => {
                 let source = representation_type(self.types, inner.ty);
                 let target = representation_type(self.types, value.ty);
                 let unbox =

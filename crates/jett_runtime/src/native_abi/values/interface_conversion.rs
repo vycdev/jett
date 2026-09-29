@@ -23,15 +23,24 @@ pub enum NativeInterfaceConversion {
     Optional(Box<Self>),
     Result(Box<Self>, Box<Self>),
     Map(Box<Self>, bool),
+    FunctionAdapter {
+        code: u64,
+    },
 }
 
 impl NativeInterfaceConversion {
     pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        self.append(&mut bytes);
-        bytes
+        self.encode_with_function_offsets().0
     }
-    fn append(&self, bytes: &mut Vec<u8>) {
+    /// Returns function-address fields for the compiler's object relocations.
+    /// At runtime these fields contain linked addresses, never function IDs.
+    pub fn encode_with_function_offsets(&self) -> (Vec<u8>, Vec<(usize, u64)>) {
+        let mut bytes = Vec::new();
+        let mut functions = Vec::new();
+        self.append(&mut bytes, &mut functions);
+        (bytes, functions)
+    }
+    fn append(&self, bytes: &mut Vec<u8>, functions: &mut Vec<(usize, u64)>) {
         match self {
             Self::Copy { owned } => bytes.extend_from_slice(&[0, u8::from(*owned)]),
             Self::Box {
@@ -58,16 +67,21 @@ impl NativeInterfaceConversion {
                     Self::List(_) => 3,
                     _ => 4,
                 });
-                inner.append(bytes);
+                inner.append(bytes, functions);
             }
             Self::Map(inner, strings) => {
                 bytes.extend_from_slice(&[6, u8::from(*strings)]);
-                inner.append(bytes);
+                inner.append(bytes, functions);
             }
             Self::Result(ok, error) => {
                 bytes.push(5);
-                ok.append(bytes);
-                error.append(bytes);
+                ok.append(bytes, functions);
+                error.append(bytes, functions);
+            }
+            Self::FunctionAdapter { code } => {
+                bytes.push(7);
+                functions.push((bytes.len(), *code));
+                bytes.extend_from_slice(&code.to_le_bytes());
             }
         }
     }
@@ -132,6 +146,13 @@ impl NativeInterfaceConversion {
                 6 => {
                     let strings = flag(bytes)?;
                     C::Map(Box::new(node(bytes, depth + 1)?), strings)
+                }
+                7 => {
+                    let code = number(bytes)?;
+                    if code == 0 {
+                        return Err(INVALID_STRUCT);
+                    }
+                    C::FunctionAdapter { code }
                 }
                 _ => return Err(INVALID_STRUCT),
             })
@@ -216,6 +237,12 @@ impl NativeInterfaceConversion {
             Self::Map(element, strings) => element.convert_map(values, input.bits, *strings)?,
             Self::Optional(ok) => Self::convert_sum(values, input.bits, ok, None)?,
             Self::Result(ok, error) => Self::convert_sum(values, input.bits, ok, Some(error))?,
+            Self::FunctionAdapter { code } => {
+                if !input.owned {
+                    return Err(INVALID_STRUCT);
+                }
+                values.function_adapter(input.bits, *code)?
+            }
         };
         Ok(NativeField {
             bits: output,

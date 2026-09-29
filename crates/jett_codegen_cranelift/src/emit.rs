@@ -2021,8 +2021,8 @@ impl Translator<'_, '_> {
                 let adapted = self.leaf(NativeLeaf::FunctionAdapter, &[source, address], true)?;
                 self.own(adapted)
             }
-            ExpressionKind::InterfaceCoerce(value) => {
-                self.interface_coerce(value, expression.ty, false)
+            ExpressionKind::InterfaceCoerce { value, adapters } => {
+                self.interface_coerce(value, expression.ty, false, adapters)
             }
             ExpressionKind::InterfaceType(value) => {
                 let lowered = self.argument(value, true)?;

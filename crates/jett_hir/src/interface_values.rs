@@ -262,7 +262,7 @@ fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
         span: value.span,
     };
     let inner = std::mem::replace(value, placeholder);
-    value.kind = ExpressionKind::InterfaceCoerce(Box::new(inner));
+    value.kind = ExpressionKind::interface_coerce(Box::new(inner));
 }
 
 pub(super) fn coerce_program(program: &mut Program, types: &TypeInterner) {
@@ -439,20 +439,70 @@ impl Coercions<'_> {
         self.adapt(value);
     }
     fn adapt(&self, expression: &mut Expression) {
-        let ExpressionKind::InterfaceCoerce(value) = &expression.kind else {
+        let ExpressionKind::InterfaceCoerce { value, .. } = &expression.kind else {
             return;
         };
-        if let Some(function) = self.adapters.borrow_mut().function(
+        let direct = self.adapters.borrow_mut().function(
             value.ty,
             expression.ty,
             self.types,
             self.identity,
             expression.span,
-        ) {
+        );
+        if let Some(function) = direct {
             expression.kind = ExpressionKind::FunctionAdapter {
                 value: value.clone(),
                 function,
             };
+        } else if let ExpressionKind::InterfaceCoerce { value, adapters } = &mut expression.kind {
+            self.container_adapters(value.ty, expression.ty, expression.span, adapters);
+        }
+    }
+    fn container_adapters(
+        &self,
+        source: TypeId,
+        target: TypeId,
+        span: Span,
+        output: &mut Vec<InterfaceFunctionAdapter>,
+    ) {
+        let source = representation_type(self.types, source);
+        let target = representation_type(self.types, target);
+        if source == target || source == TypeInterner::NEVER {
+            return;
+        }
+        match (self.types.resolve(source), self.types.resolve(target)) {
+            (Type::Function { .. }, Type::Function { .. }) => {
+                if output
+                    .iter()
+                    .any(|entry| entry.source == source && entry.target == target)
+                {
+                    return;
+                }
+                if let Some(function) = self.adapters.borrow_mut().function(
+                    source,
+                    target,
+                    self.types,
+                    self.identity,
+                    span,
+                ) {
+                    output.push(InterfaceFunctionAdapter {
+                        source,
+                        target,
+                        function,
+                    });
+                }
+            }
+            (Type::List(a), Type::List(b)) | (Type::Optional(a), Type::Optional(b)) => {
+                self.container_adapters(*a, *b, span, output);
+            }
+            (Type::Map(_, a), Type::Map(_, b)) => {
+                self.container_adapters(*a, *b, span, output);
+            }
+            (Type::Result(a, b), Type::Result(c, d)) => {
+                self.container_adapters(*a, *c, span, output);
+                self.container_adapters(*b, *d, span, output);
+            }
+            _ => {}
         }
     }
     fn block(&self, block: &mut Block, handled: Option<TypeId>) {
@@ -632,7 +682,7 @@ impl Coercions<'_> {
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::FunctionAdapter { value, .. }
-            | ExpressionKind::InterfaceCoerce(value)
+            | ExpressionKind::InterfaceCoerce { value, .. }
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)

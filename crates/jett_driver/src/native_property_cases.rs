@@ -264,7 +264,7 @@ pub(super) fn value_expression(
         (Type::Interface(_), _) => {
             let concrete = erased_value_type(value, types)
                 .ok_or("erased compile-time value has no unambiguous checked concrete type")?;
-            ExpressionKind::InterfaceCoerce(Box::new(value_expression(
+            ExpressionKind::interface_coerce(Box::new(value_expression(
                 value, concrete, span, context,
             )?))
         }
@@ -404,7 +404,7 @@ pub(super) fn value_expression(
         (Type::Result(_, failure), Value::ResultFail(value)) => {
             ExpressionKind::ResultFail(Box::new(value_expression(value, *failure, span, context)?))
         }
-        (Type::Secret(inner), _) => ExpressionKind::InterfaceCoerce(Box::new(value_expression(
+        (Type::Secret(inner), _) => ExpressionKind::interface_coerce(Box::new(value_expression(
             value, *inner, span, context,
         )?)),
         (Type::Refinement { base, .. }, _) => ExpressionKind::RefinementValidated(Box::new(

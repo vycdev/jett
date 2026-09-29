@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use jett_common::{SourceOrigin, Span};
-use jett_hir::{BinaryOp, Expression, ExpressionKind, FunctionId, UnaryOp};
+use jett_hir::{
+    BinaryOp, Expression, ExpressionKind, FunctionId, InterfaceFunctionAdapter, UnaryOp,
+};
 use jett_mir::{
     Function, Program, SequenceSource, Statement, StatementKind, Terminator, TerminatorKind,
 };
@@ -450,7 +452,12 @@ fn never_value_compatible(types: &TypeInterner, expected: TypeId, actual: TypeId
     }
 }
 
-fn interface_conversion_shape(types: &TypeInterner, source: TypeId, target: TypeId) -> bool {
+fn interface_conversion_shape(
+    types: &TypeInterner,
+    source: TypeId,
+    target: TypeId,
+    adapters: &[InterfaceFunctionAdapter],
+) -> bool {
     if jett_mir::move_values::is_secret(types, source)
         && !jett_mir::move_values::is_secret(types, target)
         && !matches!(types.resolve(target), Type::Interface(_))
@@ -465,31 +472,15 @@ fn interface_conversion_shape(types: &TypeInterner, source: TypeId, target: Type
     match (types.resolve(source), types.resolve(target)) {
         (Type::Interface(_), _) | (_, Type::Interface(_)) => true,
         (Type::List(a), Type::List(b)) | (Type::Optional(a), Type::Optional(b)) => {
-            interface_conversion_shape(types, *a, *b)
+            interface_conversion_shape(types, *a, *b, adapters)
         }
         (Type::Map(ak, av), Type::Map(bk, bv)) | (Type::Result(ak, av), Type::Result(bk, bv)) => {
-            interface_conversion_shape(types, *ak, *bk)
-                && interface_conversion_shape(types, *av, *bv)
+            interface_conversion_shape(types, *ak, *bk, adapters)
+                && interface_conversion_shape(types, *av, *bv, adapters)
         }
-        (
-            Type::Function {
-                params: a,
-                view_params: am,
-                return_type: ar,
-            },
-            Type::Function {
-                params: b,
-                view_params: bm,
-                return_type: br,
-            },
-        ) => {
-            a.len() == b.len()
-                && am == bm
-                && a.iter()
-                    .zip(b)
-                    .all(|(a, b)| interface_conversion_shape(types, *a, *b))
-                && interface_conversion_shape(types, *ar, *br)
-        }
+        (Type::Function { .. }, Type::Function { .. }) => adapters
+            .iter()
+            .any(|entry| entry.source == source && entry.target == target),
         _ => false,
     }
 }
@@ -876,6 +867,54 @@ impl Verifier<'_> {
         }
     }
 
+    fn function_adapter_signature(
+        &self,
+        function: &Function,
+        span: Span,
+        source: TypeId,
+        target: TypeId,
+        adapter: FunctionId,
+    ) -> Result<(), CodegenError> {
+        if !self.types.type_ids().any(|ty| ty == source)
+            || !self.types.type_ids().any(|ty| ty == target)
+        {
+            return Err(self.contract_error(function, span, "function adapter type is absent"));
+        }
+        let callee = self
+            .program
+            .functions
+            .get(adapter.index() as usize)
+            .filter(|callee| callee.id == adapter)
+            .ok_or_else(|| {
+                self.contract_error(function, span, "function adapter target is absent")
+            })?;
+        let Type::Function {
+            params,
+            view_params,
+            return_type,
+        } = self.types.resolve(target)
+        else {
+            return Err(self.contract_error(function, span, "function adapter type mismatch"));
+        };
+        if !matches!(self.types.resolve(source), Type::Function { .. })
+            || callee.capture_count != 1
+            || callee.params.len() != params.len() + 1
+            || callee.params[0].ty != source
+            || callee.params[0].mode != jett_mir::ParamMode::Owned
+            || callee.return_type != *return_type
+            || params.len() != view_params.len()
+            || callee.params[1..]
+                .iter()
+                .zip(params.iter().zip(view_params))
+                .any(|(actual, (ty, view))| {
+                    actual.ty != *ty || (actual.mode == jett_mir::ParamMode::View) != *view
+                })
+        {
+            return Err(self.contract_error(function, span, "function adapter signature mismatch"));
+        }
+        Ok(())
+    }
+
     fn sequence_source_type(
         &self,
         function: &Function,
@@ -1175,51 +1214,13 @@ impl Verifier<'_> {
                 function: target,
             } => {
                 self.expression(function, value)?;
-                let callee = self
-                    .program
-                    .functions
-                    .get(target.index() as usize)
-                    .filter(|callee| callee.id == *target)
-                    .ok_or_else(|| {
-                        self.contract_error(
-                            function,
-                            expression.span,
-                            "function adapter target is absent",
-                        )
-                    })?;
-                let Type::Function {
-                    params,
-                    view_params,
-                    return_type,
-                } = self.types.resolve(expression.ty)
-                else {
-                    return Err(self.expression_kind_error(
-                        function,
-                        expression,
-                        "function adapter",
-                    ));
-                };
-                if !matches!(self.types.resolve(value.ty), Type::Function { .. })
-                    || callee.capture_count != 1
-                    || callee.params.len() != params.len() + 1
-                    || callee.params[0].ty != value.ty
-                    || callee.params[0].mode != jett_mir::ParamMode::Owned
-                    || callee.return_type != *return_type
-                    || params.len() != view_params.len()
-                    || callee.params[1..]
-                        .iter()
-                        .zip(params.iter().zip(view_params))
-                        .any(|(actual, (ty, view))| {
-                            actual.ty != *ty || (actual.mode == jett_mir::ParamMode::View) != *view
-                        })
-                {
-                    return Err(self.contract_error(
-                        function,
-                        expression.span,
-                        "function adapter signature mismatch",
-                    ));
-                }
-                Ok(())
+                self.function_adapter_signature(
+                    function,
+                    expression.span,
+                    value.ty,
+                    expression.ty,
+                    *target,
+                )
             }
             ExpressionKind::FunctionRef(target) => {
                 let Some(callee) = self
@@ -2481,9 +2482,26 @@ impl Verifier<'_> {
                     Err(self.expression_kind_error(function, expression, "coarsen"))
                 }
             }
-            ExpressionKind::InterfaceCoerce(value) => {
+            ExpressionKind::InterfaceCoerce { value, adapters } => {
                 self.expression(function, value)?;
-                if interface_conversion_shape(self.types, value.ty, expression.ty) {
+                let mut signatures = HashSet::new();
+                for entry in adapters {
+                    if !signatures.insert((entry.source, entry.target)) {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "duplicate container callback adapter",
+                        ));
+                    }
+                    self.function_adapter_signature(
+                        function,
+                        expression.span,
+                        entry.source,
+                        entry.target,
+                        entry.function,
+                    )?;
+                }
+                if interface_conversion_shape(self.types, value.ty, expression.ty, adapters) {
                     Ok(())
                 } else {
                     Err(self.expression_kind_error(function, expression, "interface conversion"))

@@ -78,8 +78,8 @@ not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
-- Function adapters inside whole-container conversions and erased comptime
-  callback values whose evaluated descriptor has a different checked signature.
+- Erased comptime callback values whose evaluated descriptor has a different
+  checked signature.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata is retained, but dispatch between multiple instantiations still
   requires an interpreter identity audit.
@@ -105,3 +105,18 @@ borrowed/owned arguments, covariant returns, captured closures, stored callbacks
 higher-order callback parameters, debug names, and pending depth. A context-owned
 adapter descriptor retains the original function and invokes a generated typed
 body; no interpreter or source-name lookup participates in native execution.
+
+Whole-container callback conversions use the same generated signature adapters.
+HIR retains each required source/target signature and its generated function ID
+on the conversion. Reachability and verification include these functions. The
+native conversion descriptor contains link-time function-address relocations;
+runtime conversion wraps each callback while preserving captures, debug labels,
+pending state, and allocation-failure cleanup. Nested list/map/optional/result
+conversions do not perform runtime type inference or implementation lookup.
+
+Linked differential coverage now exercises container callbacks with captures,
+contravariant parameters, covariant returns, secret lifting, pending functions
+and containers, empty insertion, and adapters whose own parameters need nested
+container conversion. Runtime tests walk every allocation failure through list,
+map, and optional callback conversion; object tests reject missing or mismatched
+adapter metadata and require native data relocations to reachable adapter bodies.

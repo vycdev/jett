@@ -1,5 +1,5 @@
 use super::*;
-use jett_hir::{IntrinsicId, MapEntry, StringSegment};
+use jett_hir::{InterfaceFunctionAdapter, IntrinsicId, MapEntry, StringSegment};
 use jett_types::BitfieldFieldKind;
 use std::collections::BTreeSet;
 
@@ -20,6 +20,7 @@ fn interface_conversion(
     types: &TypeInterner,
     source: TypeId,
     target: TypeId,
+    adapters: &[InterfaceFunctionAdapter],
 ) -> Option<jett_runtime::native_abi::values::interface_conversion::NativeInterfaceConversion> {
     use jett_runtime::native_abi::values::interface_conversion::NativeInterfaceConversion as C;
     let source_rep = representation_type(types, source);
@@ -44,21 +45,28 @@ fn interface_conversion(
                 nothing: target_rep == TypeInterner::NOTHING,
             },
             (Type::List(a), Type::List(b)) => {
-                C::List(Box::new(interface_conversion(types, *a, *b)?))
+                C::List(Box::new(interface_conversion(types, *a, *b, adapters)?))
             }
             (Type::Optional(a), Type::Optional(b)) => {
-                C::Optional(Box::new(interface_conversion(types, *a, *b)?))
+                C::Optional(Box::new(interface_conversion(types, *a, *b, adapters)?))
             }
             (Type::Result(a, b), Type::Result(c, d)) => C::Result(
-                Box::new(interface_conversion(types, *a, *c)?),
-                Box::new(interface_conversion(types, *b, *d)?),
+                Box::new(interface_conversion(types, *a, *c, adapters)?),
+                Box::new(interface_conversion(types, *b, *d, adapters)?),
             ),
             (Type::Map(ak, av), Type::Map(bk, bv)) if ak == bk || *ak == TypeInterner::NEVER => {
                 C::Map(
-                    Box::new(interface_conversion(types, *av, *bv)?),
+                    Box::new(interface_conversion(types, *av, *bv, adapters)?),
                     is_string(types, *bk),
                 )
             }
+            (Type::Function { .. }, Type::Function { .. }) => C::FunctionAdapter {
+                code: adapters
+                    .iter()
+                    .find(|entry| entry.source == source_rep && entry.target == target_rep)?
+                    .function
+                    .index() as u64,
+            },
             _ => return None,
         },
     )
@@ -70,6 +78,7 @@ impl Translator<'_, '_> {
         expression: &Expression,
         target: TypeId,
         borrowed: bool,
+        adapters: &[InterfaceFunctionAdapter],
     ) -> Result<LoweredValue, CodegenError> {
         let source = representation_type(self.types, expression.ty);
         let target_representation = representation_type(self.types, target);
@@ -134,13 +143,18 @@ impl Translator<'_, '_> {
             }
             return Ok(unpacked);
         }
-        let conversion =
-            interface_conversion(self.types, expression.ty, target).ok_or_else(|| {
+        let conversion = interface_conversion(self.types, expression.ty, target, adapters)
+            .ok_or_else(|| {
                 self.unsupported(expression.span, "nested interface-compatible conversion")
             })?;
         let value = self.argument(expression, borrowed)?;
         let value = self.scalar(value, expression.span)?;
-        let (layout, length) = self.static_data(&conversion.encode())?;
+        let (mut bytes, functions) = conversion.encode_with_function_offsets();
+        // Relocations supply addresses. Never leave a function ID in the object.
+        for (offset, _) in &functions {
+            bytes[*offset..*offset + 8].fill(0);
+        }
+        let (layout, length) = self.static_data_with_functions(&bytes, &functions)?;
         let output = self.leaf(NativeLeaf::InterfaceConvert, &[value, layout, length], true)?;
         self.own_linear(output)
     }
@@ -1127,8 +1141,13 @@ impl Translator<'_, '_> {
         expression: &Expression,
         borrowed: bool,
     ) -> Result<LoweredValue, CodegenError> {
-        if borrowed && let ExpressionKind::InterfaceCoerce(inner) = &expression.kind {
-            return self.interface_coerce(inner, expression.ty, true);
+        if borrowed
+            && let ExpressionKind::InterfaceCoerce {
+                value: inner,
+                adapters,
+            } = &expression.kind
+        {
+            return self.interface_coerce(inner, expression.ty, true, adapters);
         }
         if borrowed
             && (is_linear(self.types, expression.ty) || is_function(self.types, expression.ty))
@@ -1210,6 +1229,13 @@ impl Translator<'_, '_> {
         self.drop_dead_locals(&BTreeSet::new())
     }
     pub(super) fn static_data(&mut self, bytes: &[u8]) -> Result<(Value, Value), CodegenError> {
+        self.static_data_with_functions(bytes, &[])
+    }
+    fn static_data_with_functions(
+        &mut self,
+        bytes: &[u8],
+        functions: &[(usize, u64)],
+    ) -> Result<(Value, Value), CodegenError> {
         let data = self
             .module
             .declare_anonymous_data(false, false)
@@ -1221,6 +1247,29 @@ impl Translator<'_, '_> {
         } else {
             bytes.into()
         });
+        for (offset, function) in functions {
+            if self.module.target_config().pointer_type() != ir::types::I64 {
+                return Err(CodegenError::Backend(
+                    "callback conversion requires 64-bit pointers".into(),
+                ));
+            }
+            let function = u32::try_from(*function).map_err(|_| {
+                CodegenError::Backend("invalid callback conversion function ID".into())
+            })?;
+            let declared = self
+                .declarations
+                .get(FunctionId::new(function))
+                .ok_or_else(|| {
+                    CodegenError::Backend("callback conversion function is unreachable".into())
+                })?;
+            let reference = self
+                .module
+                .declare_func_in_data(declared.native_id, &mut desc);
+            let offset = u32::try_from(*offset).map_err(|_| {
+                CodegenError::Backend("callback conversion descriptor is too large".into())
+            })?;
+            desc.write_function_addr(offset, reference);
+        }
         self.module
             .define_data(data, &desc)
             .map_err(|e| CodegenError::Backend(e.to_string()))?;

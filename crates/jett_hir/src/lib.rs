@@ -393,7 +393,10 @@ pub enum ExpressionKind {
     /// Compiler-owned conversion after every required refinement predicate passed.
     RefinementValidated(Box<Expression>),
     /// Explicit conversion at an interface-compatible typed boundary.
-    InterfaceCoerce(Box<Expression>),
+    InterfaceCoerce {
+        value: Box<Expression>,
+        adapters: Vec<InterfaceFunctionAdapter>,
+    },
     /// A checked signature adapter retaining its source function descriptor.
     FunctionAdapter {
         value: Box<Expression>,
@@ -441,6 +444,23 @@ pub enum ExpressionKind {
     },
     View(Box<Expression>),
     Clone(Box<Expression>),
+}
+
+/// Generated callback conversion required inside a container conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterfaceFunctionAdapter {
+    pub source: TypeId,
+    pub target: TypeId,
+    pub function: FunctionId,
+}
+
+impl ExpressionKind {
+    pub fn interface_coerce(value: Box<Expression>) -> Self {
+        Self::InterfaceCoerce {
+            value,
+            adapters: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -761,12 +781,30 @@ impl Validator<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
-            | ExpressionKind::FunctionAdapter { value, .. }
-            | ExpressionKind::InterfaceCoerce(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value) => self.expression(value),
+            ExpressionKind::FunctionAdapter { value, function } => {
+                if function.index() as usize >= self.program.functions.len() {
+                    self.error(
+                        expression.span,
+                        "adapter references an unknown HIR function",
+                    );
+                }
+                self.expression(value);
+            }
+            ExpressionKind::InterfaceCoerce { value, adapters } => {
+                for entry in adapters {
+                    if entry.function.index() as usize >= self.program.functions.len() {
+                        self.error(
+                            expression.span,
+                            "container adapter references an unknown HIR function",
+                        );
+                    }
+                }
+                self.expression(value);
+            }
             ExpressionKind::Call {
                 function,
                 args,

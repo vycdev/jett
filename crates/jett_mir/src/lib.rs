@@ -718,14 +718,22 @@ impl FunctionValidator<'_, '_> {
             | hir::ExpressionKind::Declassify(value)
             | hir::ExpressionKind::Coarsen(value)
             | hir::ExpressionKind::RefinementValidated(value)
-            | hir::ExpressionKind::FunctionAdapter { value, .. }
-            | hir::ExpressionKind::InterfaceCoerce(value)
             | hir::ExpressionKind::InterfaceType(value)
             | hir::ExpressionKind::Run(value)
             | hir::ExpressionKind::Join(value)
             | hir::ExpressionKind::Cancel(value)
             | hir::ExpressionKind::View(value)
             | hir::ExpressionKind::Clone(value) => self.expression(value),
+            hir::ExpressionKind::FunctionAdapter { value, function } => {
+                self.check_function(*function, expression.span);
+                self.expression(value);
+            }
+            hir::ExpressionKind::InterfaceCoerce { value, adapters } => {
+                for entry in adapters {
+                    self.check_function(entry.function, expression.span);
+                }
+                self.expression(value);
+            }
             hir::ExpressionKind::Call {
                 function,
                 args,

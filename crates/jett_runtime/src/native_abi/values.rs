@@ -6981,6 +6981,111 @@ mod tests {
     }
 
     #[test]
+    fn callback_container_conversions_preserve_sources_and_rollback_every_allocation() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        for shape in 0..3 {
+            let mut succeeded = false;
+            for budget in 0..64 {
+                let mut values = NativeValues::default();
+                let original = debug_function_descriptor(&mut values, "function(callback)", true);
+                let source_callback = values.run_record(original).unwrap();
+                values.drop_value(original).unwrap();
+                let callback = C::FunctionAdapter { code: 123 };
+                let (source, conversion) =
+                    match shape {
+                        0 => {
+                            let other = values.clone_value(source_callback).unwrap();
+                            let source = values.new_list(true).unwrap();
+                            values.lists.get_mut(&source).unwrap().elements =
+                                vec![Some(source_callback), Some(other)];
+                            (source, C::List(Box::new(callback)))
+                        }
+                        1 => (
+                            values.sum(SUM_SUCCESS, source_callback, true).unwrap(),
+                            C::Optional(Box::new(callback)),
+                        ),
+                        _ => {
+                            let source = values.new_map(1, 1).unwrap();
+                            let key = values.insert("key".into()).unwrap();
+                            values.maps.get_mut(&source).unwrap().entries.push(Some(
+                                NativeMapEntry {
+                                    key,
+                                    value: source_callback,
+                                    key_pending_depth: 0,
+                                    value_pending_depth: 0,
+                                    key_taken: false,
+                                },
+                            ));
+                            (source, C::Map(Box::new(callback), true))
+                        }
+                    };
+                values.allocation_budget = Some(budget);
+                let result = conversion.convert(
+                    &mut values,
+                    NativeField {
+                        bits: source,
+                        owned: true,
+                        pending_depth: 0,
+                    },
+                );
+                assert_eq!(values.owned_pending_depth(source_callback), Ok(1));
+                assert_eq!(
+                    values.function_debug_label(source_callback).unwrap(),
+                    "function(callback)"
+                );
+                match result {
+                    Ok(output) => {
+                        let adapted = match shape {
+                            0 => values.lists[&output.bits].elements[0].unwrap(),
+                            1 => values.sums[&output.bits].bits,
+                            _ => values.maps[&output.bits].entries[0].as_ref().unwrap().value,
+                        };
+                        assert_eq!(
+                            values
+                                .struct_field(adapted, NATIVE_FUNCTION_CODE_FIELD)
+                                .unwrap()
+                                .bits,
+                            123
+                        );
+                        assert_eq!(values.owned_pending_depth(adapted), Ok(1));
+                        values.drop_value(output.bits).unwrap();
+                        succeeded = true;
+                    }
+                    Err(error) => assert_eq!(error, EXHAUSTED, "shape {shape}, budget {budget}"),
+                }
+                values.drop_value(source).unwrap();
+                assert!(values.is_empty(), "shape {shape}, budget {budget}");
+                if succeeded {
+                    break;
+                }
+            }
+            assert!(succeeded, "shape {shape} never completed");
+        }
+    }
+
+    #[test]
+    fn callback_conversion_descriptors_report_exact_function_relocations() {
+        use interface_conversion::NativeInterfaceConversion as C;
+        let conversion = C::Result(
+            Box::new(C::List(Box::new(C::FunctionAdapter { code: 17 }))),
+            Box::new(C::Optional(Box::new(C::FunctionAdapter { code: 19 }))),
+        );
+        let (bytes, functions) = conversion.encode_with_function_offsets();
+        assert_eq!(
+            functions.iter().map(|(_, code)| *code).collect::<Vec<_>>(),
+            vec![17, 19]
+        );
+        for (offset, code) in functions {
+            assert_eq!(&bytes[offset..offset + 8], &code.to_le_bytes());
+        }
+        assert_eq!(C::parse(&bytes), Ok(conversion));
+        for end in 0..bytes.len() {
+            assert!(C::parse(&bytes[..end]).is_err());
+        }
+        assert!(C::parse(&C::FunctionAdapter { code: 0 }.encode()).is_err());
+    }
+
+    #[test]
     fn interface_conversion_descriptors_reject_truncated_or_extra_bytes() {
         use interface_conversion::NativeInterfaceConversion as C;
         let conversion = C::Result(

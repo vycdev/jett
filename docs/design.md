@@ -7657,8 +7657,10 @@ Function parameters are contravariant and returns are covariant, with exact view
 modes: a callback accepting every `Named` can accept `User` inputs, while one
 accepting only `User` cannot serve a caller allowed to pass any `Named`.
 Native signature adapters preserve the source callback's captures, debug name,
-and pending depth. Nested container adapters and other parity edges remain open; see
-`active/native_interface_values.md` for the remaining gates.
+and pending depth, including callbacks inside existing lists, maps, optionals,
+and results. Container descriptors use linked addresses of checked generated
+adapters. Comptime callback materialization and other parity edges remain open;
+see `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
 Generic structs retain their concrete type arguments across interface erasure,

@@ -252,6 +252,91 @@ function secret_adapter() returns nothing:
     secret[int64] value = callback(42)
     trace value
     return nothing
+type Reader = function(view Named) returns string
+type UserReader = function(view User) returns string
+function callback_list_conversions() returns nothing:
+    list[Reader] source = list(show, make_reader("list-closure"))
+    list[UserReader] converted = source
+    User input = User(label: "container")
+    trace converted
+    for callback in converted:
+        println(callback(view input))
+    list[optional[Reader]] nested_source = list(some(make_reader("nested")), none)
+    list[optional[UserReader]] nested = nested_source
+    for maybe in nested:
+        UserReader callback = maybe handle:
+            default show
+        println(callback(view input))
+    list[Reader] pending_source = run list(show)
+    list[UserReader] pending = pending_source
+    trace pending
+    list[UserReader] ready = join pending handle error:
+        return nothing
+    for callback in ready:
+        println(callback(view input))
+    list[Reader] no_callbacks = list()
+    list[UserReader] empty = no_callbacks
+    list[UserReader] filled = list.append[UserReader](empty, show)
+    trace filled
+    return nothing
+function callback_sum_conversions() returns nothing:
+    User input = User(label: "sums")
+    optional[Reader] source = some(make_reader("optional"))
+    optional[UserReader] maybe = source
+    UserReader optional_callback = maybe handle:
+        return nothing
+    println(optional_callback(view input))
+    result[Reader, Reader] success = ok(show)
+    result[UserReader, UserReader] converted = success
+    UserReader ok_callback = converted handle error:
+        return nothing
+    println(ok_callback(view input))
+    result[Reader, Reader] failed = fail(make_reader("error"))
+    result[UserReader, UserReader] failure = failed
+    UserReader failed_callback = failure handle error:
+        println(error(view input))
+        return nothing
+    println(failed_callback(view input))
+    return nothing
+function callback_map_conversions() returns nothing:
+    map[string, Reader] source = map("key": make_reader("map"))
+    map[string, UserReader] converted = source
+    trace converted
+    UserReader callback = map.get[string, UserReader](converted, "key") handle:
+        return nothing
+    User input = User(label: "lookup")
+    println(callback(view input))
+    return nothing
+function callback_pending_conversions() returns nothing:
+    optional[Reader] source = some(run make_reader("pending-callback"))
+    optional[UserReader] converted = source
+    trace converted
+    UserReader pending = converted handle:
+        return nothing
+    UserReader callback = join pending handle error:
+        return nothing
+    User input = User(label: "joined")
+    println(callback(view input))
+    list[function(view Named) returns User] factories = list(adapted_return)
+    list[function(view User) returns Named] adapted = factories
+    for factory in adapted:
+        Named produced = factory(view input)
+        println(show(view produced))
+    list[function(secret[int64]) returns secret[int64]] secret_source = list(secret_callback)
+    list[function(int64) returns secret[int64]] secret_adapted = secret_source
+    for secret_function in secret_adapted:
+        secret[int64] secret_value = secret_function(41)
+        trace secret_value
+    return nothing
+function first_reader(items: list[UserReader]) returns string:
+    User input = User(label: "higher-container")
+    for callback in items:
+        return callback(view input)
+    return "empty"
+function callback_nested_adapters() returns nothing:
+    function(list[Reader]) returns string adapted = first_reader
+    println(adapted(list(make_reader("higher"))))
+    return nothing
 type Token = secret[string]
 struct Box[T]:
     item: T
@@ -299,6 +384,11 @@ function generic_values() returns nothing:
     trace plain
     return nothing
 function main() returns nothing:
+    callback_list_conversions()
+    callback_sum_conversions()
+    callback_map_conversions()
+    callback_pending_conversions()
+    callback_nested_adapters()
     generic_values()
     secret_adapter()
     stored_adapters()
