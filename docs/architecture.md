@@ -2848,8 +2848,12 @@ inside existing lists, maps, optionals, and results. Container descriptors use
 linked addresses of checked generated adapters. Comptime callbacks materialize
 their checked source signatures before conversion to the requested type. A final
 HIR conversion pass reuses existing adapters and lowers newly materialized
-conversions before ownership analysis. Ambiguous erased specializations and other
-parity edges remain open; see `active/native_interface_values.md`.
+conversions before ownership analysis. Generic closures carry their lexical type
+bindings, ordered enclosing type arguments, and alias reflection metadata so
+materialization can select the checked body even when signatures coincide. The
+metadata is boxed to avoid inflating every interpreter value and recursive frame.
+Other reflection specialization keys and parity edges remain open; see
+`active/native_interface_values.md`.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
 Generic structs retain their concrete type arguments across interface erasure,

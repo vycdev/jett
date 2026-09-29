@@ -2,7 +2,7 @@
 //! The interpreter chooses cases; only compiled Jett code executes their bodies.
 
 use jett_common::{FileId, Span};
-use jett_comptime::value::Value;
+use jett_comptime::value::{ClosureTypeContext, Value};
 use jett_comptime::verify::{PROPERTY_DEFAULT_ITERATIONS, PropertyCase};
 use jett_hir::{
     Block, DeclarationId, DeclarationKind, Expression, ExpressionKind, Function, FunctionDebugKind,
@@ -150,6 +150,26 @@ pub(super) struct FunctionValueCandidate {
     captures: Vec<(String, TypeId)>,
     return_type: TypeId,
     id: FunctionId,
+    type_arguments: Vec<TypeId>,
+    type_argument_reflections: Vec<jett_types::ReflectionTypeInfo>,
+}
+
+impl FunctionValueCandidate {
+    fn matches_type_context(&self, context: &ClosureTypeContext, types: &TypeInterner) -> bool {
+        self.type_arguments.len() == context.arguments.len()
+            && self
+                .type_arguments
+                .iter()
+                .zip(&context.arguments)
+                .all(|(ty, actual)| types.type_name(*ty) == actual.canonical_name)
+            && (self.type_argument_reflections.is_empty()
+                || (self.type_argument_reflections.len() == context.arguments.len()
+                    && self
+                        .type_argument_reflections
+                        .iter()
+                        .zip(&context.arguments)
+                        .all(|(expected, actual)| actual.reflection.as_ref() == Some(expected))))
+    }
 }
 
 pub(super) fn function_value_candidates(
@@ -175,6 +195,12 @@ pub(super) fn function_value_candidates(
                 FunctionDebugKind::Inline => None,
             };
             FunctionValueCandidate {
+                type_arguments: function.identity.type_arguments.clone(),
+                type_argument_reflections: function
+                    .identity
+                    .specialization
+                    .type_argument_reflections
+                    .clone(),
                 source_name,
                 kind: declaration.kind,
                 body_span: function.body.span,
@@ -496,9 +522,15 @@ fn function_value_expression(
                 ) && function.source_name.as_ref() == Some(name)
                     && function.captures.is_empty()
             }
-            Value::Function { body, captures, .. } => {
+            Value::Function {
+                body,
+                captures,
+                type_context,
+                ..
+            } => {
                 function.source_name.is_none()
                     && function.body_span == body.span
+                    && function.matches_type_context(type_context, context.types)
                     && function
                         .captures
                         .iter()

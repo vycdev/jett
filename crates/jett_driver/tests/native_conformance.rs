@@ -4135,6 +4135,24 @@ fn native_comptime_composites_match_interpreter() {
 }
 
 #[test]
+fn native_comptime_generic_closures_match_interpreter() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/comptime_generic_closures.jett");
+    let expected = jett_driver::run_file_capture_output(&fixture).expect("generic closure oracle");
+    assert_eq!(
+        expected.stdout,
+        "7:2\nname:3\nalias:4\n17\nkept\n29\nnested:5\n23:6\nint64\nLabel\n"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let binary = directory.path().join("comptime_generic_closures.exe");
+    build_host_executable(&fixture, launcher(), &binary).expect("native generic comptime closures");
+    let actual = run_bounded(&binary, directory.path());
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, expected.stdout.as_bytes());
+    assert!(actual.stderr.is_empty(), "{actual:?}");
+}
+
+#[test]
 fn native_comptime_function_values_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/comptime_function_values.jett");

@@ -79,7 +79,7 @@ not introduce structural equality or change the printed struct name.
 This does **not** close the full interface gate. Still required:
 
 - Comptime callback specializations whose evaluated values do not retain enough
-  concrete metadata to select an unambiguous checked source identity.
+concrete metadata to select an unambiguous checked source identity.
 - Remaining comptime payload shapes and reflected interface fields. Generic
   struct metadata is retained, but dispatch between multiple instantiations still
   requires an interpreter identity audit.
@@ -137,3 +137,17 @@ cover named choices, captured closures, callbacks in lists and records, pending
 callbacks, covariant returns, and secret parameters/results. Completing generated
 conversions is idempotent and shares already emitted adapters, avoiding duplicate
 native symbols when comptime evaluation recreates an existing conversion.
+
+Generic closures must capture their lexical type bindings and the enclosing
+function's concrete type arguments, including reflection-visible alias metadata.
+The source body span and callable signature alone do not identify a specialization:
+two instances may differ only in capture types or a type-dependent operation.
+Calling a closure restores its captured type context, and materialization matches
+that context against checked HIR identity before considering signature adapters.
+
+Generic closure regressions now cover multiple concrete instantiations sharing a
+body and callable signature, aliases of an existing type, captured values, empty
+capture environments with type-dependent calls, nested factories, and calls from
+a different generic context. Interpreter restoration also runs after argument
+normalization failure. Boxing the captured type context preserves the established
+stack budget for recursive JSON fixtures.

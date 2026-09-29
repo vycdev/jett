@@ -2,6 +2,21 @@ use std::collections::HashMap;
 use std::fmt;
 
 use jett_parser::ast::{Block, Param, TypeExpr};
+use jett_types::ReflectionTypeInfo;
+
+/// Lexical generic context retained by an evaluated closure.
+#[derive(Debug, Clone, Default)]
+pub struct ClosureTypeContext {
+    pub bindings: HashMap<String, TypeExpr>,
+    pub arguments: Vec<ClosureTypeArgument>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClosureTypeArgument {
+    pub ty: TypeExpr,
+    pub canonical_name: String,
+    pub reflection: Option<ReflectionTypeInfo>,
+}
 
 /// Runtime value for the compile-time interpreter.
 #[derive(Debug, Clone)]
@@ -73,6 +88,9 @@ pub enum Value {
     NamedFunction(String),
     /// A captured inline function expression (closure).
     Function {
+        /// Keep generic metadata off the stack: inline storage enlarges every
+        /// Value variant and recursive interpreter frame, even without closures.
+        type_context: Box<ClosureTypeContext>,
         params: Vec<Param>,
         body: Block,
         captures: HashMap<String, Value>,

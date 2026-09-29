@@ -36,7 +36,7 @@ use jett_types::{
     ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
 
-use crate::value::Value;
+use crate::value::{ClosureTypeArgument, ClosureTypeContext, Value};
 
 mod debug;
 mod graphics;
@@ -617,6 +617,8 @@ pub struct Interpreter {
     actor_defs: HashMap<String, ActorDef>,
     /// Active generic type argument substitutions for interpreted generic functions.
     type_arg_scopes: Vec<HashMap<String, TypeExpr>>,
+    /// Ordered arguments of the lexical function, retained by nested closures.
+    current_type_arguments: Vec<TypeExpr>,
     /// Namespace of the qualified function body currently executing.
     current_namespace: Option<String>,
     /// First scope belonging to the current function or closure invocation.
@@ -694,6 +696,7 @@ impl Interpreter {
             machines: HashMap::new(),
             actor_defs: HashMap::new(),
             type_arg_scopes: Vec::new(),
+            current_type_arguments: Vec::new(),
             current_namespace: None,
             lexical_scope_floor: 0,
             current_function_trusted_stdlib: false,
@@ -2124,6 +2127,23 @@ impl Interpreter {
                     })
                     .collect();
                 Ok(ExprFlow::Value(Value::Function {
+                    type_context: Box::new(ClosureTypeContext {
+                        bindings: self
+                            .type_arg_scopes
+                            .iter()
+                            .flat_map(|scope| scope.iter())
+                            .map(|(name, ty)| (name.clone(), self.substitute_type_expr(ty)))
+                            .collect(),
+                        arguments: self
+                            .current_type_arguments
+                            .iter()
+                            .map(|ty| ClosureTypeArgument {
+                                ty: ty.clone(),
+                                canonical_name: self.concrete_type_display(ty),
+                                reflection: self.checked_type_info(ty).cloned(),
+                            })
+                            .collect(),
+                    }),
                     params: params.clone(),
                     body: body.clone(),
                     captures,
@@ -10520,6 +10540,12 @@ impl Interpreter {
         }
 
         let type_scope = self.type_scope_for_function(&func, type_args)?;
+        let arguments = func
+            .type_params
+            .iter()
+            .map(|param| type_scope[&param.name].clone())
+            .collect();
+        let saved_type_arguments = std::mem::replace(&mut self.current_type_arguments, arguments);
         self.type_arg_scopes.push(type_scope);
 
         let saved_namespace = self.current_namespace.clone();
@@ -10563,6 +10589,7 @@ impl Interpreter {
         }
         self.lexical_scope_floor = saved_scope_floor;
         self.type_arg_scopes.pop();
+        self.current_type_arguments = saved_type_arguments;
         self.current_namespace = saved_namespace;
         self.current_function_trusted_stdlib = saved_trusted_stdlib;
         call_result
@@ -10729,6 +10756,7 @@ impl Interpreter {
                 self.call_registered_function_with_type_args(&name, &[], args)
             }
             Value::Function {
+                type_context,
                 params,
                 body,
                 captures,
@@ -10743,13 +10771,19 @@ impl Interpreter {
                         args.len()
                     ));
                 }
-                let mut normalized_args = Vec::with_capacity(args.len());
-                for (param, arg) in params.iter().zip(args) {
-                    let param_ty = self.substitute_type_expr(&param.ty);
-                    normalized_args.push(self.normalize_value_for_type(&param_ty, arg)?);
-                }
-
-                // Push the captured environment as a scope, then the parameter scope on top.
+                let saved_type_scopes =
+                    std::mem::replace(&mut self.type_arg_scopes, vec![type_context.bindings]);
+                let saved_type_arguments = std::mem::replace(
+                    &mut self.current_type_arguments,
+                    type_context
+                        .arguments
+                        .into_iter()
+                        .map(|arg| arg.ty)
+                        .collect(),
+                );
+                let saved_namespace = std::mem::replace(&mut self.current_namespace, namespace);
+                let saved_trusted_stdlib = self.current_function_trusted_stdlib;
+                self.current_function_trusted_stdlib = false;
                 let scope_depth = self.scopes.len();
                 let saved_scope_floor = self.lexical_scope_floor;
                 self.lexical_scope_floor = scope_depth;
@@ -10765,23 +10799,23 @@ impl Interpreter {
                     self.set_namespace_alias(name, target);
                 }
                 self.push_scope();
-                for (param, arg) in params.iter().zip(normalized_args) {
-                    let param_ty = self.substitute_type_expr(&param.ty);
-                    self.set_variable_with_type(&param.name.name, arg, param_ty);
-                }
-                let saved_trusted_stdlib = self.current_function_trusted_stdlib;
-                let saved_namespace = self.current_namespace.clone();
-                self.current_function_trusted_stdlib = false;
-                self.current_namespace = namespace;
-                let result = self.exec_block_inner(&body);
-                self.current_function_trusted_stdlib = saved_trusted_stdlib;
-                self.current_namespace = saved_namespace;
+                let result = (|| {
+                    for (param, arg) in params.iter().zip(args) {
+                        let param_ty = self.substitute_type_expr(&param.ty);
+                        let arg = self.normalize_value_for_type(&param_ty, arg)?;
+                        self.set_variable_with_type(&param.name.name, arg, param_ty);
+                    }
+                    self.exec_block_inner(&body)
+                })();
                 while self.scopes.len() > scope_depth {
                     self.pop_scope();
                 }
                 self.lexical_scope_floor = saved_scope_floor;
-                let result = result?;
-                Ok(match result {
+                self.current_function_trusted_stdlib = saved_trusted_stdlib;
+                self.current_namespace = saved_namespace;
+                self.type_arg_scopes = saved_type_scopes;
+                self.current_type_arguments = saved_type_arguments;
+                Ok(match result? {
                     Some(Signal::Return(v)) => v,
                     _ => Value::Nothing,
                 })
@@ -16035,9 +16069,61 @@ mod tests {
     }
 
     #[test]
+    fn closure_type_context_restores_caller_after_argument_failure() {
+        let mut interp = Interpreter::new();
+        interp
+            .type_arg_scopes
+            .push(HashMap::from([("T".into(), type_named("string"))]));
+        interp.current_type_arguments = vec![type_named("uint64")];
+        interp.current_namespace = Some("caller".into());
+        interp.current_function_trusted_stdlib = true;
+        let closure = Value::Function {
+            type_context: Box::new(ClosureTypeContext {
+                bindings: HashMap::from([("T".into(), type_named("int8"))]),
+                arguments: Vec::new(),
+            }),
+            params: vec![Param {
+                view: false,
+                mutable: false,
+                name: ident("value"),
+                ty: type_named("T"),
+                span: sp(),
+            }],
+            body: block(vec![return_stmt(var("value"))]),
+            captures: HashMap::new(),
+            capture_types: HashMap::new(),
+            namespace_aliases: HashMap::new(),
+            namespace: Some("closure".into()),
+        };
+        for value in [128, 127] {
+            let result = interp.call_fn_value(closure.clone(), vec![Value::Int64(value)]);
+            if value == 128 {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("int8 value 128 is outside range")
+                );
+            } else {
+                assert_eq!(result.unwrap(), Value::Int64(127));
+            }
+            assert_eq!(interp.scopes.len(), 1);
+            assert_eq!(interp.lexical_scope_floor, 0);
+            assert_eq!(interp.type_arg_scopes.len(), 1);
+            assert_eq!(type_expr_display(&interp.type_arg_scopes[0]["T"]), "string");
+            assert_eq!(
+                type_expr_display(&interp.current_type_arguments[0]),
+                "uint64"
+            );
+            assert_eq!(interp.current_namespace.as_deref(), Some("caller"));
+            assert!(interp.current_function_trusted_stdlib);
+        }
+    }
+
+    #[test]
     fn uint64_inline_function_parameter_normalizes_small_literal_carrier() {
         let mut interp = Interpreter::new();
         let fn_value = Value::Function {
+            type_context: Box::default(),
             params: vec![Param {
                 view: false,
                 mutable: false,

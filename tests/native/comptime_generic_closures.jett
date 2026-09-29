@@ -1,0 +1,37 @@
+type Label = string
+function make_label[T](prefix: T) returns function(int64) returns string:
+    return function(value: int64) returns string: return "{prefix}:{value}"
+function identity[T](value: T) returns T:
+    return value
+function make_echo[T]() returns function(T) returns T:
+    return function(value: T) returns T: return identity[T](value)
+function invoke_in_other_type_scope[T](ignored: T, callback: function(int64) returns int64) returns int64:
+    return callback(29)
+function make_nested[T](prefix: T) returns function() returns function(int64) returns string:
+    return function() returns function(int64) returns string: return make_label[T](prefix)
+function reflected_name[T]() returns string:
+    return type.name[T]()
+function make_name[T]() returns function() returns string:
+    return function() returns string: return reflected_name[T]()
+function main() returns nothing:
+    function(int64) returns string numbered = comptime make_label[int64](7)
+    function(int64) returns string named = comptime make_label[string]("name")
+    function(int64) returns string aliased = comptime make_label[Label]("alias")
+    println(numbered(2))
+    println(named(3))
+    println(aliased(4))
+    function(int64) returns int64 numeric_echo = comptime make_echo[int64]()
+    function(string) returns string text_echo = comptime make_echo[string]()
+    println(numeric_echo(17))
+    println(text_echo("kept"))
+    println(invoke_in_other_type_scope[string]("caller", numeric_echo))
+    function() returns function(int64) returns string nested_factory = comptime make_nested[string]("nested")
+    function(int64) returns string nested = nested_factory()
+    println(nested(5))
+    function(int64) returns string baked_nested = comptime make_nested[int64](23)()
+    println(baked_nested(6))
+    function() returns string numeric_name = comptime make_name[int64]()
+    function() returns string alias_name = comptime make_name[Label]()
+    println(numeric_name())
+    println(alias_name())
+    return nothing

@@ -7661,7 +7661,9 @@ and pending depth, including callbacks inside existing lists, maps, optionals,
 and results. Container descriptors use linked addresses of checked generated
 adapters. Comptime callbacks materialize their checked source signatures before
 converting to the requested callback type; captures and pending state survive.
-Ambiguous erased specializations and other parity edges remain open; see
+Generic closures retain their enclosing type arguments and alias reflection
+metadata, and invocation restores their captured type bindings. Other reflection
+specialization keys and parity edges remain open; see
 `active/native_interface_values.md` for the remaining gates.
 Explicit comptime interface values materialize from unambiguous checked concrete
 payload types; secret fields and pending wrappers remain part of the typed value.
