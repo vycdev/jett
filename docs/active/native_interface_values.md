@@ -64,14 +64,25 @@ Allocation-failure tests verify cleanup of partial lists, maps, sums, and boxes;
 malformed conversion descriptors fail before touching source storage.
 Explicit comptime values with unambiguous checked primitive or nominal payloads
 materialize as typed boxes, including mixed lists, secret fields, and pending
-wrappers. Ambiguous erased generic metadata still fails closed.
+wrappers. Generic structs retain their instantiated identity for typed observation
+and comptime materialization; other ambiguous erased payloads still fail closed.
+
+Generic struct values must retain their instantiated type separately from their
+base display name. Interface erasure must not discard secret type arguments:
+`Box[secret[string]]` still redacts its field when observed as `Named`, including
+after cloning, pending tasks, and explicit comptime evaluation. Construction
+resolves the current invocation's type arguments rather than consulting a shared
+expression-span map, which can describe a different generic instantiation.
+This metadata supplies typed observation and comptime materialization; it does
+not introduce structural equality or change the printed struct name.
 
 This does **not** close the full interface gate. Still required:
 
 - Function adapters inside whole-container conversions and erased comptime
   callback values whose evaluated descriptor has a different checked signature.
-- Remaining comptime payload shapes, reflected construction, and concrete
-  generic identity/debug metadata after erasure.
+- Remaining comptime payload shapes and reflected interface fields. Generic
+  struct metadata is retained, but dispatch between multiple instantiations still
+  requires an interpreter identity audit.
 - Audit primitive-width/refinement dispatch identity against interpreter runtime
   identity rather than assuming every checked TypeId has a distinct runtime name.
 

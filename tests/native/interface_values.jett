@@ -252,7 +252,54 @@ function secret_adapter() returns nothing:
     secret[int64] value = callback(42)
     trace value
     return nothing
+type Token = secret[string]
+struct Box[T]:
+    item: T
+implement Named for Box[Token]:
+    function name(view self: Box[Token]) returns string:
+        return "box"
+function wrap[T](value: T) returns Box[T]:
+    return Box[T](item: value)
+function generic_secret() returns Named:
+    return wrap[Token]("hidden-generic-interface")
+function reflected_generic_secret() returns Named:
+    Box[Token] source = wrap[Token]("hidden-generic-interface")
+    mutable TypeConstruction builder = type.construct_start[Box[Token]]()
+    for field in type.fields[Box[Token]]():
+        comptime type Field = field.type_info:
+            Field value = type.field_value[Box[Token], Field](view source, view field)
+            builder = type.construct_put[Box[Token], Field](builder, view field, value) handle error:
+                return Group(label: "reflection-failed")
+    Box[Token] built = type.construct_finish[Box[Token]](builder) handle error:
+        return Group(label: "reflection-failed")
+    return built
+function generic_values() returns nothing:
+    Box[int64] public = wrap[int64](19)
+    trace public
+    Named value = generic_secret()
+    trace value
+    println(show(view value))
+    Named copied = clone value
+    trace copied
+    Named pending = run copied
+    trace pending
+    Named ready = join pending handle error:
+        return nothing
+    trace ready
+    Named baked = comptime generic_secret()
+    trace baked
+    println(show(view baked))
+    list[Named] items = comptime list(generic_secret(), generic_secret())
+    trace items
+    Named reflected = reflected_generic_secret()
+    trace reflected
+    Named reflected_baked = comptime reflected_generic_secret()
+    trace reflected_baked
+    Box[string] plain = wrap[string]("visible-generic-interface")
+    trace plain
+    return nothing
 function main() returns nothing:
+    generic_values()
     secret_adapter()
     stored_adapters()
     adapter_values()

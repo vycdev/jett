@@ -40,6 +40,7 @@ use crate::value::Value;
 
 mod debug;
 mod graphics;
+mod nominal_types;
 
 use graphics::GraphicsProvider;
 pub use graphics::{GraphicsTestEvent, GraphicsTestObservation};
@@ -2557,7 +2558,7 @@ impl Interpreter {
             Expr::Ident(ident) => {
                 if let Some(name) = self.registry_name(&self.structs, &ident.name) {
                     return Ok(ExprFlow::Value(
-                        self.construct_struct(&name, args, arg_values)?,
+                        self.construct_struct(&name, type_args, args, arg_values)?,
                     ));
                 }
                 if let Some(name) = self.registry_name(&self.bitfields, &ident.name) {
@@ -2591,6 +2592,7 @@ impl Interpreter {
                     if let Some(struct_name) = self.registry_name(&self.structs, name) {
                         return Ok(ExprFlow::Value(self.construct_struct(
                             &struct_name,
+                            type_args,
                             args,
                             arg_values,
                         )?));
@@ -3726,7 +3728,12 @@ impl Interpreter {
         bitfield: &BitfieldDef,
         value: &Value,
     ) -> Result<Vec<u8>, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{}.to_bytes expects a {} value",
                 bitfield.name.name, bitfield.name.name
@@ -3885,6 +3892,7 @@ impl Interpreter {
         }
 
         Ok(Value::Struct {
+            concrete_type: None,
             type_name: bitfield.name.name.clone(),
             fields,
         })
@@ -5311,6 +5319,7 @@ impl Interpreter {
             .map(|(index, transition)| Self::type_machine_transition_value(index, transition))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachine".to_string(),
             fields: vec![
                 ("states".to_string(), Value::List(states)),
@@ -5339,6 +5348,7 @@ impl Interpreter {
             })
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -5358,6 +5368,7 @@ impl Interpreter {
         transition: ReflectionMachineTransition,
     ) -> Value {
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineTransition".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -5459,6 +5470,7 @@ impl Interpreter {
         let has_secret = self.type_expr_has_secret(&field.ty);
         let type_info = self.type_info_value(&field.ty);
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -6141,6 +6153,7 @@ impl Interpreter {
             .map(|(index, field)| self.type_bitfield_field_value(index, field))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfield".to_string(),
             fields: vec![
                 (
@@ -6159,6 +6172,7 @@ impl Interpreter {
             .map(|ty| Value::OptionalSome(Box::new(self.type_info_value(ty))))
             .unwrap_or(Value::OptionalNone);
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfieldField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -6196,6 +6210,7 @@ impl Interpreter {
             .collect::<Vec<_>>();
 
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(index as i64)),
@@ -6380,6 +6395,7 @@ impl Interpreter {
         field: &ReflectionFieldInfo,
     ) -> Value {
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(field.index as i64)),
@@ -6458,6 +6474,7 @@ impl Interpreter {
             .map(Self::reflection_bitfield_field_info_value)
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfield".to_string(),
             fields: vec![
                 (
@@ -6476,6 +6493,7 @@ impl Interpreter {
             .map(|info| Value::OptionalSome(Box::new(Self::reflection_type_info_value(info))))
             .unwrap_or(Value::OptionalNone);
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeBitfieldField".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(field.index as i64)),
@@ -6551,6 +6569,7 @@ impl Interpreter {
             .map(Self::reflection_machine_transition_info_value)
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachine".to_string(),
             fields: vec![
                 ("states".to_string(), Value::List(states)),
@@ -6570,6 +6589,7 @@ impl Interpreter {
             .map(|field| Self::reflection_field_info_value(owner_type, Some(owner_member), field))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineState".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(state.index as i64)),
@@ -6588,6 +6608,7 @@ impl Interpreter {
         transition: &ReflectionMachineTransitionInfo,
     ) -> Value {
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeMachineTransition".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(transition.index as i64)),
@@ -6636,6 +6657,7 @@ impl Interpreter {
             .map(|field| Self::reflection_field_info_value(owner_type, Some(owner_member), field))
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeVariant".to_string(),
             fields: vec![
                 ("index".to_string(), Value::Int64(variant.index as i64)),
@@ -6661,6 +6683,7 @@ impl Interpreter {
             .map(Self::reflection_type_info_value)
             .collect();
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeInfo".to_string(),
             fields: vec![
                 (
@@ -6707,6 +6730,7 @@ impl Interpreter {
         };
 
         Value::Struct {
+            concrete_type: None,
             type_name: "TypeInfo".to_string(),
             fields: vec![
                 (
@@ -7929,6 +7953,7 @@ impl Interpreter {
         }
 
         Ok(result_ok(Value::Struct {
+            concrete_type: Some(self.concrete_type_display(owner_ty)),
             type_name: type_expr_name(owner_ty),
             fields: struct_fields,
         }))
@@ -7965,6 +7990,7 @@ impl Interpreter {
         }
 
         Ok(result_ok(Value::Struct {
+            concrete_type: Some(self.concrete_type_display(owner_ty)),
             type_name: type_expr_name(owner_ty),
             fields: struct_fields,
         }))
@@ -8241,6 +8267,7 @@ impl Interpreter {
             }
 
             return Ok(result_ok(Value::Struct {
+                concrete_type: None,
                 type_name: bitfield_name,
                 fields: bitfield_fields,
             }));
@@ -8303,6 +8330,7 @@ impl Interpreter {
         }
 
         Ok(result_ok(Value::Struct {
+            concrete_type: None,
             type_name: bitfield_name,
             fields: bitfield_fields,
         }))
@@ -8316,7 +8344,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<(usize, String, String, i64), String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeVariant, got {value}"
             ));
@@ -8375,7 +8408,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<Vec<TypeFieldMetadata>, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeVariant, got {value}"
             ));
@@ -8406,7 +8444,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<(usize, String, String), String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeMachineState, got {value}"
             ));
@@ -8457,7 +8500,12 @@ impl Interpreter {
         value: &Value,
         caller: &str,
     ) -> Result<Vec<TypeFieldMetadata>, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: argument must be TypeMachineState, got {value}"
             ));
@@ -8485,7 +8533,12 @@ impl Interpreter {
     }
 
     fn type_field_metadata_for(value: &Value, caller: &str) -> Result<TypeFieldMetadata, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!(
                 "{caller}: second argument must be TypeField, got {value}"
             ));
@@ -8592,7 +8645,12 @@ impl Interpreter {
     }
 
     fn type_info_metadata(value: &Value) -> Result<String, String> {
-        let Value::Struct { type_name, fields } = value else {
+        let Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } = value
+        else {
             return Err(format!("expected TypeInfo, got {value}"));
         };
         if type_name != "TypeInfo" {
@@ -10769,6 +10827,7 @@ impl Interpreter {
     fn construct_struct(
         &mut self,
         struct_name: &str,
+        type_args: &[TypeExpr],
         args: &[CallArg],
         arg_values: Vec<Value>,
     ) -> Result<Value, String> {
@@ -10846,7 +10905,15 @@ impl Interpreter {
             .map(|(field, value)| (field.name.name.clone(), value.unwrap()))
             .collect();
 
+        let concrete_type = (!type_args.is_empty()).then(|| {
+            let args = type_args
+                .iter()
+                .map(|ty| self.concrete_type_display(ty))
+                .collect::<Vec<_>>();
+            format!("{struct_name}[{}]", args.join(", "))
+        });
         let value = Value::Struct {
+            concrete_type,
             type_name: struct_name.to_string(),
             fields,
         };
@@ -10947,6 +11014,7 @@ impl Interpreter {
         }
 
         let value = Value::Struct {
+            concrete_type: None,
             type_name: bitfield_name.to_string(),
             fields: bitfield
                 .fields
@@ -10965,7 +11033,11 @@ impl Interpreter {
 
     fn eval_value_field_access(&self, value: Value, field_name: &str) -> Result<ExprFlow, String> {
         match value {
-            Value::Struct { type_name, fields } => fields
+            Value::Struct {
+                concrete_type: _,
+                type_name,
+                fields,
+            } => fields
                 .into_iter()
                 .find(|(name, _)| name == field_name)
                 .map(|(_, value)| ExprFlow::Value(value))
@@ -12505,6 +12577,7 @@ mod tests {
         interp.set_reflection_metadata(Arc::new(metadata));
 
         let value = Value::Struct {
+            concrete_type: None,
             type_name: "SecretBox".to_string(),
             fields: Vec::new(),
         };
@@ -12762,6 +12835,7 @@ mod tests {
         let field =
             Interpreter::reflection_field_info_value("Box", None, &string_field_info(0, "value"));
         let value = Value::Struct {
+            concrete_type: None,
             type_name: "Box".to_string(),
             fields: vec![("value".to_string(), Value::String("ok".to_string()))],
         };
@@ -12881,6 +12955,7 @@ mod tests {
             panic!("expected list of TypeField values");
         };
         let value = Value::Struct {
+            concrete_type: None,
             type_name: "Box".to_string(),
             fields: vec![("value".to_string(), Value::String("ok".to_string()))],
         };
@@ -13597,6 +13672,7 @@ mod tests {
             panic!("expected successful construction finish");
         };
         let Value::Struct {
+            concrete_type: _,
             type_name: finished_type_name,
             fields: finished_fields,
         } = *finished
@@ -13687,6 +13763,7 @@ mod tests {
         assert_eq!(
             *finished,
             Value::Struct {
+                concrete_type: None,
                 type_name: "Counter".to_string(),
                 fields: vec![("value".to_string(), Value::Uint64(42))],
             }
@@ -14342,6 +14419,7 @@ mod tests {
         assert_eq!(
             finished,
             result_ok(Value::Struct {
+                concrete_type: None,
                 type_name: "Header".to_string(),
                 fields: vec![
                     ("version".to_string(), Value::Int64(4)),
@@ -14445,6 +14523,7 @@ mod tests {
         assert_eq!(
             finished,
             result_ok(Value::Struct {
+                concrete_type: None,
                 type_name: "Header".to_string(),
                 fields: vec![("wide".to_string(), Value::Uint64(42))],
             })
@@ -16399,6 +16478,7 @@ mod tests {
         interp.set_variable(
             "wrapper",
             Value::Struct {
+                concrete_type: None,
                 type_name: "Wrapper".into(),
                 fields: vec![("invoke".into(), Value::NamedFunction("increment".into()))],
             },
@@ -17107,6 +17187,7 @@ function main() returns int64:
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::Struct {
+                concrete_type: None,
                 type_name: "Point".to_string(),
                 fields: vec![
                     ("x".to_string(), Value::Int64(3)),
@@ -17130,6 +17211,7 @@ function main() returns int64:
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::Struct {
+                concrete_type: None,
                 type_name: "Packet".to_string(),
                 fields: vec![("serial".to_string(), Value::Uint64(42))],
             }
@@ -17155,6 +17237,7 @@ function main() returns int64:
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "User".to_string(),
                 fields: vec![("age".to_string(), Value::Int64(42))],
             }))
@@ -17222,6 +17305,7 @@ function main() returns int64:
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::Struct {
+                concrete_type: None,
                 type_name: "TcpFlags".to_string(),
                 fields: vec![
                     ("syn".to_string(), Value::Int64(0)),
@@ -17265,6 +17349,7 @@ function main() returns int64:
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "TcpFlags".to_string(),
                 fields: vec![
                     ("syn".to_string(), Value::Int64(1)),
@@ -17449,6 +17534,7 @@ function main() returns int64:
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "IpHeader".to_string(),
                 fields: vec![
                     ("version".to_string(), Value::Int64(4)),
@@ -17519,6 +17605,7 @@ function main() returns int64:
         assert_eq!(
             interp.eval_expr(&expr).unwrap(),
             Value::ResultOk(Box::new(Value::Struct {
+                concrete_type: None,
                 type_name: "Header".to_string(),
                 fields: vec![(
                     "protocol".to_string(),
@@ -17660,12 +17747,14 @@ function main() returns int64:
         let mut interp = Interpreter::new();
         let items = Value::List(vec![Value::Int64(7)]);
         let inner = Value::Struct {
+            concrete_type: None,
             type_name: "Inner".to_string(),
             fields: vec![("items".to_string(), items.clone())],
         };
         interp.set_variable(
             "outer",
             Value::Struct {
+                concrete_type: None,
                 type_name: "Outer".to_string(),
                 fields: vec![
                     ("inner".to_string(), inner),

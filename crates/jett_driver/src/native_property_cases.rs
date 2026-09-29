@@ -227,9 +227,14 @@ fn erased_value_type(value: &Value, types: &TypeInterner) -> Option<TypeId> {
     let mut candidates = types
         .type_ids()
         .filter(|ty| match (types.resolve(*ty), value) {
-            (Type::Struct(id), Value::Struct { type_name, .. }) => {
-                types.resolve_struct(*id).name == *type_name
-            }
+            (
+                Type::Struct(id),
+                Value::Struct {
+                    type_name,
+                    concrete_type,
+                    ..
+                },
+            ) => types.resolve_struct(*id).name == concrete_type.as_deref().unwrap_or(type_name),
             (Type::Bitfield(id), Value::Struct { type_name, .. }) => {
                 types.resolve_bitfield(*id).name == *type_name
             }

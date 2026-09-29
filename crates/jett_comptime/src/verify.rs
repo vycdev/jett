@@ -734,13 +734,18 @@ fn shrink_value(value: &Value) -> Vec<Value> {
             }
             candidates
         }
-        Value::Struct { type_name, fields } if !fields.is_empty() => {
+        Value::Struct {
+            concrete_type: _,
+            type_name,
+            fields,
+        } if !fields.is_empty() => {
             let mut candidates = Vec::new();
             for (i, (_, field)) in fields.iter().enumerate() {
                 for shrunk_field in shrink_value(field) {
                     let mut new_fields = fields.clone();
                     new_fields[i].1 = shrunk_field;
                     candidates.push(Value::Struct {
+                        concrete_type: None,
                         type_name: type_name.clone(),
                         fields: new_fields,
                     });
@@ -1716,6 +1721,7 @@ fn generate_struct_values(
 
     if struct_def.def.fields.is_empty() {
         return vec![Value::Struct {
+            concrete_type: None,
             type_name: struct_def.type_name.clone(),
             fields: vec![],
         }];
@@ -1750,6 +1756,7 @@ fn generate_struct_values(
             })
             .collect();
         values.push(Value::Struct {
+            concrete_type: None,
             type_name: struct_def.type_name.clone(),
             fields,
         });
@@ -1829,6 +1836,7 @@ fn generate_generic_struct_values(
 
     if substituted_fields.is_empty() {
         return vec![Value::Struct {
+            concrete_type: None,
             type_name: struct_def.type_name.clone(),
             fields: vec![],
         }];
@@ -1861,6 +1869,7 @@ fn generate_generic_struct_values(
             })
             .collect();
         values.push(Value::Struct {
+            concrete_type: None,
             type_name: struct_def.type_name.clone(),
             fields,
         });
@@ -1955,6 +1964,7 @@ fn generate_bitfield_values(
 ) -> Vec<Value> {
     if bitfield_def.def.fields.is_empty() {
         return vec![Value::Struct {
+            concrete_type: None,
             type_name: bitfield_def.type_name.clone(),
             fields: vec![],
         }];
@@ -1989,6 +1999,7 @@ fn generate_bitfield_values(
             })
             .collect();
         values.push(Value::Struct {
+            concrete_type: None,
             type_name: bitfield_def.type_name.clone(),
             fields,
         });
@@ -3583,7 +3594,7 @@ mod tests {
             values.iter().any(|value| {
                 matches!(
                     value,
-                    Value::Struct { type_name, fields }
+                    Value::Struct { concrete_type: _, type_name, fields }
                         if type_name == "app.PropertyUser"
                             && fields.iter().any(|(name, value)| {
                                 name == "name" && matches!(value, Value::String(_))
@@ -3851,7 +3862,7 @@ mod tests {
             values.iter().any(|value| {
                 matches!(
                     value,
-                    Value::Struct { type_name, fields }
+                    Value::Struct { concrete_type: _, type_name, fields }
                         if type_name == "app.Header"
                             && fields.iter().any(|(name, value)| {
                                 name == "version"
@@ -3997,7 +4008,7 @@ mod tests {
             values.iter().any(|value| {
                 matches!(
                     value,
-                    Value::Struct { type_name, fields }
+                    Value::Struct { concrete_type: _, type_name, fields }
                         if type_name == "app.Box"
                             && matches!(fields.as_slice(), [(_, Value::Int64(_))])
                 )
@@ -4110,6 +4121,7 @@ mod tests {
     #[test]
     fn property_shrinker_simplifies_struct_fields() {
         let candidates = shrink_value(&Value::Struct {
+            concrete_type: None,
             type_name: "PropertyUser".to_string(),
             fields: vec![
                 ("name".to_string(), Value::String("Ada".to_string())),
@@ -4117,6 +4129,7 @@ mod tests {
             ],
         });
         assert!(candidates.contains(&Value::Struct {
+            concrete_type: None,
             type_name: "PropertyUser".to_string(),
             fields: vec![
                 ("name".to_string(), Value::String(String::new())),
@@ -4124,6 +4137,7 @@ mod tests {
             ],
         }));
         assert!(candidates.contains(&Value::Struct {
+            concrete_type: None,
             type_name: "PropertyUser".to_string(),
             fields: vec![
                 ("name".to_string(), Value::String("Ada".to_string())),

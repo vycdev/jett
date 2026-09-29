@@ -309,8 +309,15 @@ impl Interpreter {
             Value::ResultFail(inner) => {
                 format!("fail({})", self.format_debug_value(inner, args.get(1)))
             }
-            Value::Struct { type_name, fields } => {
-                let owner = self.debug_nominal_owner(ty, type_name);
+            Value::Struct {
+                concrete_type,
+                type_name,
+                fields,
+            } => {
+                let owner = concrete_type
+                    .as_deref()
+                    .and_then(Self::debug_type)
+                    .or_else(|| self.debug_nominal_owner(ty, type_name));
                 let types = owner
                     .as_ref()
                     .map(|ty| self.debug_fields(ty, None))

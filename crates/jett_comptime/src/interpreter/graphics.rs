@@ -224,7 +224,12 @@ fn key_value(key: Key) -> Value {
 }
 
 fn field<'a>(value: &'a Value, expected_type: &str, name: &str) -> Result<&'a Value, String> {
-    let Value::Struct { type_name, fields } = value else {
+    let Value::Struct {
+        concrete_type: _,
+        type_name,
+        fields,
+    } = value
+    else {
         return Err(format!("graphics: expected {expected_type}"));
     };
     if type_name != expected_type {

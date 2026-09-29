@@ -152,7 +152,15 @@ fn native_interface_values_match_interpreter() {
         !expected
             .debug_output
             .iter()
-            .any(|line| line.contains("hidden-interface-token"))
+            .any(|line| line.contains("hidden-interface-token")
+                || line.contains("hidden-generic-interface")
+                || line.contains("reflection-failed"))
+    );
+    assert!(
+        expected
+            .debug_output
+            .iter()
+            .any(|line| line.contains("visible-generic-interface"))
     );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("interface_values.exe");

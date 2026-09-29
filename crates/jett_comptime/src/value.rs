@@ -42,6 +42,9 @@ pub enum Value {
     /// A user-defined struct instance: `Point(x: 1, y: 2)`.
     Struct {
         type_name: String,
+        /// Concrete generic identity retained across interface erasure. This
+        /// metadata does not change source display or value equality.
+        concrete_type: Option<String>,
         fields: Vec<(String, Value)>,
     },
     /// An enum instance: `Color.red` or `Shape.circle(5.0)`.
@@ -111,10 +114,12 @@ impl PartialEq for Value {
             ) => t1 == t2 && v1 == v2 && s1 == s2 && f1 == f2,
             (
                 Value::Struct {
+                    concrete_type: _,
                     type_name: t1,
                     fields: f1,
                 },
                 Value::Struct {
+                    concrete_type: _,
                     type_name: t2,
                     fields: f2,
                 },
@@ -212,7 +217,11 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Struct { type_name, fields } => {
+            Value::Struct {
+                concrete_type: _,
+                type_name,
+                fields,
+            } => {
                 write!(f, "{type_name}(")?;
                 for (i, (name, value)) in fields.iter().enumerate() {
                     if i > 0 {
