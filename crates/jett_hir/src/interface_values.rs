@@ -228,7 +228,7 @@ pub(super) fn contains_erased_boundary(types: &TypeInterner, ty: TypeId) -> bool
     }
 }
 
-fn representation_type(types: &TypeInterner, mut ty: TypeId) -> TypeId {
+pub(super) fn representation_type(types: &TypeInterner, mut ty: TypeId) -> TypeId {
     while let Type::Secret(inner) | Type::Refinement { base: inner, .. } = types.resolve(ty) {
         ty = *inner;
     }

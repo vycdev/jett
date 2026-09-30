@@ -3168,7 +3168,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     || self.resolved_expression_kind(expression) == Some(DefKind::Function)
                 {
                     ExpressionKind::FunctionRef(self.resolve_function_value_target(expression)?)
-                } else if self.enum_variant_index(ty, field).is_some() {
+                } else if self.enum_constructor_variant(expression, ty).is_some() {
                     self.lower_enum_construct(ty, field, &[], span)?
                 } else {
                     self.lower_field(base, field)?
@@ -5286,6 +5286,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         args: &[ast::CallArg],
         span: Span,
     ) -> Option<ExpressionKind> {
+        let enum_type =
+            interface_values::representation_type(&self.parent.check.interner, enum_type);
         let Some(index) = self.enum_variant_index(enum_type, variant) else {
             self.parent
                 .error(span, "checked enum construction has no matching variant");
@@ -5301,6 +5303,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     }
 
     fn enum_variant_index(&self, enum_type: TypeId, variant: &ast::Ident) -> Option<usize> {
+        let enum_type =
+            interface_values::representation_type(&self.parent.check.interner, enum_type);
         let Type::Enum(enum_id) = *self.parent.check.interner.resolve(enum_type) else {
             return None;
         };
@@ -5318,6 +5322,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         callee: &'b Expr,
         output_type: TypeId,
     ) -> Option<&'b ast::Ident> {
+        // Compiler-predefined enum names resolve as constants and have no
+        // checked value expression. Actual fields keep a checked base.
         match callee {
             Expr::EnumVariant(_, variant, _) => Some(variant),
             Expr::FieldAccess(base, variant, _)
@@ -5327,7 +5333,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 ) || matches!(
                     self.resolved_expression_kind(callee),
                     Some(DefKind::Enum | DefKind::Type)
-                )) && self.enum_variant_index(output_type, variant).is_some() =>
+                ) || (matches!(
+                    self.resolved_expression_kind(base),
+                    None | Some(DefKind::Constant)
+                ) && !self.expression_types.contains_key(&base.span())))
+                    && self.enum_variant_index(output_type, variant).is_some() =>
             {
                 Some(variant)
             }
@@ -7512,6 +7522,33 @@ function main() returns int64:
         };
         assert_eq!(variant.index(), 1);
         assert!(matches!(payloads[0].kind, ExpressionKind::Int(3)));
+    }
+
+    #[test]
+    fn lowers_secret_enum_constructors_with_nominal_targets() {
+        let program = lower_source(
+            "namespace app\nenum Choice:\n    empty\n    number(value: int8)\nfunction main() returns nothing:\n    secret[Choice] empty = Choice.empty\n    secret[Choice] number = Choice.number(-128)\n    return nothing\n",
+        );
+        let main = &program.functions[0];
+        let mut target = None;
+        for (index, statement) in main.body.statements[..2].iter().enumerate() {
+            let StatementKind::Let { value, .. } = &statement.kind else {
+                panic!("expected secret enum local");
+            };
+            let ExpressionKind::EnumConstruct {
+                enum_type,
+                variant,
+                payloads,
+                ..
+            } = &value.kind
+            else {
+                panic!("expected nominal enum construction");
+            };
+            assert_ne!(value.ty, *enum_type, "secrecy belongs to the expression");
+            assert_eq!(*target.get_or_insert(*enum_type), *enum_type);
+            assert_eq!(variant.index(), index as u32);
+            assert_eq!(payloads.len(), index);
+        }
     }
 
     #[test]

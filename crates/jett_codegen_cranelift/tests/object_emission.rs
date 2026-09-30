@@ -1260,6 +1260,60 @@ fn rejects_unbaked_comptime_instead_of_executing_it_at_runtime() {
 }
 
 #[test]
+fn rejects_secret_binary_results_and_wrappers_that_remove_taint() {
+    for expression in ["hidden == plain", "clone hidden"] {
+        let source = format!(
+            "namespace app\nfunction compare(hidden: secret[bool], plain: bool) returns secret[bool]:\n    return {expression}\n"
+        );
+        let (mut program, types) = lower_source(&source);
+        emit_host_object(&program, &types).expect("checked secret binary or wrapper");
+        let function = &mut program.functions[0];
+        function.return_type = TypeInterner::BOOL;
+        let entry = function.entry.index() as usize;
+        let TerminatorKind::Return(Some(value)) = &mut function.blocks[entry].terminator.kind
+        else {
+            panic!("expected returned expression");
+        };
+        value.ty = TypeInterner::BOOL;
+        let error = emit_host_object(&program, &types)
+            .expect_err("a compiler handoff cannot silently declassify");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("secret result") || message.contains("wrapper")),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn wrapped_enum_equality_rejects_missing_exact_payload_methods() {
+    let (mut program, types) = lower_source_with_equatable(
+        "namespace app\nstruct Item:\n    id: int64\nimplement Equatable for Item:\n    function equals(view self: Item, view other: Item) returns bool:\n        return self.id == other.id\nenum Choice:\n    item(value: Item)\nfunction compare(view hidden: secret[Choice], view plain: Choice) returns secret[bool]:\n    return hidden == plain\n",
+        true,
+    );
+    let &method = program.equality_methods.values().next().unwrap();
+    program.functions[method.index() as usize]
+        .identity
+        .declaration
+        .origin = SourceOrigin::Stdlib;
+    let symbol = symbol_name(&program.functions[method.index() as usize].identity, &types).unwrap();
+    assert!(
+        emit_host_object(&program, &types)
+            .expect("checked wrapped equality")
+            .symbols
+            .contains(&symbol),
+        "wrapped enum payload methods remain reachable"
+    );
+    program.equality_methods.clear();
+    let error = emit_host_object(&program, &types)
+        .expect_err("secrecy must not bypass explicit payload equality");
+    assert!(
+        error.to_string().contains("enum equality payload type"),
+        "{error}"
+    );
+}
+
+#[test]
 fn emits_exact_enum_payload_method_and_rejects_broken_handoff() {
     let (mut program, types) = lower_source_with_equatable(
         r#"namespace app

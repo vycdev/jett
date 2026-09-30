@@ -1,0 +1,113 @@
+namespace app
+struct Entry:
+    id: int8
+    label: string
+implement Equatable for Entry:
+    function equals(view self: Entry, view other: Entry) returns bool:
+        return self.id == other.id
+enum Choice:
+    empty
+    number(value: int8)
+    numbers(values: list[int64])
+    entry(value: Entry)
+type Selected = Choice where true
+type Inherited = Selected where true
+type Hidden = secret[Choice] where true
+struct Container:
+    empty: secret[Choice]
+enum Simple:
+    empty
+    number(value: int8)
+function equal[T](view left: secret[T], view right: secret[T]) returns bool:
+    return declassify(left == right)
+function different[T](view left: secret[T], view right: secret[T]) returns bool:
+    return declassify(left != right)
+function mixed_left[T](view left: secret[T], view right: T) returns bool:
+    return declassify(left == right)
+function mixed_right[T](view left: T, view right: secret[T]) returns bool:
+    return declassify(left != right)
+function units() returns bool:
+    secret[Choice] first = Choice.empty
+    secret[Choice] same = Choice.empty
+    Choice different_value = Choice.number(1)
+    bool direct = declassify(first == Choice.empty)
+    return direct && equal[Choice](view first, view same) && mixed_right[Choice](view different_value, view first)
+function simple() returns bool:
+    secret[Simple] first = Simple.number(-128)
+    Simple same = Simple.number(-128)
+    Simple changed = Simple.number(127)
+    return mixed_left[Simple](view first, view same) && mixed_right[Simple](view changed, view first)
+function numbers() returns bool:
+    secret[Choice] first = Choice.number(-128)
+    Choice same = Choice.number(-128)
+    secret[Choice] changed = Choice.number(127)
+    return mixed_left[Choice](view first, view same) && different[Choice](view first, view changed)
+function collections() returns bool:
+    secret[Choice] first = Choice.numbers(list(7, 9))
+    secret[Choice] same = Choice.numbers(list(7, 9))
+    secret[Choice] changed = Choice.numbers(list(7, 10))
+    return equal[Choice](view first, view same) && different[Choice](view first, view changed)
+function entries() returns bool:
+    secret[Choice] first = Choice.entry(Entry(id: 7, label: "first"))
+    secret[Choice] same = Choice.entry(Entry(id: 7, label: "ignored"))
+    Choice changed = Choice.entry(Entry(id: 8, label: "first"))
+    return equal[Choice](view first, view same) && mixed_right[Choice](view changed, view first)
+function projected() returns bool:
+    Container holder = Container(empty: Choice.entry(Entry(id: 7, label: "projected")))
+    secret[Choice] same = Choice.entry(Entry(id: 7, label: "ignored"))
+    return equal[Choice](view holder.empty, view same)
+function refinements() returns bool:
+    Inherited first = Choice.entry(Entry(id: 7, label: "first")) handle error:
+        return false
+    secret[Inherited] hidden = clone first
+    Inherited matching = Choice.entry(Entry(id: 7, label: "ignored")) handle error:
+        return false
+    secret[Inherited] same = clone matching
+    return equal[Inherited](view hidden, view same) && mixed_left[Inherited](view hidden, view first)
+function secret_refinements() returns bool:
+    Hidden first = Choice.entry(Entry(id: 7, label: "first")) handle error:
+        return false
+    Hidden same = Choice.entry(Entry(id: 7, label: "ignored")) handle error:
+        return false
+    secret[bool] matches = first == same
+    return declassify matches
+function pending() returns bool:
+    secret[Choice] task = run run Choice.entry(Entry(id: 7, label: "pending"))
+    secret[Choice] inner = join task handle error:
+        return false
+    secret[Choice] ready = join inner handle error:
+        return false
+    secret[Choice] same = Choice.entry(Entry(id: 7, label: "ignored"))
+    return equal[Choice](view ready, view same)
+function baked_values() returns bool:
+    secret[Choice] baked = comptime Choice.entry(Entry(id: 7, label: "baked"))
+    secret[Choice] same = Choice.entry(Entry(id: 7, label: "ignored"))
+    secret[Simple] number = comptime Simple.number(-128)
+    Simple matching = Simple.number(-128)
+    return equal[Choice](view baked, view same) && mixed_left[Simple](view number, view matching)
+function primitive_arithmetic() returns bool:
+    secret[int8] hidden = 7
+    int8 plain = 2
+    secret[int8] added = hidden + plain
+    secret[int8] subtracted = plain - hidden
+    secret[int8] divided = hidden / plain
+    secret[int8] remainder = hidden modulo plain
+    secret[bool] ordered = plain < hidden
+    int8 negative = -5
+    return declassify added == 9 && declassify subtracted == negative && declassify divided == 3 && declassify remainder == 1 && declassify ordered
+function primitive_logic() returns bool:
+    secret[bool] hidden = true
+    bool plain = false
+    secret[bool] both = hidden && plain
+    secret[bool] either = plain || hidden
+    secret[bool] same = hidden == true
+    return !(declassify both) && declassify either && declassify same
+function main(stdout: Stdout) returns nothing:
+    bool baked_units = comptime units()
+    bool baked_numbers = comptime numbers()
+    bool baked_collections = comptime collections()
+    bool baked_entries = comptime entries()
+    bool baked_refinements = comptime refinements()
+    bool baked_secret_refinements = comptime secret_refinements()
+    Stdout.write(view stdout, "{units()} {simple()} {numbers()} {collections()} {entries()} {projected()} {refinements()} {secret_refinements()} {pending()} {baked_values()} {primitive_arithmetic()} {primitive_logic()}\n")
+    Stdout.write(view stdout, "{baked_units} {baked_numbers} {baked_collections} {baked_entries} {baked_refinements} {baked_secret_refinements}\n")

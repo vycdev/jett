@@ -277,6 +277,9 @@ pub(crate) fn equality_layout(
     ty: TypeId,
     methods: &HashMap<TypeId, jett_hir::FunctionId>,
 ) -> Option<EqualityLayout> {
+    // Outer secrecy taints the checked comparison result, not its data layout.
+    // Nested secret payloads still follow the supported graph rules below.
+    let ty = jett_mir::move_values::representation_type(types, ty);
     fn supported(
         types: &TypeInterner,
         ty: TypeId,
@@ -370,6 +373,25 @@ pub(crate) fn equality_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outer_secret_equality_uses_the_value_layout_without_changing_debug_redaction() {
+        let mut types = TypeInterner::new();
+        let list = types.intern(Type::List(TypeInterner::INT64));
+        let secret = types.intern(Type::Secret(list));
+        let methods = HashMap::new();
+        assert_eq!(
+            equality_layout(&types, secret, &methods).unwrap().bytes,
+            equality_layout(&types, list, &methods).unwrap().bytes,
+        );
+        assert_eq!(
+            debug_layout(&types, secret).unwrap().last(),
+            Some(&(NativeDebugTag::Redacted as u8))
+        );
+        let secret_element = types.intern(Type::Secret(TypeInterner::INT64));
+        let nested = types.intern(Type::List(secret_element));
+        assert!(equality_layout(&types, nested, &methods).is_none());
+    }
 
     #[test]
     fn function_debug_layout_is_opaque_and_secret_values_are_redacted() {

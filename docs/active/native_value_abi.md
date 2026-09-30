@@ -2,6 +2,15 @@
 
 This is an implementation contract, not a full-parity claim.
 
+Secret-wrapped enum constructors retain an unwrapped nominal enum target and a
+separately checked secret expression type. Equality uses the value representation
+for its root layout, while debug observation keeps the redacted root. This also
+preserves exact explicit struct methods in wrapped enum payloads and does not
+permit nested secret payload graphs. Mixed public/secret binary operands retain
+the checker's inner type compatibility and secret result taint. Clone/view
+context conversions may add outer secrecy; neither those conversions nor a
+fabricated binary result may declassify. Runtime leaf signatures are unchanged.
+
 The additive `jett_rt_v1_float_remainder(context, f64, f64) -> f64` leaf implements
 floating `modulo` using the same `%` operation as the interpreter. It allocates
 no owned values, preserves the context's first-error handling, and treats NaN

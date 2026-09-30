@@ -236,3 +236,13 @@ pending depth, and an owned record payload after source removal. Runtime tests
 verify that failed checks preserve owners and ready sums with pending payloads
 remain extractable. Hidden-secret diagnostic observation remains subject to the
 unresolved observation policy; native formatting retains its existing redaction.
+
+The wrapped-enum regression closes accepted secret constructor and equality
+paths through unit and narrow variants, collection and exact struct payloads,
+generic calls, projected fields named like variants, inherited refinements,
+secret-backed refinements, nested pending joins, and explicit comptime values.
+Debug and release artifacts execute after source removal and match the reference
+output. Adjacent mixed public/secret arithmetic and logic preserve result taint;
+malformed handoff tests reject lost secrecy and missing exact payload methods.
+Debug layout tests retain root redaction and reject nested secret equality graphs.
+These checks do not settle secret terminal-diagnostic observation policy.

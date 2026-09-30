@@ -1446,11 +1446,12 @@ impl Verifier<'_> {
             }
             ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
                 self.expression(function, value)?;
-                self.require_same_type(
+                self.require_call_result_type(
                     function,
                     expression.span,
                     value.ty,
                     expression.ty,
+                    false,
                     "scalar wrapper changes its value type",
                 )
             }
@@ -2418,11 +2419,12 @@ impl Verifier<'_> {
                 payloads,
                 ..
             } => {
-                self.require_same_type(
+                self.require_call_result_type(
                     function,
                     expression.span,
-                    expression.ty,
                     *enum_type,
+                    expression.ty,
+                    false,
                     "enum construction type mismatch",
                 )?;
                 let Type::Enum(enum_id) = self.types.resolve(*enum_type) else {
@@ -2876,14 +2878,16 @@ impl Verifier<'_> {
         self.expression(function, right)?;
         let operand = scalar_kind(self.types, left.ty, "binary operand")?;
         let right_operand = scalar_kind(self.types, right.ty, "binary operand")?;
+        let left_type = self.secret_inner_type(left.ty).unwrap_or(left.ty);
+        let right_type = self.secret_inner_type(right.ty).unwrap_or(right.ty);
         let refined_divisor = operand.is_integer()
             && matches!(op, BinaryOp::Divide | BinaryOp::Modulo)
             && matches!(
-                self.types.resolve(right.ty),
-                Type::Refinement { base, .. } if *base == left.ty
+                self.types.resolve(right_type),
+                Type::Refinement { base, .. } if *base == left_type
             )
             && operand == right_operand;
-        if left.ty != right.ty && !refined_divisor {
+        if left_type != right_type && !refined_divisor {
             return Err(self.contract_error(
                 function,
                 expression.span,
@@ -2891,11 +2895,24 @@ impl Verifier<'_> {
             ));
         }
         let result = scalar_kind(self.types, expression.ty, "binary result")?;
+        if (self.secret_inner_type(left.ty).is_some() || self.secret_inner_type(right.ty).is_some())
+            && self.secret_inner_type(expression.ty).is_none()
+        {
+            return Err(self.contract_error(
+                function,
+                expression.span,
+                "secret binary operands require a secret result",
+            ));
+        }
         if operand == ScalarKind::Enum
             && matches!(op, BinaryOp::Equal | BinaryOp::NotEqual)
             && !known_unit_enum_variant(left)
             && !known_unit_enum_variant(right)
-            && let Type::Enum(id) = self.types.resolve(left.ty)
+            && let Type::Enum(id) = self
+                .types
+                .resolve(jett_mir::move_values::representation_type(
+                    self.types, left.ty,
+                ))
             && self
                 .types
                 .resolve_enum(*id)

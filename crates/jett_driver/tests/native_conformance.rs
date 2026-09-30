@@ -730,6 +730,40 @@ fn native_indirect_owned_results_match_interpreter_in_both_profiles() {
 }
 
 #[test]
+fn native_wrapped_enum_equality_matches_interpreter_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/wrapped_enum_equality.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("wrapped_enum.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).expect("wrapped equality oracle");
+    assert_eq!(
+        expected.stdout,
+        "true true true true true true true true true true true true\ntrue true true true true true\n"
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("wrapped_enum_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native wrapped enum equality");
+        binaries.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
 fn native_pending_sum_handles_fail_before_extraction_in_both_profiles() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/pending_sum_handle_failure.jett");

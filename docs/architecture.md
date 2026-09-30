@@ -3212,8 +3212,15 @@ payloads, while a field view borrows the parent through the call boundary.
 The checker exports exact Equatable method identities for direct comparisons
 and typed owner-to-method metadata for aggregate payloads. HIR turns direct
 comparisons into ordinary calls; native aggregate traversal yields custom leaves
-to compiled method calls. Both negate the complete result for inequality. See
-`active/native_value_abi.md` for the supported
+to compiled method calls. Both negate the complete result for inequality.
+Outer `secret` wrappers retain nominal enum constructor targets and taint the
+comparison's boolean result. Mixed public/secret operands compare their checked
+inner types without treating different nominal types as interchangeable.
+Equality graphs inspect the outer wrapped value's representation while debug
+graphs retain redaction; nested secret payload restrictions are unchanged.
+Verified clone/view conversions may add outer secrecy but cannot remove it,
+and native binary validation rejects handoffs that lose a secret result.
+See `active/native_value_abi.md` for the supported
 ownership subset and remaining projected-place/refinement/enum boundaries.
 Native reflected construction now uses the same explicit `TypeConstruction`
 builder source form for concrete structs, supported bitfields, enums, and
