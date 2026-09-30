@@ -7,20 +7,26 @@ passes checking but fails reference execution with `undefined variable 'answer'`
 The interpreter registers declarations without initializing top-level variables,
 and HIR accepts identifier values only for locals or checked functions.
 
-Implementing execution requires a common contract for both backends. Ordinary
-pure initializers must not become required compile-time evaluation merely to
-make native constant emission easier: only explicit `comptime` selects that
-requirement, and optimization must not change source validity. Runtime
-initialization, if selected, must run in declaration order before entry without
-module-import effects or runtime capabilities, with failures and cleanup defined.
+The design already selects immutable compile-time constants baked into the
+binary. It does not authorize runtime initialization or shared global runtime
+storage. Implement the documented constant subset first, preserving declaration
+order and namespace isolation. Both execution handoffs must receive the same
+checked constant value rather than evaluate an initializer at program startup.
 
-The unresolved ownership rule is whether global constants support only
-implicitly copyable values, or also move-only immutable data through explicit
-`view`/`clone`. Do not implicitly clone a move-only global on every read, silently
-consume shared storage, or introduce mutable references. Structured values need
-a defined owner lifetime and cleanup; opaque resources, actors, pending tasks,
-and erased payloads additionally need scrutiny for hidden state or authority.
-Callable constants must retain declaration context and their permitted captures.
+The frontend must enforce the documented compile-time constant initializer
+restriction. Literal initializers are unambiguous. Any extension to ordinary
+pure calls must be reconciled with the explicit `comptime expression` rule:
+optimization must not change validity, and ordinary pure calls must not silently
+acquire a required compile-time evaluation boundary. This note does not select
+such an extension.
 
-No option is selected by this note. Native parity cannot be claimed for global
-reads based on successful checking alone.
+Move-only constant values still need a precise read and ownership rule before
+execution support is extended to them. Do not implicitly clone a move-only
+constant on every read, silently consume shared storage, or introduce mutable
+references. Opaque resources, actors, pending tasks, and erased payloads require
+separate scrutiny for hidden state or authority. Callable constants must retain
+declaration context and their permitted captures.
+
+The compile-time-only contract is selected by `docs/design.md`; this note records
+the missing implementation and remaining subset questions. Native parity cannot
+be claimed for constant reads based on successful checking alone.

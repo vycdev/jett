@@ -463,11 +463,12 @@ ResolveResult {
 - **Parent namespace aggregation** — `use net.http` imports all child namespaces (`net.http.server`, `net.http.client`) when `net.http` itself is not a declared namespace but its children are. Accessing child items uses the last segment: `server.listen(...)`, `client.get(...)`.
 - **Namespace exports** — namespaced declarations are private to their declaring namespace by default. `export` marks public API declarations, but executable code outside the namespace must first import it locally and then use the import's bound name or alias; exported names are not inserted into the global flat scope.
 
-The global declaration rule currently has no execution handoff: reference
-declaration registration omits initialization, and HIR global reads have no
-value source. The [open execution contract](open_design/global_constant_execution.md)
-records the initialization and ownership requirements before either backend is
-extended.
+The global constant rule currently has no execution handoff: reference
+declaration registration omits constant values, and HIR constant reads have no
+value source. The design requires compile-time values baked into the binary,
+without startup initialization or global runtime storage. The
+[execution gap](open_design/global_constant_execution.md) records this missing
+implementation and the remaining initializer and ownership subset questions.
 
 ---
 
