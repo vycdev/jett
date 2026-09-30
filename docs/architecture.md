@@ -450,7 +450,7 @@ ResolveResult {
 - **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain available by canonical qualification under the fixed prelude and module contract.
 - **Bare declarations before standard module prefixes** — a bare reference to a declared same-namespace function, such as `math(4)`, resolves to that function. A dotted standard call such as `math.abs(-4)` keeps its module prefix. Resolver facts carry this distinction into HIR.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
-- **Global constants** — registered as top-level declarations; the checker reports E0377 at every mutable namespace-level binding, without rejecting local mutability. Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
+- **Global constants** — registered as top-level declarations; the checker reports E0377 at every mutable namespace-level binding, without rejecting local mutability. Initializers admit literals (including signed numeric spellings), earlier same-namespace constant references, parentheses around those forms, or explicit `comptime expression`. Required calculations, including operators, interpolation, and calls, must be explicit; ordinary calculations report E0378 even with known operands. Project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
 
 - **Canonical type names** — every struct, enum, interface, machine, actor,
   bitfield, alias, and refinement declaration is validated before registration.
@@ -463,12 +463,24 @@ ResolveResult {
 - **Parent namespace aggregation** — `use net.http` imports all child namespaces (`net.http.server`, `net.http.client`) when `net.http` itself is not a declared namespace but its children are. Accessing child items uses the last segment: `server.listen(...)`, `client.get(...)`.
 - **Namespace exports** — namespaced declarations are private to their declaring namespace by default. `export` marks public API declarations, but executable code outside the namespace must first import it locally and then use the import's bound name or alias; exported names are not inserted into the global flat scope.
 
-The global constant rule currently has no execution handoff: reference
-declaration registration omits constant values, and HIR constant reads have no
-value source. The design requires compile-time values baked into the binary,
-without startup initialization or global runtime storage. The
-[execution gap](open_design/global_constant_execution.md) records this missing
-implementation and the remaining initializer and ownership subset questions.
+Namespace constants are materialized in declaration order during compilation,
+under their declaring namespace. The compiler retains values by declaration
+span in the shared checked-value table; reference execution, verify/property
+drivers, and native lowering receive that same table. HIR reads carry a
+`Constant` marker naming the checked declaration, which the native materializer
+replaces before MIR lowering. No source initializer executes at startup and no
+mutable global runtime storage is introduced. The implemented subset covers
+fixed-width integers, floats, booleans, strings, `nothing`, and transparent
+primitive aliases. Evaluation errors, unsupported constant types, and hidden
+pending primitive values report E9001 before execution or output publication.
+The [constant contract](open_design/global_constant_execution.md) retains the
+unresolved ownership rules for other types.
+
+A constant `trace` lowers through a scoped compiler-owned temporary with the
+declaration's debug type spelling. That temporary is absent from subsequent
+breakpoint snapshots and release lowering removes the observation. Constant
+reads inside generic bodies and inline callbacks keep declaration identity
+instead of becoming closure captures or caller-dependent ambient bindings.
 
 ---
 
@@ -1188,6 +1200,10 @@ isolated alias scope, so aliases cannot leak between baked expressions.
 3. **`comptime` expressions** — `if comptime is_numeric[T]()` branches are resolved, dead branches are eliminated.
 4. **Refinement type constraints on literals** — `Port p = 80` validates `80 >= 1 && 80 <= 65535` at compile time.
 5. **Bitfield literal validation** — `ColorChannel(red: 300, ...)` catches the out-of-range value at compile time.
+6. **Namespace constants** — literal values and earlier constant references are
+   materialized in declaration order for both execution backends, even when
+   unused. Every calculation in an initializer requires an explicit `comptime`
+   site; declaring a constant does not make evaluation implicit.
 
 ### Comptime Type Reflection
 
@@ -1246,9 +1262,12 @@ The compiler never constructs runtime capability values for comptime; file,
 network, clock, randomness, environment, process, foreign access, and
 application logging are all excluded.
 
-Only explicit `comptime expression` sites require build-time value evaluation.
-Ordinary pure calls may be constant-folded later, but that optimization cannot
-affect diagnostics or source acceptance.
+Required compile-time value evaluation always uses explicit `comptime expression`
+sites. Literal spellings and earlier constant references denote existing values
+without executing a calculation. Namespace declarations do not introduce an
+implicit evaluation boundary for operators, interpolation, or calls. Ordinary
+pure expressions outside explicit sites may be constant-folded later, but that
+optimization cannot affect diagnostics or source acceptance.
 
 ---
 
@@ -2799,14 +2818,15 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0377 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing and equality, sequence policy, arithmetic safety, graphics policy, release debug-print policy, and mutable global rejection |
-| E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
+| E0300–E0378 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing and equality, sequence policy, arithmetic safety, graphics policy, release debug-print policy, mutable global rejection, and required explicit constant evaluation |
+| E0400–E0404 | Ownership errors (use-after-move, consuming a view, move-only closure captures, pending task control, and immutable rebinding) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |
 | E0700 | Actor response errors (`respond` outside a handler with `responds`) |
 | E0800–E0802 | Complexity limit errors (too many statements, too much nesting, too much cyclomatic complexity) |
 | E0999–E1000 | Lexer/parser diagnostics surfaced by the parser |
 | E9000 | Comptime verify failures |
+| E9001 | Required compile-time evaluation failures, unsupported namespace constant types, and invalid primitive constant value shapes |
 
 ### Native Linux executable seed
 
@@ -2834,6 +2854,14 @@ baked values fail before codegen; the original source computation is never
 emitted as a fallback. Native regressions execute baked `math.factorial(5)`
 after removing its source file
 and compare supported composite and closure results with the interpreter.
+
+Namespace primitive constants use the same evaluated-value materializer through
+their declaration-keyed HIR `Constant` reads. HIR baking completes before MIR,
+including reads inside test bodies, generic specializations, inline callbacks,
+and constant trace temporaries. Native validation rejects any remaining marker.
+This handoff does not authorize move-only namespace constants: their read,
+sharing, lifetime, and authority rules remain unresolved, and compilation
+conservatively reports E9001 rather than introducing implicit clones or storage.
 
 
 ### Native string and numeric execution slice

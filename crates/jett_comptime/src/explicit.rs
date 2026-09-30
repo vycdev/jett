@@ -41,19 +41,20 @@ impl ComptimeContext {
 #[derive(Debug, Clone, Default)]
 pub struct ExplicitComptimeValues {
     values: HashMap<(Span, ComptimeContext), Value>,
+    constants: HashMap<Span, Value>,
 }
 
 impl ExplicitComptimeValues {
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.values.len() + self.constants.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.values.is_empty() && self.constants.is_empty()
     }
 
     pub fn values(&self) -> impl Iterator<Item = &Value> {
-        self.values.values()
+        self.values.values().chain(self.constants.values())
     }
 
     pub fn get(&self, span: Span, context: &ComptimeContext) -> Option<&Value> {
@@ -62,6 +63,11 @@ impl ExplicitComptimeValues {
 
     pub fn insert(&mut self, span: Span, context: ComptimeContext, value: Value) {
         self.values.insert((span, context), value);
+    }
+
+    /// A checked namespace constant, independent of any function instantiation.
+    pub fn constant(&self, declaration: Span) -> Option<&Value> {
+        self.constants.get(&declaration)
     }
 }
 
@@ -89,7 +95,8 @@ impl EvaluationContext {
     }
 }
 
-/// Evaluate every explicit `comptime` expression in a checked module.
+/// Evaluate namespace constants and every explicit `comptime` expression in a
+/// checked module.
 ///
 /// The expressions are evaluated without runtime locals or parameters. Visible
 /// `use` aliases are lexical name bindings and are carried into evaluation.
@@ -102,10 +109,21 @@ pub fn evaluate_explicit_comptime_expressions(
 ) -> (ExplicitComptimeValues, Vec<Diagnostic>) {
     let mut expressions = Vec::new();
     collect_module_expressions(module, &mut expressions);
-    let Some(first) = expressions.first() else {
+    let span = expressions
+        .first()
+        .map(|expression| expression.span)
+        .or_else(|| {
+            module.items.iter().find_map(|item| {
+                if let Item::VarDecl(decl) = item {
+                    Some(decl.name.span)
+                } else {
+                    None
+                }
+            })
+        });
+    let Some(span) = span else {
         return (ExplicitComptimeValues::default(), Vec::new());
     };
-    let span = first.span;
     // Compiler callers may have a smaller stack than reference execution.
     // Keep required comptime evaluation on the same fixed interpreter budget.
     std::thread::scope(|scope| {
@@ -152,6 +170,13 @@ fn evaluate_collected_expressions(
 
     let mut values = ExplicitComptimeValues::default();
     let mut diagnostics = Vec::new();
+    evaluate_constants(
+        module,
+        &checked_expression_types,
+        &mut interpreter,
+        &mut values,
+        &mut diagnostics,
+    );
     for collected in expressions {
         let contexts = evaluation_contexts(&collected, &checked_expression_types);
         let parameters = collected
@@ -182,6 +207,115 @@ fn evaluate_collected_expressions(
         }
     }
     (values, diagnostics)
+}
+
+fn evaluate_constants(
+    module: &Module,
+    checked: &CheckedExpressionTypes,
+    interpreter: &mut Interpreter,
+    values: &mut ExplicitComptimeValues,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut current_file = None;
+    let mut namespace = None;
+    for item in &module.items {
+        let file = item_file(item);
+        if current_file.is_some_and(|previous| previous != file) {
+            namespace = None;
+        }
+        current_file = Some(file);
+        if let Item::Namespace(declaration) = item {
+            namespace = Some(declaration.name.name.clone());
+        }
+        let Item::VarDecl(declaration) = item else {
+            continue;
+        };
+        let ty = checked.get(&declaration.name.span).map(String::as_str);
+        if !matches!(
+            ty,
+            Some(
+                "int8"
+                    | "int16"
+                    | "int32"
+                    | "int64"
+                    | "uint8"
+                    | "uint16"
+                    | "uint32"
+                    | "uint64"
+                    | "float32"
+                    | "float64"
+                    | "string"
+                    | "bool"
+                    | "nothing"
+            )
+        ) {
+            diagnostics.push(Diagnostic::error(
+                9001,
+                "constant execution currently requires an implicitly copyable primitive type; move-only constant ownership is unresolved",
+                declaration.name.span,
+            ));
+            continue;
+        }
+        let expression = match &declaration.value {
+            Expr::Comptime(inner, _) => inner.as_ref(),
+            expression => expression,
+        };
+        match interpreter.eval_closed_comptime_expression(
+            namespace.as_deref(),
+            &HashMap::new(),
+            expression,
+            &[],
+            None,
+            None,
+            Vec::new(),
+        ) {
+            Ok(value) => {
+                if !constant_value_matches_type(&value, ty) {
+                    diagnostics.push(Diagnostic::error(
+                        9001,
+                        "global constant value does not match its declared primitive type; pending tasks and other hidden runtime state cannot be baked as primitive constants",
+                        declaration.value.span(),
+                    ));
+                    continue;
+                }
+                interpreter.register_constant_in_namespace(
+                    namespace.as_deref(),
+                    declaration,
+                    value.clone(),
+                );
+                if let Expr::Comptime(_, span) = declaration.value {
+                    values.insert(span, ComptimeContext::default(), value.clone());
+                }
+                values.constants.insert(declaration.name.span, value);
+            }
+            Err(error) => diagnostics.push(Diagnostic::error(
+                9001,
+                format!("global constant must be evaluable during compilation: {error}"),
+                declaration.value.span(),
+            )),
+        }
+    }
+}
+
+fn constant_value_matches_type(value: &Value, ty: Option<&str>) -> bool {
+    // Sized primitives retain their checked identity around the scalar carrier.
+    // Removing that metadata must not also unwrap a pending task.
+    match (value.payload(), ty) {
+        (Value::Int64(value), Some("int8")) => i8::try_from(*value).is_ok(),
+        (Value::Int64(value), Some("int16")) => i16::try_from(*value).is_ok(),
+        (Value::Int64(value), Some("int32")) => i32::try_from(*value).is_ok(),
+        (Value::Int64(_), Some("int64")) => true,
+        // The interpreter uses its signed carrier for these unsigned widths.
+        (Value::Int64(value), Some("uint8")) => u8::try_from(*value).is_ok(),
+        (Value::Int64(value), Some("uint16")) => u16::try_from(*value).is_ok(),
+        (Value::Int64(value), Some("uint32")) => u32::try_from(*value).is_ok(),
+        (Value::Uint64(_), Some("uint64")) => true,
+        (Value::Float64(_), Some("float32" | "float64"))
+        | (Value::String(_), Some("string"))
+        | (Value::Bool(_), Some("bool"))
+        | (Value::Nothing, Some("nothing")) => true,
+        _ => false,
+    }
 }
 
 fn evaluation_contexts(

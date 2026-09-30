@@ -233,11 +233,11 @@ There must be **no spooky action at a distance**. A variable must never be silen
 - Semantic program side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract. Compiler-owned debug observations such as `trace`, `breakpoint`, `print`, and `println` are non-release tooling instrumentation, not semantic I/O.
 - All inputs to a function come through its parameters or an anonymous function's explicit capture environment. No global ambient reads and no thread-local storage. Anonymous functions may capture only implicitly copyable values from the enclosing scope; each captured value is copied into the closure. Move-only values must be passed explicitly as parameters. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id == target_id)` when `target_id` is copyable.
 
-Global declarations pass current frontend checking, but constant reads have no
-execution handoff yet. Constants must be baked into the binary, without runtime
-initialization or global runtime storage. The missing implementation and
-remaining subset questions are tracked in the
-[global constant contract](open_design/global_constant_execution.md).
+Supported namespace constant values are materialized during compilation and
+baked into the binary. Reading one substitutes its checked immutable value; it does not
+add an ambient runtime input, startup initializer, or mutable global storage.
+The supported primitive subset and remaining ownership questions are recorded
+in the [global constant contract](open_design/global_constant_execution.md).
 
 **Example — side effects are declared, not hidden:**
 
@@ -6804,7 +6804,8 @@ float64 PI = 3.14159265358979
 
 Global mutable variables are forbidden (Rule Set 2). The frontend reports E0377
 at each mutable namespace-level binding before either backend lowers or executes
-it. Local mutable bindings remain allowed. Global constants are allowed because
+it. Local mutable bindings remain allowed. Assigning to a namespace constant,
+including through a projected field, reports E0404. Global constants are allowed because
 they never change — they are baked into the binary at compile time.
 
 Global constant initializers are namespace-local: they may use literals and
@@ -6813,6 +6814,32 @@ vendored declarations from another namespace. File-level `use` is forbidden,
 and global constants cannot create an implicit cross-namespace dependency.
 Compiler-provided standard declarations retain the canonical qualified and
 fixed-prelude availability selected by the module contract.
+
+An initializer may use a literal, including a signed numeric spelling, an earlier
+same-namespace constant reference, parentheses around those forms, or an explicit
+`comptime expression`. Literal spellings and constant references already denote
+values; they do not execute a calculation. All required calculations, including
+operators, interpolation, and function calls, must use `comptime`; an ordinary
+calculation in a constant initializer reports E0378 even when all operands are
+known. For example, write `int64 doubled = comptime (base * 2)`, while
+`int64 copied = base` directly reads the earlier value. Any pure function remains
+eligible for an explicit evaluation, including a function that reads earlier
+constants. Evaluation failure reports E9001 during compilation, even when the
+constant is unused, before runtime execution or native publication.
+
+Both execution backends receive the same checked constant values. The current
+supported types are fixed-width integers, `float32`, `float64`, `bool`, `string`,
+`nothing`, and transparent aliases of those types. A primitive declaration must
+evaluate to its actual primitive value shape; a hidden pending task cannot be
+baked as a primitive constant. Other constant types, including move-only
+aggregates, nominal refinements, resources, actors, function values, and erased
+payloads, conservatively report E9001 while their ownership contract remains
+unresolved. This restriction does not limit ordinary local values or explicit
+`comptime` results outside namespace constant declarations.
+
+`trace` may observe a supported constant in debug builds and retains its declared
+type spelling. The compiler's observation temporary does not appear in a later
+breakpoint's lexical scope. Release builds remove the trace as usual.
 
 ### Functions
 
@@ -7723,12 +7750,14 @@ automated deadline without source-tree or compiler environment dependencies.
 Full language/runtime parity and clean Windows execution are still release
 gates, not claims made by this seed. See `active/native_codegen_parity_plan.md`.
 
-Explicit `comptime` primitive results are imported into typed HIR before MIR
-lowering, retaining their checked type and span. Ordinary pure calls remain
-runtime calls. The backend rejects any unresolved `Comptime` marker instead of
-emitting its source computation. Composite constants still need native layout
-lowering and remain an explicit native parity gap. A native regression executes
-baked `math.factorial(5)` after removing its source file.
+Explicit `comptime` results are imported into typed HIR before MIR lowering,
+retaining their checked type and span. Supported namespace constant reads use
+the same materializer and have no runtime initializer. Ordinary pure calls
+outside required evaluation remain runtime calls. The backend rejects unresolved
+`Comptime` and namespace `Constant` markers instead of emitting their source
+computation. Move-only namespace constant ownership remains an explicit parity
+obligation. A native regression executes baked `math.factorial(5)` after removing
+its source file.
 
 
 ### Native string and numeric execution slice

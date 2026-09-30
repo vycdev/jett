@@ -76,7 +76,7 @@ fn task_control_requires_pending(operation: &str, span: Span) -> Diagnostic {
 }
 
 /// E0404: Rebinding requires an explicitly mutable local.
-fn cannot_rebind_immutable(name: &str, span: Span) -> Diagnostic {
+pub(crate) fn cannot_rebind_immutable(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         404,
         format!("cannot reassign `{name}` because it is not mutable"),

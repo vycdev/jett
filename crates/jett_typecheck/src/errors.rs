@@ -987,6 +987,15 @@ pub fn mutable_global(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0378: Required value computation in a constant must be explicit.
+pub fn constant_initializer(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        378,
+        "global constant initializer must use a literal, an earlier constant, or `comptime expression` for required evaluation",
+        span,
+    )
+}
+
 /// E0800: Function body exceeds the statement count limit.
 pub fn function_statement_limit(
     function_name: &str,

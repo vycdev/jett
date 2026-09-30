@@ -730,6 +730,168 @@ fn native_indirect_owned_results_match_interpreter_in_both_profiles() {
 }
 
 #[test]
+fn native_global_constants_match_interpreter_without_source_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/global_constants.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("constants.jett");
+    fs::copy(fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).expect("constant oracle");
+    let line = "-128:18446744073709551615:3.140000104904175:hello:42:true:true:43\n";
+    assert_eq!(
+        expected.stdout,
+        format!("{}hello:42:42:42\n", line.repeat(3))
+    );
+    assert_eq!(
+        expected.debug_output,
+        [
+            "trace minimum: app.Count = -128",
+            "trace label: string = hello:42",
+            "trace unit: nothing = nothing",
+        ]
+    );
+    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("constants_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native constants");
+        binaries.push((binary, release));
+    }
+    let verify_binary = directory.path().join("constants_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native constant verify suite");
+    let property_binary = directory.path().join("constants_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native constant property suite");
+    fs::remove_file(source).unwrap();
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert_eq!(
+            actual.stderr,
+            if release {
+                b"".as_slice()
+            } else {
+                debug.as_bytes()
+            }
+        );
+    }
+    let verified = run_bounded(&verify_binary, directory.path());
+    assert!(verified.status.success(), "{verified:?}");
+    assert!(verified.stdout.is_empty(), "{verified:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&verified.stderr),
+        "trace answer: int64 = 42\nbreakpoint hit\n"
+    );
+    let property = run_bounded(&property_binary, directory.path());
+    assert!(property.status.success(), "{property:?}");
+    assert!(property.stdout.is_empty(), "{property:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&property.stderr),
+        "trace greeting: string = hello\n".repeat(100)
+    );
+}
+
+#[test]
+fn native_sibling_namespace_constants_stay_distinct_without_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let sources = directory.path().join("src");
+    fs::create_dir(&sources).unwrap();
+    let manifest = directory.path().join("jett.proj");
+    fs::write(
+        &manifest,
+        "name: sibling_constants\nversion: 0.1.0\nentry: src/main.jett\n",
+    )
+    .unwrap();
+    let alpha = sources.join("00_alpha.jett");
+    let bravo = sources.join("10_bravo.jett");
+    // Equal-width namespace and value spellings put the constant declarations
+    // at identical byte offsets. Their file identities must keep them distinct.
+    for (path, namespace, answer) in [(&alpha, "alpha", 11), (&bravo, "bravo", 29)] {
+        fs::write(
+            path,
+            format!(
+                "namespace {namespace}\nint64 answer = {answer}\nexport function read() returns int64:\n    return answer\n"
+            ),
+        )
+        .unwrap();
+    }
+    let source = sources.join("main.jett");
+    fs::write(
+        &source,
+        r#"namespace app
+int64 answer = 80
+function combined() returns int64:
+    use alpha
+    use bravo
+    return alpha.read() + bravo.read() + answer
+function main(stdout: Stdout) returns nothing:
+    use alpha
+    use bravo
+    Stdout.write(view stdout, "{alpha.read()}:{bravo.read()}:{answer}:{combined()}\n")
+verify namespace_constants:
+    use alpha
+    use bravo
+    assert alpha.read() == 11
+    assert bravo.read() == 29
+    assert answer == 80
+    assert combined() == 120
+property namespace_constant_reads:
+    given value: int64
+    use alpha
+    use bravo
+    assert alpha.read() == 11
+    assert bravo.read() == 29
+    assert answer == 80
+    assert value + combined() - combined() == value
+"#,
+    )
+    .unwrap();
+    let expected =
+        jett_driver::run_file_capture_output(&source).expect("namespace constant oracle");
+    assert_eq!(expected.stdout, "11:29:80:120\n");
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("namespace_constants_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native sibling namespace constants");
+        binaries.push((binary, expected.stdout.as_bytes().to_vec()));
+    }
+    let verify_binary = directory.path().join("namespace_constants_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native sibling namespace constant verify suite");
+    binaries.push((verify_binary, Vec::new()));
+    let property_binary = directory.path().join("namespace_constants_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native sibling namespace constant property suite");
+    binaries.push((property_binary, Vec::new()));
+    for path in [&source, &alpha, &bravo, &manifest] {
+        fs::remove_file(path).unwrap();
+    }
+    for (binary, stdout) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, stdout, "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
 fn native_wrapped_enum_equality_matches_interpreter_in_both_profiles() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/wrapped_enum_equality.jett");

@@ -1260,6 +1260,19 @@ fn rejects_unbaked_comptime_instead_of_executing_it_at_runtime() {
 }
 
 #[test]
+fn rejects_unbaked_namespace_constants_before_object_generation() {
+    let (program, types) = lower_source(
+        "namespace app\nint64 answer = 42\nfunction main() returns int64:\n    return answer\n",
+    );
+    let error = emit_host_object(&program, &types)
+        .expect_err("constant reads require the compiler-produced value table");
+    assert!(
+        error.to_string().contains("unbaked namespace constant"),
+        "{error}"
+    );
+}
+
+#[test]
 fn rejects_secret_binary_results_and_wrappers_that_remove_taint() {
     for expression in ["hidden == plain", "clone hidden"] {
         let source = format!(

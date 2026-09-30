@@ -645,6 +645,7 @@ impl Resolver {
     }
 
     fn resolve_global_constant_initializer(&mut self, decl: &VarDecl, item_index: usize) {
+        self.resolve_type_expr(&decl.ty, item_index);
         let previous_policy = self.project_namespace_policy;
         self.project_namespace_policy = ProjectNamespacePolicy::Forbid;
         self.resolve_expr(&decl.value, item_index);

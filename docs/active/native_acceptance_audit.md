@@ -41,7 +41,7 @@ been audited. Likewise, a fixture's reference in Rust is not proof of execution.
 | Explicit control flow, evaluation order, ownership, and failure cleanup | MIR validation and ownership suites; linked handler, projected-view, temporary-owner, callback, actor, refinement, and terminal-failure regressions; native allocation-failure rollback tests. |
 | Versioned C ABI and exact resource retirement | Runtime ABI version/layout tests, mismatch rejection, cleanup probes and panic containment; native launcher tests for successful and failing entry cleanup. |
 | Deterministic objects, target selection, linking, and atomic publication | Codegen deterministic-object and unsupported-target tests; native driver linker/runtime validation and output-preservation tests. |
-| Required comptime evaluation stays at compile time | Explicit-comptime evaluation/materialization tests, per-instantiation context regressions, and rejection of unbaked comptime expressions by codegen. No runtime interpreter fallback is an acceptance substitute. |
+| Required comptime evaluation stays at compile time | Explicit-comptime and namespace-constant evaluation/materialization tests, per-instantiation context regressions, primitive value-shape rejection, and rejection of unbaked markers by codegen. No runtime initializer or interpreter fallback is an acceptance substitute. |
 | Supported-host distribution | All four jobs in `.github/workflows/native.yml`: Linux GNU and Windows MSVC workspace/build/package jobs, followed by clean installed jobs with no checkout. Both runtime profiles must work after relocation and source removal. |
 | Complete current workspace | `cargo test --locked --workspace --no-fail-fast` or equivalent test and doc-test invocations against a coherent revision. Rebuilding dependency artifacts during a run can invalidate later rustdoc inputs; such failures require a fresh doc-test run. |
 | Stable documentation matches the implementation | Review `docs/design.md`, `docs/architecture.md`, the parity plan, and the notes below against the final implementation and verified gate results. |
@@ -65,9 +65,10 @@ The following semantic and implementation gaps prevent a full parity claim:
   and use construction/rebinding. The checker currently also accepts unsafe
   immutable/view roots, while neither execution backend implements the update.
 - [Global constant execution](../open_design/global_constant_execution.md):
-  neither backend materializes accepted constant declarations. The design selects
-  compile-time constants baked into the binary without startup initialization;
-  initializer restrictions and the supported ownership subset need implementation.
+  both backends now receive shared immutable compile-time primitive values,
+  including transparent aliases, without startup initialization. Move-only and
+  nominal constant types still require a read, lifetime, and authority contract;
+  conservative E9001 rejection does not close that broader design obligation.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
@@ -246,3 +247,32 @@ output. Adjacent mixed public/secret arithmetic and logic preserve result taint;
 malformed handoff tests reject lost secrecy and missing exact payload methods.
 Debug layout tests retain root redaction and reject nested secret equality graphs.
 These checks do not settle secret terminal-diagnostic observation policy.
+
+The namespace-constant handoff materializes literal values and earlier constant
+references in declaration order, including unused declarations. All required
+calculations, including operators, interpolation, and calls, require explicit
+`comptime`; ordinary calculation initializers report E0378. E0377 still forbids
+mutable globals. A shared declaration-keyed table supplies the reference,
+verify/property, and native drivers. HIR `Constant` reads are baked before MIR
+rather than emitted as startup work. Primitive shape checks reject hidden pending
+values with E9001.
+Debug constant traces retain declared type spelling through a scoped observation
+temporary; that temporary does not enter later breakpoint snapshots and release
+lowering removes the trace.
+
+The public-driver regressions in `global_constants.rs` cover literal-only
+programs, namespace isolation across files, generic and inline reads,
+verify/property contexts, required explicit calculations, initializer evaluation,
+unused aggregate and pending rejection, and preservation of diagnostics and
+existing native outputs.
+`native_global_constants_match_interpreter_without_source_in_both_profiles`
+provides the linked primitive-constant obligation, including test bodies and
+source removal. These regressions must pass against the final revision alongside
+the inventory and platform gates; they do not resolve move-only constant ownership
+or establish full native completion.
+
+Local checks for this slice pass: compiler-phase suites, all 593 frontend
+fixtures, all 182 run-pass backend-lowering cases, ten public constant-driver
+regressions, and linked constant programs and verify/property suites after
+source removal. Both program profiles are covered. The final revision still
+requires the independent workspace, inventory, and platform distribution gates.

@@ -408,6 +408,7 @@ fn collect_expression_references(expression: &Expression, references: &mut Refer
             }
         }
         ExpressionKind::Int(_)
+        | ExpressionKind::Constant { .. }
         | ExpressionKind::Float(_)
         | ExpressionKind::String(_)
         | ExpressionKind::Bool(_)

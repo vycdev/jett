@@ -153,6 +153,34 @@ impl Baker<'_> {
     }
 
     fn expression(&mut self, expr: &mut Expression) {
+        if let E::Constant { declaration } = expr.kind {
+            match self.values.constant(declaration) {
+                Some(value) => match value_expression(
+                    value,
+                    expr.ty,
+                    expr.span,
+                    &mut ValueContext {
+                        types: self.types,
+                        reflection: self.reflection,
+                        functions: self.function_values,
+                        refinement_functions: None,
+                        locals: &mut *self.locals,
+                        bindings: &mut self.bindings,
+                    },
+                ) {
+                    Ok(replacement) => *expr = replacement,
+                    Err(message) => self.errors.push(LowerError {
+                        span: expr.span,
+                        message: format!("cannot materialize constant: {message}"),
+                    }),
+                },
+                None => self.errors.push(LowerError {
+                    span: expr.span,
+                    message: "namespace constant has no checked compile-time value".into(),
+                }),
+            }
+            return;
+        }
         if let E::Comptime {
             bindings,
             source_span,
@@ -255,6 +283,7 @@ impl Baker<'_> {
             }
             E::InlineFunction { body, .. } => self.block(body),
             E::Int(_)
+            | E::Constant { .. }
             | E::Float(_)
             | E::String(_)
             | E::Bool(_)

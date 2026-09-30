@@ -232,6 +232,8 @@ pub fn run_verify_blocks_with_metadata(
 
 /// Run all verify blocks with checked metadata and expression type facts from
 /// type checking.
+/// Namespace constants require `run_verify_blocks_with_checked_values`, using
+/// the values produced by the compiler's required evaluation phase.
 pub fn run_verify_blocks_with_metadata_and_expression_types(
     module: &Module,
     metadata: Arc<ReflectionMetadata>,
@@ -245,6 +247,59 @@ pub fn run_verify_blocks_with_metadata_and_expression_types(
         Some(breakpoint_exclusions),
     );
     verify_results_to_diagnostics(results)
+}
+
+/// Execute checked tests using the same immutable values as the compiler handoff.
+pub fn run_verify_blocks_with_checked_values(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+    values: Arc<crate::ExplicitComptimeValues>,
+) -> Vec<Diagnostic> {
+    verify_results_to_diagnostics(run_verify_blocks_detailed_with_checked_values(
+        module,
+        metadata,
+        expression_types,
+        breakpoint_exclusions,
+        values,
+    ))
+}
+
+pub fn run_verify_blocks_detailed_with_checked_values(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+    values: Arc<crate::ExplicitComptimeValues>,
+) -> Vec<VerifyResult> {
+    run_verification(
+        module,
+        Some(metadata),
+        Some(expression_types),
+        Some(breakpoint_exclusions),
+        Some(values),
+        false,
+    )
+    .results
+}
+
+pub fn collect_property_cases_with_checked_values(
+    module: &Module,
+    metadata: Arc<ReflectionMetadata>,
+    expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+    values: Arc<crate::ExplicitComptimeValues>,
+) -> Vec<PropertyCase> {
+    run_verification(
+        module,
+        Some(metadata),
+        Some(expression_types),
+        Some(breakpoint_exclusions),
+        Some(values),
+        true,
+    )
+    .property_cases
 }
 
 fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> {
@@ -292,6 +347,7 @@ pub fn run_verify_blocks_detailed_with_metadata_and_expression_types(
         metadata,
         expression_types,
         breakpoint_exclusions,
+        None,
         false,
     )
     .results
@@ -312,6 +368,7 @@ pub fn collect_property_cases_with_metadata_and_expression_types(
         Some(metadata),
         Some(expression_types),
         Some(breakpoint_exclusions),
+        None,
         true,
     )
     .property_cases
@@ -322,12 +379,14 @@ fn run_verification(
     metadata: Option<Arc<ReflectionMetadata>>,
     expression_types: Option<Arc<CheckedExpressionTypes>>,
     breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
+    values: Option<Arc<crate::ExplicitComptimeValues>>,
     collect_cases: bool,
 ) -> VerificationRun {
     let module_for_thread = module.clone();
     let thread_metadata = metadata.clone();
     let thread_expression_types = expression_types.clone();
     let thread_exclusions = breakpoint_exclusions.clone();
+    let thread_values = values.clone();
     match std::thread::Builder::new()
         .name("jett-verify".to_string())
         .stack_size(VERIFY_STACK_SIZE)
@@ -337,6 +396,7 @@ fn run_verification(
                 thread_metadata,
                 thread_expression_types,
                 thread_exclusions,
+                thread_values,
                 collect_cases,
             )
         }) {
@@ -349,6 +409,7 @@ fn run_verification(
             metadata,
             expression_types,
             breakpoint_exclusions,
+            values,
             collect_cases,
         ),
     }
@@ -359,9 +420,13 @@ fn run_verify_blocks_detailed_inner(
     metadata: Option<Arc<ReflectionMetadata>>,
     expression_types: Option<Arc<CheckedExpressionTypes>>,
     breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
+    values: Option<Arc<crate::ExplicitComptimeValues>>,
     collect_cases: bool,
 ) -> VerificationRun {
     let mut interp = Interpreter::new();
+    if let Some(values) = values {
+        interp.set_explicit_comptime_values(values);
+    }
     if let Some(exclusions) = breakpoint_exclusions {
         interp.set_breakpoint_exclusions(exclusions);
     }
@@ -2420,7 +2485,7 @@ mod tests {
             FileId::new(0),
         );
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let run = run_verification(&parsed.module, None, None, None, true);
+        let run = run_verification(&parsed.module, None, None, None, None, true);
         assert_eq!(run.results.len(), 1);
         assert!(run.results[0].passed);
         assert_eq!(run.property_cases.len(), PROPERTY_DEFAULT_ITERATIONS);

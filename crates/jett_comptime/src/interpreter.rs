@@ -652,6 +652,9 @@ pub struct Interpreter {
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
     explicit_comptime_values: Option<Arc<crate::ExplicitComptimeValues>>,
+    /// Compiler-produced immutable constants, separate from runtime scopes.
+    constants: HashMap<String, Value>,
+    constant_types: HashMap<String, TypeExpr>,
     /// Live actor instances keyed by unique ID.
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
@@ -723,6 +726,8 @@ impl Interpreter {
             active_checked_scope: None,
             breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
+            constants: HashMap::new(),
+            constant_types: HashMap::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
             debug_output: Vec::new(),
@@ -863,7 +868,8 @@ impl Interpreter {
                 return Some(v);
             }
         }
-        None
+        self.registry_name(&self.constants, name)
+            .and_then(|name| self.constants.get(&name))
     }
 
     /// Locate an existing struct field without cloning its enclosing values.
@@ -894,7 +900,8 @@ impl Interpreter {
                 return Some(ty);
             }
         }
-        None
+        self.registry_name(&self.constant_types, name)
+            .and_then(|name| self.constant_types.get(&name))
     }
 
     /// Reassign an existing variable in the nearest enclosing scope that
@@ -1150,6 +1157,20 @@ impl Interpreter {
         for item in &module.items {
             Self::update_current_namespace(item, &mut current_file, &mut current_namespace);
             match item {
+                Item::VarDecl(decl) => {
+                    if let Some(value) = self
+                        .explicit_comptime_values
+                        .as_ref()
+                        .and_then(|values| values.constant(decl.name.span))
+                        .cloned()
+                    {
+                        self.register_constant_in_namespace(
+                            current_namespace.as_deref(),
+                            decl,
+                            value,
+                        );
+                    }
+                }
                 Item::Function(func) => {
                     self.register_function_in_namespace(current_namespace.as_deref(), func)
                 }
@@ -1185,6 +1206,21 @@ impl Interpreter {
                 _ => {}
             }
         }
+    }
+
+    pub(crate) fn register_constant_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        declaration: &jett_parser::ast::VarDecl,
+        value: Value,
+    ) {
+        let name = namespace.map_or_else(
+            || declaration.name.name.clone(),
+            |namespace| format!("{namespace}.{}", declaration.name.name),
+        );
+        let ty = self.substitute_type_expr_in_namespace(&declaration.ty, namespace);
+        self.constant_types.insert(name.clone(), ty);
+        self.constants.insert(name, value);
     }
 
     fn item_file(item: &Item) -> FileId {

@@ -1444,6 +1444,9 @@ impl Verifier<'_> {
             ExpressionKind::Comptime { .. } => {
                 Err(self.unsupported(function, expression.span, "unbaked comptime expression"))
             }
+            ExpressionKind::Constant { .. } => {
+                Err(self.unsupported(function, expression.span, "unbaked namespace constant"))
+            }
             ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
                 self.expression(function, value)?;
                 self.require_call_result_type(

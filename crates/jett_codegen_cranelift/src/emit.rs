@@ -2087,6 +2087,9 @@ impl Translator<'_, '_> {
             ExpressionKind::Comptime { .. } => {
                 Err(self.unsupported(expression.span, "unbaked comptime expression"))
             }
+            ExpressionKind::Constant { .. } => {
+                Err(self.unsupported(expression.span, "unbaked namespace constant"))
+            }
             ExpressionKind::View(value) => self.argument(value, true),
             ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
                 let borrowed = self.argument(value, true)?;

@@ -1,0 +1,12 @@
+# ERROR: E0378 x5
+namespace app
+function compute() returns int64:
+    return 42
+int64 ordinary = compute()
+string interpolated = "answer:{compute()}"
+int64 calculated = 40 + 2
+bool inverted = not true
+string literal_interpolation = "answer:{42}"
+int64 explicit_value = comptime compute()
+function main() returns nothing:
+    return nothing

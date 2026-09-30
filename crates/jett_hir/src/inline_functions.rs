@@ -303,6 +303,7 @@ impl Extractor<'_> {
                 }
             }
             ExpressionKind::Int(_)
+            | ExpressionKind::Constant { .. }
             | ExpressionKind::Float(_)
             | ExpressionKind::String(_)
             | ExpressionKind::Bool(_)
@@ -453,6 +454,7 @@ fn expression_uses_local(expression: &Expression, target: u32) -> bool {
                 || args.iter().any(|arg| expression_uses_local(arg, target))
         }
         ExpressionKind::Int(_)
+        | ExpressionKind::Constant { .. }
         | ExpressionKind::Float(_)
         | ExpressionKind::String(_)
         | ExpressionKind::Bool(_)

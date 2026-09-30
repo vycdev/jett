@@ -514,6 +514,7 @@ struct TypeChecker<'a> {
     trusted_stdlib_function_signatures: HashMap<String, (Vec<TypeId>, TypeId)>,
     /// Name of the function currently being type-checked (None outside functions).
     current_function_name: Option<String>,
+    constant_declarations: HashSet<Span>,
     /// Whether the function currently being type-checked is pure.
     current_function_pure: bool,
     /// Whether we are inside a verify block.
@@ -667,6 +668,7 @@ impl<'a> TypeChecker<'a> {
             graphics_authority_params: HashSet::new(),
             trusted_stdlib_function_signatures: HashMap::new(),
             current_function_name: None,
+            constant_declarations: HashSet::new(),
             current_function_pure: false,
             in_verify_block: false,
             in_property_block: false,
@@ -4897,6 +4899,14 @@ impl<'a> TypeChecker<'a> {
     // ------------------------------------------------------------------
 
     fn check_module(&mut self, module: &Module) {
+        self.constant_declarations = module
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::VarDecl(decl) if !decl.mutable => Some(decl.name.span),
+                _ => None,
+            })
+            .collect();
         self.collect_type_aliases(module);
 
         // First pass: predeclare all user-defined types so function signatures,
@@ -5098,6 +5108,9 @@ impl<'a> TypeChecker<'a> {
                     if decl.mutable {
                         self.sink
                             .emit(errors::mutable_global(&decl.name.name, decl.name.span));
+                    } else if !self.is_constant_initializer(&decl.value) {
+                        self.sink
+                            .emit(errors::constant_initializer(decl.value.span()));
                     }
                     self.check_var_decl(decl);
                 }
@@ -8484,7 +8497,40 @@ impl<'a> TypeChecker<'a> {
         self.record_reflection_local_fact(decl, declared_type, init_type);
     }
 
+    fn is_constant_initializer(&self, expression: &Expr) -> bool {
+        match expression {
+            Expr::IntLiteral(_, _)
+            | Expr::FloatLiteral(_, _)
+            | Expr::StringLiteral(_, _)
+            | Expr::BoolLiteral(_, _)
+            | Expr::Nothing(_)
+            | Expr::Comptime(_, _) => true,
+            Expr::Ident(ident) => self.resolve.resolutions.get(&ident.span).is_some_and(|id| {
+                self.constant_declarations
+                    .contains(&self.resolve.scope_table.def(*id).span)
+            }),
+            Expr::Paren(inner, _) => self.is_constant_initializer(inner),
+            Expr::Unary(ast::UnaryOp::Neg, inner, _) => {
+                matches!(
+                    inner.as_ref(),
+                    Expr::IntLiteral(_, _) | Expr::FloatLiteral(_, _)
+                )
+            }
+            _ => false,
+        }
+    }
+
     fn check_assign(&mut self, assign: &ast::AssignStmt) {
+        if let Some(root) = Self::assignment_root(&assign.target)
+            && let Some(definition) = self.ident_def_id(root)
+            && self
+                .constant_declarations
+                .contains(&self.resolve.scope_table.def(definition).span)
+        {
+            self.sink.emit(crate::ownership::cannot_rebind_immutable(
+                &root.name, root.span,
+            ));
+        }
         if let Expr::Ident(ident) = &assign.target {
             if let Some(def_id) = self.ident_def_id(ident) {
                 self.clear_reflection_local_fact(def_id);
@@ -8503,6 +8549,14 @@ impl<'a> TypeChecker<'a> {
                 &self.type_name(value_type),
                 assign.span,
             ));
+        }
+    }
+
+    fn assignment_root(target: &Expr) -> Option<&ast::Ident> {
+        match target {
+            Expr::Ident(ident) => Some(ident),
+            Expr::FieldAccess(base, _, _) | Expr::Paren(base, _) => Self::assignment_root(base),
+            _ => None,
         }
     }
 
@@ -19861,6 +19915,105 @@ function main() returns list[int64]:
 
         let errors = check_source_errors(
             "namespace app\nint64 answer = 42\nfunction read_answer() returns int64:\n    mutable int64 local = answer\n    local = local + 1\n    return local\n",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn namespace_constants_reject_rebinding_and_projected_writes() {
+        let source = r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+int64 answer = 42
+Record record = comptime Record(child: Inner(value: 1))
+function example() returns nothing:
+    answer = 43
+    answer = answer + 1
+    (answer) = 44
+    record.child.value = 2
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 4, "{errors:?}");
+        let targets = errors
+            .iter()
+            .map(|diagnostic| {
+                assert_eq!(diagnostic.code.code(), 404, "{diagnostic:?}");
+                &source[diagnostic.span.start as usize..diagnostic.span.end as usize]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(targets, ["answer", "answer", "answer", "record"]);
+    }
+
+    #[test]
+    fn namespace_constants_reject_rebinding_in_methods_and_inline_functions() {
+        let errors = check_source_errors(
+            r#"namespace app
+int64 answer = 42
+struct Record:
+    value: int64
+    function change(view self: Record) returns nothing:
+        answer = 43
+function callback() returns function() returns nothing:
+    return function() returns nothing:
+        answer = answer + 1
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|diagnostic| diagnostic.code.code() == 404)
+        );
+    }
+
+    #[test]
+    fn namespace_constants_reject_rebinding_in_actor_and_test_bodies() {
+        let errors = check_source_errors(
+            r#"namespace app
+int64 answer = 42
+actor Counter:
+    mutable int64 count = 0
+    receive change:
+        answer = 43
+        count = count + 1
+verify immutable_constant:
+    answer = answer + 1
+property immutable_reads:
+    given value: int64
+    answer = value
+"#,
+        );
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|diagnostic| diagnostic.code.code() == 404)
+        );
+    }
+
+    #[test]
+    fn namespace_constants_preserve_mutable_local_and_actor_bindings() {
+        let errors = check_source_errors(
+            r#"namespace app
+int64 answer = 42
+function local() returns nothing:
+    mutable int64 answer = 1
+    answer = answer + 1
+actor Counter:
+    mutable int64 answer = 0
+    receive change:
+        answer = answer + 1
+property local_binding:
+    given answer: int64
+    assert answer == answer
+namespace other
+int64 answer = 7
+function local() returns nothing:
+    mutable int64 answer = 1
+    answer = answer + 1
+"#,
         );
         assert!(errors.is_empty(), "{errors:?}");
     }

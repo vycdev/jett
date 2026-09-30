@@ -8,9 +8,8 @@ use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
 use jett_comptime::evaluate_explicit_comptime_expressions;
 use jett_comptime::value::Value;
 use jett_comptime::verify::{
-    collect_property_cases_with_metadata_and_expression_types,
-    run_verify_blocks_detailed_with_metadata_and_expression_types,
-    run_verify_blocks_with_metadata_and_expression_types,
+    collect_property_cases_with_checked_values, run_verify_blocks_detailed_with_checked_values,
+    run_verify_blocks_with_checked_values,
 };
 pub use jett_comptime::{
     ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
@@ -598,13 +597,16 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     all_diagnostics.extend(comptime_diagnostics);
-    let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
-        &parse_result.module,
-        check_result.reflection_metadata,
-        checked_expression_types.clone(),
-        Arc::new(check_result.breakpoint_exclusions.clone()),
-    );
-    all_diagnostics.extend(verify_diagnostics);
+    let explicit_comptime_values = Arc::new(explicit_comptime_values);
+    if !has_error_diagnostics(&all_diagnostics) {
+        all_diagnostics.extend(run_verify_blocks_with_checked_values(
+            &parse_result.module,
+            check_result.reflection_metadata,
+            checked_expression_types.clone(),
+            Arc::new(check_result.breakpoint_exclusions.clone()),
+            explicit_comptime_values.clone(),
+        ));
+    }
 
     let has_errors = has_error_diagnostics(&all_diagnostics);
 
@@ -616,7 +618,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
         breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
-        explicit_comptime_values: Some(Arc::new(explicit_comptime_values)),
+        explicit_comptime_values: Some(explicit_comptime_values),
     }
 }
 
@@ -2810,13 +2812,16 @@ fn lower_file_for_backend_inner(
         Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     diagnostics.extend(comptime_diagnostics);
-    diagnostics.extend(run_verify_blocks_with_metadata_and_expression_types(
-        &parse_result.module,
-        reflection_metadata.clone(),
-        checked_expression_types.clone(),
-        Arc::new(check_result.breakpoint_exclusions.clone()),
-    ));
     let explicit_comptime_values = Arc::new(explicit_comptime_values);
+    if !has_error_diagnostics(&diagnostics) {
+        diagnostics.extend(run_verify_blocks_with_checked_values(
+            &parse_result.module,
+            reflection_metadata.clone(),
+            checked_expression_types.clone(),
+            Arc::new(check_result.breakpoint_exclusions.clone()),
+            explicit_comptime_values.clone(),
+        ));
+    }
     if has_error_diagnostics(&diagnostics) {
         return Err(build_failure(
             diagnostics,
@@ -2856,11 +2861,12 @@ fn lower_file_for_backend_inner(
         None
     };
     let native_property_plan = if mode == BackendLoweringMode::PropertySuite {
-        let cases = collect_property_cases_with_metadata_and_expression_types(
+        let cases = collect_property_cases_with_checked_values(
             &parse_result.module,
             reflection_metadata.clone(),
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
+            explicit_comptime_values.clone(),
         );
         native_property_cases::append_property_suite(
             &mut hir,
@@ -3017,13 +3023,16 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
         Arc::new(check_result.breakpoint_exclusions.clone()),
     );
     all_diagnostics.extend(comptime_diagnostics);
-    let verify_diagnostics = run_verify_blocks_with_metadata_and_expression_types(
-        &parse_result.module,
-        check_result.reflection_metadata,
-        checked_expression_types.clone(),
-        Arc::new(check_result.breakpoint_exclusions.clone()),
-    );
-    all_diagnostics.extend(verify_diagnostics);
+    let explicit_comptime_values = Arc::new(explicit_comptime_values);
+    if !has_error_diagnostics(&all_diagnostics) {
+        all_diagnostics.extend(run_verify_blocks_with_checked_values(
+            &parse_result.module,
+            check_result.reflection_metadata,
+            checked_expression_types.clone(),
+            Arc::new(check_result.breakpoint_exclusions.clone()),
+            explicit_comptime_values.clone(),
+        ));
+    }
 
     let has_errors = has_error_diagnostics(&all_diagnostics);
 
@@ -3035,7 +3044,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
         breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
-        explicit_comptime_values: Some(Arc::new(explicit_comptime_values)),
+        explicit_comptime_values: Some(explicit_comptime_values),
     }
 }
 
@@ -4351,11 +4360,22 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
     }
 
     let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
-    let results = run_verify_blocks_detailed_with_metadata_and_expression_types(
+    let (values, diagnostics) = evaluate_explicit_comptime_expressions(
         &parse_result.module,
-        Some(check_result.reflection_metadata),
-        Some(checked_expression_types),
-        Some(Arc::new(check_result.breakpoint_exclusions.clone())),
+        check_result.reflection_metadata.clone(),
+        checked_expression_types.clone(),
+        Arc::new(check_result.breakpoint_exclusions.clone()),
+    );
+    let errors = error_messages_from_diagnostics(&diagnostics);
+    if !errors.is_empty() {
+        return Err(format!("comptime errors:\n{}", errors.join("\n")));
+    }
+    let results = run_verify_blocks_detailed_with_checked_values(
+        &parse_result.module,
+        check_result.reflection_metadata,
+        checked_expression_types,
+        Arc::new(check_result.breakpoint_exclusions.clone()),
+        Arc::new(values),
     );
 
     let total = results.len();

@@ -867,6 +867,7 @@ impl FunctionValidator<'_, '_> {
             }
             hir::ExpressionKind::Field { base, .. } => self.expression(base),
             hir::ExpressionKind::Int(_)
+            | hir::ExpressionKind::Constant { .. }
             | hir::ExpressionKind::Float(_)
             | hir::ExpressionKind::String(_)
             | hir::ExpressionKind::Bool(_)

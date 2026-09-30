@@ -313,6 +313,10 @@ pub enum ExpressionKind {
     Bool(bool),
     Nothing,
     Local(LocalId),
+    /// A checked namespace constant materialized before MIR lowering.
+    Constant {
+        declaration: Span,
+    },
     /// A checked, concrete source function used as a first-class value.
     FunctionRef(FunctionId),
     /// A checked inline function with an environment copied from caller locals.
@@ -1051,6 +1055,7 @@ impl Validator<'_> {
             }
             ExpressionKind::Field { base, .. } => self.expression(base),
             ExpressionKind::Int(_)
+            | ExpressionKind::Constant { .. }
             | ExpressionKind::Float(_)
             | ExpressionKind::String(_)
             | ExpressionKind::Bool(_)
@@ -1152,6 +1157,7 @@ struct Lowerer<'a> {
     refinement_sources: Vec<RefinementSource<'a>>,
     refinement_function_ids: HashMap<TypeId, FunctionId>,
     function_ids: HashMap<FunctionKey, FunctionId>,
+    constant_definitions: HashMap<DefId, Span>,
     errors: Vec<LowerError>,
     include_test_bodies: bool,
 }
@@ -1164,6 +1170,24 @@ impl<'a> Lowerer<'a> {
         origins: &'a HashMap<FileId, SourceOrigin>,
         include_test_bodies: bool,
     ) -> Self {
+        let constant_definitions = module
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::VarDecl(decl) = item else {
+                    return None;
+                };
+                if decl.mutable {
+                    return None;
+                }
+                resolve
+                    .scope_table
+                    .definitions
+                    .iter()
+                    .find(|definition| definition.span == decl.name.span)
+                    .map(|definition| (definition.id, decl.name.span))
+            })
+            .collect();
         Self {
             module,
             resolve,
@@ -1177,6 +1201,7 @@ impl<'a> Lowerer<'a> {
             refinement_sources: Vec::new(),
             refinement_function_ids: HashMap::new(),
             function_ids: HashMap::new(),
+            constant_definitions,
             errors: Vec::new(),
             include_test_bodies,
         }
@@ -2739,6 +2764,13 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     self.parent.error(trace.span, "trace target is unresolved");
                     return None;
                 };
+                if let Some(declaration) = self.parent.constant_definitions.get(definition).copied()
+                {
+                    if self.parent.check.release {
+                        return None;
+                    }
+                    return self.lower_constant_trace(trace, *definition, declaration);
+                }
                 let Some(local) = self.local_ids.get(definition).copied() else {
                     self.parent.error(trace.span, "trace target is not a local");
                     return None;
@@ -2785,6 +2817,59 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return None;
         }
         Some(Statement { kind, span })
+    }
+
+    fn lower_constant_trace(
+        &mut self,
+        trace: &ast::TraceStmt,
+        definition: DefId,
+        declaration: Span,
+    ) -> Option<Statement> {
+        let Some(ty) = self.parent.check.definition_types.get(&definition).copied() else {
+            self.parent
+                .error(trace.span, "constant trace target has no checked type");
+            return None;
+        };
+        // Materialize the baked value only for this observation. The temporary
+        // is not a lexical binding and must not appear in later breakpoints.
+        let local = LocalId(self.locals.len() as u32);
+        self.locals.push(Local {
+            id: local,
+            name: trace.name.name.clone(),
+            ty,
+            debug_ty: ty,
+            debug_type_name: self
+                .parent
+                .check
+                .debug_type_names
+                .get(&declaration)
+                .cloned(),
+            mutable: false,
+            span: trace.span,
+        });
+        Some(Statement {
+            kind: StatementKind::Scope(Block {
+                statements: vec![
+                    Statement {
+                        kind: StatementKind::Let {
+                            local,
+                            value: Expression {
+                                kind: ExpressionKind::Constant { declaration },
+                                ty,
+                                span: trace.name.span,
+                            },
+                        },
+                        span: trace.span,
+                    },
+                    Statement {
+                        kind: StatementKind::Trace(local),
+                        span: trace.span,
+                    },
+                ],
+                span: trace.span,
+            }),
+            span: trace.span,
+        })
     }
 
     fn lower_comptime_type_bind(
@@ -3106,6 +3191,11 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 };
                 if let Some(local) = self.local_ids.get(&definition).copied() {
                     ExpressionKind::Local(local)
+                } else if let Some(declaration) = self.parent.constant_definitions.get(&definition)
+                {
+                    ExpressionKind::Constant {
+                        declaration: *declaration,
+                    }
                 } else if self.parent.resolve.scope_table.def(definition).kind == DefKind::Function
                 {
                     ExpressionKind::FunctionRef(self.resolve_function_value_target(expression)?)
