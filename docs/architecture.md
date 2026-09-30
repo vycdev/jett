@@ -616,6 +616,7 @@ This sub-phase tracks the ownership state of every variable through the control 
   an owned or viewed value. Clone support is type-specific rather than universal.
 - Assigning to an immutable local is rejected during ownership analysis
   (`E0404`). A `mutable` local can be rebound after its value is consumed.
+
 - **For loops:** `for item in items` consumes `items`; `for item in view items` borrows `items`.
 - **Run/join:** `run` marks a value as pending; it cannot be used until `join`ed.
 - **No orphaned tasks:** every `run` must have a matching `join` or `cancel` before the function returns.
@@ -630,6 +631,13 @@ This sub-phase tracks the ownership state of every variable through the control 
   task-control failure independently of the function's declared result error.
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
 - **Closure capture analysis:** Anonymous functions may capture only implicitly copyable values from the enclosing scope. Each capture is copied into the closure. Capturing a move-only value is a compile error; it must be passed explicitly as a parameter.
+
+Projected field assignment does not yet have an execution contract. The
+ownership pass checks mutability only for identifier rebinding, so checked
+field targets can currently include immutable locals or views. The interpreter
+and native place planners reject execution of these writes. The
+[open contract](open_design/projected_field_assignment.md) must settle safe
+updates or explicit frontend rejection before extending this handoff.
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 

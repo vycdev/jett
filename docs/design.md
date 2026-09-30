@@ -5405,6 +5405,11 @@ A `list[uint8]` field captures everything after the fixed-size fields as a raw b
 | `memcpy(&header, buffer, sizeof(header))` | `Header.from_bytes(buffer)` |
 | `0x1F`, `0b00011111`, `31` | A field width: `field: 5 bits` |
 
+Direct field assignment in this table is a design proposal whose execution and
+ownership contract remains [unresolved](open_design/projected_field_assignment.md).
+The checker currently accepts projected writes, including unsafe immutable/view
+roots, but neither the interpreter nor native lowering implements those updates.
+
 No hex literals, no binary literals, no shift operators, no mask operators. The LLM works entirely in base-10 integers and field names.
 
 #### Byte Order Annotation
