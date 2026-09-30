@@ -585,6 +585,11 @@ When a `result` or `optional` and its payload both implement a destination
 interface, conversion preserves the whole sum and selects its implementation.
 Extracting the payload still requires explicit `handle`.
 
+Coarsening or declassifying a value passed as a view preserves that borrow.
+The callee observes the underlying payload without consuming the refinement or
+secret owner. This also applies to borrowed fields and function-value calls;
+the original value remains available after the call.
+
 If you need the base type multiple times in one function, assign it to a local variable once:
 
 ```

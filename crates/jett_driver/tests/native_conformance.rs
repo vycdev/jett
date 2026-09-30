@@ -404,6 +404,88 @@ fn native_interface_display_failure_matches_interpreter() {
 }
 
 #[test]
+fn native_interface_refined_small_values_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_refined_small_values.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("small_values.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source)
+        .expect("refined small-value interface oracle");
+    assert_eq!(
+        expected.stdout,
+        "nothing\nunit\nagain\nbool:false\nenabled:true\nbytes:6f6b\ndata:6f6b\nnothing\nunit\nagain\nbool:false\nenabled:true\nbytes:6f6b\ndata:6f6b\nunit\nunit\n6f6b:6f6b:7368:7368:7368:2:data:6f6b:2:2\n6f6b:6f6b:7368:7368:7368:2:data:6f6b:2:2\n"
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("small_values_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native refined small-value interfaces");
+        binaries.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_transparent_borrow_argument_failure_cleans_owners_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_refined_small_values.jett");
+    let original = fs::read_to_string(fixture).unwrap();
+    let (declarations, _) = original.split_once("function main(").unwrap();
+    for callee in ["sized", "callback"] {
+        for borrowed in ["view coarsen packet.data", "view declassify packet.hidden"] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("borrow_failure.jett");
+            fs::write(&source, format!("{declarations}function failed() returns int64:\n    string rejected = string.repeat(\"ab\", 9223372036854775807)\n    return string.char_count(rejected)\nfunction main(stdout: Stdout) returns nothing:\n    Packet packet = Packet(data: bytes.from_string(\"ok\"), hidden: bytes.from_string(\"sh\")) handle error:\n        Stdout.write(view stdout, error)\n        return nothing\n    function(view bytes, int64) returns string callback = sized\n    Stdout.write(view stdout, {callee}({borrowed}, failed()))\n")).unwrap();
+            let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+            assert!(expected.output.stdout.is_empty(), "{expected:?}");
+            assert!(expected.output.debug_output.is_empty(), "{expected:?}");
+            assert_eq!(
+                expected.message,
+                "runtime error: string.repeat: requested output is too large"
+            );
+            let mut binaries = Vec::new();
+            for release in [false, true] {
+                let binary = directory
+                    .path()
+                    .join(format!("borrow_failure_{release}.exe"));
+                jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    launcher(),
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .expect("native failure following a transparent borrow");
+                binaries.push(binary);
+            }
+            fs::remove_file(&source).unwrap();
+            for binary in binaries {
+                let actual = run_bounded(&binary, directory.path());
+                assert_eq!(
+                    actual.status.code(),
+                    Some(71),
+                    "{callee}({borrowed}): {actual:?}"
+                );
+                assert!(actual.stdout.is_empty(), "{actual:?}");
+                assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+            }
+        }
+    }
+}
+
+#[test]
 fn native_interface_refined_actors_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_refined_actors.jett");

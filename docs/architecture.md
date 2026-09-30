@@ -823,6 +823,12 @@ local keeps its declared binding type separate from its checked runtime type,
 so state narrowing does not change the debug label. Native `coarsen` verifies
 a checked refinement ancestor and transfers its base
 representation, including ownership of aggregate payloads, without a wrapper.
+MIR copy and move planning propagate the enclosing argument's borrow mode
+through coarsening, declassification, and validated-refinement expressions.
+Native argument emission follows that same mode through transparent wrappers,
+including local and field projections, rather than loading an owned argument
+from a view-only binding. Direct and indirect calls retain ordinary cleanup
+when a later argument fails.
 For refinement boundaries, HIR lowers each checked predicate to a
 compiler-owned pure function. MIR calls unvalidated ancestor predicates in
 base-first order and branches to the source `handle error` block on a false

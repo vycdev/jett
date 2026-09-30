@@ -1718,3 +1718,16 @@ parsing. Parsing now uses an explicit parent stack instead of a 128-level cutoff
 with the same encoding and validation. Linked debug/release tests cover the
 accepted empty-container source; runtime tests cover populated deep conversions,
 the boxed leaf identity, allocation-failure rollback, truncation, and extra bytes.
+
+### Borrowed transparent values and small refinement owners
+
+The saved transparent-borrow fix now has linked debug/release gates. Refined
+`nothing`, `bool`, and `bytes` values retain their interface owners at runtime
+and comptime, including inherited unit refinements and nested pending joins.
+Coarsening and declassification preserve views through direct and indirect
+calls, projected fields, repeated reads, and later-argument handlers. Both
+profiles execute after deleting source. Companion failures retain the exact
+interpreter error and exit 71 after cleanup when a later argument fails. This
+closes the unfinished fixture verification from the saved commit; the open
+semantic decisions and supported-host release gates remain in the acceptance
+audit.

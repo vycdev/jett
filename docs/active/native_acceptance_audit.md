@@ -176,3 +176,12 @@ bytes are rejected before conversion.
 The standalone report intentionally keeps `complete` false while these release
 obligations are unresolved, even when every fixture count is full. The historical
 85% planning estimate is not a measured code-coverage or completion result.
+
+The refined-small-value interface gate executes `nothing`, inherited unit
+refinements, booleans, and bytes in runtime and comptime lists, with nested
+pending unit joins. It also checks borrowed coarsening/declassification through
+direct calls, callbacks, projected fields, and later-argument handlers. Both
+debug and release artifacts run after source removal. The companion failure
+gate covers direct/indirect calls and both transparent wrappers, requiring the
+interpreter's exact terminal error, no partial output, and exit 71 rather than
+cleanup failure. MIR and codegen suites validate the shared ownership handoff.

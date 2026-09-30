@@ -518,3 +518,13 @@ Shrinking a field preserves the record's instantiated identity. The
 `property_generic_owners` fixture and linked replay test distinguish narrow and
 string owners and require shrinking to preserve successful dispatch before the
 property's intended length assertion fails.
+
+`interface_refined_small_values` completes linked coverage for `nothing`,
+inherited unit refinements, boolean refinements, and byte-backed refinements.
+Runtime and baked heterogeneous lists select each nominal implementation;
+doubly pending unit values preserve their refinement through interface joins.
+Coarsening and declassification retain borrowed byte storage through direct
+calls, callbacks, field projections, and handlers in later arguments. Debug and
+release binaries match the interpreter after source removal. A companion gate
+checks terminal failure in a later argument for both call forms and wrapper
+kinds, requiring exit 71 and exact diagnostics after owned-value cleanup.

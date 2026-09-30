@@ -461,6 +461,11 @@ to construct a refinement. MIR snapshots a cloneable owned local before either
 transparent conversion, preserving the original refinement or secret value
 for a later read while the converted result owns its copy. Linked differential
 fixtures cover reuse after `coarsen` and repeated `declassify` of a secret list.
+When the conversion is used as a borrowed argument, MIR and native emission
+preserve the underlying view instead of creating or consuming an owner. Linked
+debug/release coverage checks local and projected bytes, direct and indirect
+calls, later-argument handlers, source removal, and terminal argument failure
+with successful cleanup.
 Private crypto leaves borrow checked bytes and
 return owned digests; the interpreter and native runtime use
 the same SHA-256, SHA-512, MD5, and HMAC-SHA-256 kernels behind public `.jett`

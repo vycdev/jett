@@ -25,7 +25,32 @@ implement Named for bytes:
         return "bytes:{bytes.to_hex(self)}"
 implement Named for Data:
     function name(view self: Data) returns string:
-        return "data:{bytes.to_hex(coarsen self)}"
+        string text = bytes.to_hex(coarsen self)
+        int64 length = bytes.length(coarsen self)
+        if length == 0:
+            return "empty"
+        return "data:{text}"
+struct Packet:
+    data: Data
+    hidden: secret[bytes]
+function hex(view data: bytes) returns string:
+    return bytes.to_hex(data)
+function sized(view data: bytes, length: int64) returns string:
+    return "{bytes.to_hex(data)}:{length}"
+function borrowed() returns string:
+    Packet packet = Packet(data: bytes.from_string("ok"), hidden: bytes.from_string("sh")) handle error:
+        return error
+    function(view bytes) returns string reader = hex
+    string first = hex(view coarsen packet.data)
+    string second = reader(view coarsen packet.data)
+    string third = hex(view declassify packet.hidden)
+    string fourth = reader(view declassify packet.hidden)
+    optional[int64] absent = none
+    string fifth = sized(view declassify packet.hidden, absent handle:
+        default bytes.length(coarsen packet.data)
+    )
+    Data copied = clone packet.data
+    return "{first}:{second}:{third}:{fourth}:{fifth}:{Named.name(view copied)}:{bytes.length(coarsen packet.data)}:{bytes.length(declassify packet.hidden)}"
 function values() returns list[Named]:
     Unit unit = nothing handle error:
         return list()
@@ -46,12 +71,15 @@ function restored() returns list[Named]:
     Named ready = join inner handle error:
         return list()
     return list(ready)
-function main() returns nothing:
+function main(stdout: Stdout) returns nothing:
     for value in values():
-        println(Named.name(view value))
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
     for value in comptime values():
-        println(Named.name(view value))
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
     for value in restored():
-        println(Named.name(view value))
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
     for value in comptime restored():
-        println(Named.name(view value))
+        Stdout.write(view stdout, "{Named.name(view value)}\n")
+    Stdout.write(view stdout, "{borrowed()}\n")
+    string baked = comptime borrowed()
+    Stdout.write(view stdout, "{baked}\n")
