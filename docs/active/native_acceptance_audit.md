@@ -64,6 +64,9 @@ The following decisions remain unresolved and prevent a full parity claim:
   implement safe updates to owned mutable locals versus reject projected writes
   and use construction/rebinding. The checker currently also accepts unsafe
   immutable/view roots, while neither execution backend implements the update.
+- [Global constant execution](../open_design/global_constant_execution.md):
+  neither backend initializes accepted global declarations. Their ordinary versus
+  explicit-comptime initialization and shared ownership contract need implementation.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.

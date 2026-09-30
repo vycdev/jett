@@ -233,6 +233,10 @@ There must be **no spooky action at a distance**. A variable must never be silen
 - Semantic program side effects must be declared in the function signature via **capability parameters** (see Rule Set 16). If a function writes to a file, it receives a `Filesystem` capability. If it accesses the network, it receives a `Network` capability. The signature is the contract. Compiler-owned debug observations such as `trace`, `breakpoint`, `print`, and `println` are non-release tooling instrumentation, not semantic I/O.
 - All inputs to a function come through its parameters or an anonymous function's explicit capture environment. No global ambient reads and no thread-local storage. Anonymous functions may capture only implicitly copyable values from the enclosing scope; each captured value is copied into the closure. Move-only values must be passed explicitly as parameters. This allows patterns like `list.find(users, function(u: User) returns bool: return u.id == target_id)` when `target_id` is copyable.
 
+Global declarations pass current frontend checking, but global reads have no
+execution handoff yet. Their initialization and ownership rules are tracked in
+the [global constant contract](open_design/global_constant_execution.md).
+
 **Example — side effects are declared, not hidden:**
 
 ```

@@ -451,6 +451,7 @@ ResolveResult {
 - **Bare declarations before standard module prefixes** — a bare reference to a declared same-namespace function, such as `math(4)`, resolves to that function. A dotted standard call such as `math.abs(-4)` keeps its module prefix. Resolver facts carry this distinction into HIR.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
 - **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
+
 - **Canonical type names** — every struct, enum, interface, machine, actor,
   bitfield, alias, and refinement declaration is validated before registration.
   Names must begin with an ASCII uppercase letter and otherwise contain only
@@ -461,6 +462,12 @@ ResolveResult {
 - **Import aliasing** — `use net.http as net_http` binds the alias in local scope. Conflicting last-segment names require `as`.
 - **Parent namespace aggregation** — `use net.http` imports all child namespaces (`net.http.server`, `net.http.client`) when `net.http` itself is not a declared namespace but its children are. Accessing child items uses the last segment: `server.listen(...)`, `client.get(...)`.
 - **Namespace exports** — namespaced declarations are private to their declaring namespace by default. `export` marks public API declarations, but executable code outside the namespace must first import it locally and then use the import's bound name or alias; exported names are not inserted into the global flat scope.
+
+The global declaration rule currently has no execution handoff: reference
+declaration registration omits initialization, and HIR global reads have no
+value source. The [open execution contract](open_design/global_constant_execution.md)
+records the initialization and ownership requirements before either backend is
+extended.
 
 ---
 
