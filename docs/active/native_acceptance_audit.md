@@ -65,8 +65,9 @@ The following decisions remain unresolved and prevent a full parity claim:
   and use construction/rebinding. The checker currently also accepts unsafe
   immutable/view roots, while neither execution backend implements the update.
 - [Global constant execution](../open_design/global_constant_execution.md):
-  neither backend initializes accepted global declarations. Their ordinary versus
-  explicit-comptime initialization and shared ownership contract need implementation.
+  neither backend materializes accepted constant declarations. The design selects
+  compile-time constants baked into the binary without startup initialization;
+  initializer restrictions and the supported ownership subset need implementation.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
