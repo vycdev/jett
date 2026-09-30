@@ -7070,6 +7070,11 @@ exact `Equatable` implementation gets a compile error for either operator.
 
 Enums retain their existing variant-and-payload equality. Equality does not
 grant collection-key eligibility.
+Direct `==` and `!=` are rejected for `bytes`, `list`, `map`, `set`, `optional`,
+and `result`, including aliases, refinements, and secret wrappers over those
+types. Compare their contents explicitly. This restriction is checked in
+generic instantiations and explicit comptime expressions too; it does not change
+the separate comparisons of collections nested inside enum payloads.
 Finite recursive enum payloads use the same comparisons at every depth. A
 fixed backend traversal limit must not reject an otherwise supported comparison.
 Payload comparison retains its short-circuit order, pending-depth distinctions,

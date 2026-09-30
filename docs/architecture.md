@@ -562,6 +562,12 @@ Bottom-up type checking of every expression:
   implementation validation. `!=` negates `equals` rather than adding a second
   customization point. Missing implementations report E0358. Enums retain
   variant-and-payload equality.
+- **Direct collection equality:** `==` and `!=` on bytes, lists, maps, sets,
+  optionals, and results report E0376 in the frontend. Classification walks
+  secret and refinement wrappers; transparent aliases already share their base
+  type. Concrete generic bodies and explicit comptime expressions use the same
+  check before evaluation or lowering. Enum payload comparison retains its
+  separate aggregate path.
 - **Primitive collection hashing boundary:** Type formation for `map[K, V]`
   and `set[T]` accepts signed/unsigned integers, `string`, `bool`, and
   refinements backed by those types. Other types report E0359 before
@@ -2770,7 +2776,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0375 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
+| E0300–E0376 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing and equality, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |

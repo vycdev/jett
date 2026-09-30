@@ -10494,6 +10494,21 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn is_direct_collection_equality_type(&self, mut ty: TypeId) -> bool {
+        loop {
+            match self.interner.resolve(ty) {
+                Type::Secret(inner) | Type::Refinement { base: inner, .. } => ty = *inner,
+                Type::Bytes
+                | Type::List(_)
+                | Type::Map(_, _)
+                | Type::Set(_)
+                | Type::Optional(_)
+                | Type::Result(_, _) => return true,
+                _ => return false,
+            }
+        }
+    }
+
     fn check_binary(&mut self, lhs: &Expr, op: BinOp, rhs: &Expr, span: Span) -> TypeId {
         let (lhs_ty, rhs_ty) = if Self::is_numeric_literal(lhs) && !Self::is_numeric_literal(rhs) {
             let rhs_ty = self.check_expr(rhs);
@@ -10592,6 +10607,14 @@ impl<'a> TypeChecker<'a> {
                         Self::binop_str(op),
                         &self.type_name(lhs_ty),
                         &self.type_name(rhs_ty),
+                        span,
+                    ));
+                    return TypeInterner::ERROR;
+                }
+                if self.is_direct_collection_equality_type(lhs_base) {
+                    self.sink.emit(errors::direct_collection_equality(
+                        &self.type_name(lhs_ty),
+                        Self::binop_str(op),
                         span,
                     ));
                     return TypeInterner::ERROR;

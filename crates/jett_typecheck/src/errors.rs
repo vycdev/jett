@@ -965,6 +965,17 @@ pub fn view_argument_requires_view_parameter(span: Span) -> Diagnostic {
     )
 }
 
+/// E0376: Collections and built-in sums have no direct equality operation.
+pub fn direct_collection_equality(type_name: &str, op: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        376,
+        format!(
+            "operator `{op}` is not defined for `{type_name}`; compare its contents explicitly"
+        ),
+        span,
+    )
+}
+
 /// E0800: Function body exceeds the statement count limit.
 pub fn function_statement_limit(
     function_name: &str,

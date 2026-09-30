@@ -2188,6 +2188,22 @@ compile_fail_fixture!(
     "equatable_signature_is_exact.jett"
 );
 compile_fail_fixture!(
+    compile_fail_direct_collection_equality,
+    "direct_collection_equality.jett"
+);
+compile_fail_fixture!(
+    compile_fail_direct_collection_equality_wrappers,
+    "direct_collection_equality_wrappers.jett"
+);
+compile_fail_fixture!(
+    compile_fail_direct_collection_equality_generic,
+    "direct_collection_equality_generic.jett"
+);
+compile_fail_fixture!(
+    compile_fail_direct_collection_equality_comptime,
+    "direct_collection_equality_comptime.jett"
+);
+compile_fail_fixture!(
     compile_fail_collection_struct_hashing_is_unsupported,
     "collection_struct_hashing_is_unsupported.jett"
 );

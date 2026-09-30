@@ -961,6 +961,58 @@ fn native_suites_reject_failing_source_assertions() {
 }
 
 #[test]
+fn native_builds_reject_direct_collection_equality_before_publication() {
+    for ty in [
+        "bytes",
+        "list[int64]",
+        "map[string, int64]",
+        "set[int64]",
+        "optional[int64]",
+        "result[int64, string]",
+    ] {
+        for op in ["==", "!="] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("comparison.jett");
+            fs::write(&source, format!("namespace app\nfunction compare(view left: {ty}, view right: {ty}) returns bool:\n    return left {op} right\nfunction main() returns nothing:\n    return nothing\n")).unwrap();
+            for release in [false, true] {
+                let binary = directory.path().join("preserved.exe");
+                fs::write(&binary, b"existing output").unwrap();
+                let error = jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    launcher(),
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .unwrap_err();
+                let jett_driver::native::NativeBuildError::Lowering {
+                    source: lowering, ..
+                } = error
+                else {
+                    panic!("{ty} {op}: expected frontend rejection, got {error}");
+                };
+                let jett_driver::BackendLoweringError::Build(checked) = *lowering else {
+                    panic!("{ty} {op}: expected diagnostics before HIR");
+                };
+                let errors = checked
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect::<Vec<_>>();
+                assert_eq!(errors.len(), 1, "{ty} {op}: {errors:?}");
+                assert_eq!(errors[0].code.code(), 376);
+                assert_eq!(
+                    errors[0].message,
+                    format!(
+                        "operator `{op}` is not defined for `{ty}`; compare its contents explicitly"
+                    )
+                );
+                assert_eq!(fs::read(&binary).unwrap(), b"existing output");
+            }
+        }
+    }
+}
+
+#[test]
 fn native_builds_preserve_shrunk_property_diagnostics_and_existing_artifacts() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("property_failure.jett");

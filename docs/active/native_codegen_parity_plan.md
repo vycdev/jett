@@ -1670,12 +1670,14 @@ printing is a separate unresolved policy, recorded in
 
 ### Direct collection comparison audit
 
-Direct equality of bytes, lists, maps, sets, optionals, and results reaches
-runtime errors in the interpreter but internal build errors in native code.
-This is an uncovered accepted-source contract, not a passing failure-parity
-case. The source-language choice between compile-time rejection and preserved
-runtime errors is recorded in
-[direct collection equality](../open_design/direct_collection_equality.md).
+Direct equality of bytes, lists, maps, sets, optionals, and results previously
+reached runtime errors in the interpreter and internal build errors in native
+code. The user selected compile-time rejection on 2026-09-30. Both operators
+now report E0376 before evaluation or lowering, including aliases, refinements,
+secrets, generic instantiations, and explicit comptime expressions. Native
+debug/release builds preserve existing artifacts on rejection. The settled
+contract is recorded in
+[direct collection equality](../completed/direct_collection_equality.md).
 
 ### Deep recursive debug values
 
