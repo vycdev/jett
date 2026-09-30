@@ -759,7 +759,7 @@ signed zero, and NaN. Payloads containing user structs remain unsupported:
 their equality requires an exact `Equatable.equals` implementation, and the
 current enum comparison path does not dispatch that method. The intended
 language rule for this nested case is recorded in
-`docs/open_design/enum_payload_struct_equality.md`.
+`docs/active/native_enum_struct_equality.md`.
 Actor handles expose a separate equality mismatch: direct actor `==` is
 accepted by the checker but fails in the interpreter, while recursive enum
 equality compares actor IDs and native aggregate equality rejects the actor
@@ -1476,7 +1476,8 @@ Linked native/interpreter coverage now exercises an enum payload containing a
 user struct with an owned list field: construction, borrowed match, clone,
 trace, list storage, and cleanup agree. Equality for this payload still hits
 the conservative native guard while the language rule in
-`docs/open_design/enum_payload_struct_equality.md` is unresolved. This narrows
+`docs/active/native_enum_struct_equality.md` tracks the selected explicit-method
+rule and its outstanding implementation. This narrows
 the enum payload gap without changing the broad 85% estimate.
 
 Native refinement validation now snapshots a cloneable owned local before

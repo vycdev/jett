@@ -705,7 +705,7 @@ their text. A linked differential fixture also covers a user-struct payload
 with owned list fields through construction, borrowed matching, clone, trace,
 list storage, and cleanup. Aggregate payload equality remains guarded; enum
 equality over user structs awaits the rule in
-`docs/open_design/enum_payload_struct_equality.md`.
+`docs/active/native_enum_struct_equality.md`.
 Supported aggregate payloads use an explicit comparison stack instead of the
 former 128-level recursion guard. Active `(node, left, right)` paths reject
 malformed cycles; repeated children on separate paths remain valid. Child

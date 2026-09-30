@@ -562,6 +562,10 @@ Bottom-up type checking of every expression:
   implementation validation. `!=` negates `equals` rather than adding a second
   customization point. Missing implementations report E0358. Enums retain
   variant-and-payload equality.
+  The accepted extension requires the same explicit method at nested user-struct
+  payload boundaries. Frontend recursive validation, interpreted method dispatch,
+  and the typed native traversal handoff remain open in
+  [the active implementation note](active/native_enum_struct_equality.md).
 - **Direct collection equality:** `==` and `!=` on bytes, lists, maps, sets,
   optionals, and results report E0376 in the frontend. Classification walks
   secret and refinement wrappers; transparent aliases already share their base

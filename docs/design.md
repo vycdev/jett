@@ -7070,6 +7070,11 @@ exact `Equatable` implementation gets a compile error for either operator.
 
 Enums retain their existing variant-and-payload equality. Equality does not
 grant collection-key eligibility.
+The selected rule for user structs nested inside enum payloads is to invoke each
+struct's exact explicit `Equatable.equals` method, including through nested
+containers. There is no field comparison fallback at that boundary. Enforcement
+and native implementation are tracked in
+[the active enum equality work](active/native_enum_struct_equality.md).
 Direct `==` and `!=` are rejected for `bytes`, `list`, `map`, `set`, `optional`,
 and `result`, including aliases, refinements, and secret wrappers over those
 types. Compare their contents explicitly. This restriction is checked in

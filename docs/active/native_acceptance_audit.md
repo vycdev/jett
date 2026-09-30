@@ -55,7 +55,6 @@ separate from parity for existing accepted behavior.
 
 The following decisions remain unresolved and prevent a full parity claim:
 
-- [Enum payloads containing user structs](../open_design/enum_payload_struct_equality.md): exact explicit equality versus rejecting those comparisons.
 - [Actor equality](../open_design/actor_equality.md): actor identity versus rejecting comparisons.
 - [Actor handles escaping comptime](../open_design/comptime_actor_values.md): reject escaping handles versus materializing a defined actor graph.
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
@@ -70,6 +69,12 @@ Passing its growing regression suite does not remove those audit obligations.
 is settled: both operators now report E0376 before comptime evaluation or native
 lowering, including wrapped and concretely instantiated types. Frontend fixture
 coverage and native debug/release publication checks pin this contract.
+
+[User structs nested inside enum payloads](native_enum_struct_equality.md) now
+have a selected source rule: invoke their exact explicit `Equatable.equals`
+implementations. Recursive frontend validation, interpreter/comptime method
+dispatch, and typed compiled method calls from native aggregate traversal remain
+required. The decision is settled; its implementation remains a parity gate.
 
 Normal native builds run frontend verify/property checks before emission; a
 source-level failed property cannot be silently
