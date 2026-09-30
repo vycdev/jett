@@ -1,0 +1,12 @@
+namespace app
+struct Record:
+    label: string
+function main(stdout: Stdout) returns nothing:
+    bytes owned = bytes.from_string("live owner")
+    optional[string] source = some("payload")
+    optional[string] first = run source
+    optional[string] pending = run first
+    Stdout.write(view stdout, "before;")
+    string found = pending handle:
+        return Stdout.write(view stdout, "unexpected handler")
+    Stdout.write(view stdout, "unexpected extraction")

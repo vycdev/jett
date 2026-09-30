@@ -399,6 +399,13 @@ temporary planning. The planner now reserves each result in addition to the
 callee descriptor and its arguments. A companion matrix covers the other owned
 return families and terminal failure after earlier callbacks produced owners.
 
+`interface_refined_sums` audits optional/result refinements containing erased
+interface payloads. Direct whole-sum validation, inherited nominal owners,
+field construction, function return adapters, pending joins, and ordinary/baked
+values retain the inner concrete implementation. Absent and rejected failure
+branches exercise validation independently from payload extraction. Refinement
+errors keep their string type when the base result's errors are integers.
+
 Opaque carriers must also retain their checked concrete owners when erased to
 interfaces. Distinct actor declarations and refinements of `TypeConstruction`
 already dispatch independently in native code. Interpreter metadata must preserve

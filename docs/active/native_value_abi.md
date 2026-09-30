@@ -501,6 +501,13 @@ continuation; return exits the enclosing function; break/continue retain their
 enclosing loop edges. Failure branches without an error binding drop the sum
 normally. Terminal runtime failure still bypasses these language-level branches.
 The move fixed point covers the extracted edges and transferred payload places.
+Emitted SumTag statements call `SumHandleTag` with the source's checked debug
+layout. The leaf rejects outer pending depth before extraction, preserving the
+sum and its owned payload for cleanup. Ready sums return their tag without
+parsing the layout; pending payloads inside a ready sum remain valid. On failure,
+typed observation produces the reference pending-value diagnostic for public
+values while retaining native secret redaction. The separate raw SumTag leaf
+continues to serve internal runtime protocols.
 Nested payloads work. Result/optional handlers inside direct-call arguments
 also lower through `view` wrappers; preceding owned arguments are staged in
 checked evaluation order before the handler's CFG branch. A native differential

@@ -1264,6 +1264,23 @@ impl NativeValues {
         text.push_str(&value);
         Ok(0)
     }
+    fn sum_handle_tag(&mut self, value: u64, layout: &[u8]) -> LeafResult<u32> {
+        let sum = self.sums.get(&value).ok_or(INVALID_SUM)?;
+        let tag = sum.tag;
+        let pending = sum.pending_depth != 0;
+        if !pending {
+            return Ok(tag);
+        }
+        let layout = NativeDebugLayout::parse(layout)?;
+        let value = layout.format_value(self, value, layout.root)?;
+        self.dynamic_failure_message = Some(
+            format!("handle block requires a result or optional value, got {value}").into_bytes(),
+        );
+        Err((
+            JettRuntimeStatusV1::INVALID_ARGUMENT,
+            b"cannot handle a pending sum",
+        ))
+    }
     fn debug_emit(&mut self, builder: u64) -> LeafResult<u32> {
         let mut stderr = io::stderr().lock();
         write_all_bytes(&mut stderr, self.text(builder)?.as_bytes())
@@ -5500,6 +5517,12 @@ leaves! {
             Ok(id) };
     SumTag, jett_rt_v1_sum_tag, false, (value: u64 => I64), u32 => I32,
         |s| s.sums.get(&value).map(|v| v.tag).ok_or(INVALID_SUM);
+    SumHandleTag, jett_rt_v1_sum_handle_tag, false, (value: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u32 => I32,
+        |s| { if layout_pointer == 0 { return Err(INVALID_SUM); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_SUM)?;
+            if length > isize::MAX as usize { return Err(INVALID_SUM); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.sum_handle_tag(value, layout) };
     SumPayloadPendingDepth, jett_rt_v1_sum_payload_pending_depth, false, (value: u64 => I64), u64 => I64,
         |s| s.sums.get(&value).map(|v| v.payload_pending_depth).ok_or(INVALID_SUM);
     SumTake, jett_rt_v1_sum_take, false, (value: u64 => I64, tag: u32 => I32), u64 => I64,
@@ -8295,6 +8318,41 @@ mod tests {
             assert!(values.is_empty());
         }
     }
+    #[test]
+    fn sum_handles_reject_outer_pending_depth_and_preserve_owned_payloads() {
+        let mut values = NativeValues::default();
+        let mut primitive = vec![NativeDebugTag::Primitive as u8];
+        primitive.extend_from_slice(&(NativeSortKind::String as u32).to_le_bytes());
+        let mut optional = vec![NativeDebugTag::Optional as u8];
+        optional.extend_from_slice(&1u32.to_le_bytes());
+        let layout = function_debug_layout_bytes(&[optional, primitive], 0);
+        let text = values.insert("payload".into()).unwrap();
+        let ready = values.sum(SUM_SUCCESS, text, true).unwrap();
+        let pending = values.run_sum(ready).unwrap();
+        let twice = values.run_sum(pending).unwrap();
+        assert_eq!(values.sum_handle_tag(ready, &layout), Ok(SUM_SUCCESS));
+        assert!(values.sum_handle_tag(twice, &layout).is_err());
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"handle block requires a result or optional value, got pending(pending(some(payload)))".as_slice())
+        );
+        assert!(values.sums.contains_key(&twice));
+        let malformed = values.sum_handle_tag(twice, b"invalid");
+        assert!(malformed.is_err());
+        let inner_pending = values.insert("inner".into()).unwrap();
+        values
+            .strings
+            .get_mut(&inner_pending)
+            .unwrap()
+            .pending_depth = 1;
+        let outer_ready = values.sum(SUM_SUCCESS, inner_pending, true).unwrap();
+        assert_eq!(values.sum_handle_tag(outer_ready, &layout), Ok(SUM_SUCCESS));
+        for value in [ready, pending, twice, outer_ready] {
+            values.drop_value(value).unwrap();
+        }
+        assert!(values.is_empty());
+    }
+
     #[test]
     fn sum_registry_leak_is_independent_of_payload_ownership() {
         let mut context = Context::new();

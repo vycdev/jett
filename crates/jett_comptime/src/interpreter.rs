@@ -3556,10 +3556,17 @@ impl Interpreter {
                                     | Value::OptionalSome(_)
                                     | Value::OptionalNone
                             );
-                            let handles_sum = sum_payload
-                                && self.debug_expression_type(target).is_none_or(|ty| {
-                                    !self.type_name_has_refinement(&self.concrete_type_display(&ty))
-                                        && matches!(self.inference_base_type(&ty), TypeExpr::Generic(name, _, _)
+                            let target_type = self.debug_expression_type(target);
+                            let refines_whole_sum = self.type_name_has_refinement(&type_name)
+                                && target_type.as_ref().is_some_and(|ty| {
+                                    self.concrete_type_display(
+                                        &self.inference_base_type(&declared_ty),
+                                    ) == self.concrete_type_display(&self.inference_base_type(ty))
+                                });
+                            let handles_sum = sum_payload && !refines_whole_sum
+                                && target_type.as_ref().is_none_or(|ty| {
+                                    !self.type_name_has_refinement(&self.concrete_type_display(ty))
+                                        && matches!(self.inference_base_type(ty), TypeExpr::Generic(name, _, _)
                                             if matches!(name.name.as_str(), "result" | "optional"))
                                 });
                             let flow = if !handles_sum {

@@ -23,6 +23,12 @@ Rejection needs a defined static rule for interfaces and builders; rejecting
 every such value also rejects public instances that currently print successfully.
 Do not weaken native redaction to reproduce the interpreter's disclosure.
 
+Pending-sum extraction errors are another raw-value observation boundary. The
+reference `handle` diagnostic uses raw `Value` display, while the native pending
+check uses the checked layout and preserves redaction. Public pending values
+have differential coverage; hidden secret payloads need the same explicit
+observation-policy decision before their parity can be claimed.
+
 After the decision, compare source checking and native/interpreter output for
 public and secret-bearing erased records, generic fields, incomplete builders,
 nested containers, and pending payloads. Public text equal to `[redacted]` must

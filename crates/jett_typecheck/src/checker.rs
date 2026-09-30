@@ -8290,10 +8290,12 @@ impl<'a> TypeChecker<'a> {
                 if allow_refinement_handle && self.is_refinement_type(expected_ty) =>
             {
                 let target_ty = self.check_expr(target);
-                if matches!(
-                    self.interner.resolve(target_ty),
-                    Type::Result(_, _) | Type::Optional(_)
-                ) {
+                if !self.can_refine_from(target_ty, expected_ty)
+                    && matches!(
+                        self.interner.resolve(target_ty),
+                        Type::Result(_, _) | Type::Optional(_)
+                    )
+                {
                     self.check_handle_with_target_type(target_ty, bind_name.as_ref(), body, *span)
                 } else {
                     self.check_refinement_handle_with_input_type(

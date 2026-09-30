@@ -1219,7 +1219,11 @@ impl Translator<'_, '_> {
                 let slot = self.local_slots[source.index() as usize]
                     .ok_or_else(|| self.unsupported(statement.span, "sum view tag place"))?;
                 let v = self.builder.ins().stack_load(ir::types::I64, slot, 0);
-                let tag = self.leaf(NativeLeaf::SumTag, &[v], true)?;
+                let ty = self.local_types[source.index() as usize].ty;
+                let layout = debug::debug_layout(self.types, ty)
+                    .ok_or_else(|| self.unsupported(statement.span, "sum handle debug layout"))?;
+                let (pointer, length) = self.static_data(&layout)?;
+                let tag = self.leaf(NativeLeaf::SumHandleTag, &[v, pointer, length], true)?;
                 let flag = self.builder.ins().ireduce(ir::types::I8, tag);
                 self.define_local(*target, LoweredValue::Scalar(flag), statement.span)
             }

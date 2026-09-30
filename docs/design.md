@@ -545,6 +545,12 @@ arguments, and scoped type bindings cannot change their meaning. The constraint'
 for validation; inherited interface refinements dispatch through that base.
 Validation preserves the caller's context whether the constraint passes or fails.
 
+If a refinement's base is an optional or result, its `handle error:` validates
+the whole sum, including an absent or failure branch. It does not extract the
+payload. An outer optional/result containing an already refined value still
+uses ordinary sum extraction. Refinement-validation errors are strings even
+when the base result has a different error type.
+
 **For parameterized validation, use functions.** If validation rules depend on runtime values (e.g., a minimum password length from config), write a regular function that returns `result[T, string]`:
 
 ```

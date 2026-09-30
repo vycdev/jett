@@ -471,6 +471,14 @@ compile_fail_fixture!(
     compile_fail_refinement_requires_handle,
     "refinement_requires_handle.jett"
 );
+compile_fail_fixture!(
+    compile_fail_refinement_sum_requires_handle,
+    "refinement_sum_requires_handle.jett"
+);
+compile_fail_fixture!(
+    compile_fail_refinement_sum_requires_handle_error,
+    "refinement_sum_requires_handle_error.jett"
+);
 
 run_pass_fixture!(run_pass_simple, "simple.jett");
 run_pass_fixture!(run_pass_fibonacci, "fibonacci.jett");

@@ -3523,15 +3523,26 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         output_type: TypeId,
         span: Span,
     ) -> Option<Expression> {
-        let kind = match self.parent.check.interner.resolve(target.ty) {
-            Type::Result(_, _) => HandleKind::Result,
-            Type::Optional(_) => HandleKind::Optional,
-            _ if matches!(
-                self.parent.check.interner.resolve(output_type),
-                Type::Refinement { .. }
-            ) =>
-            {
-                let mut predicates = self.checked_refinement_predicates(output_type, span)?;
+        let refinement_predicates = if matches!(
+            self.parent.check.interner.resolve(output_type),
+            Type::Refinement { .. }
+        ) {
+            Some(self.checked_refinement_predicates(output_type, span)?)
+        } else {
+            None
+        };
+        let refines_whole_sum = refinement_predicates.as_ref().is_some_and(|predicates| {
+            predicates.first().is_some_and(|predicate| {
+                target.ty == predicate.base_type || target.ty == predicate.input_type
+            })
+        });
+        let kind = match (
+            self.parent.check.interner.resolve(target.ty),
+            refinement_predicates,
+        ) {
+            (Type::Result(_, _), _) if !refines_whole_sum => HandleKind::Result,
+            (Type::Optional(_), _) if !refines_whole_sum => HandleKind::Optional,
+            (_, Some(mut predicates)) => {
                 if let Some(index) = predicates
                     .iter()
                     .position(|predicate| predicate.refined_type == target.ty)
@@ -3543,7 +3554,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     predicates,
                 }
             }
-            _ => {
+            (_, None) => {
                 self.parent.error(
                     span,
                     "checked handle target is neither result, optional, nor refinement",
@@ -3559,8 +3570,8 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 return None;
             };
             let ty = match self.parent.check.interner.resolve(target.ty) {
-                Type::Result(_, error) => Some(*error),
                 _ if matches!(kind, HandleKind::Refinement { .. }) => Some(TypeInterner::STRING),
+                Type::Result(_, error) => Some(*error),
                 _ => self.parent.check.definition_types.get(&definition).copied(),
             };
             let Some(ty) = ty else {
@@ -7537,6 +7548,61 @@ function positive_or_one(raw: int64, fallback: Positive) returns Positive:
             program.functions[1].identity.declaration.kind,
             DeclarationKind::RefinementPredicate
         );
+    }
+
+    #[test]
+    fn lowers_whole_sum_refinements_before_sum_extraction() {
+        let program = lower_source(
+            r#"namespace app
+type Choice = optional[int64] where true
+type Outcome = result[int64, int64] where true
+function check(maybe: optional[int64], outcome: result[int64, int64], wrapped: result[Outcome, int64], optional_wrapped: optional[Choice]) returns nothing:
+    Choice first = maybe handle error: return nothing
+    Outcome second = outcome handle error: return nothing
+    Outcome third = wrapped handle error: return nothing
+    Choice fourth = optional_wrapped handle: return nothing
+    return nothing
+"#,
+        );
+        let function = &program.functions[0];
+        for (index, expected) in [
+            TypeInterner::STRING,
+            TypeInterner::STRING,
+            TypeInterner::INT64,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let StatementKind::Let { value, .. } = &function.body.statements[index].kind else {
+                panic!("expected a checked binding");
+            };
+            let ExpressionKind::Handle {
+                kind,
+                error_local: Some(error),
+                ..
+            } = &value.kind
+            else {
+                panic!("expected a checked handle");
+            };
+            assert_eq!(function.locals[error.index() as usize].ty, expected);
+            if index < 2 {
+                assert!(
+                    matches!(kind, HandleKind::Refinement { predicates, .. } if predicates.len() == 1)
+                );
+            } else {
+                assert!(matches!(kind, HandleKind::Result));
+            }
+        }
+        let StatementKind::Let { value, .. } = &function.body.statements[3].kind else {
+            panic!("expected optional extraction");
+        };
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::Handle {
+                kind: HandleKind::Optional,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -730,6 +730,123 @@ fn native_indirect_owned_results_match_interpreter_in_both_profiles() {
 }
 
 #[test]
+fn native_pending_sum_handles_fail_before_extraction_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_sum_handle_failure.jett");
+    let template = fs::read_to_string(fixture).unwrap();
+    for (ty, value, payload, rendered, handle) in [
+        (
+            "optional[string]",
+            "some(\"payload\")",
+            "string",
+            "some(payload)",
+            "handle:",
+        ),
+        ("optional[string]", "none", "string", "none", "handle:"),
+        (
+            "result[string, int64]",
+            "ok(\"payload\")",
+            "string",
+            "ok(payload)",
+            "handle error:",
+        ),
+        (
+            "result[string, int64]",
+            "fail(17)",
+            "string",
+            "fail(17)",
+            "handle error:",
+        ),
+        (
+            "optional[Record]",
+            "some(Record(label: \"payload\"))",
+            "Record",
+            "some(app.Record(label: payload))",
+            "handle:",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pending_sum.jett");
+        let text = template
+            .replace("optional[string]", ty)
+            .replace("some(\"payload\")", value)
+            .replace("string found", &format!("{payload} found"))
+            .replace("handle:", handle);
+        fs::write(&source, text).unwrap();
+        let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+        assert_eq!(expected.output.stdout, "before;");
+        assert_eq!(
+            expected.message,
+            format!(
+                "runtime error: handle block requires a result or optional value, got pending(pending({rendered}))"
+            )
+        );
+        assert!(expected.output.debug_output.is_empty());
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory.path().join(format!("pending_sum_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .expect("native pending sum handle");
+            binaries.push(binary);
+        }
+        fs::remove_file(&source).unwrap();
+        for binary in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+            assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+            assert_eq!(
+                actual.stderr,
+                format!("{}\n", expected.message).as_bytes(),
+                "{actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_interface_refined_sums_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_refined_sums.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("refined_sums.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected =
+        jett_driver::run_file_capture_output(&source).expect("refined interface sums oracle");
+    let values = "choice:small:7;again:choice:small:7;outcome:text;outcome-fail:kept;choice:small:7;outcome:text;\n";
+    assert_eq!(
+        expected.stdout,
+        format!(
+            "{values}{values}choice rejected\nchoice rejected\noutcome rejected\noutcome rejected\nchoice:small:11;choice:small:11;\nchoice:small:11\nabsent rejected\nabsent rejected\npending rejected\nchoice:small:11\n17:true\n17:true\n"
+        )
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("refined_sums_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native refined interface sums");
+        binaries.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
 fn native_interface_math_facade_contexts_match_interpreter_in_both_profiles() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_math_facade_contexts.jett");

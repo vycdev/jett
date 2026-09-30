@@ -3085,6 +3085,11 @@ restore the requested ancestor without losing the concrete base implementation.
 The checker accepts a compatible whole sum before considering missing payload
 handling. Interpreter refinement handles use the checked source type to
 distinguish a sum from an interface whose concrete payload happens to be a sum.
+For an exact base/ancestor of the expected refinement, whole-value refinement
+validation takes precedence over sum extraction. Checked HIR keeps the matching
+handle kind and a string error local. Native sum extraction checks outer pending
+depth before reading the tag; a pending sum produces the reference handle error
+without taking its payload, including inside a caught refinement predicate.
 Predicates observe the base interface identity; already validated pending
 refinements retain their invariant without rerunning a predicate on the task.
 Constructor fields with pending predicate chains keep their checked ancestor

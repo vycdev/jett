@@ -219,3 +219,16 @@ results, and comptime-created callbacks invoked at runtime. It verifies concrete
 owner dispatch through interface collections and exact output in debug/release
 after source removal. These probes strengthen the facade/comptime audit without
 settling the remaining equality or erased-call policy decisions.
+
+The refined-sum audit fixes direct optional/result refinement boundaries to
+validate their whole declared base before considering extraction. Its linked
+matrix preserves erased payload owners across inheritance, fields, callbacks,
+pending joins, and runtime/comptime values. Failure/absence cases and integer
+result errors pin the independent string refinement-error contract.
+The pending-candidate regression also exposed unguarded native sum extraction;
+native tag reads now reject outer pending depth before payload transfer.
+Debug/release terminal-error tests cover both sum families and branches, nested
+pending depth, and an owned record payload after source removal. Runtime tests
+verify that failed checks preserve owners and ready sums with pending payloads
+remain extractable. Hidden-secret diagnostic observation remains subject to the
+unresolved observation policy; native formatting retains its existing redaction.
