@@ -976,6 +976,17 @@ pub fn direct_collection_equality(type_name: &str, op: &str, span: Span) -> Diag
     )
 }
 
+/// E0377: Namespace-level declarations cannot introduce mutable global state.
+pub fn mutable_global(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        377,
+        format!(
+            "namespace-level binding `{name}` cannot be mutable; global declarations must be immutable compile-time constants"
+        ),
+        span,
+    )
+}
+
 /// E0800: Function body exceeds the statement count limit.
 pub fn function_statement_limit(
     function_name: &str,

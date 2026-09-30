@@ -1295,6 +1295,49 @@ fn native_suites_reject_failing_source_assertions() {
 }
 
 #[test]
+fn native_builds_reject_mutable_globals_before_publication() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/compile_fail/mutable_global.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("mutable_global.jett");
+    fs::copy(fixture, &source).unwrap();
+    let reference = jett_driver::run_file_capture_output(&source).unwrap_err();
+    assert!(reference.contains("E0377"), "{reference}");
+    for release in [false, true] {
+        let binary = directory.path().join("preserved.exe");
+        fs::write(&binary, b"existing output").unwrap();
+        let error = jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .unwrap_err();
+        let jett_driver::native::NativeBuildError::Lowering {
+            source: lowering, ..
+        } = error
+        else {
+            panic!("expected frontend rejection, got {error}");
+        };
+        let jett_driver::BackendLoweringError::Build(checked) = *lowering else {
+            panic!("expected diagnostics before HIR");
+        };
+        let errors = checked
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|diagnostic| diagnostic.code.code() == 377)
+        );
+        assert_eq!(fs::read(&binary).unwrap(), b"existing output");
+    }
+}
+
+#[test]
 fn native_builds_reject_direct_collection_equality_before_publication() {
     for ty in [
         "bytes",

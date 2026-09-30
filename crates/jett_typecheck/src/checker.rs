@@ -5094,7 +5094,13 @@ impl<'a> TypeChecker<'a> {
                 }
                 Item::Bitfield(_) => {}
                 Item::Actor(def) => self.check_actor(def, current_namespace.as_deref()),
-                Item::VarDecl(decl) => self.check_var_decl(decl),
+                Item::VarDecl(decl) => {
+                    if decl.mutable {
+                        self.sink
+                            .emit(errors::mutable_global(&decl.name.name, decl.name.span));
+                    }
+                    self.check_var_decl(decl);
+                }
                 Item::Verify(verify) => self.check_verify_block(verify),
                 Item::Property(prop) => self.check_property_block(prop),
                 _ => {}
@@ -19841,6 +19847,22 @@ function main() returns list[int64]:
                 .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error),
             "result context must not infer a type argument absent from all inputs"
         );
+    }
+
+    #[test]
+    fn rejects_mutable_namespace_values_but_preserves_local_mutability() {
+        let errors = check_source_errors(
+            "namespace first\nmutable int64 count = 0\nfunction read_count() returns int64:\n    return count\nnamespace second\nmutable string label = \"global\"\nfunction read_label() returns string:\n    return label\n",
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().all(|error| error.code.code() == 377));
+        assert!(errors[0].message.contains("count"));
+        assert!(errors[1].message.contains("label"));
+
+        let errors = check_source_errors(
+            "namespace app\nint64 answer = 42\nfunction read_answer() returns int64:\n    mutable int64 local = answer\n    local = local + 1\n    return local\n",
+        );
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]

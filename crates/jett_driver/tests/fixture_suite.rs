@@ -2195,6 +2195,7 @@ compile_fail_fixture!(
     compile_fail_equatable_signature_is_exact,
     "equatable_signature_is_exact.jett"
 );
+compile_fail_fixture!(compile_fail_mutable_global, "mutable_global.jett");
 compile_fail_fixture!(
     compile_fail_direct_collection_equality,
     "direct_collection_equality.jett"

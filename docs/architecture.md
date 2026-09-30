@@ -450,7 +450,7 @@ ResolveResult {
 - **Inline-only imports** — `use` statements are only allowed inside functions/blocks, never at file level. Within a function or nested block, `use` must appear before any other code. Executable access to another project or vendored namespace requires an active local import; same-namespace access and canonical qualified types in declaration signatures do not. Compiler-provided standard namespaces remain available by canonical qualification under the fixed prelude and module contract.
 - **Bare declarations before standard module prefixes** — a bare reference to a declared same-namespace function, such as `math(4)`, resolves to that function. A dotted standard call such as `math.abs(-4)` keeps its module prefix. Resolver facts carry this distinction into HIR.
 - **Duplicate namespace detection** — two project/dependency files declaring the same namespace is an error. Compiler-shipped stdlib files have a narrow fragment exception so one stdlib namespace can be split across several implementation files; duplicate declarations inside that namespace still fail normally.
-- **Global constants** — registered as top-level declarations (global mutable variables are forbidden). Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
+- **Global constants** — registered as top-level declarations; the checker reports E0377 at every mutable namespace-level binding, without rejecting local mutability. Their initializers may use literals and same-namespace declarations, but project or vendored declarations from another namespace are rejected with `E0211`; compiler-provided standard declarations follow the fixed stdlib namespace and prelude policy.
 
 - **Canonical type names** — every struct, enum, interface, machine, actor,
   bitfield, alias, and refinement declaration is validated before registration.
@@ -2799,7 +2799,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 |---|---|
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
-| E0300–E0376 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing and equality, sequence policy, arithmetic safety, graphics policy, and release debug-print policy |
+| E0300–E0377 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing and equality, sequence policy, arithmetic safety, graphics policy, release debug-print policy, and mutable global rejection |
 | E0400–E0401 | Ownership errors (use-after-move, consuming a view) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |

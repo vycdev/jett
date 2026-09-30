@@ -53,7 +53,7 @@ separate from parity for existing accepted behavior.
 
 ## Remaining semantic work
 
-The following decisions remain unresolved and prevent a full parity claim:
+The following semantic and implementation gaps prevent a full parity claim:
 
 - [Actor equality](../open_design/actor_equality.md): actor identity versus rejecting comparisons.
 - [Actor handles escaping comptime](../open_design/comptime_actor_values.md): reject escaping handles versus materializing a defined actor graph.

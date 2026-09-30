@@ -2,6 +2,8 @@
 
 Global constants are permitted by the design and frontend, subject to declaration
 order and namespace isolation. Neither execution handoff implements them today.
+Mutable namespace-level declarations are forbidden and now report E0377 before
+either execution handoff. Local mutable bindings are unaffected.
 A same-namespace `int64 answer = 42` followed by an entry point reading `answer`
 passes checking but fails reference execution with `undefined variable 'answer'`.
 The interpreter registers declarations without initializing top-level variables,

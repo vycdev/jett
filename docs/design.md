@@ -6802,7 +6802,10 @@ string DEFAULT_HOST = "localhost"
 float64 PI = 3.14159265358979
 ```
 
-Global mutable variables are forbidden (Rule Set 2). Global constants are allowed because they never change — they are baked into the binary at compile time.
+Global mutable variables are forbidden (Rule Set 2). The frontend reports E0377
+at each mutable namespace-level binding before either backend lowers or executes
+it. Local mutable bindings remain allowed. Global constants are allowed because
+they never change — they are baked into the binary at compile time.
 
 Global constant initializers are namespace-local: they may use literals and
 declarations from their own namespace, but they cannot reference project or
