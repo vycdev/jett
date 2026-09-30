@@ -358,6 +358,7 @@ fn visit(
         *temporaries += usize::from(match &value.kind {
             ExpressionKind::Local(_) => !borrowed,
             ExpressionKind::Call { .. }
+            | ExpressionKind::IndirectCall { .. }
             | ExpressionKind::Intrinsic { .. }
             | ExpressionKind::Clone(_)
             | ExpressionKind::ResultOk(_)

@@ -196,3 +196,22 @@ debug and release artifacts run after source removal. The companion failure
 gate covers direct/indirect calls and both transparent wrappers, requiring the
 interpreter's exact terminal error, no partial output, and exit 71 rather than
 cleanup failure. MIR and codegen suites validate the shared ownership handoff.
+
+The facade-context audit found a missing ownership-planner case: indirect calls
+returning move-only values did not reserve their result temporary. A list built
+from several callbacks returning interfaces failed native emission after
+exhausting the planned slots. MIR now counts each owned indirect result, while
+retaining separate slots for callee descriptors and argument evaluation.
+`native_indirect_owned_results_match_interpreter_in_both_profiles` checks records,
+enums, bitfields, machines, lists, sets, maps, bytes, optional/result values, and
+construction builders. A third callback failure must retire earlier results and
+the partially built collection, match the interpreter's error and output, and
+exit 71. Both profiles execute after source removal.
+
+`native_interface_math_facade_contexts_match_interpreter_in_both_profiles` checks
+all int64/float64 forms of the overloaded abs/min/max facades, secret taint from
+either argument, generic wrappers, captured public-value callbacks, wholly baked
+results, and comptime-created callbacks invoked at runtime. It verifies concrete
+owner dispatch through interface collections and exact output in debug/release
+after source removal. These probes strengthen the facade/comptime audit without
+settling the remaining equality or erased-call policy decisions.

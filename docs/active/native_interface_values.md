@@ -389,6 +389,16 @@ redaction for runtime and baked JSON parser results, enum/bitfield/machine JSON
 round trips, and math facade results. It passes from the ordinary native test
 thread after explicit evaluation adopts the shared interpreter stack budget.
 
+The `interface_math_facade_contexts` probe covers both allowed numeric owners
+for every abs/min/max facade, secret taint from either operand, generic wrappers,
+captured public-value callbacks, entirely baked collections, and baked callbacks
+called at runtime. All preserve integer/fraction/secret interface dispatch in
+linked debug and release artifacts after source removal. This probe exposed an
+independent MIR capacity error: owned indirect-call results were omitted from
+temporary planning. The planner now reserves each result in addition to the
+callee descriptor and its arguments. A companion matrix covers the other owned
+return families and terminal failure after earlier callbacks produced owners.
+
 Opaque carriers must also retain their checked concrete owners when erased to
 interfaces. Distinct actor declarations and refinements of `TypeConstruction`
 already dispatch independently in native code. Interpreter metadata must preserve

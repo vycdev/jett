@@ -669,6 +669,105 @@ fn native_comptime_actor_computation_matches_interpreter() {
 }
 
 #[test]
+fn native_indirect_owned_results_match_interpreter_in_both_profiles() {
+    for (fixture_name, stdout, failure) in [
+        (
+            "indirect_owned_results",
+            "true true true\n4 4 4 4 4 4 4\n",
+            None,
+        ),
+        (
+            "indirect_owned_result_failure",
+            "1;2;3;",
+            Some("runtime error: string.repeat: requested output is too large"),
+        ),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../tests/native/{fixture_name}.jett"));
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join(format!("{fixture_name}.jett"));
+        fs::copy(&fixture, &source).unwrap();
+        let interpreted = jett_driver::run_file_capture_outcome(&source);
+        if let Some(message) = failure {
+            let expected = interpreted.unwrap_err();
+            assert_eq!(expected.message, message);
+            assert_eq!(expected.output.stdout, stdout);
+            assert!(expected.output.debug_output.is_empty());
+        } else {
+            let expected = interpreted.unwrap();
+            assert_eq!(expected.stdout, stdout);
+            assert!(expected.debug_output.is_empty());
+        }
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory
+                .path()
+                .join(format!("{fixture_name}_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .expect("native owned indirect results");
+            binaries.push(binary);
+        }
+        fs::remove_file(&source).unwrap();
+        for binary in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert_eq!(
+                actual.status.code(),
+                Some(if failure.is_some() { 71 } else { 0 }),
+                "{actual:?}"
+            );
+            assert_eq!(actual.stdout, stdout.as_bytes());
+            let stderr = failure
+                .map(|message| format!("{message}\n"))
+                .unwrap_or_default();
+            assert_eq!(actual.stderr, stderr.as_bytes(), "{actual:?}");
+        }
+    }
+}
+
+#[test]
+fn native_interface_math_facade_contexts_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_math_facade_contexts.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("math_facades.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected =
+        jett_driver::run_file_capture_output(&source).expect("math facade context oracle");
+    let primitives = "integer:3;fraction:1.25;integer:1;fraction:1.25;integer:2;fraction:2.5;\n";
+    let hidden = "hidden-integer;hidden-fraction;hidden-integer;hidden-fraction;hidden-integer;hidden-fraction;\n";
+    let callbacks = "integer:3;fraction:1.25;hidden-integer;hidden-fraction;\n";
+    assert_eq!(
+        expected.stdout,
+        format!("{primitives}{hidden}{callbacks}{primitives}{hidden}{callbacks}{callbacks}")
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("math_facades_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native math facade contexts");
+        binaries.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
 fn native_interface_facade_results_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_facade_results.jett");

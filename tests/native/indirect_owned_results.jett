@@ -1,0 +1,75 @@
+namespace app
+struct Record:
+    label: string
+enum Event:
+    empty
+    named(label: string)
+bitfield Header:
+    code: 8 bits
+machine Session:
+    states:
+        active(label: string)
+    transitions:
+        active to active
+function record() returns Record:
+    return Record(label: "record")
+function event() returns Event:
+    return Event.named("event")
+function header() returns Header:
+    return Header(code: 7)
+function session() returns Session:
+    return Session(active, "session")
+function sequence() returns list[string]:
+    return list("sequence")
+function members() returns set[string]:
+    return set.add[string](set.new[string](), "member")
+function mapping() returns map[string, string]:
+    return map("key": "value")
+function raw() returns bytes:
+    return bytes.from_string("raw")
+function maybe() returns optional[string]:
+    return some("maybe")
+function outcome() returns result[string, string]:
+    return ok("outcome")
+function builder() returns TypeConstruction:
+    return type.construct_start[Record]()
+function collect[T](factory: function() returns T) returns list[T]:
+    return list(factory(), factory(), factory(), factory())
+function verify_records() returns bool:
+    list[Record] values = collect[Record](record)
+    for value in values:
+        if value.label != "record":
+            return false
+    return true
+function verify_events() returns bool:
+    list[Event] values = collect[Event](event)
+    for value in values:
+        match value:
+            named(label):
+                if label != "event":
+                    return false
+            empty:
+                return false
+    return true
+function verify_sums() returns bool:
+    list[optional[string]] maybe_values = collect[optional[string]](maybe)
+    list[result[string, string]] outcomes = collect[result[string, string]](outcome)
+    for value in maybe_values:
+        string text = value handle: return false
+        if text != "maybe":
+            return false
+    for value in outcomes:
+        string text = value handle error: return false
+        if text != "outcome":
+            return false
+    return true
+function main(stdout: Stdout) returns nothing:
+    list[Header] headers = collect[Header](header)
+    list[Session] sessions = collect[Session](session)
+    list[list[string]] sequences = collect[list[string]](sequence)
+    list[set[string]] sets = collect[set[string]](members)
+    list[map[string, string]] maps = collect[map[string, string]](mapping)
+    list[bytes] bytes_values = collect[bytes](raw)
+    list[TypeConstruction] builders = collect[TypeConstruction](builder)
+    Stdout.write(view stdout, "{verify_records()} {verify_events()} {verify_sums()}\n")
+    Stdout.write(view stdout, "{list.length(view headers)} {list.length(view sessions)} {list.length(view sequences)} {list.length(view sets)} {list.length(view maps)} {list.length(view bytes_values)} {list.length(view builders)}\n")

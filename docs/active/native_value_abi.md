@@ -875,7 +875,12 @@ from the descriptor and pass the environment to the checked target signature.
 Function values copy by deep-cloning their descriptors and captured values;
 aggregate fields own and release them. Source argument order, runtime-failure
 checks, and owned result handling match direct calls. View-parameter function
-values remain guarded.
+values retain their checked borrow modes, including capability arguments.
+Ownership planning reserves an independent result temporary for every indirect
+call returning an owned aggregate or interface, as well as the callee descriptor
+and argument temporaries. Linked debug/release tests cover collections built
+from multiple owned callbacks, both live and baked interface facade results,
+and cleanup after a later callback fails.
 The `list.sort_by` callback now runs in `.jett` over
 one precomputed key per item, then performs stable swaps of parallel key and
 item lists. This avoids invoking Jett callbacks while a runtime collection
