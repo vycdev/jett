@@ -11345,8 +11345,49 @@ impl Interpreter {
             .collect())
     }
 
+    fn sum_primitive_list(
+        &self,
+        name: &str,
+        type_name: &str,
+        items: &[Value],
+    ) -> Result<Value, String> {
+        let invalid_element = |index| {
+            if index == 0 {
+                format!("{name}: list elements must be int64 or float64")
+            } else {
+                format!("{name}: mixed types")
+            }
+        };
+        if matches!(type_name, "float32" | "float64") {
+            let mut total = 0.0_f64;
+            for (index, item) in items.iter().enumerate() {
+                let Value::Float64(number) = item.payload() else {
+                    return Err(invalid_element(index));
+                };
+                total = if type_name == "float32" {
+                    f64::from(total as f32 + *number as f32)
+                } else {
+                    total + number
+                };
+            }
+            return Ok(Value::Float64(total));
+        }
+        let mut total = 0_u64;
+        // Reduction modulo the selected width commutes with every addition.
+        // Keep the raw accumulator and apply that width before returning.
+        for (index, item) in items.iter().enumerate() {
+            let bits = match (type_name, item.payload()) {
+                ("uint64", Value::Uint64(number)) => *number,
+                (_, Value::Int64(number)) if type_name != "uint64" => *number as u64,
+                _ => return Err(invalid_element(index)),
+            };
+            total = total.wrapping_add(bits);
+        }
+        self.wrap_integer_value_for_type_name(type_name, Value::Uint64(total))
+    }
+
     /// Try to call a higher-order built-in that requires `&mut self` (because
-    /// it needs to invoke a user-supplied function value).  Returns `None` if
+    /// it needs to invoke a user-supplied function value). Returns `None` if
     /// the name is not a higher-order built-in.
     fn call_higher_order_builtin(
         &mut self,
@@ -11398,6 +11439,27 @@ impl Interpreter {
                 }
                 match args[0].payload() {
                     Value::List(items) => {
+                        let element = self
+                            .current_type_arguments
+                            .first()
+                            .map(|ty| self.concrete_type_display(ty));
+                        if let Some(type_name) = element
+                            && matches!(
+                                type_name.as_str(),
+                                "int8"
+                                    | "int16"
+                                    | "int32"
+                                    | "int64"
+                                    | "uint8"
+                                    | "uint16"
+                                    | "uint32"
+                                    | "uint64"
+                                    | "float32"
+                                    | "float64"
+                            )
+                        {
+                            return Some(self.sum_primitive_list(name, &type_name, items));
+                        }
                         if items.is_empty() {
                             return Some(Ok(Value::Int64(0)));
                         }
@@ -19804,6 +19866,157 @@ mod builtin_tests {
         let list_expr = Expr::ListConstruct(vec![int(1), int(2), int(3)], sp());
         let expr = dotted_call("list", "__length", vec![list_expr]);
         assert_eq!(interp.eval_expr(&expr).unwrap(), Value::Int64(3));
+    }
+
+    #[test]
+    fn private_list_sum_wraps_every_primitive_integer_width() {
+        for (type_name, maximum, increment, expected) in [
+            (
+                "int8",
+                Value::Int64(127),
+                Value::Int64(1),
+                Value::Int64(-128),
+            ),
+            (
+                "int16",
+                Value::Int64(32767),
+                Value::Int64(1),
+                Value::Int64(-32768),
+            ),
+            (
+                "int32",
+                Value::Int64(i32::MAX.into()),
+                Value::Int64(1),
+                Value::Int64(i32::MIN.into()),
+            ),
+            (
+                "int64",
+                Value::Int64(i64::MAX),
+                Value::Int64(1),
+                Value::Int64(i64::MIN),
+            ),
+            ("uint8", Value::Int64(255), Value::Int64(2), Value::Int64(1)),
+            (
+                "uint16",
+                Value::Int64(65535),
+                Value::Int64(2),
+                Value::Int64(1),
+            ),
+            (
+                "uint32",
+                Value::Int64(u32::MAX.into()),
+                Value::Int64(2),
+                Value::Int64(1),
+            ),
+            (
+                "uint64",
+                Value::Uint64(u64::MAX),
+                Value::Uint64(2),
+                Value::Uint64(1),
+            ),
+        ] {
+            let mut interp = Interpreter::new();
+            interp.current_function_trusted_stdlib = true;
+            interp.current_type_arguments = vec![TypeExpr::Named(ident(type_name))];
+            assert_eq!(
+                interp.call_higher_order_builtin(
+                    "list.__sum",
+                    &[Value::List(vec![maximum, increment])]
+                ),
+                Some(Ok(expected)),
+                "{type_name}"
+            );
+            let zero = if type_name == "uint64" {
+                Value::Uint64(0)
+            } else {
+                Value::Int64(0)
+            };
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[Value::List(Vec::new())]),
+                Some(Ok(zero)),
+                "empty {type_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_list_sum_preserves_float_width_rounding_and_ieee_values() {
+        for (type_name, expected) in [("float32", 0.0), ("float64", 1.0)] {
+            let mut interp = Interpreter::new();
+            interp.current_function_trusted_stdlib = true;
+            interp.current_type_arguments = vec![TypeExpr::Named(ident(type_name))];
+            let numbers = vec![
+                Value::Float64(16777216.0),
+                Value::Float64(1.0),
+                Value::Float64(-16777216.0),
+            ];
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[Value::List(numbers)]),
+                Some(Ok(Value::Float64(expected)))
+            );
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[Value::List(Vec::new())]),
+                Some(Ok(Value::Float64(0.0)))
+            );
+            let infinite = Value::List(vec![Value::Float64(f64::INFINITY)]);
+            assert_eq!(
+                interp.call_higher_order_builtin("list.__sum", &[infinite]),
+                Some(Ok(Value::Float64(f64::INFINITY)))
+            );
+            let cancelling = Value::List(vec![
+                Value::Float64(f64::INFINITY),
+                Value::Float64(f64::NEG_INFINITY),
+            ]);
+            let Some(Ok(Value::Float64(nan))) =
+                interp.call_higher_order_builtin("list.__sum", &[cancelling])
+            else {
+                panic!("expected a float result");
+            };
+            assert!(nan.is_nan());
+        }
+    }
+
+    #[test]
+    fn private_list_sum_retains_pending_errors_and_requires_trusted_stdlib() {
+        let mut interp = Interpreter::new();
+        assert!(
+            interp
+                .call_higher_order_builtin("list.__sum", &[Value::List(Vec::new())])
+                .is_none()
+        );
+        interp.current_function_trusted_stdlib = true;
+        for (type_name, number) in [
+            ("int8", Value::Int64(1)),
+            ("uint64", Value::Uint64(1)),
+            ("float32", Value::Float64(1.0)),
+            ("float64", Value::Float64(1.0)),
+        ] {
+            interp.current_type_arguments = vec![TypeExpr::Named(ident(type_name))];
+            for (items, message) in [
+                (
+                    vec![Value::Pending(Box::new(number.clone()))],
+                    "list elements must be int64 or float64",
+                ),
+                (
+                    vec![number.clone(), Value::Pending(Box::new(number))],
+                    "mixed types",
+                ),
+            ] {
+                assert_eq!(
+                    interp.call_higher_order_builtin("list.__sum", &[Value::List(items)]),
+                    Some(Err(format!("list.__sum: {message}"))),
+                    "{type_name}"
+                );
+            }
+            assert_eq!(
+                interp.call_higher_order_builtin(
+                    "list.__sum",
+                    &[Value::Pending(Box::new(Value::List(Vec::new())))]
+                ),
+                Some(Err("list.__sum: argument must be a list".into())),
+                "{type_name}"
+            );
+        }
     }
 
     #[test]

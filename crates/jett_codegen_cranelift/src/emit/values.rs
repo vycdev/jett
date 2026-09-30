@@ -940,11 +940,11 @@ impl Translator<'_, '_> {
             IntrinsicId::ListNew => self.list_new(result_type, span),
             IntrinsicId::ListSum => {
                 let list = self.scalar(values[0], span)?;
-                Ok(LoweredValue::Scalar(self.leaf(
-                    NativeLeaf::ListSumInt,
-                    &[list],
-                    true,
-                )?))
+                let kind = crate::values::list_sum_kind(self.types, result_type)
+                    .ok_or_else(|| self.unsupported(span, "invalid numeric list sum type"))?;
+                let kind = self.builder.ins().iconst(ir::types::I32, kind as i64);
+                let bits = self.leaf(NativeLeaf::ListSumPrimitive, &[list, kind], true)?;
+                self.unpack_payload(bits, result_type, span)
             }
             IntrinsicId::ListLength => {
                 let list = self.scalar(values[0], span)?;

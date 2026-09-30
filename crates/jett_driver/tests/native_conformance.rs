@@ -287,6 +287,130 @@ fn native_generic_integer_wrapping_matches_interpreter() {
 }
 
 #[test]
+fn native_primitive_list_sums_match_interpreter_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/list_sum_primitives.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("list_sum.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected =
+        jett_driver::run_file_capture_output(&source).expect("primitive list sum oracle");
+    let nonempty = "int8:-128;int16:-32768;int32:-2147483648;int64:-9223372036854775808;uint8:1;uint16:1;uint32:1;uint64:1;float32:0;float64:1;\n";
+    let empty =
+        "int8:0;int16:0;int32:0;int64:0;uint8:0;uint16:0;uint32:0;uint64:0;float32:0;float64:0;\n";
+    assert_eq!(
+        expected.stdout,
+        format!("{nonempty}{nonempty}{empty}{empty}")
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("list_sum_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native primitive list sum program");
+        binaries.push(binary);
+    }
+    let verify_binary = directory.path().join("list_sum_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native primitive list sum verify suite");
+    let property_binary = directory.path().join("list_sum_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native primitive list sum property suite");
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+    for suite in [verify_binary, property_binary] {
+        let actual = run_bounded(&suite, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_primitive_list_sums_reject_pending_in_both_profiles() {
+    for (ty, first, second) in [
+        ("int8", "2", "3"),
+        ("uint64", "2", "3"),
+        ("float32", "2.0", "3.0"),
+        ("float64", "2.0", "3.0"),
+    ] {
+        for (name, initializer, message) in [
+            (
+                "first",
+                format!("list(run run {first}, {second})"),
+                "list.__sum: list elements must be int64 or float64",
+            ),
+            (
+                "later",
+                format!("list({first}, run run {second})"),
+                "list.__sum: mixed types",
+            ),
+            (
+                "outer",
+                format!("run run list({first}, {second})"),
+                "list.__sum: argument must be a list",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("pending_list_sum.jett");
+            fs::write(
+                &source,
+                format!(
+                    "namespace app\nfunction main(stdout: Stdout) returns nothing:\n    list[{ty}] values = {initializer}\n    Stdout.write(view stdout, \"before\\n\")\n    {ty} total = list.sum[{ty}](view values)\n    trace total\n    Stdout.write(view stdout, \"after\\n\")\n"
+                ),
+            )
+            .unwrap();
+            let expected = jett_driver::run_file_capture_outcome(&source)
+                .expect_err("pending primitive list sum oracle");
+            assert_eq!(expected.output.stdout, "before\n", "{ty}/{name}");
+            assert!(expected.output.debug_output.is_empty(), "{ty}/{name}");
+            assert_eq!(
+                expected.message,
+                format!("runtime error: {message}"),
+                "{ty}/{name}"
+            );
+            let mut binaries = Vec::new();
+            for release in [false, true] {
+                let binary = directory.path().join(format!("pending_sum_{release}.exe"));
+                jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    launcher(),
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .expect("native pending primitive list sum program");
+                binaries.push(binary);
+            }
+            fs::remove_file(&source).unwrap();
+            for binary in binaries {
+                let actual = run_bounded(&binary, directory.path());
+                assert_eq!(actual.status.code(), Some(71), "{ty}/{name}: {actual:?}");
+                assert_eq!(
+                    actual.stdout,
+                    expected.output.stdout.as_bytes(),
+                    "{ty}/{name}"
+                );
+                assert_eq!(
+                    actual.stderr,
+                    format!("{}\n", expected.message).as_bytes(),
+                    "{ty}/{name}: {actual:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn native_generic_lexical_type_scope_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_lexical_type_scope.jett");

@@ -282,7 +282,10 @@ pub(crate) fn verify_intrinsic(
         let list = |ty| matches!(types.resolve(ty), Type::List(inner) if *inner == element);
         let valid = match id {
             IntrinsicId::ListSum => {
-                args.len() == 1 && list(args[0].ty) && element == T::INT64 && result == T::INT64
+                args.len() == 1
+                    && list(args[0].ty)
+                    && list_sum_kind(types, element).is_some()
+                    && result == element
             }
             IntrinsicId::ListNew => args.is_empty() && list(result),
             IntrinsicId::ListAppend => {
@@ -705,6 +708,23 @@ pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<Na
     })
 }
 
+pub(crate) fn list_sum_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
+    let kind = list_sort_kind(types, element)?;
+    match kind {
+        NativeSortKind::Int8
+        | NativeSortKind::Int16
+        | NativeSortKind::Int32
+        | NativeSortKind::Int64
+        | NativeSortKind::Uint8
+        | NativeSortKind::Uint16
+        | NativeSortKind::Uint32
+        | NativeSortKind::Uint64
+        | NativeSortKind::Float32
+        | NativeSortKind::Float64 => Some(kind),
+        NativeSortKind::Bool | NativeSortKind::String => None,
+    }
+}
+
 // The interpreter only orders these five row-key/value shapes. Other types
 // compare equal in sort_by_index and are considered sorted by is_sorted.
 pub(crate) fn list_comparison_kind(
@@ -747,5 +767,61 @@ pub(crate) fn list_element(
         Some(*inner)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jett_common::{FileId, Span};
+    use jett_hir::ExpressionKind;
+
+    #[test]
+    fn list_sum_admits_only_matching_primitive_numeric_results() {
+        let mut types = TypeInterner::new();
+        for element in [
+            TypeInterner::INT8,
+            TypeInterner::INT16,
+            TypeInterner::INT32,
+            TypeInterner::INT64,
+            TypeInterner::UINT8,
+            TypeInterner::UINT16,
+            TypeInterner::UINT32,
+            TypeInterner::UINT64,
+            TypeInterner::FLOAT32,
+            TypeInterner::FLOAT64,
+        ] {
+            let arg = Expression {
+                kind: ExpressionKind::Nothing,
+                ty: types.intern(Type::List(element)),
+                span: Span::new(FileId::new(0), 0, 1),
+            };
+            assert!(list_sum_kind(&types, element).is_some());
+            assert_eq!(
+                verify_intrinsic(IntrinsicId::ListSum, &[arg.clone()], element, &types),
+                Ok(())
+            );
+            assert!(
+                verify_intrinsic(IntrinsicId::ListSum, &[arg], TypeInterner::BOOL, &types).is_err()
+            );
+        }
+        let refinement = types.intern(Type::Refinement {
+            name: "Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        for element in [
+            TypeInterner::BOOL,
+            TypeInterner::STRING,
+            TypeInterner::BYTES,
+            refinement,
+        ] {
+            let arg = Expression {
+                kind: ExpressionKind::Nothing,
+                ty: types.intern(Type::List(element)),
+                span: Span::new(FileId::new(0), 0, 1),
+            };
+            assert_eq!(list_sum_kind(&types, element), None);
+            assert!(verify_intrinsic(IntrinsicId::ListSum, &[arg], element, &types).is_err());
+        }
     }
 }

@@ -2654,6 +2654,62 @@ impl NativeValues {
         Ok(id)
     }
 
+    fn sum_primitive_list(&self, id: u64, raw_kind: u32) -> LeafResult<u64> {
+        let kind = NativeSortKind::from_raw(raw_kind)?;
+        if matches!(kind, NativeSortKind::Bool | NativeSortKind::String) {
+            return Err(INVALID_LIST);
+        }
+        let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
+        if list.owned {
+            return Err(INVALID_LIST);
+        }
+        if list.pending_depth != 0 {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"list.__sum: argument must be a list",
+            ));
+        }
+        if list.element_pending_depths.contains_key(&0) {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"list.__sum: list elements must be int64 or float64",
+            ));
+        }
+        if !list.element_pending_depths.is_empty() {
+            return Err((
+                JettRuntimeStatusV1::INVALID_ARGUMENT,
+                b"list.__sum: mixed types",
+            ));
+        }
+        let mut total = 0_u64;
+        for element in &list.elements {
+            let bits = element.ok_or(INVALID_LIST)?;
+            if !kind.valid_bits(bits) {
+                return Err(INVALID_LIST);
+            }
+            total = match kind {
+                NativeSortKind::Int8 | NativeSortKind::Uint8 => {
+                    u64::from((total as u8).wrapping_add(bits as u8))
+                }
+                NativeSortKind::Int16 | NativeSortKind::Uint16 => {
+                    u64::from((total as u16).wrapping_add(bits as u16))
+                }
+                NativeSortKind::Int32 | NativeSortKind::Uint32 => {
+                    u64::from((total as u32).wrapping_add(bits as u32))
+                }
+                NativeSortKind::Int64 | NativeSortKind::Uint64 => total.wrapping_add(bits),
+                NativeSortKind::Float32 => u64::from(
+                    (f32::from_bits(total as u32) + f32::from_bits(bits as u32)).to_bits(),
+                ),
+                NativeSortKind::Float64 => (f64::from_bits(total) + f64::from_bits(bits)).to_bits(),
+                NativeSortKind::Bool | NativeSortKind::String => {
+                    unreachable!("numeric kind checked above")
+                }
+            };
+        }
+        Ok(total)
+    }
+
     fn math_numbers(
         &self,
         id: u64,
@@ -5307,18 +5363,10 @@ leaves! {
             if list.owned { s.clone_value(bits) } else { Ok(bits) } };
 
     ListSumInt, jett_rt_v1_list_sum_int64, false, (value: u64 => I64), i64 => I64,
-        |s| { let list = s.lists.get(&value).ok_or(INVALID_LIST)?;
-            if list.owned { return Err(INVALID_LIST); }
-            if list.pending_depth != 0 {
-                return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__sum: argument must be a list"));
-            }
-            if list.element_pending_depths.contains_key(&0) {
-                return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__sum: list elements must be int64 or float64"));
-            }
-            if !list.element_pending_depths.is_empty() {
-                return Err((JettRuntimeStatusV1::INVALID_ARGUMENT, b"list.__sum: mixed types"));
-            }
-            Ok(list.elements.iter().flatten().fold(0_i64, |acc, bits| acc.wrapping_add(*bits as i64))) };
+        |s| s.sum_primitive_list(value, NativeSortKind::Int64 as u32).map(|bits| bits as i64);
+
+    ListSumPrimitive, jett_rt_v1_list_sum_primitive, false, (value: u64 => I64, kind: u32 => I32), u64 => I64,
+        |s| s.sum_primitive_list(value, kind);
 
     MathAverage, jett_rt_v1_math_average, false, (value: u64 => I64, kind: u32 => I32), f64 => F64,
         |s| { let numbers = s.math_numbers(value, kind, (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average: list is empty"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.average expects a list of numeric values"), (JettRuntimeStatusV1::INVALID_ARGUMENT, b"math.__average expects a list of numbers"))?;
@@ -8481,6 +8529,174 @@ mod tests {
         }
         context.destroy(JettRuntimeStatusV1::INVALID_ARGUMENT);
     }
+    #[test]
+    fn primitive_list_sum_wraps_widths_rounds_floats_and_keeps_empty_zero() {
+        let cases = [
+            (NativeSortKind::Int8, [127, 1], 128),
+            (NativeSortKind::Int16, [32767, 1], 32768),
+            (NativeSortKind::Int32, [i32::MAX as u64, 1], 1_u64 << 31),
+            (NativeSortKind::Int64, [i64::MAX as u64, 1], 1_u64 << 63),
+            (NativeSortKind::Uint8, [255, 2], 1),
+            (NativeSortKind::Uint16, [65535, 2], 1),
+            (NativeSortKind::Uint32, [u32::MAX as u64, 2], 1),
+            (NativeSortKind::Uint64, [u64::MAX, 2], 1),
+            (
+                NativeSortKind::Float32,
+                [1.5_f32.to_bits() as u64, 2.25_f32.to_bits() as u64],
+                3.75_f32.to_bits() as u64,
+            ),
+            (
+                NativeSortKind::Float64,
+                [1.5_f64.to_bits(), 2.25_f64.to_bits()],
+                3.75_f64.to_bits(),
+            ),
+        ];
+        for (kind, input, expected) in cases {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            assert_eq!(values.sum_primitive_list(list, kind as u32), Ok(0));
+            values.lists.get_mut(&list).unwrap().elements = input.map(Some).to_vec();
+            assert_eq!(
+                values.sum_primitive_list(list, kind as u32),
+                Ok(expected),
+                "{kind:?}"
+            );
+            assert_eq!(values.lists[&list].elements, input.map(Some));
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+        for (kind, bits, expected) in [
+            (
+                NativeSortKind::Float32,
+                [
+                    16777216.0_f32.to_bits() as u64,
+                    1.0_f32.to_bits() as u64,
+                    (-16777216.0_f32).to_bits() as u64,
+                ],
+                0,
+            ),
+            (
+                NativeSortKind::Float64,
+                [
+                    16777216.0_f64.to_bits(),
+                    1.0_f64.to_bits(),
+                    (-16777216.0_f64).to_bits(),
+                ],
+                1.0_f64.to_bits(),
+            ),
+        ] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = bits.map(Some).to_vec();
+            assert_eq!(values.sum_primitive_list(list, kind as u32), Ok(expected));
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn primitive_list_sum_rejects_invalid_carriers_without_consuming_owners() {
+        let mut values = NativeValues::default();
+        let list = values.new_list(false).unwrap();
+        for kind in [
+            NativeSortKind::Bool as u32,
+            NativeSortKind::String as u32,
+            u32::MAX,
+        ] {
+            assert_eq!(values.sum_primitive_list(list, kind), Err(INVALID_LIST));
+        }
+        values.lists.get_mut(&list).unwrap().elements = vec![Some(256)];
+        assert_eq!(
+            values.sum_primitive_list(list, NativeSortKind::Int8 as u32),
+            Err(INVALID_LIST)
+        );
+        values.lists.get_mut(&list).unwrap().elements = vec![None];
+        assert_eq!(
+            values.sum_primitive_list(list, NativeSortKind::Uint64 as u32),
+            Err(INVALID_LIST)
+        );
+        values.drop_value(list).unwrap();
+        let owned = values.new_list(true).unwrap();
+        assert_eq!(
+            values.sum_primitive_list(owned, NativeSortKind::Int64 as u32),
+            Err(INVALID_LIST)
+        );
+        values.drop_value(owned).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn primitive_list_sum_preserves_ieee_infinity_and_nan() {
+        for kind in [NativeSortKind::Float32, NativeSortKind::Float64] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            let (positive, negative) = if kind == NativeSortKind::Float32 {
+                (
+                    u64::from(f32::INFINITY.to_bits()),
+                    u64::from(f32::NEG_INFINITY.to_bits()),
+                )
+            } else {
+                (f64::INFINITY.to_bits(), f64::NEG_INFINITY.to_bits())
+            };
+            values.lists.get_mut(&list).unwrap().elements = vec![Some(positive)];
+            assert_eq!(values.sum_primitive_list(list, kind as u32), Ok(positive));
+            values
+                .lists
+                .get_mut(&list)
+                .unwrap()
+                .elements
+                .push(Some(negative));
+            let nan = values.sum_primitive_list(list, kind as u32).unwrap();
+            assert!(if kind == NativeSortKind::Float32 {
+                f32::from_bits(nan as u32).is_nan()
+            } else {
+                f64::from_bits(nan).is_nan()
+            });
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn primitive_list_sum_retains_pending_errors_without_consuming_input() {
+        for (kind, bits) in [
+            (NativeSortKind::Int8, 1),
+            (NativeSortKind::Uint64, 1),
+            (NativeSortKind::Float32, u64::from(1.0_f32.to_bits())),
+            (NativeSortKind::Float64, 1.0_f64.to_bits()),
+        ] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = vec![Some(bits), Some(bits)];
+            for (index, message) in [
+                (
+                    0,
+                    b"list.__sum: list elements must be int64 or float64".as_slice(),
+                ),
+                (1, b"list.__sum: mixed types".as_slice()),
+            ] {
+                values.lists.get_mut(&list).unwrap().element_pending_depths =
+                    HashMap::from([(index, 1)]);
+                assert_eq!(
+                    values.sum_primitive_list(list, kind as u32),
+                    Err((JettRuntimeStatusV1::INVALID_ARGUMENT, message)),
+                    "{kind:?}"
+                );
+                assert_eq!(values.lists[&list].elements, [Some(bits), Some(bits)]);
+            }
+            values.lists.get_mut(&list).unwrap().pending_depth = 1;
+            assert_eq!(
+                values.sum_primitive_list(list, kind as u32),
+                Err((
+                    JettRuntimeStatusV1::INVALID_ARGUMENT,
+                    b"list.__sum: argument must be a list".as_slice()
+                ))
+            );
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+    }
+
     #[test]
     fn empty_numeric_aggregates_report_their_checked_runtime_errors() {
         for (operation, expected) in [

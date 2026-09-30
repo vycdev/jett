@@ -1,0 +1,84 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+type Small = int8
+implement Named for int8:
+    function name(view self: int8) returns string:
+        return "int8:{self}"
+implement Named for int16:
+    function name(view self: int16) returns string:
+        return "int16:{self}"
+implement Named for int32:
+    function name(view self: int32) returns string:
+        return "int32:{self}"
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "int64:{self}"
+implement Named for uint8:
+    function name(view self: uint8) returns string:
+        return "uint8:{self}"
+implement Named for uint16:
+    function name(view self: uint16) returns string:
+        return "uint16:{self}"
+implement Named for uint32:
+    function name(view self: uint32) returns string:
+        return "uint32:{self}"
+implement Named for uint64:
+    function name(view self: uint64) returns string:
+        return "uint64:{self}"
+implement Named for float32:
+    function name(view self: float32) returns string:
+        return "float32:{self}"
+implement Named for float64:
+    function name(view self: float64) returns string:
+        return "float64:{self}"
+function total[T](values: list[T]) returns T:
+    return list.sum[T](view values)
+function totals() returns list[Named]:
+    Small small = total[Small](list(127, 1))
+    int16 medium = total[int16](list(32767, 1))
+    int32 larger = total[int32](list(2147483647, 1))
+    int64 largest = total[int64](list(9223372036854775807, 1))
+    uint8 unsigned_small = total[uint8](list(255, 2))
+    uint16 unsigned_medium = total[uint16](list(65535, 2))
+    uint32 unsigned_larger = total[uint32](list(4294967295, 2))
+    uint64 unsigned_largest = total[uint64](list(18446744073709551615, 2))
+    float32 narrow = total[float32](list(16777216.0, 1.0, -16777216.0))
+    float64 wide = total[float64](list(16777216.0, 1.0, -16777216.0))
+    return list(small, medium, larger, largest, unsigned_small, unsigned_medium, unsigned_larger, unsigned_largest, narrow, wide)
+function empty_totals() returns list[Named]:
+    int8 small = total[int8](list())
+    int16 medium = total[int16](list())
+    int32 larger = total[int32](list())
+    int64 largest = total[int64](list())
+    uint8 unsigned_small = total[uint8](list())
+    uint16 unsigned_medium = total[uint16](list())
+    uint32 unsigned_larger = total[uint32](list())
+    uint64 unsigned_largest = total[uint64](list())
+    float32 narrow = total[float32](list())
+    float64 wide = total[float64](list())
+    return list(small, medium, larger, largest, unsigned_small, unsigned_medium, unsigned_larger, unsigned_largest, narrow, wide)
+function describe(values: list[Named]) returns string:
+    mutable string text = ""
+    for value in values:
+        text = "{text}{Named.name(view value)};"
+    return text
+function main(stdout: Stdout) returns nothing:
+    list[Named] live = totals()
+    list[Named] baked = comptime totals()
+    list[Named] empty_live = empty_totals()
+    list[Named] empty_baked = comptime empty_totals()
+    Stdout.write(view stdout, "{describe(live)}\n{describe(baked)}\n{describe(empty_live)}\n{describe(empty_baked)}\n")
+verify primitive_sums:
+    string expected = "int8:-128;int16:-32768;int32:-2147483648;int64:-9223372036854775808;uint8:1;uint16:1;uint32:1;uint64:1;float32:0;float64:1;"
+    assert describe(totals()) == expected
+    list[Named] baked = comptime totals()
+    assert describe(baked) == expected
+    string empty_expected = "int8:0;int16:0;int32:0;int64:0;uint8:0;uint16:0;uint32:0;uint64:0;float32:0;float64:0;"
+    assert describe(empty_totals()) == empty_expected
+    list[Named] empty_baked = comptime empty_totals()
+    assert describe(empty_baked) == empty_expected
+property primitive_sum_trials:
+    given value: int64
+    assert total[int64](list(value, 1)) == value + 1
+    assert total[int64](list(value, -1)) == value - 1

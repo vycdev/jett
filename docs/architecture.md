@@ -2878,6 +2878,14 @@ remainder operation as the interpreter. Binary32 operands widen exactly for the
 call, and the result rounds back to binary32 at the checked expression boundary.
 NaN and infinity outcomes remain floating values rather than runtime failures.
 
+`list.sum[T]` uses the checked numeric primitive width in both execution paths.
+The native `ListSumPrimitive` leaf returns packed value bits for typed unpacking;
+fixed-width integers wrap and floating sums round at each addition, including
+binary32. Empty lists return zero of the declared numeric type. The list remains
+borrowed, and outer pending lists or pending elements retain their terminal
+failure checks. This kernel does not introduce summation for nominal refinements
+or nonnumeric element types.
+
 Non-release `print` and `println` validate aggregate arguments through the native
 debug type graph and reuse `DebugAppendAggregate` to format a borrowed value into
 an owned temporary string. Primitive task formatting retains its existing path.

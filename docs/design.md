@@ -7783,6 +7783,13 @@ comparison failures also match. This implementation parity does not establish
 the concurrent scheduling and cancellation checkpoints described in Rule Set 10;
 the current sequential `cancel` leaves its pending operand unchanged.
 
+`list.sum[T]` follows the selected arithmetic rules for every numeric primitive:
+integer sums wrap at the declared width, and floating sums use that width's IEEE
+addition at each step. An empty list returns numeric zero of its declared type.
+The operation borrows the list and preserves existing errors for pending lists
+or elements. This implementation does not add a summation contract for nominal
+refinements or nonnumeric types.
+
 Native entry grants cover all eleven checked capability types for the value
 operations already implemented by the interpreter, including direct and
 indirect calls, views, debug output, and task wrapping. Stderr, Stdin,

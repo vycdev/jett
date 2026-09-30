@@ -276,3 +276,13 @@ fixtures, all 182 run-pass backend-lowering cases, ten public constant-driver
 regressions, and linked constant programs and verify/property suites after
 source removal. Both program profiles are covered. The final revision still
 requires the independent workspace, inventory, and platform distribution gates.
+
+The primitive-list sum audit found that native admission accepted only `int64`,
+while the reference path also lost narrow-width wrapping and returned an integer
+zero for empty floating lists. Both paths now use the checked numeric primitive
+width, preserving per-addition binary32 rounding and IEEE infinity/NaN behavior.
+Runtime and interpreter regressions cover widths, empty values, and pending
+element failures. `native_primitive_list_sums_match_interpreter_in_both_profiles`
+adds linked program and verify/property execution after source removal. These
+supplemental cases do not change the inventory denominator or establish full
+native acceptance.
