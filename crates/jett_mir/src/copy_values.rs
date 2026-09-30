@@ -510,9 +510,21 @@ fn visit(
         | ExpressionKind::Nothing
         | ExpressionKind::PropertyCaseContext(_)
         | ExpressionKind::RuntimeFailure(_) => {}
-        ExpressionKind::Binary { left, right, .. } => {
-            visit(left, reads, temporaries, types, program, false)?;
-            visit(right, reads, temporaries, types, program, false)?;
+        ExpressionKind::Binary { left, op, right } => {
+            let enum_equality =
+                matches!(op, jett_hir::BinaryOp::Equal | jett_hir::BinaryOp::NotEqual)
+                    && matches!(
+                        types.resolve(crate::move_values::representation_type(types, left.ty)),
+                        Type::Enum(_)
+                    );
+            visit(left, reads, temporaries, types, program, enum_equality)?;
+            visit(right, reads, temporaries, types, program, enum_equality)?;
+            // A custom payload method needs one owned traversal cursor. This
+            // is a conservative bound; pure primitive graphs need no cursor.
+            *temporaries += usize::from(
+                enum_equality
+                    && program.is_some_and(|program| !program.equality_methods.is_empty()),
+            );
         }
         ExpressionKind::OptionalNone if program.is_some() => {}
         ExpressionKind::StructConstruct {

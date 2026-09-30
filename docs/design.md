@@ -7070,11 +7070,13 @@ exact `Equatable` implementation gets a compile error for either operator.
 
 Enums retain their existing variant-and-payload equality. Equality does not
 grant collection-key eligibility.
-The selected rule for user structs nested inside enum payloads is to invoke each
+User structs nested inside enum payloads invoke each
 struct's exact explicit `Equatable.equals` method, including through nested
-containers. There is no field comparison fallback at that boundary. Enforcement
-and native implementation are tracked in
-[the active enum equality work](active/native_enum_struct_equality.md).
+containers. The frontend reports E0358 when a required method is missing, and
+comparison stops at each custom struct method without inspecting ignored fields.
+Both interpreted/comptime and native execution enforce this boundary; `!=`
+negates the complete result. See
+[the enum equality implementation](completed/enum_payload_struct_equality.md).
 Direct `==` and `!=` are rejected for `bytes`, `list`, `map`, `set`, `optional`,
 and `result`, including aliases, refinements, and secret wrappers over those
 types. Compare their contents explicitly. This restriction is checked in

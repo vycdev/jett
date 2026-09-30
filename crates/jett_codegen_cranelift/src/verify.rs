@@ -9,7 +9,7 @@ use jett_mir::{
 };
 use jett_types::{BitfieldFieldKind, Type, TypeId, TypeInterner};
 
-use crate::reachability::reachable_function_ids;
+use crate::reachability::reachable_function_ids_with_types;
 use crate::{CodegenError, symbol_name};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,7 +205,26 @@ pub(crate) fn verify_program(
 ) -> Result<VerifiedProgram, CodegenError> {
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
 
-    let reachable = reachable_function_ids(program)?;
+    for (&owner, &method) in &program.equality_methods {
+        let (_, target) = function_by_id(program, method)?;
+        if owner.index() as usize >= types.len()
+            || !matches!(types.resolve(owner), Type::Struct(_))
+            || target.capture_count != 0
+            || target.params.len() != 2
+            || target.return_type != TypeInterner::BOOL
+            || target.params.iter().any(|parameter| {
+                parameter.ty != owner || parameter.mode != jett_mir::ParamMode::View
+            })
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: target.identity.declaration.name.clone(),
+                span: target.span,
+                message: "enum equality target must have two exact struct views and return bool"
+                    .into(),
+            });
+        }
+    }
+    let reachable = reachable_function_ids_with_types(program, types)?;
     let mut functions = Vec::with_capacity(reachable.len());
     let mut by_mir_index = vec![None; program.functions.len()];
     let mut unique_symbols = HashSet::with_capacity(reachable.len());
@@ -2893,7 +2912,12 @@ impl Verifier<'_> {
                             | ScalarKind::String)
                     )
                 })
-            && super::emit::debug::equality_layout(self.types, left.ty).is_none()
+            && super::emit::debug::equality_layout(
+                self.types,
+                left.ty,
+                &self.program.equality_methods,
+            )
+            .is_none()
         {
             return Err(self.unsupported(function, expression.span, "enum equality payload type"));
         }

@@ -562,10 +562,12 @@ Bottom-up type checking of every expression:
   implementation validation. `!=` negates `equals` rather than adding a second
   customization point. Missing implementations report E0358. Enums retain
   variant-and-payload equality.
-  The accepted extension requires the same explicit method at nested user-struct
-  payload boundaries. Frontend recursive validation, interpreted method dispatch,
-  and the typed native traversal handoff remain open in
-  [the active implementation note](active/native_enum_struct_equality.md).
+  Nested user-struct payloads require the same explicit method, including through
+  containers, machines, and refinements. The frontend validates the recursive type
+  graph; HIR/MIR retain exact owner-to-function targets. The interpreter calls
+  source methods, while native cursors yield to generated calls outside the
+  runtime context lock. Struct fields remain opaque at this boundary. See
+  [the implementation note](completed/enum_payload_struct_equality.md).
 - **Direct collection equality:** `==` and `!=` on bytes, lists, maps, sets,
   optionals, and results report E0376 in the frontend. Classification walks
   secret and refinement wrappers; transparent aliases already share their base
@@ -1604,7 +1606,8 @@ values preserve their lexical namespace, so calls from the stdlib graphics loop
 resolve application helpers in the defining module.
 
 The callback audit includes implicit `Equatable.equals` dispatch from struct
-`==` and `!=` expressions. It selects the method using the operand type in the
+`==` and `!=` expressions and recursively nested enum payloads. It selects
+methods using the operand type in the
 current checked generic instantiation, without auditing unrelated instantiations.
 
 Bare generic templates are rejected as function values before interpretation;
@@ -3185,9 +3188,11 @@ MIR records the root owner and field path, keeps the root loan active through
 the loop, and clones each loop binding without owning the projected value.
 An owned field read clones the selected value, including nested move-only
 payloads, while a field view borrows the parent through the call boundary.
-The checker exports exact Equatable method identities for comparison expressions;
-HIR turns them into ordinary direct calls (and negation for inequality), never
-structural or handle equality. See `active/native_value_abi.md` for the supported
+The checker exports exact Equatable method identities for direct comparisons
+and typed owner-to-method metadata for aggregate payloads. HIR turns direct
+comparisons into ordinary calls; native aggregate traversal yields custom leaves
+to compiled method calls. Both negate the complete result for inequality. See
+`active/native_value_abi.md` for the supported
 ownership subset and remaining projected-place/refinement/enum boundaries.
 Native reflected construction now uses the same explicit `TypeConstruction`
 builder source form for concrete structs, supported bitfields, enums, and

@@ -238,6 +238,8 @@ pub struct CheckResult {
     pub call_argument_orders: HashMap<Span, CheckedCallArgumentOrder>,
     /// Source-defined method bodies in deterministic declaration order.
     pub method_definitions: Vec<CheckedMethodDefinition>,
+    /// Exact explicit struct equality targets, independent of expression spans.
+    pub equality_methods: HashMap<TypeId, CheckedMethodCall>,
     /// Concrete source-defined method targets, keyed by call span.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
     pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
@@ -302,6 +304,27 @@ pub fn check_with_options(
             .check_module_with_debug(module);
 
     let reflection_metadata = Arc::new(checker.build_reflection_metadata());
+    let equality_methods = checker
+        .named_types
+        .get("Equatable")
+        .map(|interface| {
+            checker
+                .interface_method_definitions
+                .iter()
+                .filter_map(|((candidate, owner, name), &index)| {
+                    (*candidate == *interface
+                        && name == "equals"
+                        && matches!(checker.interner.resolve(*owner), Type::Struct(_)))
+                    .then_some((
+                        *owner,
+                        CheckedMethodCall {
+                            source_span: checker.method_definitions[index].source_span,
+                        },
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut diagnostics = checker.sink.into_diagnostics();
     diagnostics.extend(complexity_diagnostics);
@@ -326,6 +349,7 @@ pub fn check_with_options(
         intrinsic_reflection_arguments: checker.intrinsic_reflection_arguments,
         call_argument_orders: checker.call_argument_orders,
         method_definitions: checker.method_definitions,
+        equality_methods,
         method_calls: checker.method_calls,
         interface_calls: checker.interface_calls,
         method_values: checker.method_values,
@@ -10509,6 +10533,52 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn aggregate_equality_structs(&self, ty: TypeId) -> Vec<TypeId> {
+        let mut pending = vec![ty];
+        let mut seen = HashSet::new();
+        let mut owners = Vec::new();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            match self.interner.resolve(ty) {
+                Type::Struct(_) => owners.push(ty),
+                Type::Secret(inner)
+                | Type::Refinement { base: inner, .. }
+                | Type::List(inner)
+                | Type::Set(inner)
+                | Type::Optional(inner) => pending.push(*inner),
+                Type::Map(key, value) | Type::Result(key, value) => pending.extend([*value, *key]),
+                Type::Enum(id) => pending.extend(
+                    self.interner
+                        .resolve_enum(*id)
+                        .variants
+                        .iter()
+                        .rev()
+                        .flat_map(|variant| variant.fields.iter().rev().map(|(_, ty)| *ty)),
+                ),
+                Type::Machine(id) | Type::MachineState { machine: id, .. } => pending.extend(
+                    self.interner
+                        .resolve_machine(*id)
+                        .states
+                        .iter()
+                        .rev()
+                        .flat_map(|state| state.fields.iter().rev().map(|(_, ty)| *ty)),
+                ),
+                Type::Bitfield(id) => pending.extend(
+                    self.interner
+                        .resolve_bitfield(*id)
+                        .fields
+                        .iter()
+                        .rev()
+                        .map(|field| field.ty),
+                ),
+                _ => {}
+            }
+        }
+        owners
+    }
+
     fn check_binary(&mut self, lhs: &Expr, op: BinOp, rhs: &Expr, span: Span) -> TypeId {
         let (lhs_ty, rhs_ty) = if Self::is_numeric_literal(lhs) && !Self::is_numeric_literal(rhs) {
             let rhs_ty = self.check_expr(rhs);
@@ -10626,6 +10696,21 @@ impl<'a> TypeChecker<'a> {
                         span,
                     ));
                     return TypeInterner::ERROR;
+                }
+                if matches!(
+                    self.interner.resolve(self.fully_coarsened_type(lhs_base)),
+                    Type::Enum(_)
+                ) {
+                    for owner in self.aggregate_equality_structs(lhs_base) {
+                        if !self.user_struct_has_explicit_equality(owner) {
+                            self.sink.emit(errors::equality_requires_equatable(
+                                &self.type_name(owner),
+                                Self::binop_str(op),
+                                span,
+                            ));
+                            return TypeInterner::ERROR;
+                        }
+                    }
                 }
                 if matches!(self.interner.resolve(lhs_base), Type::Struct(_)) {
                     // Equality is a checked method call, not structural data

@@ -480,4 +480,5 @@ Program {
             },
         },
     ],
+    equality_methods: {},
 }

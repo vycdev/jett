@@ -30,6 +30,33 @@ pub fn validate_backend_types(
     for function in &program.functions {
         validator.function(function);
     }
+    for (&owner, &method) in &program.equality_methods {
+        let target = program
+            .functions
+            .get(method.index() as usize)
+            .filter(|function| function.id == method);
+        if let Some(target) = target {
+            if owner.index() as usize >= interner.len()
+                || !matches!(interner.resolve(owner), Type::Struct(_))
+                || target.capture_count != 0
+                || target.params.len() != 2
+                || target.return_type != TypeInterner::BOOL
+                || target.params.iter().any(|parameter| {
+                    parameter.ty != owner || parameter.mode != crate::ParamMode::View
+                })
+            {
+                validator.error(
+                    target.span,
+                    "equality target must have two exact struct views and return bool",
+                );
+            }
+        } else {
+            validator.error(
+                Span::new(jett_common::FileId::new(0), 0, 0),
+                "equality target is absent from HIR",
+            );
+        }
+    }
     if validator.errors.is_empty() {
         Ok(())
     } else {
@@ -689,6 +716,7 @@ mod tests {
     fn program_with(return_type: TypeId, statements: Vec<Statement>) -> Program {
         let span = test_span();
         Program {
+            equality_methods: Default::default(),
             functions: vec![Function {
                 id: FunctionId(0),
                 identity: FunctionIdentity {

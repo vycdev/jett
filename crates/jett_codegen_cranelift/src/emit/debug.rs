@@ -29,6 +29,8 @@ enum DebugNode {
 
 struct DebugGraph<'a> {
     types: &'a TypeInterner,
+    equality_methods: Option<&'a HashMap<TypeId, jett_hir::FunctionId>>,
+    custom: Vec<(u32, jett_hir::FunctionId)>,
     indexes: HashMap<TypeId, u32>,
     nodes: Vec<Option<DebugNode>>,
 }
@@ -55,8 +57,12 @@ impl DebugGraph<'_> {
                 Type::Struct(id) => {
                     let definition = self.types.resolve_struct(id).clone();
                     let mut fields = Vec::with_capacity(definition.fields.len());
-                    for (name, ty) in definition.fields {
-                        fields.push((name, self.node(ty)?));
+                    if let Some(methods) = self.equality_methods {
+                        self.custom.push((index, *methods.get(&ty)?));
+                    } else {
+                        for (name, ty) in definition.fields {
+                            fields.push((name, self.node(ty)?));
+                        }
                     }
                     DebugNode::Record(value_type_name(&definition.name), fields)
                 }
@@ -243,6 +249,8 @@ fn variants_node(
 pub(crate) fn debug_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8>> {
     let mut graph = DebugGraph {
         types,
+        equality_methods: None,
+        custom: Vec::new(),
         indexes: HashMap::new(),
         nodes: Vec::new(),
     };
@@ -259,8 +267,22 @@ pub(crate) fn debug_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8>> 
     Some(bytes)
 }
 
-pub(crate) fn equality_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8>> {
-    fn supported(types: &TypeInterner, ty: TypeId, seen: &mut HashSet<TypeId>) -> bool {
+pub(crate) struct EqualityLayout {
+    pub bytes: Vec<u8>,
+    pub custom: Vec<(u32, jett_hir::FunctionId)>,
+}
+
+pub(crate) fn equality_layout(
+    types: &TypeInterner,
+    ty: TypeId,
+    methods: &HashMap<TypeId, jett_hir::FunctionId>,
+) -> Option<EqualityLayout> {
+    fn supported(
+        types: &TypeInterner,
+        ty: TypeId,
+        seen: &mut HashSet<TypeId>,
+        methods: &HashMap<TypeId, jett_hir::FunctionId>,
+    ) -> bool {
         if !seen.insert(ty) {
             return true;
         }
@@ -280,34 +302,34 @@ pub(crate) fn equality_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8
             | Type::Bytes
             | Type::Nothing => true,
             Type::List(element) | Type::Set(element) | Type::Optional(element) => {
-                supported(types, *element, seen)
+                supported(types, *element, seen, methods)
             }
             Type::Map(key, value) | Type::Result(key, value) => {
-                supported(types, *key, seen) && supported(types, *value, seen)
+                supported(types, *key, seen, methods) && supported(types, *value, seen, methods)
             }
             Type::Enum(id) => types.resolve_enum(*id).variants.iter().all(|variant| {
                 variant
                     .fields
                     .iter()
-                    .all(|(_, field_type)| supported(types, *field_type, seen))
+                    .all(|(_, field_type)| supported(types, *field_type, seen, methods))
             }),
             Type::Machine(id) | Type::MachineState { machine: id, .. } => {
                 types.resolve_machine(*id).states.iter().all(|state| {
                     state
                         .fields
                         .iter()
-                        .all(|(_, field_type)| supported(types, *field_type, seen))
+                        .all(|(_, field_type)| supported(types, *field_type, seen, methods))
                 })
             }
             Type::Bitfield(id) => types
                 .resolve_bitfield(*id)
                 .fields
                 .iter()
-                .all(|field| supported(types, field.ty, seen)),
-            Type::Refinement { base, .. } => supported(types, *base, seen),
+                .all(|field| supported(types, field.ty, seen, methods)),
+            Type::Refinement { base, .. } => supported(types, *base, seen, methods),
+            Type::Struct(_) => methods.contains_key(&ty),
             // Exact Equatable dispatch must be retained for user structs.
-            Type::Struct(_)
-            | Type::Secret(_)
+            Type::Secret(_)
             | Type::TypeConstruction
             | Type::Never
             | Type::Interface(_)
@@ -319,11 +341,30 @@ pub(crate) fn equality_layout(types: &TypeInterner, ty: TypeId) -> Option<Vec<u8
         }
     }
 
-    if supported(types, ty, &mut HashSet::new()) {
-        debug_layout(types, ty)
-    } else {
-        None
+    if !supported(types, ty, &mut HashSet::new(), methods) {
+        return None;
     }
+    let mut graph = DebugGraph {
+        types,
+        indexes: HashMap::new(),
+        nodes: Vec::new(),
+        equality_methods: Some(methods),
+        custom: Vec::new(),
+    };
+    let root = graph.node(ty)?;
+    let mut bytes = b"JD\x01".to_vec();
+    number(&mut bytes, graph.nodes.len())?;
+    bytes.extend_from_slice(&root.to_le_bytes());
+    for node in graph.nodes {
+        let mut encoded = Vec::new();
+        encode_node(&mut encoded, node?)?;
+        number(&mut bytes, encoded.len())?;
+        bytes.extend_from_slice(&encoded);
+    }
+    Some(EqualityLayout {
+        bytes,
+        custom: graph.custom,
+    })
 }
 
 #[cfg(test)]
@@ -348,11 +389,11 @@ mod tests {
         let list = types.intern(Type::List(optional));
         for ty in [function, optional, list] {
             assert!(debug_layout(&types, ty).is_some());
-            assert!(equality_layout(&types, ty).is_none());
+            assert!(equality_layout(&types, ty, &HashMap::new()).is_none());
         }
         let secret = types.intern(Type::Secret(function));
         let layout = debug_layout(&types, secret).unwrap();
         assert_eq!(layout.last(), Some(&(NativeDebugTag::Redacted as u8)));
-        assert!(equality_layout(&types, secret).is_none());
+        assert!(equality_layout(&types, secret, &HashMap::new()).is_none());
     }
 }

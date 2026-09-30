@@ -70,11 +70,13 @@ is settled: both operators now report E0376 before comptime evaluation or native
 lowering, including wrapped and concretely instantiated types. Frontend fixture
 coverage and native debug/release publication checks pin this contract.
 
-[User structs nested inside enum payloads](native_enum_struct_equality.md) now
-have a selected source rule: invoke their exact explicit `Equatable.equals`
-implementations. Recursive frontend validation, interpreter/comptime method
-dispatch, and typed compiled method calls from native aggregate traversal remain
-required. The decision is settled; its implementation remains a parity gate.
+[User structs nested inside enum payloads](../completed/enum_payload_struct_equality.md)
+now invoke exact explicit `Equatable.equals` implementations. Recursive frontend
+validation, interpreter/comptime dispatch, and typed native cursor calls are
+implemented. Linked debug/release coverage includes generic owners, containers,
+recursive values, pending depth, method failures, and source removal. Compiler
+phase suites and all 589 frontend fixtures pass. This closes this equality gate;
+full inventory and platform CI are still independent acceptance obligations.
 
 Normal native builds run frontend verify/property checks before emission; a
 source-level failed property cannot be silently

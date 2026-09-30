@@ -832,6 +832,7 @@ fn translate_function(
             environment_variable,
             actor_state_range,
             types,
+            equality_methods: &program.equality_methods,
             symbol,
             local_types: &function.locals,
             test_ownership: matches!(
@@ -1016,6 +1017,7 @@ fn translate_function(
         environment_variable,
         actor_state_range,
         types,
+        equality_methods: &program.equality_methods,
         symbol,
         local_types: &function.locals,
         test_ownership: matches!(
@@ -1051,6 +1053,7 @@ enum LoweredValue {
 }
 
 struct Translator<'a, 'builder> {
+    equality_methods: &'a std::collections::HashMap<TypeId, FunctionId>,
     builder: &'a mut FunctionBuilder<'builder>,
     module: &'a mut ObjectModule,
     declarations: &'a DeclaredFunctions,
@@ -1904,7 +1907,9 @@ impl Translator<'_, '_> {
                         ],
                         true,
                     )?;
-                    let Type::Enum(enum_id) = self.types.resolve(left.ty) else {
+                    let Type::Enum(enum_id) =
+                        self.types.resolve(representation_type(self.types, left.ty))
+                    else {
                         return Err(self.unsupported(expression.span, "enum equality type"));
                     };
                     let variants = &self.types.resolve_enum(*enum_id).variants;
@@ -1925,12 +1930,29 @@ impl Translator<'_, '_> {
                             },
                         );
                         let (layout, leaf) = if aggregate {
-                            (
-                                debug::equality_layout(self.types, left.ty).ok_or_else(|| {
-                                    self.unsupported(expression.span, "enum equality payload type")
-                                })?,
-                                NativeLeaf::EnumEqualAggregate,
-                            )
+                            let layout =
+                                debug::equality_layout(self.types, left.ty, self.equality_methods)
+                                    .ok_or_else(|| {
+                                        self.unsupported(
+                                            expression.span,
+                                            "enum equality payload type",
+                                        )
+                                    })?;
+                            if !layout.custom.is_empty() {
+                                let value = self.custom_enum_equality(
+                                    left_value,
+                                    right_value,
+                                    &layout,
+                                    expression.span,
+                                )?;
+                                let value = if *op == BinaryOp::NotEqual {
+                                    self.builder.ins().bxor_imm(value, 1)
+                                } else {
+                                    value
+                                };
+                                return Ok(LoweredValue::Scalar(value));
+                            }
+                            (layout.bytes, NativeLeaf::EnumEqualAggregate)
                         } else {
                             let mut layout = b"JE\x01".to_vec();
                             let count = u32::try_from(variants.len()).map_err(|_| {
@@ -2410,6 +2432,106 @@ impl Translator<'_, '_> {
                 self.project_field(base, *field, expression.ty, expression.span, false)
             }
         }
+    }
+
+    fn custom_enum_equality(
+        &mut self,
+        left: Value,
+        right: Value,
+        layout: &debug::EqualityLayout,
+        span: Span,
+    ) -> Result<Value, CodegenError> {
+        let mut bytes = b"JQ\x01".to_vec();
+        let count = u32::try_from(layout.custom.len())
+            .map_err(|_| self.unsupported(span, "equality method count"))?;
+        bytes.extend_from_slice(&count.to_le_bytes());
+        for (node, _) in &layout.custom {
+            bytes.extend_from_slice(&node.to_le_bytes());
+        }
+        bytes.extend_from_slice(&layout.bytes);
+        let (pointer, length) = self.static_data(&bytes)?;
+        let cursor = self.leaf(
+            NativeLeaf::EnumEqualityStart,
+            &[left, right, pointer, length],
+            true,
+        )?;
+        let owned = self.own_linear(cursor)?;
+        let next = self.builder.create_block();
+        let dispatch = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.append_block_param(done, ir::types::I32);
+        self.builder.ins().jump(next, &[]);
+        self.builder.switch_to_block(next);
+        let status = self.leaf(NativeLeaf::EnumEqualityNext, &[cursor], true)?;
+        let complete = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::UnsignedLessThanOrEqual, status, 1);
+        self.builder
+            .ins()
+            .brif(complete, done, &[status.into()], dispatch, &[]);
+        self.builder.switch_to_block(dispatch);
+        for (ordinal, (_, method)) in layout.custom.iter().enumerate() {
+            let invoke = self.builder.create_block();
+            let following = self.builder.create_block();
+            let selected = self
+                .builder
+                .ins()
+                .icmp_imm(IntCC::Equal, status, ordinal as i64 + 2);
+            self.builder
+                .ins()
+                .brif(selected, invoke, &[], following, &[]);
+            self.builder.switch_to_block(invoke);
+            let zero = self.builder.ins().iconst(ir::types::I32, 0);
+            let one = self.builder.ins().iconst(ir::types::I32, 1);
+            let left = self.leaf(NativeLeaf::EnumEqualityArgument, &[cursor, zero], true)?;
+            let right = self.leaf(NativeLeaf::EnumEqualityArgument, &[cursor, one], true)?;
+            let declared = self.declarations.get(*method).ok_or_else(|| {
+                contract_error(self.symbol, span, "enum equality method is not reachable")
+            })?;
+            let reference = self
+                .module
+                .declare_func_in_func(declared.native_id, self.builder.func);
+            let context = self.builder.use_var(self.runtime_context);
+            let environment = self.builder.ins().iconst(ir::types::I64, 0);
+            let call = self
+                .builder
+                .ins()
+                .call(reference, &[context, environment, left, right]);
+            let results = self.builder.func.dfg.inst_results(call).to_vec();
+            self.check_failure()?;
+            let [equal, depth] = results.as_slice() else {
+                return Err(contract_error(
+                    self.symbol,
+                    span,
+                    "enum equality method has invalid bool ABI",
+                ));
+            };
+            let equal = self.builder.ins().uextend(ir::types::I32, *equal);
+            self.leaf(
+                NativeLeaf::EnumEqualityAnswer,
+                &[cursor, equal, *depth],
+                true,
+            )?;
+            self.builder.ins().jump(next, &[]);
+            self.builder.switch_to_block(following);
+        }
+        // An invalid cursor response must take the normal cleanup path.
+        let invalid_argument = self.builder.ins().iconst(ir::types::I32, 2);
+        self.leaf(
+            NativeLeaf::EnumEqualityArgument,
+            &[cursor, invalid_argument],
+            true,
+        )?;
+        let zero = self.builder.ins().iconst(ir::types::I32, 0);
+        self.builder.ins().jump(done, &[zero.into()]);
+        self.builder.switch_to_block(done);
+        let result = self.builder.block_params(done)[0];
+        self.leaf(NativeLeaf::DropValue, &[cursor], true)?;
+        if let LoweredValue::Owned(_, slot) = owned {
+            self.clear_slot(slot);
+        }
+        Ok(self.builder.ins().ireduce(ir::types::I8, result))
     }
 
     fn call(

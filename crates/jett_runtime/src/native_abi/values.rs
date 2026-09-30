@@ -888,6 +888,7 @@ pub(super) struct NativeValues {
     sets: HashMap<NativeHandle, NativeSet>,
     maps: HashMap<NativeHandle, NativeMap>,
     structs: HashMap<NativeHandle, NativeStruct>,
+    equalities: HashMap<NativeHandle, debug_equal::EqualityCursor>,
     actors: HashMap<NativeHandle, u64>,
     capability_tasks: HashMap<NativeHandle, (u64, u64)>,
     opaque_capabilities: HashMap<&'static str, u64>,
@@ -1038,6 +1039,7 @@ impl NativeValues {
     }
     pub(super) fn is_empty(&self) -> bool {
         self.structs.is_empty()
+            && self.equalities.is_empty()
             && self.actors.is_empty()
             && self.builders.is_empty()
             && self.structs_created == self.structs_destroyed
@@ -4521,6 +4523,9 @@ impl NativeValues {
         self.retain(id)
     }
     fn drop_value(&mut self, id: u64) -> LeafResult<u32> {
+        if let Some(cursor) = self.equalities.remove(&id) {
+            return self.equality_drop(cursor);
+        }
         if self.actors.contains_key(&id) {
             return Err(INVALID_ACTOR);
         }
@@ -5844,6 +5849,18 @@ leaves! {
             if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
             let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
             s.aggregate_enum_equal(left, right, layout) };
+    EnumEqualityStart, jett_rt_v1_enum_equality_start, false, (left: u64 => I64, right: u64 => I64, layout_pointer: u64 => I64, layout_length: u64 => I64), u64 => I64,
+        |s| { if layout_pointer == 0 { return Err(INVALID_STRUCT); }
+            let length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            if length > isize::MAX as usize { return Err(INVALID_STRUCT); }
+            let layout = unsafe { std::slice::from_raw_parts(layout_pointer as *const u8, length) };
+            s.equality_start(left, right, layout) };
+    EnumEqualityNext, jett_rt_v1_enum_equality_next, false, (cursor: u64 => I64), u32 => I32,
+        |s| s.equality_next(cursor);
+    EnumEqualityArgument, jett_rt_v1_enum_equality_argument, false, (cursor: u64 => I64, argument: u32 => I32), u64 => I64,
+        |s| s.equality_argument(cursor, argument);
+    EnumEqualityAnswer, jett_rt_v1_enum_equality_answer, false, (cursor: u64 => I64, equal: u32 => I32, depth: u64 => I64), u32 => I32,
+        |s| s.equality_answer(cursor, equal, depth);
     FromInt, jett_rt_v1_string_from_int, false, (value: i64 => I64), u64 => I64,
         |s| s.insert(value.to_string());
     FromUint, jett_rt_v1_string_from_uint, false, (value: u64 => I64), u64 => I64,

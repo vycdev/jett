@@ -404,6 +404,90 @@ fn native_interface_display_failure_matches_interpreter() {
 }
 
 #[test]
+fn native_enum_struct_equality_matches_interpreter_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/enum_struct_equality.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("enum_structs.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected =
+        jett_driver::run_file_capture_output(&source).expect("explicit payload equality oracle");
+    assert_eq!(
+        expected.stdout,
+        "true true true true true true true true true true\n"
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("enum_structs_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native explicit payload methods");
+        binaries.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_enum_struct_equality_failure_cleans_cursor_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/enum_struct_equality_failure.jett");
+    let original = fs::read_to_string(fixture).unwrap().replace("\r\n", "\n");
+    let pending = original.replace("string rejected = string.repeat(\"ab\", 9223372036854775807)\n            return string.char_count(rejected) == 0", "return run true");
+    assert_ne!(pending, original);
+    for (original, message) in [
+        (
+            &original,
+            "runtime error: string.repeat: requested output is too large",
+        ),
+        (&pending, "runtime error: Equatable.equals must return bool"),
+    ] {
+        for operator in ["==", "!="] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("enum_failure.jett");
+            fs::write(
+                &source,
+                original.replace("\"left\\n\") ==", &format!("\"left\\n\") {operator}")),
+            )
+            .unwrap();
+            let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+            assert_eq!(expected.output.stdout, "true\nleft\nright\n");
+            assert!(expected.output.debug_output.is_empty());
+            assert_eq!(expected.message, message);
+            let mut binaries = Vec::new();
+            for release in [false, true] {
+                let binary = directory.path().join(format!("enum_failure_{release}.exe"));
+                jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    launcher(),
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .expect("native failing payload method");
+                binaries.push(binary);
+            }
+            fs::remove_file(&source).unwrap();
+            for binary in binaries {
+                let actual = run_bounded(&binary, directory.path());
+                assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+                assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+                assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+            }
+        }
+    }
+}
+
+#[test]
 fn native_interface_refined_small_values_match_interpreter_in_both_profiles() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_refined_small_values.jett");

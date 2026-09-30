@@ -703,9 +703,14 @@ the selected variant's scalar payloads. Integer and boolean payloads compare
 their value bits, floating-point payloads use IEEE equality, and strings compare
 their text. A linked differential fixture also covers a user-struct payload
 with owned list fields through construction, borrowed matching, clone, trace,
-list storage, and cleanup. Aggregate payload equality remains guarded; enum
-equality over user structs awaits the rule in
-`docs/active/native_enum_struct_equality.md`.
+list storage, and cleanup. User structs inside aggregate payloads now call their
+exact checked `Equatable.equals` methods. Opaque struct nodes yield through an
+owned comparison cursor to generated direct calls outside the runtime context
+lock. Nested comparisons use independent cursors; temporary borrowed shells
+unwrap matching pending structs without traversing ignored fields. Success,
+false results, and method failures retire every cursor and shell. The four
+additive enum equality leaves and their `JQ` version-1 descriptor are documented
+in `docs/completed/enum_payload_struct_equality.md`.
 Supported aggregate payloads use an explicit comparison stack instead of the
 former 128-level recursion guard. Active `(node, left, right)` paths reject
 malformed cycles; repeated children on separate paths remain valid. Child

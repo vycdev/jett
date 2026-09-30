@@ -755,11 +755,11 @@ Aggregate payload comparison now uses a recursive type descriptor for lists,
 sets, maps, optionals, results, bytes, bitfields, machines, and nested enums.
 `tests/native/enum_aggregate_equality.jett` compares matching and differing
 values with the interpreter, including collection order, recursive payloads,
-signed zero, and NaN. Payloads containing user structs remain unsupported:
-their equality requires an exact `Equatable.equals` implementation, and the
-current enum comparison path does not dispatch that method. The intended
-language rule for this nested case is recorded in
-`docs/active/native_enum_struct_equality.md`.
+signed zero, and NaN. Payloads containing user structs now invoke exact checked
+`Equatable.equals` methods through resumable cursors and compiled calls. The
+frontend rejects missing methods and retains opaque method boundaries. See
+`docs/completed/enum_payload_struct_equality.md` for implementation and linked
+debug/release coverage.
 Actor handles expose a separate equality mismatch: direct actor `==` is
 accepted by the checker but fails in the interpreter, while recursive enum
 equality compares actor IDs and native aggregate equality rejects the actor
@@ -1474,11 +1474,11 @@ matrix gaps above remain open; the broad estimate stays about 85%.
 
 Linked native/interpreter coverage now exercises an enum payload containing a
 user struct with an owned list field: construction, borrowed match, clone,
-trace, list storage, and cleanup agree. Equality for this payload still hits
-the conservative native guard while the language rule in
-`docs/active/native_enum_struct_equality.md` tracks the selected explicit-method
-rule and its outstanding implementation. This narrows
-the enum payload gap without changing the broad 85% estimate.
+trace, list storage, and cleanup agree. Equality for user-struct payloads now
+invokes exact explicit methods, including through containers, generic owners,
+refinements, and machines. Linked debug/release and interpreter/comptime coverage
+is recorded in `docs/completed/enum_payload_struct_equality.md`. This closes the
+nested-struct equality gate without claiming completion of the full native audit.
 
 Native refinement validation now snapshots a cloneable owned local before
 testing its predicate, leaving the source readable after success and inside

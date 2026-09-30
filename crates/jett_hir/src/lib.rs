@@ -144,6 +144,7 @@ pub struct ScopedTypeBinding {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub equality_methods: HashMap<TypeId, FunctionId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1252,7 +1253,31 @@ impl<'a> Lowerer<'a> {
         }
         if self.errors.is_empty() {
             inline_functions::extract_inline_functions(&mut functions, &self.check.interner);
-            let mut program = Program { functions };
+            let equality_methods = self
+                .check
+                .equality_methods
+                .iter()
+                .map(|(&owner, method)| {
+                    self.function_ids
+                        .get(&FunctionKey::Method {
+                            source_span: method.source_span,
+                        })
+                        .copied()
+                        .map(|target| (owner, target))
+                        .ok_or_else(|| {
+                            vec![LowerError {
+                                span: method.source_span,
+                                message:
+                                    "checked equality method is absent from HIR function identities"
+                                        .into(),
+                            }]
+                        })
+                })
+                .collect::<Result<HashMap<_, _>, _>>()?;
+            let mut program = Program {
+                functions,
+                equality_methods,
+            };
             interface_values::coerce_program(&mut program, &self.check.interner);
             validate(&program).map_err(|errors| {
                 errors

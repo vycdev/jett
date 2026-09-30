@@ -13,13 +13,29 @@ use jett_types::{Type, TypeInterner};
 use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget, SymbolKind, SymbolScope};
 
 fn lower_source(source: &str) -> (Program, TypeInterner) {
+    lower_source_with_equatable(source, false)
+}
+
+fn lower_source_with_equatable(source: &str, include_equatable: bool) -> (Program, TypeInterner) {
     let file = FileId::new(0);
-    let parsed = jett_parser::parse(source, file);
+    let mut parsed = jett_parser::parse(source, file);
     assert!(
         parsed.errors.is_empty(),
         "parse errors: {:?}",
         parsed.errors
     );
+    let mut origins = HashMap::from([(file, SourceOrigin::Project)]);
+    if include_equatable {
+        let prelude_file = FileId::new(jett_common::STDLIB_FILE_ID_START);
+        let mut prelude = jett_parser::parse(
+            "namespace stdlib\nexport interface Equatable:\n    function equals(view self: Equatable, view other: Equatable) returns bool\n",
+            prelude_file,
+        );
+        assert!(prelude.errors.is_empty());
+        prelude.module.items.append(&mut parsed.module.items);
+        parsed.module.items = prelude.module.items;
+        origins.insert(prelude_file, SourceOrigin::Stdlib);
+    }
     let resolved = jett_resolve::resolve(&parsed.module);
     let checked = jett_typecheck::check(&parsed.module, &resolved);
     assert!(
@@ -30,13 +46,7 @@ fn lower_source(source: &str) -> (Program, TypeInterner) {
         "check errors: {:?}",
         checked.diagnostics
     );
-    let hir = jett_hir::lower(
-        &parsed.module,
-        &resolved,
-        &checked,
-        &HashMap::from([(file, SourceOrigin::Project)]),
-    )
-    .expect("HIR lowering");
+    let hir = jett_hir::lower(&parsed.module, &resolved, &checked, &origins).expect("HIR lowering");
     let mir = jett_mir::lower(&hir, &checked.interner).expect("MIR lowering");
     (mir, checked.interner)
 }
@@ -1031,6 +1041,7 @@ fn rejects_statically_zero_integer_divisors() {
 fn rejects_an_explicit_non_host_target_before_object_generation() {
     let program = Program {
         functions: Vec::new(),
+        equality_methods: HashMap::new(),
     };
     let types = TypeInterner::new();
 
@@ -1048,6 +1059,7 @@ fn rejects_an_explicit_non_host_target_before_object_generation() {
 fn rejects_malformed_target_text() {
     let program = Program {
         functions: Vec::new(),
+        equality_methods: HashMap::new(),
     };
     let types = TypeInterner::new();
 
@@ -1248,11 +1260,14 @@ fn rejects_unbaked_comptime_instead_of_executing_it_at_runtime() {
 }
 
 #[test]
-fn rejects_implicit_struct_equality_inside_enum_payloads() {
-    let (program, types) = lower_source(
+fn emits_exact_enum_payload_method_and_rejects_broken_handoff() {
+    let (mut program, types) = lower_source_with_equatable(
         r#"namespace app
 struct Item:
     id: int64
+implement Equatable for Item:
+    function equals(view self: Item, view other: Item) returns bool:
+        return self.id == other.id
 enum Value:
     empty
     item(value: Item)
@@ -1261,7 +1276,44 @@ function main() returns bool:
     Value right = Value.item(Item(id: 1))
     return left == right
 "#,
+        true,
     );
+    let (&owner, &method) = program
+        .equality_methods
+        .iter()
+        .next()
+        .expect("checked exact target");
+    assert_eq!(program.equality_methods.len(), 1);
+    program.functions[method.index() as usize]
+        .identity
+        .declaration
+        .origin = SourceOrigin::Stdlib;
+    let expected_symbol =
+        symbol_name(&program.functions[method.index() as usize].identity, &types).unwrap();
+    let first = emit_host_object(&program, &types).expect("checked enum method emission");
+    assert!(
+        first.symbols.contains(&expected_symbol),
+        "implicitly called stdlib methods remain reachable"
+    );
+    assert_eq!(first, emit_host_object(&program, &types).unwrap());
+    for broken in 0..3 {
+        let mut invalid = program.clone();
+        match broken {
+            0 => {
+                invalid.functions[method.index() as usize].params[0].mode =
+                    jett_mir::ParamMode::Owned
+            }
+            1 => invalid.functions[method.index() as usize].return_type = TypeInterner::INT64,
+            _ => {
+                invalid.equality_methods.insert(TypeInterner::BOOL, method);
+            }
+        }
+        assert!(
+            emit_host_object(&invalid, &types).is_err(),
+            "invalid handoff {broken} must fail"
+        );
+    }
+    program.equality_methods.remove(&owner);
     let error = emit_host_object(&program, &types)
         .expect_err("nested user structs must not gain structural equality");
     assert!(

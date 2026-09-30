@@ -2204,6 +2204,14 @@ compile_fail_fixture!(
     "direct_collection_equality_comptime.jett"
 );
 compile_fail_fixture!(
+    compile_fail_enum_struct_equality_requires_equatable,
+    "enum_struct_equality_requires_equatable.jett"
+);
+compile_fail_fixture!(
+    compile_fail_graphics_enum_equality_effect,
+    "graphics_enum_equality_effect.jett"
+);
+compile_fail_fixture!(
     compile_fail_collection_struct_hashing_is_unsupported,
     "collection_struct_hashing_is_unsupported.jett"
 );

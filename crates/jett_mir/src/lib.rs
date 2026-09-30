@@ -26,6 +26,7 @@ impl BlockId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub equality_methods: std::collections::HashMap<TypeId, FunctionId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -888,6 +889,7 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             .collect());
     }
     Ok(Program {
+        equality_methods: program.equality_methods.clone(),
         functions: program
             .functions
             .iter()

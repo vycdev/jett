@@ -7,7 +7,33 @@ use crate::CodegenError;
 /// Find the backend-reachable MIR functions without changing their original
 /// `FunctionId` identity. The returned IDs are in original program order so
 /// declaration and object-symbol order stay deterministic.
-pub(crate) fn reachable_function_ids(program: &Program) -> Result<Vec<FunctionId>, CodegenError> {
+#[cfg(test)]
+fn reachable_function_ids(program: &Program) -> Result<Vec<FunctionId>, CodegenError> {
+    reachable_functions(program, None)
+}
+
+pub(crate) fn reachable_function_ids_with_types(
+    program: &Program,
+    types: &jett_types::TypeInterner,
+) -> Result<Vec<FunctionId>, CodegenError> {
+    reachable_functions(program, Some(types))
+}
+
+struct References<'a> {
+    functions: Vec<(FunctionId, Span)>,
+    program: &'a Program,
+    types: Option<&'a jett_types::TypeInterner>,
+}
+impl References<'_> {
+    fn push(&mut self, reference: (FunctionId, Span)) {
+        self.functions.push(reference);
+    }
+}
+
+fn reachable_functions(
+    program: &Program,
+    types: Option<&jett_types::TypeInterner>,
+) -> Result<Vec<FunctionId>, CodegenError> {
     let mut reachable = vec![false; program.functions.len()];
     let mut pending = Vec::new();
 
@@ -29,9 +55,13 @@ pub(crate) fn reachable_function_ids(program: &Program) -> Result<Vec<FunctionId
     while let Some((function_id, function_span)) = pending.pop() {
         let function = resolve_function(program, function_id)
             .ok_or_else(|| invalid_target(program.functions.first(), function_span, function_id))?;
-        let mut references = Vec::new();
+        let mut references = References {
+            functions: Vec::new(),
+            program,
+            types,
+        };
         collect_function_references(function, &mut references);
-        for (target, span) in references {
+        for (target, span) in references.functions {
             mark_reachable(
                 program,
                 target,
@@ -102,7 +132,7 @@ fn function_label(function: &Function) -> String {
     format!("{}::{}", declaration.namespace, declaration.name)
 }
 
-fn collect_function_references(function: &Function, references: &mut Vec<(FunctionId, Span)>) {
+fn collect_function_references(function: &Function, references: &mut References<'_>) {
     for block in &function.blocks {
         for statement in &block.statements {
             match &statement.kind {
@@ -159,7 +189,7 @@ fn collect_function_references(function: &Function, references: &mut Vec<(Functi
     }
 }
 
-fn collect_hir_block_references(block: &hir::Block, references: &mut Vec<(FunctionId, Span)>) {
+fn collect_hir_block_references(block: &hir::Block, references: &mut References<'_>) {
     for statement in &block.statements {
         match &statement.kind {
             hir::StatementKind::Let { value, .. }
@@ -232,10 +262,7 @@ fn collect_hir_block_references(block: &hir::Block, references: &mut Vec<(Functi
 /// Deliberately match every expression variant without a wildcard. Adding a
 /// new MIR-carried HIR expression cannot compile until reachability decides how
 /// to traverse it.
-fn collect_expression_references(
-    expression: &Expression,
-    references: &mut Vec<(FunctionId, Span)>,
-) {
+fn collect_expression_references(expression: &Expression, references: &mut References<'_>) {
     match &expression.kind {
         ExpressionKind::FunctionRef(function) => references.push((*function, expression.span)),
         ExpressionKind::FunctionAdapter { value, function } => {
@@ -251,7 +278,20 @@ fn collect_expression_references(
                 collect_expression_references(argument, references);
             }
         }
-        ExpressionKind::Binary { left, right, .. } => {
+        ExpressionKind::Binary { left, op, right } => {
+            if matches!(op, hir::BinaryOp::Equal | hir::BinaryOp::NotEqual) {
+                if let Some(types) = references.types {
+                    if let Some(layout) = crate::emit::debug::equality_layout(
+                        types,
+                        left.ty,
+                        &references.program.equality_methods,
+                    ) {
+                        for (_, method) in layout.custom {
+                            references.push((method, expression.span));
+                        }
+                    }
+                }
+            }
             collect_expression_references(left, references);
             collect_expression_references(right, references);
         }
@@ -271,7 +311,7 @@ fn collect_expression_references(
         | ExpressionKind::Clone(value) => collect_expression_references(value, references),
         ExpressionKind::InterfaceCoerce { value, adapters } => {
             collect_expression_references(value, references);
-            references.extend(
+            references.functions.extend(
                 adapters
                     .iter()
                     .map(|entry| (entry.function, expression.span)),

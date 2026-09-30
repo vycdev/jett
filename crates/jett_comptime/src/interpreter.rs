@@ -2179,6 +2179,104 @@ impl Interpreter {
         .map(|value| self.retain_checked_identity(type_name, value))
     }
 
+    fn enum_payload_equal(&mut self, left: &Value, right: &Value) -> Result<bool, String> {
+        let mut work = vec![(left, right)];
+        while let Some((left, right)) = work.pop() {
+            let (left, right) = (left.payload(), right.payload());
+            match (left, right) {
+                (
+                    Value::Struct {
+                        type_name: a,
+                        fields: af,
+                        ..
+                    },
+                    Value::Struct {
+                        type_name: b,
+                        fields: bf,
+                        ..
+                    },
+                ) => {
+                    if a != b {
+                        return Ok(false);
+                    }
+                    if self.bitfields.contains_key(a) {
+                        if af.len() != bf.len() {
+                            return Ok(false);
+                        }
+                        for ((an, av), (bn, bv)) in af.iter().zip(bf).rev() {
+                            if an != bn {
+                                return Ok(false);
+                            }
+                            work.push((av, bv));
+                        }
+                    } else {
+                        let equal = self.call_function_with_type_args(
+                            "Equatable.equals",
+                            &[],
+                            vec![left.clone(), right.clone()],
+                        )?;
+                        match equal.into_payload() {
+                            Value::Bool(true) => {}
+                            Value::Bool(false) => return Ok(false),
+                            _ => return Err("Equatable.equals must return bool".into()),
+                        }
+                    }
+                }
+                (
+                    Value::Enum {
+                        type_name: a,
+                        variant: av,
+                        fields: af,
+                    },
+                    Value::Enum {
+                        type_name: b,
+                        variant: bv,
+                        fields: bf,
+                    },
+                )
+                | (
+                    Value::Machine {
+                        type_name: a,
+                        state: av,
+                        fields: af,
+                    },
+                    Value::Machine {
+                        type_name: b,
+                        state: bv,
+                        fields: bf,
+                    },
+                ) => {
+                    if a != b || av != bv || af.len() != bf.len() {
+                        return Ok(false);
+                    }
+                    work.extend(af.iter().zip(bf).rev());
+                }
+                (Value::List(a), Value::List(b)) | (Value::Set(a), Value::Set(b)) => {
+                    if a.len() != b.len() {
+                        return Ok(false);
+                    }
+                    work.extend(a.iter().zip(b).rev());
+                }
+                (Value::Map(a), Value::Map(b)) => {
+                    if a.len() != b.len() {
+                        return Ok(false);
+                    }
+                    for ((ak, av), (bk, bv)) in a.iter().zip(b).rev() {
+                        work.push((av, bv));
+                        work.push((ak, bk));
+                    }
+                }
+                (Value::Pending(a), Value::Pending(b))
+                | (Value::OptionalSome(a), Value::OptionalSome(b))
+                | (Value::ResultOk(a), Value::ResultOk(b))
+                | (Value::ResultFail(a), Value::ResultFail(b)) => work.push((a, b)),
+                _ if left != right => return Ok(false),
+                _ => {}
+            }
+        }
+        Ok(true)
+    }
+
     fn eval_expr_flow_inner(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
         match expr {
             // Literals
@@ -2275,6 +2373,19 @@ impl Interpreter {
                     _ => {}
                 }
                 let right = value_or_signal!(self, rhs);
+                if matches!(op, BinOp::Eq | BinOp::NotEq)
+                    && matches!(
+                        (left.payload(), right.payload()),
+                        (Value::Enum { .. }, Value::Enum { .. })
+                    )
+                {
+                    let equal = self.enum_payload_equal(&left, &right)?;
+                    return Ok(ExprFlow::Value(Value::Bool(if *op == BinOp::Eq {
+                        equal
+                    } else {
+                        !equal
+                    })));
+                }
                 if matches!(op, BinOp::Eq | BinOp::NotEq)
                     && matches!(
                         (left.payload(), right.payload()),
