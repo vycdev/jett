@@ -7440,3 +7440,129 @@ fn native_reflected_interface_field_failures_match_interpreter_in_both_profiles(
         }
     }
 }
+
+#[test]
+fn native_interface_method_values_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_method_values.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("interface_method_values.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected =
+        jett_driver::run_file_capture_output(&source).expect("interface method value oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "owners:8:107:18:1008\n",
+            "slots:13:112:23:1013\n",
+            "coarsen:8\n",
+            "routes:8:8:8:8:8:8:8:8\n",
+            "adapted:18:18\n",
+            "alias:18\n",
+            "baked:8:8:8:8:8\n",
+            "receiver\nfactory\nordered:8\n",
+            "capability:9\n",
+            "reuse:9:8\n",
+            "collision:8:8:8\n",
+        )
+    );
+    assert_eq!(expected.debug_output.len(), 4);
+    for (event, method) in expected.debug_output.iter().zip([
+        "callback_library.Reader.read",
+        "callback_library.Reader.offset",
+        "callback_library.Reader.read",
+        "callback_library.Absent.read",
+    ]) {
+        assert!(event.ends_with(&format!("= function({method})")), "{event}");
+    }
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("method_values_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native interface method values");
+        binaries.push((binary, release));
+    }
+    let verify_binary = directory.path().join("method_values_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native interface method value verify suite");
+    let property_binary = directory.path().join("method_values_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native interface method value property suite");
+    fs::remove_file(&source).unwrap();
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        let debug = if release {
+            String::new()
+        } else {
+            format!("{}\n", expected.debug_output.join("\n"))
+        };
+        assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
+    }
+    for binary in [verify_binary, property_binary] {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_interface_method_value_pending_receiver_matches_qualified_call() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/interface_method_values.jett");
+    let template = fs::read_to_string(&fixture).unwrap();
+    let declarations = template.split("function main(").next().unwrap();
+    for callee in ["callback", "library.Reader.read"] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pending_method_receiver.jett");
+        fs::write(
+            &source,
+            format!(
+                "{declarations}function main(stdout: Stdout) returns nothing:\n    use callback_library as library\n    library.Reader source = run 7\n    function(view library.Reader) returns int64 callback = library.Reader.read\n    Stdout.write(view stdout, \"before\\n\")\n    int64 value = {callee}(view source)\n    Stdout.write(view stdout, \"{{value}}\\n\")\n    return nothing\n"
+            ),
+        )
+        .unwrap();
+        let expected = jett_driver::run_file_capture_outcome(&source)
+            .expect_err("pending receiver must fail before implementation dispatch");
+        assert_eq!(expected.output.stdout, "before\n");
+        assert!(expected.output.debug_output.is_empty());
+        assert_eq!(
+            expected.message,
+            "runtime error: undefined function 'callback_library.Reader.read'"
+        );
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory
+                .path()
+                .join(format!("pending_method_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .expect("native interface method pending receiver");
+            binaries.push(binary);
+        }
+        fs::remove_file(&source).unwrap();
+        for binary in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert_eq!(actual.status.code(), Some(71), "{callee}: {actual:?}");
+            assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+            assert_eq!(
+                actual.stderr,
+                format!("{}\n", expected.message).as_bytes(),
+                "{callee}: {actual:?}"
+            );
+        }
+    }
+}

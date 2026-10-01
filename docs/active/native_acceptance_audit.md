@@ -472,3 +472,34 @@ reflection tests, and eight pending-reflection tests pass, including existing
 explicit secret-owner implementations.
 These supplemental cases leave the inventory denominator unchanged and do not
 settle the open reflected admission contract or establish full native parity.
+
+The qualified interface callback audit found that `Reader.read` checked as a
+function value but became a non-function in the reference evaluator and lacked
+a native dispatcher target. Checked method values now distinguish concrete
+source bodies from interface slots. Callback-only slots are collected through
+ordinary, generic, and nested reflected bodies and resolve to the existing
+dispatcher with exact parameter types and view modes. Declared slots remain
+available without an implementation, and creating a callback executes no body
+or authority. Runtime receivers still select the existing implementation.
+Transparent aliases resolve in declaration scope, including when a caller's
+namespace import or generic parameter has the same name as the target.
+
+An implementation of another interface for an interface type can share the
+declared method's qualified display name. The declaration's slot takes
+precedence during reference lookup, invocation, and explicit compile-time
+callback materialization; failure to select an implementation cannot fall back
+to the colliding source body. The source implementation retains its distinct
+native identity.
+
+All 201 checker, 332 reference/comptime, 77 HIR, 47 MIR, and 594 frontend fixture
+tests pass. The two
+new native conformance tests pass in debug and release after source removal,
+including compiled verify/property suites, aliases, multiple owners and slots,
+explicit receiver reuse, callback adapters, generic and compile-time values,
+capability parameters, argument-before-callee effects, canonical debug names,
+name collisions, and pending-receiver failures. All 13 adjacent linked function
+value tests and 19 adjacent interface tests pass. Complete inventory, workspace,
+and host distribution gates
+remain independent obligations for the final revision; the supplemental
+callback fixture does not change the inventory denominator or settle the
+concrete-owner argument policy for erased calls.

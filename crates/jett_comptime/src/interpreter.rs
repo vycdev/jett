@@ -1035,7 +1035,8 @@ impl Interpreter {
     }
 
     fn runtime_name(&self, name: &str) -> String {
-        self.registry_name(&self.functions, name)
+        self.registry_name(&self.interface_methods, name)
+            .or_else(|| self.registry_name(&self.functions, name))
             .or_else(|| self.type_alias_method_name(name))
             .or_else(|| self.expand_namespace_alias_name(name))
             .unwrap_or_else(|| name.to_string())
@@ -1048,12 +1049,47 @@ impl Interpreter {
         if !matches!(self.type_aliases.get(&alias), Some(None)) {
             return None;
         }
-        let namespace = Self::type_name_namespace(&alias).or(self.current_namespace.as_deref());
-        let base =
-            self.substitute_type_expr_in_namespace(&self.type_alias_bases[&alias], namespace);
-        let owner = self.concrete_type_display(&base);
+        let owner = self
+            .declared_interface_alias_target_name(&alias, &mut HashSet::new())
+            .unwrap_or_else(|| {
+                let namespace =
+                    Self::type_name_namespace(&alias).or(self.current_namespace.as_deref());
+                let base = self
+                    .substitute_type_expr_in_namespace(&self.type_alias_bases[&alias], namespace);
+                self.concrete_type_display(&base)
+            });
         let method = format!("{owner}.{method}");
-        self.functions.contains_key(&method).then_some(method)
+        (self.functions.contains_key(&method) || self.interface_methods.contains_key(&method))
+            .then_some(method)
+    }
+
+    fn declared_interface_alias_target_name(
+        &self,
+        alias: &str,
+        aliases: &mut HashSet<String>,
+    ) -> Option<String> {
+        if !matches!(self.type_aliases.get(alias), Some(None)) || !aliases.insert(alias.to_string())
+        {
+            return None;
+        }
+        let TypeExpr::Named(target) = self.type_alias_bases.get(alias)? else {
+            return None;
+        };
+        // Namespace aliases and type bindings belong to the calling function;
+        // neither can change the static target of a namespace declaration.
+        let owner = if target.name.contains('.') {
+            target.name.clone()
+        } else {
+            Self::type_name_namespace(alias)
+                .map(|namespace| format!("{namespace}.{}", target.name))
+                .filter(|name| self.type_name_is_registered(name))
+                .unwrap_or_else(|| target.name.clone())
+        };
+        if self.interfaces.contains(&owner) {
+            Some(owner)
+        } else {
+            self.declared_interface_alias_target_name(&owner, aliases)
+        }
     }
 
     pub fn set_breakpoint_exclusions(&mut self, exclusions: Arc<HashMap<Span, HashSet<String>>>) {
@@ -1179,12 +1215,7 @@ impl Interpreter {
                     self.register_type_alias_in_namespace(current_namespace.as_deref(), alias);
                 }
                 Item::Interface(interface) => {
-                    if let Some(namespace) = current_namespace.as_deref() {
-                        self.interfaces
-                            .insert(format!("{namespace}.{}", interface.name.name));
-                    } else {
-                        self.register_interface(interface);
-                    }
+                    self.register_interface_in_namespace(current_namespace.as_deref(), interface);
                 }
                 Item::Implement(block) => {
                     self.register_implement_block_in_namespace(current_namespace.as_deref(), block)
@@ -1336,9 +1367,26 @@ impl Interpreter {
         }
     }
 
-    /// Retain interface names so nested type arguments can be qualified.
+    /// Retain interface names and declared dispatch slots before implementations
+    /// are registered, so methods can also be used as named function values.
     pub fn register_interface(&mut self, interface: &InterfaceDecl) {
-        self.interfaces.insert(interface.name.name.clone());
+        self.register_interface_in_namespace(None, interface);
+    }
+
+    pub fn register_interface_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        interface: &InterfaceDecl,
+    ) {
+        let owner_name = namespace
+            .map(|namespace| format!("{namespace}.{}", interface.name.name))
+            .unwrap_or_else(|| interface.name.name.clone());
+        self.interfaces.insert(owner_name.clone());
+        for method in &interface.methods {
+            self.interface_methods
+                .entry(format!("{owner_name}.{}", method.name.name))
+                .or_default();
+        }
     }
 
     /// Register an `implement Interface for Type` block so interface-qualified
@@ -2517,6 +2565,9 @@ impl Interpreter {
                     && let Some(name) = Self::dotted_expr_name(expr)
                 {
                     let function = self.runtime_name(&name);
+                    if self.interface_methods.contains_key(&function) {
+                        return Ok(ExprFlow::Value(Value::NamedFunction(function)));
+                    }
                     if self.functions.contains_key(&function) {
                         return Ok(ExprFlow::Value(Value::NamedFunction(function)));
                     }
@@ -11239,9 +11290,14 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: Vec<Value>,
     ) -> Result<Value, String> {
-        let resolved_name = self
-            .resolve_interface_dispatch(name, &args)
-            .unwrap_or_else(|| name.to_string());
+        let resolved_name = match (
+            self.resolve_interface_dispatch(name, &args),
+            self.interface_dispatch_name(name),
+        ) {
+            (Some(resolved), _) => resolved,
+            (None, Some(interface)) => return Err(format!("undefined function '{interface}'")),
+            (None, None) => name.to_string(),
+        };
 
         // Look up the function definition.
         let registered = self
@@ -11647,19 +11703,23 @@ impl Interpreter {
     }
 
     fn resolve_interface_dispatch(&self, name: &str, args: &[Value]) -> Option<String> {
-        if self.functions.contains_key(name) {
-            return Some(name.to_string());
+        if let Some(interface) = self.interface_dispatch_name(name) {
+            let receiver_type = runtime_type_name(args.first()?)?;
+            return self.interface_methods[&interface]
+                .get(&receiver_type)
+                .cloned();
         }
+        self.functions.contains_key(name).then(|| name.to_string())
+    }
 
-        let receiver_type = runtime_type_name(args.first()?)?;
+    fn interface_dispatch_name(&self, name: &str) -> Option<String> {
         self.interface_methods
-            .get(name)
+            .contains_key(name)
+            .then(|| name.to_string())
             .or_else(|| {
                 self.current_qualified_name(name)
-                    .and_then(|qualified| self.interface_methods.get(&qualified))
+                    .filter(|qualified| self.interface_methods.contains_key(qualified))
             })
-            .and_then(|methods| methods.get(&receiver_type))
-            .cloned()
     }
 
     fn display_interpolation_value(&mut self, expr: &Expr, value: Value) -> Result<String, String> {
@@ -18163,6 +18223,303 @@ function main() returns nothing:
             2
         );
         assert!(values.values().any(|value| *value == Value::Int64(7)));
+    }
+
+    #[test]
+    fn declared_interface_method_values_exist_before_implementations() {
+        let declaration = interface_decl(
+            "Reader",
+            vec![("read", vec![("self", "Reader", true)], "int64")],
+        );
+        for namespace in [None, Some("models")] {
+            let mut interp = Interpreter::new();
+            if let Some(namespace) = namespace {
+                interp.register_interface_in_namespace(Some(namespace), &declaration);
+            } else {
+                interp.register_interface(&declaration);
+            }
+            let owner = namespace.map_or_else(
+                || var("Reader"),
+                |namespace| field_access(var(namespace), "Reader"),
+            );
+            let method = field_access(owner, "read");
+            let name = namespace.map_or_else(
+                || "Reader.read".to_string(),
+                |namespace| format!("{namespace}.Reader.read"),
+            );
+            let callback = interp.eval_expr(&method).expect("declared callback");
+            assert!(matches!(&callback, Value::NamedFunction(target) if target == &name));
+            assert_eq!(callback.to_string(), format!("function({name})"));
+            assert!(interp.interface_methods[&name].is_empty());
+            assert_eq!(
+                interp.call_fn_value(callback.clone(), vec![Value::Int64(7)]),
+                Err(format!("undefined function '{name}'"))
+            );
+
+            let namespace_header = namespace
+                .map(|namespace| format!("namespace {namespace}\n"))
+                .unwrap_or_default();
+            let source = format!(
+                "{namespace_header}implement Reader for int64:\n    function read(view self: int64) returns int64:\n        return self + 1\n"
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            interp.register_module(&parsed.module);
+            interp.register_interface_in_namespace(namespace, &declaration);
+            assert_eq!(
+                interp.call_fn_value(callback, vec![Value::Int64(7)]),
+                Ok(Value::Int64(8))
+            );
+        }
+    }
+
+    #[test]
+    fn interface_method_values_dispatch_by_owner_with_aliases_and_inherent_collision() {
+        let source = r#"namespace beta
+export function helper() returns int64:
+    return 99
+export interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return 99
+namespace models
+function helper() returns int64:
+    return 5
+export interface Reader:
+    function read(view self: Reader) returns int64
+export type Readable = Reader
+export type Chained = Readable
+export struct Counter:
+    value: int64
+    function read(view self: Counter) returns int64:
+        return 1000 + self.value
+implement Reader for Counter:
+    function read(view self: Counter) returns int64:
+        return helper() + self.value
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return helper() + self
+export function make_reader() returns function(view Reader) returns int64:
+    return Readable.read
+namespace app
+function main() returns int64:
+    use models as original
+    use beta as models
+    original.Counter counter = original.Counter(value: 2)
+    original.Reader boxed = clone counter
+    original.Reader number = 7
+    function(view original.Reader) returns int64 callback = original.Reader.read
+    int64 first = callback(view boxed)
+    function(view original.Readable) returns int64 aliased = original.Readable.read
+    int64 second = aliased(view number)
+    int64 third = original.make_reader()(view boxed)
+    function(view original.Chained) returns int64 chained = original.Chained.read
+    int64 fourth = chained(view number)
+    int64 inherent = original.Counter.read(view counter)
+    return first + second + third + fourth + inherent
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        assert_eq!(
+            interp.call_function("app.main", vec![]),
+            Ok(Value::Int64(1040))
+        );
+        let alias_method = field_access(field_access(var("models"), "Readable"), "read");
+        assert!(matches!(
+            interp.eval_expr(&alias_method),
+            Ok(Value::NamedFunction(name)) if name == "models.Reader.read"
+        ));
+        assert_eq!(interp.lexical_scope_floor, 0);
+        assert_eq!(interp.namespace_alias_scopes.len(), 1);
+        assert_eq!(interp.current_namespace, None);
+        assert!(interp.visible_namespace_aliases().is_empty());
+    }
+
+    #[test]
+    fn declared_interface_slots_take_precedence_over_colliding_source_methods() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+interface Other:
+    function read(view self: Other) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+implement Other for Reader:
+    function read(view self: Reader) returns int64:
+        return 99
+function main() returns list[int64]:
+    Reader item = 7
+    function(view Reader) returns int64 callback = Reader.read
+    int64 direct = Reader.read(view item)
+    int64 indirect = callback(view item)
+    return list(direct, indirect)
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        assert!(interp.functions.contains_key("models.Reader.read"));
+        assert_eq!(
+            interp.call_function("models.main", vec![]),
+            Ok(Value::List(vec![Value::Int64(8), Value::Int64(8)]))
+        );
+        assert_eq!(
+            interp.call_function("models.Reader.read", vec![Value::Bool(true)]),
+            Err("undefined function 'models.Reader.read'".into())
+        );
+    }
+
+    #[test]
+    fn interface_alias_method_values_ignore_callers_generic_type_bindings() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+type Readable = Reader
+struct Counter:
+    value: int64
+implement Reader for Counter:
+    function read(view self: Counter) returns int64:
+        return self.value + 5
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return 1
+function choose[Reader](unused: Reader) returns function(view models.Reader) returns int64:
+    return models.Readable.read
+function main() returns int64:
+    Counter item = Counter(value: 2)
+    function(view models.Reader) returns int64 callback = choose[int64](7)
+    return callback(view item)
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        assert!(matches!(
+            interp.call_function_with_type_args(
+                "models.choose",
+                &[type_named("int64")],
+                vec![Value::Int64(7)]
+            ),
+            Ok(Value::NamedFunction(name)) if name == "models.Reader.read"
+        ));
+        assert_eq!(
+            interp.call_function("models.main", vec![]),
+            Ok(Value::Int64(7))
+        );
+    }
+
+    #[test]
+    fn interface_method_callback_evaluates_arguments_before_callee_once() {
+        let source = r#"namespace app
+interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+function receiver(stdout: Stdout) returns Reader:
+    Stdout.write(view stdout, "argument\n")
+    return 7
+function select_reader(stdout: Stdout) returns function(view Reader) returns int64:
+    Stdout.write(view stdout, "callee\n")
+    return Reader.read
+function main(stdout: Stdout) returns int64:
+    return select_reader(view stdout)(view receiver(view stdout))
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        interp.enable_stdout_capture();
+        assert_eq!(
+            interp.call_function("app.main", vec![Value::Nothing]),
+            Ok(Value::Int64(8))
+        );
+        assert_eq!(interp.take_stdout_output(), "argument\ncallee\n");
+    }
+
+    #[test]
+    fn interface_method_callback_preserves_pending_receiver_failures() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        let method = field_access(field_access(var("models"), "Reader"), "read");
+        let callback = interp.eval_expr(&method).expect("interface callback");
+        let mut pending = Value::Int64(7);
+        for _ in 0..2 {
+            pending = Value::Pending(Box::new(pending));
+            let expected = Err("undefined function 'models.Reader.read'".into());
+            assert_eq!(
+                interp.call_fn_value(callback.clone(), vec![pending.clone()]),
+                expected
+            );
+            assert_eq!(
+                interp.call_function("models.Reader.read", vec![pending.clone()]),
+                expected
+            );
+        }
+        assert_eq!(
+            interp.call_fn_value(callback, vec![Value::Int64(7)]),
+            Ok(Value::Int64(8))
+        );
+        assert_eq!(interp.lexical_scope_floor, 0);
+        assert_eq!(interp.namespace_alias_scopes.len(), 1);
+        assert_eq!(interp.current_namespace, None);
+    }
+
+    #[test]
+    fn comptime_interface_method_values_keep_canonical_dispatch_names() {
+        let source = r#"namespace models
+interface Reader:
+    function read(view self: Reader) returns int64
+type Readable = Reader
+interface Reporter:
+    function emit(view self: Reporter, view stdout: Stdout) returns nothing
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+function make_reader() returns function(view Reader) returns int64:
+    return Readable.read
+function main() returns nothing:
+    function(view Reader) returns int64 direct = comptime models.Reader.read
+    function(view Readable) returns int64 aliased = comptime Readable.read
+    function(view Reader) returns int64 returned = comptime make_reader()
+    function(view Reporter, view Stdout) returns nothing reporter = comptime Reporter.emit
+    int64 answer = comptime (models.Reader.read)(view 7)
+    return nothing
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let (values, diagnostics) = crate::evaluate_explicit_comptime_expressions(
+            &parsed.module,
+            Arc::new(ReflectionMetadata::new()),
+            Arc::new(CheckedExpressionTypes::default()),
+            Arc::new(HashMap::new()),
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(values.len(), 5);
+        assert_eq!(
+            values
+                .values()
+                .filter(|value| matches!(value, Value::NamedFunction(name) if name == "models.Reader.read"))
+                .count(),
+            3
+        );
+        assert!(values.values().any(
+            |value| matches!(value, Value::NamedFunction(name) if name == "models.Reporter.emit")
+        ));
+        assert!(values.values().any(|value| *value == Value::Int64(8)));
     }
 
     #[test]

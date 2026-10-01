@@ -344,6 +344,14 @@ pub(super) fn function_value_candidates(
     functions: &[Function],
     method_value_definitions: &HashSet<Span>,
 ) -> Vec<FunctionValueCandidate> {
+    let dispatch_names = functions
+        .iter()
+        .filter(|function| is_interface_dispatcher(function))
+        .filter_map(|function| match &function.debug_kind {
+            FunctionDebugKind::Named(name) => Some(name.as_str()),
+            FunctionDebugKind::Inline => None,
+        })
+        .collect::<HashSet<_>>();
     functions
         .iter()
         .filter(|function| {
@@ -354,7 +362,17 @@ pub(super) fn function_value_candidates(
                     | DeclarationKind::Verify
                     | DeclarationKind::Property
             ) && (function.identity.declaration.kind != DeclarationKind::Method
-                || method_value_definitions.contains(&function.span))
+                // Generated interface dispatchers have no concrete source body.
+                // Their reserved identity and canonical debug name identify a
+                // named callback returned by explicit compile-time evaluation.
+                || is_interface_dispatcher(function)
+                // An implementation for an interface owner can share its debug
+                // name with a declared slot; the qualified spelling selects the slot.
+                || (method_value_definitions.contains(&function.span)
+                    && !matches!(
+                        &function.debug_kind,
+                        FunctionDebugKind::Named(name) if dispatch_names.contains(name.as_str())
+                    )))
         })
         .map(|function| {
             let declaration = &function.identity.declaration;
@@ -392,6 +410,15 @@ pub(super) fn function_value_candidates(
             }
         })
         .collect()
+}
+
+fn is_interface_dispatcher(function: &Function) -> bool {
+    function.identity.declaration.kind == DeclarationKind::Method
+        && function
+            .identity
+            .declaration
+            .name
+            .starts_with("$interface.dispatch.")
 }
 
 pub(super) struct ValueContext<'a> {

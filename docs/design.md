@@ -7317,6 +7317,15 @@ method does not bind an instance. Parameter types and `view` modes remain part
 of the callback's type. Method bodies use their declaring namespace when
 invoked through a callback, including callbacks produced by `comptime`.
 
+An interface-qualified method value, such as `Reader.read`, denotes the same
+dynamic dispatch as an interface-qualified call. Its receiver remains an
+explicit parameter with the interface type and declared `view` mode; invoking
+the callback selects the receiver's concrete implementation. Creating or storing
+the callback does not select an implementation or execute its body. The named
+callback retains the interface declaration's canonical namespace and method name.
+The declared slot owns that qualified spelling even if an implementation of
+another interface for the interface type has a method with the same name.
+
 A call through a function-valued expression evaluates arguments in lexical
 source order, then evaluates the callee to select the function. This includes
 parenthesized callbacks, returned functions, and function-valued fields. If an

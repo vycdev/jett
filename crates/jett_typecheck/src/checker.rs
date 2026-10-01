@@ -62,7 +62,7 @@ pub struct CheckedGenericFunctionInstantiation {
     /// Concrete source-defined method targets selected in this body.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
     pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
-    /// Concrete source-defined methods selected as function values in this body.
+    /// Source method bodies or interface slots selected as function values.
     pub method_values: HashMap<Span, CheckedMethodValue>,
     /// Concrete struct construction targets selected in this body.
     pub struct_constructions: HashMap<Span, CheckedStructConstruction>,
@@ -195,10 +195,16 @@ pub struct CheckedInterfaceCall {
     pub method_index: usize,
 }
 
-/// The concrete source-defined method selected for a function-value expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckedMethodValue {
-    pub source_span: Span,
+/// Checked executable target selected for a qualified method-value expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedMethodValue {
+    /// A concrete method body with its receiver as an explicit parameter.
+    Source { source_span: Span },
+    /// An interface dispatcher selected by the explicit receiver at invocation.
+    Interface {
+        interface_type: TypeId,
+        method_index: usize,
+    },
 }
 
 /// The concrete struct type selected for a checked construction call.
@@ -243,7 +249,7 @@ pub struct CheckResult {
     /// Concrete source-defined method targets, keyed by call span.
     pub method_calls: HashMap<Span, CheckedMethodCall>,
     pub interface_calls: HashMap<Span, CheckedInterfaceCall>,
-    /// Concrete source-defined method values, keyed by expression span.
+    /// Source method bodies or interface slots, keyed by expression span.
     pub method_values: HashMap<Span, CheckedMethodValue>,
     /// Source method bodies selected by concrete owner/member lookup. This
     /// excludes implementation bodies shadowed by an inherent method.
@@ -333,6 +339,8 @@ pub fn check_with_options(
     let method_value_definitions = checker
         .method_definitions_by_owner
         .values()
+        // This map selects Source bodies by concrete owner/member. Interface
+        // value slots have no source body and never enter this definition set.
         .map(|&index| checker.method_definitions[index].source_span)
         .collect();
 
@@ -7116,13 +7124,31 @@ impl<'a> TypeChecker<'a> {
         else {
             return;
         };
-        let value = CheckedMethodValue {
+        let value = CheckedMethodValue::Source {
             source_span: self.method_definitions[index].source_span,
         };
+        self.record_method_value(span, value);
+    }
+
+    fn record_method_value(&mut self, span: Span, value: CheckedMethodValue) {
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             active.method_values.insert(span, value);
         } else {
             self.method_values.insert(span, value);
+        }
+    }
+
+    fn clear_interface_method_value(&mut self, span: Span) {
+        let values = if let Some(active) = self.active_generic_instantiations.last_mut() {
+            &mut active.method_values
+        } else {
+            &mut self.method_values
+        };
+        if matches!(
+            values.get(&span),
+            Some(CheckedMethodValue::Interface { .. })
+        ) {
+            values.remove(&span);
         }
     }
 
@@ -12818,6 +12844,7 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.interface_calls.insert(span, call);
             }
+            self.clear_interface_method_value(callee.span());
             return;
         }
         let definition_index = match self.interner.resolve(declared_owner) {
@@ -12834,6 +12861,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(index) = definition_index {
             let source_span = self.method_definitions[index].source_span;
             self.record_method_call(span, source_span);
+            self.clear_interface_method_value(callee.span());
         }
     }
 
@@ -13674,12 +13702,20 @@ impl<'a> TypeChecker<'a> {
                 interface_def
                     .methods
                     .iter()
-                    .find(|m| m.name == field.name)
-                    .cloned(),
+                    .enumerate()
+                    .find(|(_, method)| method.name == field.name)
+                    .map(|(index, method)| (index, method.clone())),
             )
         };
 
-        if let Some(method) = method {
+        if let Some((method_index, method)) = method {
+            self.record_method_value(
+                span,
+                CheckedMethodValue::Interface {
+                    interface_type: type_id,
+                    method_index,
+                },
+            );
             let params = method.params.iter().map(|(_, ty, _)| *ty).collect();
             let view_params = method.params.iter().map(|(_, _, view)| *view).collect();
             return Some(self.interner.intern(Type::Function {
@@ -18423,6 +18459,7 @@ function main() returns nothing:
             result.diagnostics
         );
         assert_eq!(result.interface_calls.len(), 1);
+        assert!(result.method_values.is_empty());
         let call = result.interface_calls.values().next().unwrap();
         let Type::Interface(id) = result.interner.resolve(call.interface_type) else {
             panic!("dispatch owner must be a checked interface");
@@ -18440,6 +18477,7 @@ function main() returns nothing:
         for body in specialized {
             assert_eq!(body.interface_calls.len(), 1);
             assert_eq!(body.interface_calls.values().next(), Some(call));
+            assert!(body.method_values.is_empty());
         }
     }
 
@@ -18574,11 +18612,14 @@ function invoke() returns int64:
         );
         assert_eq!(result.method_values.len(), 2);
         for (expression_span, target) in &result.method_values {
+            let CheckedMethodValue::Source { source_span } = target else {
+                panic!("concrete method value must select a source body");
+            };
             let expression = &source[expression_span.start as usize..expression_span.end as usize];
             let definition = result
                 .method_definitions
                 .iter()
-                .find(|method| method.source_span == target.source_span)
+                .find(|method| method.source_span == *source_span)
                 .expect("method value must identify its checked source definition");
             assert_eq!(definition.owner_name, "models.Point");
             assert_eq!(
@@ -18601,6 +18642,301 @@ function invoke() returns int64:
             assert_eq!(view_params, &vec![true]);
             assert_eq!(*return_type, TypeInterner::INT64);
         }
+    }
+
+    #[test]
+    fn interface_method_values_export_callback_only_slots_and_exact_signatures() {
+        let source = r#"namespace app
+interface Reader:
+    function read(view self: Reader) returns int64
+    function consume(self: Reader, flag: bool) returns string
+function reader() returns function(view Reader) returns int64:
+    return Reader.read
+function consumer() returns function(Reader, bool) returns string:
+    return Reader.consume
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(result.interface_calls.is_empty());
+        assert!(result.method_definitions.is_empty());
+        assert!(result.method_value_definitions.is_empty());
+        assert_eq!(result.method_values.len(), 2);
+        for (span, target) in &result.method_values {
+            let CheckedMethodValue::Interface {
+                interface_type,
+                method_index,
+            } = target
+            else {
+                panic!("interface method value must identify its dispatch slot");
+            };
+            let Type::Interface(id) = result.interner.resolve(*interface_type) else {
+                panic!("slot owner must remain the exact interface type");
+            };
+            let interface = result.interner.resolve_interface(*id);
+            assert_eq!(interface.name, "app.Reader");
+            let method = &interface.methods[*method_index];
+            let expression = &source[span.start as usize..span.end as usize];
+            let (index, params, views, output) = match expression {
+                "Reader.read" => (0, vec![*interface_type], vec![true], TypeInterner::INT64),
+                "Reader.consume" => (
+                    1,
+                    vec![*interface_type, TypeInterner::BOOL],
+                    vec![false, false],
+                    TypeInterner::STRING,
+                ),
+                other => panic!("unexpected method expression: {other}"),
+            };
+            assert_eq!(*method_index, index);
+            assert_eq!(expression.rsplit('.').next().unwrap(), method.name);
+            assert_eq!(
+                result.interner.resolve(result.type_map[span]),
+                &Type::Function {
+                    params,
+                    view_params: views,
+                    return_type: output,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn interface_method_values_share_alias_and_namespace_slots() {
+        let result = check_source_result(
+            r#"namespace contracts
+export interface Reader:
+    function read(view self: contracts.Reader) returns int64
+namespace app
+type Access = contracts.Reader
+function callbacks() returns nothing:
+    use contracts
+    use contracts as c
+    function(view contracts.Reader) returns int64 qualified = contracts.Reader.read
+    function(view c.Reader) returns int64 imported = (c.Reader.read)
+    function(view Access) returns int64 aliased = Access.read
+    return nothing
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.method_values.len(), 3);
+        let expected = result.method_values.values().next().unwrap();
+        let CheckedMethodValue::Interface {
+            interface_type,
+            method_index,
+        } = expected
+        else {
+            panic!("aliases must resolve to an interface slot");
+        };
+        assert_eq!(
+            result.interner.type_name(*interface_type),
+            "contracts.Reader"
+        );
+        assert_eq!(*method_index, 0);
+        for (span, target) in &result.method_values {
+            assert_eq!(target, expected);
+            let Type::Function {
+                params,
+                view_params,
+                return_type,
+            } = result.interner.resolve(result.type_map[span])
+            else {
+                panic!("method value must keep its declared function signature");
+            };
+            assert_eq!(params, &vec![*interface_type]);
+            assert_eq!(view_params, &vec![true]);
+            assert_eq!(*return_type, TypeInterner::INT64);
+        }
+        assert!(result.method_value_definitions.is_empty());
+    }
+
+    #[test]
+    fn interface_method_values_are_distinct_from_direct_call_targets() {
+        let source = r#"interface Reader:
+    function read(view self: Reader) returns int64
+struct Point:
+    value: int64
+implement Reader for Point:
+    function read(view self: Point) returns int64:
+        return self.value
+function observed(view value: Reader) returns int64:
+    function(view Reader) returns int64 callback = Reader.read
+    return Reader.read(view value) + callback(view value)
+function main() returns int64:
+    Point point = Point(value: 7)
+    return Reader.read(view point) + observed(view point)
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.interface_calls.len(), 1);
+        assert_eq!(result.method_calls.len(), 1);
+        assert_eq!(result.method_values.len(), 1);
+        let (span, target) = result.method_values.iter().next().unwrap();
+        assert!(matches!(
+            target,
+            CheckedMethodValue::Interface {
+                method_index: 0,
+                ..
+            }
+        ));
+        let value_start = source.find("Reader.read\n").unwrap();
+        assert_eq!(span.start as usize, value_start);
+        assert_eq!(span.end as usize, value_start + "Reader.read".len());
+        assert_eq!(result.method_value_definitions.len(), 1);
+        assert!(
+            result
+                .method_value_definitions
+                .contains(&result.method_definitions[0].source_span)
+        );
+    }
+
+    #[test]
+    fn interface_method_values_survive_generic_body_instantiation() {
+        let result = check_source_result(
+            r#"namespace sample
+interface Reader:
+    function read(view self: Reader) returns int64
+function reader[T](value: T) returns function(view Reader) returns int64:
+    return Reader.read
+function main() returns nothing:
+    function(view Reader) returns int64 first = reader[int64](1)
+    function(view Reader) returns int64 second = reader[string]("two")
+    return nothing
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.generic_function_instantiations.len(), 2);
+        let mut expected = None;
+        for instance in &result.generic_function_instantiations {
+            assert_eq!(instance.method_values.len(), 1);
+            let (span, target) = instance.method_values.iter().next().unwrap();
+            let CheckedMethodValue::Interface {
+                interface_type,
+                method_index,
+            } = target
+            else {
+                panic!("concrete generic body must retain its interface slot");
+            };
+            assert_eq!(result.interner.type_name(*interface_type), "sample.Reader");
+            assert_eq!(*method_index, 0);
+            assert!(instance.type_map.contains_key(span));
+            if let Some(expected) = expected {
+                assert_eq!(*target, expected);
+            } else {
+                expected = Some(*target);
+            }
+            assert!(instance.interface_calls.is_empty());
+        }
+        assert!(result.method_value_definitions.is_empty());
+    }
+
+    #[test]
+    fn interface_method_values_survive_comptime_body_fact_snapshots() {
+        let result = check_source_result(
+            r#"namespace sample
+interface Reader:
+    function read(view self: Reader) returns int64
+struct Pair:
+    name: string
+    count: int64
+function inspect[T](view value: T) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            function(view Reader) returns int64 callback = Reader.read
+            string reflected_name = type.name[Field]()
+    return nothing
+function main() returns nothing:
+    Pair pair = Pair(name: "Ada", count: 42)
+    inspect[Pair](view pair)
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            result.diagnostics
+        );
+        let inspect = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instance| !instance.comptime_type_bindings.is_empty())
+            .unwrap();
+        let bindings = inspect.comptime_type_bindings.values().next().unwrap();
+        assert_eq!(bindings.len(), 2);
+        for binding in bindings {
+            assert_eq!(binding.body.method_values.len(), 1);
+            let (span, target) = binding.body.method_values.iter().next().unwrap();
+            let CheckedMethodValue::Interface {
+                interface_type,
+                method_index,
+            } = target
+            else {
+                panic!("reflected body facts must retain their interface slot");
+            };
+            assert_eq!(result.interner.type_name(*interface_type), "sample.Reader");
+            assert_eq!(*method_index, 0);
+            assert!(binding.body.type_map.contains_key(span));
+            assert!(binding.body.interface_calls.is_empty());
+        }
+        assert!(result.method_value_definitions.is_empty());
+    }
+
+    #[test]
+    fn interface_method_values_keep_existing_signature_and_member_rejections() {
+        let prefix = "interface Reader:\n    function read(view self: Reader) returns int64\n";
+        for declaration in [
+            "function(Reader) returns int64 callback = Reader.read",
+            "function(view Reader, int64) returns int64 callback = Reader.read",
+            "function(view Reader) returns string callback = Reader.read",
+        ] {
+            let source = format!(
+                "{prefix}function callbacks() returns nothing:\n    {declaration}\n    return nothing\n"
+            );
+            let errors = check_source_errors(&source);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 311),
+                "{declaration}: {errors:?}"
+            );
+        }
+        let source = format!(
+            "{prefix}function callbacks() returns nothing:\n    function(view Reader) returns int64 callback = Reader.missing\n    return nothing\n"
+        );
+        let result = check_source_result(&source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|error| error.code.code() == 329)
+        );
+        assert!(result.method_values.is_empty());
     }
 
     #[test]
@@ -18671,7 +19007,12 @@ function main() returns int64:
         for instance in &result.generic_function_instantiations {
             assert_eq!(instance.method_values.len(), 1);
             let (expression_span, target) = instance.method_values.iter().next().unwrap();
-            assert_eq!(target.source_span, method.source_span);
+            assert_eq!(
+                target,
+                &CheckedMethodValue::Source {
+                    source_span: method.source_span,
+                }
+            );
             assert!(instance.type_map.contains_key(expression_span));
         }
     }
@@ -18739,11 +19080,18 @@ function main() returns int64:
             "{:?}",
             result.diagnostics
         );
-        let target = result.method_values.values().next().unwrap();
+        let source_span = result
+            .method_values
+            .values()
+            .find_map(|target| match target {
+                CheckedMethodValue::Source { source_span } => Some(*source_span),
+                CheckedMethodValue::Interface { .. } => None,
+            })
+            .unwrap();
         let definition = result
             .method_definitions
             .iter()
-            .find(|method| method.source_span == target.source_span)
+            .find(|method| method.source_span == source_span)
             .unwrap();
         assert!(definition.interface_name.is_none());
         assert!(
@@ -18814,7 +19162,12 @@ function main() returns nothing:
         for binding in bindings {
             assert_eq!(binding.body.method_values.len(), 1);
             let (expression_span, target) = binding.body.method_values.iter().next().unwrap();
-            assert_eq!(target.source_span, result.method_definitions[0].source_span);
+            assert_eq!(
+                target,
+                &CheckedMethodValue::Source {
+                    source_span: result.method_definitions[0].source_span,
+                }
+            );
             assert!(binding.body.type_map.contains_key(expression_span));
         }
     }

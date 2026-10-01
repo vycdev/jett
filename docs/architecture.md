@@ -932,6 +932,23 @@ the type namespace as a runtime field. The receiver stays an explicit callback
 parameter, with its checked ownership mode. Interpreter registration retains
 the declaration namespace separately from the qualified method name, so method
 bodies resolve their lexical helpers consistently for direct and indirect calls.
+Qualified interface method values carry the checked interface type and method
+slot through those same fact maps. HIR collects slots used only as callbacks,
+including generic and nested reflected bodies, and resolves them to the existing
+zero-capture dispatcher. Parameter types and view modes remain exact; the
+explicit receiver selects an implementation at invocation. Direct qualified
+calls retain their selected call target without an unused callback fact.
+Interpreter registration retains declared slots even without implementations,
+and transparent interface aliases produce the canonical named callback.
+Those aliases resolve their targets in declaration scope; caller namespace
+imports and generic type bindings cannot redirect the selected interface.
+Explicit compile-time callback values are materialized from the generated
+dispatcher's reserved identity and canonical debug name, rather than a concrete
+implementation body. Creating a callback does not invoke it or capture authority.
+Declared interface slots take precedence over concrete methods with a colliding
+qualified display name. The interpreter cannot fall back to that concrete body
+after failed dynamic selection, and compile-time materialization excludes the
+colliding source candidate while retaining its distinct implementation function.
 Generic body checking similarly saves and restores the triggering closure's capture
 scope so a generic callee's parameters cannot be mistaken for captures.
 Generic annotations on an inline function use ordinary type substitution;

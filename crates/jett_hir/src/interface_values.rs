@@ -11,19 +11,31 @@ impl Lowerer<'_> {
                     .map(|call| (call.interface_type, call.method_index)),
             );
         }
+        fn values(slots: &mut Vec<(TypeId, usize)>, facts: &HashMap<Span, CheckedMethodValue>) {
+            slots.extend(facts.values().filter_map(|value| match value {
+                CheckedMethodValue::Source { .. } => None,
+                CheckedMethodValue::Interface {
+                    interface_type,
+                    method_index,
+                } => Some((*interface_type, *method_index)),
+            }));
+        }
         fn bindings(
             slots: &mut Vec<(TypeId, usize)>,
             facts: &HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
         ) {
             for binding in facts.values().flatten() {
                 calls(slots, &binding.body.interface_calls);
+                values(slots, &binding.body.method_values);
                 bindings(slots, &binding.body.comptime_type_bindings);
             }
         }
         calls(&mut slots, &self.check.interface_calls);
+        values(&mut slots, &self.check.method_values);
         bindings(&mut slots, &self.check.comptime_type_bindings);
         for body in &self.check.generic_function_instantiations {
             calls(&mut slots, &body.interface_calls);
+            values(&mut slots, &body.method_values);
             bindings(&mut slots, &body.comptime_type_bindings);
         }
         let first = self.functions.len()

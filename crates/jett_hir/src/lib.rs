@@ -5922,19 +5922,25 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn resolve_function_value_target(&mut self, expression: &Expr) -> Option<FunctionId> {
         if let Some(method) = self.method_values.get(&expression.span()) {
-            return self
-                .function_ids
-                .get(&FunctionKey::Method {
-                    source_span: method.source_span,
-                })
-                .copied()
-                .or_else(|| {
-                    self.parent.error(
-                        expression.span(),
-                        "method value target has no checked concrete HIR function",
-                    );
-                    None
-                });
+            let key = match method {
+                CheckedMethodValue::Source { source_span } => FunctionKey::Method {
+                    source_span: *source_span,
+                },
+                CheckedMethodValue::Interface {
+                    interface_type,
+                    method_index,
+                } => FunctionKey::Interface {
+                    owner: *interface_type,
+                    method: *method_index,
+                },
+            };
+            return self.function_ids.get(&key).copied().or_else(|| {
+                self.parent.error(
+                    expression.span(),
+                    "method value target has no checked HIR function",
+                );
+                None
+            });
         }
         let Some(definition) = self.resolved_definition(expression) else {
             self.parent.error(
@@ -7463,6 +7469,192 @@ function main() returns int64:
             panic!("expected indirect method call");
         };
         assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+    }
+
+    #[test]
+    fn lowers_callback_only_interface_slots_with_canonical_names_and_view_modes() {
+        let program = lower_source(
+            r#"namespace models
+export interface Reader:
+    function read(view self: Reader) returns int64
+    function write(view self: Reader, view stdout: Stdout) returns nothing
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+    function write(view self: int64, view stdout: Stdout) returns nothing:
+        return nothing
+namespace app
+function reader() returns function(view models.Reader) returns int64:
+    use models as m
+    return (m.Reader.read)
+function writer() returns function(view models.Reader, view Stdout) returns nothing:
+    use models
+    return models.Reader.write
+function main() returns int64:
+    use models as m
+    function(view m.Reader) returns int64 callback = m.Reader.read
+    m.Reader value = 7
+    return callback(view value)
+"#,
+        );
+        let named = |name: &str| {
+            program
+                .functions
+                .iter()
+                .find(|function| function.debug_kind == FunctionDebugKind::Named(name.into()))
+                .expect("named HIR function")
+        };
+        let read = named("models.Reader.read");
+        let write = named("models.Reader.write");
+        assert_eq!(read.identity.declaration.namespace, "models");
+        assert_eq!(read.identity.declaration.kind, DeclarationKind::Method);
+        assert_eq!(read.capture_count, 0);
+        assert_eq!(write.capture_count, 0);
+        assert_eq!(read.params.len(), 1);
+        assert_eq!(write.params.len(), 2);
+        assert_eq!(read.params[0].mode, ParamMode::View);
+        assert!(
+            write
+                .params
+                .iter()
+                .all(|param| param.mode == ParamMode::View)
+        );
+        assert_eq!(read.params[0].ty, write.params[0].ty);
+        assert_eq!(read.return_type, TypeInterner::INT64);
+        assert_eq!(write.return_type, TypeInterner::NOTHING);
+        assert_eq!(
+            read.body.statements.len(),
+            2,
+            "dispatch and failure fallback"
+        );
+        assert_eq!(write.body.statements.len(), 2);
+        for (factory, target) in [("app.reader", read.id), ("app.writer", write.id)] {
+            let StatementKind::Return(Some(value)) = &named(factory).body.statements[0].kind else {
+                panic!("expected a returned interface method value");
+            };
+            assert_eq!(value.kind, ExpressionKind::FunctionRef(target));
+        }
+        let main = named("app.main");
+        let StatementKind::Let { value, .. } = &main.body.statements[0].kind else {
+            panic!("expected interface callback binding");
+        };
+        assert_eq!(value.kind, ExpressionKind::FunctionRef(read.id));
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::IndirectCall { args, .. },
+            ..
+        })) = &main.body.statements[2].kind
+        else {
+            panic!("expected indirect interface callback invocation");
+        };
+        assert!(matches!(args[0].kind, ExpressionKind::View(_)));
+        assert_eq!(
+            program
+                .functions
+                .iter()
+                .filter(|function| function.debug_kind == read.debug_kind)
+                .count(),
+            1,
+            "repeated method values must share one dispatcher",
+        );
+    }
+
+    #[test]
+    fn collects_interface_method_values_found_only_in_generic_body_facts() {
+        let program = lower_source(
+            r#"namespace app
+interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self
+function factory[T](seed: T) returns function(view Reader) returns int64:
+    return Reader.read
+function main() returns int64:
+    function(view Reader) returns int64 first = factory[int64](1)
+    function(view Reader) returns int64 second = factory[string]("two")
+    Reader value = 7
+    return first(view value) + second(view value)
+"#,
+        );
+        let dispatcher = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.debug_kind == FunctionDebugKind::Named("app.Reader.read".into())
+            })
+            .expect("callback-only generic interface dispatcher");
+        let factories = program
+            .functions
+            .iter()
+            .filter(|function| function.identity.declaration.name == "factory")
+            .collect::<Vec<_>>();
+        assert_eq!(factories.len(), 2);
+        for factory in factories {
+            let StatementKind::Return(Some(value)) = &factory.body.statements[0].kind else {
+                panic!("expected specialized interface callback return");
+            };
+            assert_eq!(value.kind, ExpressionKind::FunctionRef(dispatcher.id));
+        }
+    }
+
+    #[test]
+    fn collects_interface_method_values_in_nested_reflected_body_facts() {
+        let program = lower_source(
+            r#"namespace app
+interface Reader:
+    function read(view self: Reader) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self
+struct Inner:
+    count: int64
+struct Outer:
+    item: Inner
+function reflected[T](view value: T, view reader: Reader) returns int64:
+    mutable int64 output = 0
+    for outer in type.fields[T]():
+        comptime type Field = outer.type_info:
+            for inner in type.fields[Field]():
+                comptime type Item = inner.type_info:
+                    function(view Reader) returns int64 callback = Reader.read
+                    output = callback(view reader)
+    return output
+function main() returns int64:
+    Outer value = Outer(item: Inner(count: 1))
+    Reader reader = 7
+    return reflected[Outer](view value, view reader)
+"#,
+        );
+        let dispatcher = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.debug_kind == FunctionDebugKind::Named("app.Reader.read".into())
+            })
+            .expect("nested reflected interface dispatcher");
+        let reflected = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "reflected")
+            .expect("specialized reflected function");
+        let StatementKind::For { body, .. } = &reflected.body.statements[1].kind else {
+            panic!("expected outer reflected loop");
+        };
+        let StatementKind::ReflectedTypeDispatch { arms, .. } = &body.statements[0].kind else {
+            panic!("expected outer type binding dispatch");
+        };
+        assert_eq!(arms.len(), 1);
+        let StatementKind::For { body, .. } = &arms[0].body.statements[0].kind else {
+            panic!("expected inner reflected loop");
+        };
+        let StatementKind::ReflectedTypeDispatch { arms, .. } = &body.statements[0].kind else {
+            panic!("expected inner type binding dispatch");
+        };
+        assert_eq!(arms.len(), 1);
+        let StatementKind::Let { value, .. } = &arms[0].body.statements[0].kind else {
+            panic!("expected interface callback in nested binding body");
+        };
+        assert_eq!(value.kind, ExpressionKind::FunctionRef(dispatcher.id));
     }
 
     #[test]

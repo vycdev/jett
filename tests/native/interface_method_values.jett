@@ -1,0 +1,163 @@
+namespace callback_library
+export interface Reader:
+    function read(view self: Reader) returns int64
+    function offset(view self: Reader, delta: int64) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+    function offset(view self: int64, delta: int64) returns int64:
+        return self + 1 + delta
+implement Reader for int8:
+    function read(view self: int8) returns int64:
+        return 107
+    function offset(view self: int8, delta: int64) returns int64:
+        return 107 + delta
+export struct Counter:
+    value: int64
+    function read(view self: Counter) returns int64:
+        return self.value + 500
+implement Reader for Counter:
+    function read(view self: Counter) returns int64:
+        return self.value * 2
+    function offset(view self: Counter, delta: int64) returns int64:
+        return self.value * 2 + delta
+export type Selected = Reader where true
+implement Reader for Selected:
+    function read(view self: Selected) returns int64:
+        Reader base = coarsen clone self
+        function(view Reader) returns int64 callback = Reader.read
+        return callback(view base) + 1000
+    function offset(view self: Selected, delta: int64) returns int64:
+        Reader base = coarsen clone self
+        function(view Reader, int64) returns int64 callback = Reader.offset
+        return callback(view base, delta) + 1000
+export type Readable = Reader
+export struct Holder:
+    callback: function(view Reader) returns int64
+export interface Reporter:
+    function emit(view self: Reporter, view stdout: Stdout) returns nothing
+implement Reporter for Counter:
+    function emit(view self: Counter, view stdout: Stdout) returns nothing:
+        Stdout.write(view stdout, "capability:{self.value}\n")
+export interface Absent:
+    function read(view self: Absent) returns int64
+export function choose() returns function(view Reader) returns int64:
+    return Reader.read
+export function generic_choose[T](unused: T) returns function(view Reader) returns int64:
+    return Reader.read
+export function make_holder() returns Holder:
+    return Holder(callback: Reader.read)
+export function closed_read() returns int64:
+    Reader source = 7
+    function(view Reader) returns int64 callback = Reader.read
+    return callback(view source)
+export function seed() returns Selected:
+    Reader source = 7
+    Selected selected = source handle error:
+        return seed()
+    return selected
+export function apply[T](callback: function(view T) returns int64, view source: T) returns int64:
+    return callback(view source)
+namespace collision_library
+export interface Reader:
+    function read(view self: Reader) returns int64
+export interface Other:
+    function read(view self: Other) returns int64
+implement Reader for int64:
+    function read(view self: int64) returns int64:
+        return self + 1
+implement Other for Reader:
+    function read(view self: Reader) returns int64:
+        return 99
+namespace app
+function receiver_effect(view stdout: Stdout) returns callback_library.Reader:
+    Stdout.write(view stdout, "receiver\n")
+    return 7
+function factory_effect(view stdout: Stdout) returns function(view callback_library.Reader) returns int64:
+    use callback_library
+    Stdout.write(view stdout, "factory\n")
+    return callback_library.Reader.read
+function alias_choice[Reader](unused: Reader) returns function(view callback_library.Reader) returns int64:
+    use callback_library
+    return callback_library.Readable.read
+function main(stdout: Stdout) returns nothing:
+    use callback_library
+    use callback_library as library
+    use collision_library
+    use collision_library as collision
+    function(view library.Readable) returns int64 callback = library.Readable.read
+    function(view library.Reader, int64) returns int64 offset = library.Reader.offset
+    library.Reader wide = 7
+    int8 small = 7
+    library.Reader tiny = small
+    library.Counter concrete = library.Counter(value: 9)
+    library.Reader record = clone concrete
+    library.Selected selected = library.seed()
+    library.Reader refined = clone selected
+    library.Reader base = coarsen selected
+    Stdout.write(view stdout, "owners:{callback(view wide)}:{callback(view tiny)}:{callback(view record)}:{callback(view refined)}\n")
+    Stdout.write(view stdout, "slots:{offset(view wide, 5)}:{offset(view tiny, 5)}:{offset(view record, 5)}:{offset(view refined, 5)}\n")
+    Stdout.write(view stdout, "coarsen:{callback(view base)}\n")
+    function(view library.Reader) returns int64 returned = library.choose()
+    function(view library.Reader) returns int64 generic_int = library.generic_choose[int64](0)
+    function(view library.Reader) returns int64 generic_string = library.generic_choose[string]("unused")
+    function(view library.Reader) returns int64 copied = clone callback
+    library.Holder holder = library.Holder(callback: clone callback)
+    list[function(view library.Reader) returns int64] callbacks = list(clone callback)
+    function(view library.Reader) returns int64 listed = list.get[function(view library.Reader) returns int64](view callbacks, 0) handle:
+        default library.Reader.read
+    optional[function(view library.Reader) returns int64] absent = none
+    function(view library.Reader) returns int64 fallback = absent handle:
+        default library.Reader.read
+    Stdout.write(view stdout, "routes:{(library.Reader.read)(view wide)}:{returned(view wide)}:{generic_int(view wide)}:{generic_string(view wide)}:{copied(view wide)}:{holder.callback(view wide)}:{listed(view wide)}:{fallback(view wide)}\n")
+    function(view library.Counter) returns int64 narrow = library.Reader.read
+    Stdout.write(view stdout, "adapted:{narrow(view concrete)}:{library.apply[library.Counter](library.Reader.read, view concrete)}\n")
+    function(view library.Reader) returns int64 shadowed = alias_choice[int64](0)
+    Stdout.write(view stdout, "alias:{shadowed(view record)}\n")
+    function(view library.Reader) returns int64 baked = comptime callback_library.Reader.read
+    function(view library.Reader) returns int64 baked_returned = comptime callback_library.choose()
+    library.Holder baked_holder = comptime callback_library.make_holder()
+    list[function(view library.Reader) returns int64] baked_list = comptime list(callback_library.Reader.read)
+    function(view library.Reader) returns int64 baked_listed = list.get[function(view library.Reader) returns int64](view baked_list, 0) handle:
+        default library.Reader.read
+    int64 baked_call = comptime callback_library.closed_read()
+    Stdout.write(view stdout, "baked:{baked(view wide)}:{baked_returned(view wide)}:{baked_holder.callback(view wide)}:{baked_listed(view wide)}:{baked_call}\n")
+    function(view library.Absent) returns int64 unimplemented = library.Absent.read
+    trace callback
+    trace offset
+    trace baked
+    trace unimplemented
+    int64 ordered =(factory_effect(view stdout))(receiver_effect(view stdout))
+    Stdout.write(view stdout, "ordered:{ordered}\n")
+    function(view library.Reporter, view Stdout) returns nothing emit = comptime callback_library.Reporter.emit
+    library.Reporter reporter = clone concrete
+    emit(view reporter, view stdout)
+    Stdout.write(view stdout, "reuse:{concrete.value}:{callback(view wide)}\n")
+    collision.Reader collision_receiver = 7
+    function(view collision.Reader) returns int64 collision_callback = collision.Reader.read
+    function(view collision.Reader) returns int64 collision_baked = comptime collision_library.Reader.read
+    Stdout.write(view stdout, "collision:{collision_callback(view collision_receiver)}:{collision_baked(view collision_receiver)}:{collision.Reader.read(view collision_receiver)}\n")
+    return nothing
+verify interface_callbacks:
+    use callback_library
+    use callback_library as library
+    library.Counter source = library.Counter(value: 9)
+    library.Reader erased = clone source
+    function(view library.Reader) returns int64 callback = library.Reader.read
+    function(view library.Reader) returns int64 baked = comptime callback_library.choose()
+    assert callback(view erased) == 18
+    assert baked(view erased) == 18
+    assert source.value == 9
+    assert library.Counter.read(view source) == 509
+    library.Holder holder = comptime callback_library.make_holder()
+    assert holder.callback(view erased) == 18
+    assert callback(view erased) == 18
+property interface_callback_trials:
+    given input: int64
+    use callback_library as library
+    library.Counter source = library.Counter(value: input)
+    library.Reader erased = clone source
+    function(view library.Reader) returns int64 callback = library.Reader.read
+    assert callback(view erased) == input * 2
+    assert source.value == input
+    assert callback(view erased) == input * 2
