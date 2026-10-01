@@ -663,7 +663,7 @@ release regression verifies rejection before launcher lookup and preserves an
 existing executable.
 
 All 62 MIR tests, 78 codegen tests, 21 linked interface tests, both public
-view-escape tests, and five local alias regressions pass with this repair.
+view-escape tests, and four local alias regressions pass with this repair.
 The linked nonstring qualification regression runs in both profiles after
 source removal, checks independent returned clones and unchanged backing
 owners, and requires the exact later terminal failure with successful cleanup.
@@ -699,3 +699,27 @@ string handles and reference counts, pending layers, exact dynamic failures,
 first-error status, and terminal cleanup. Supplemental cases leave the
 inventory denominator unchanged; complete workspace and supported-host
 distribution validation remain final-revision obligations.
+
+The locked Windows workspace run at `7cdf24b1` passed every workspace target
+and doc-test. Native conformance reported 267 passes with no failures. All
+inventory gates passed: 182 HIR/MIR fixtures, 182 native objects, 30 entry
+cases, 25 runtime contracts, 155 verify fixtures, and three property fixtures
+with 100 trials each. Source remained frozen throughout the run. Linux-only
+tests and both supported hosts' clean package jobs still require CI results for
+the final revision; a local Windows pass does not substitute for those gates.
+
+Additional source probes found two gaps outside the fixed inventory. A direct
+struct `Equatable.equals` returning `run true` is accepted by the checker but
+the reference interpreter reports `Equatable.equals must return bool`. Native
+`==` instead prints `pending(true)` and exits successfully; native `!=` reports
+`'not' requires a boolean operand` with exit 71. Secret-qualified operands show
+the same equality-result gap when the secret is initialized from a ready local.
+The enum payload callback already checks result depth; the direct operator
+call needs its own preserved result boundary before inequality negation.
+
+Direct `secret[Item]` initialization from `Item(...)` is a separate native
+admission gap: its checked struct construction retains the outer secret type
+without an inner constructor/qualification split, and native verification
+correctly rejects the inconsistent constructor metadata. Initializing the
+secret from an existing ready `Item` local works. Neither probe changes the
+inventory denominator or authorizes a broader equality or constructor policy.
