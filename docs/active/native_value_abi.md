@@ -14,9 +14,12 @@ result can escape the call while the original owner's depth remains unchanged.
 
 Contextually secret struct construction uses an exact nominal inner
 `StructConstruct` followed by the existing qualification coercion. Only checked
-plain struct constructors qualify; validating result constructors retain their
-predicate and result contract. Field conversions, source evaluation order,
+struct constructors qualify; validating constructors retain their exact
+`result[Struct, string]`, predicate chains and validation flag inside the
+qualification boundary. Field conversions, source evaluation order,
 pending depth, and ownership are preserved without a runtime ABI change.
+Predicate errors retain the existing captured, prefixed result failure; field
+evaluation errors remain terminal and bypass result handlers.
 
 Secret qualification around checked bitfield and machine constructors uses the
 existing coercion and value ABI. Inner construction retains the exact bitfield

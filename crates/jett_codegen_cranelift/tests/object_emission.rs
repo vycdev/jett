@@ -1813,6 +1813,86 @@ fn qualified_struct_constructors_keep_strict_nominal_contracts() {
 }
 
 #[test]
+fn qualified_validating_struct_constructors_keep_exact_result_contracts() {
+    use jett_hir::ExpressionKind;
+    let (baseline, mut types) = lower_source(
+        r#"namespace app
+type Positive = int64 where value > 0
+struct Item:
+    number: Positive
+struct Other:
+    number: Positive
+function make(value: Positive) returns secret[result[Item, string]]:
+    return Item(number: value)
+"#,
+    );
+    emit_host_object(&baseline, &types)
+        .expect("qualified validating struct without new predicates");
+    let item = types
+        .type_ids()
+        .find(|ty| {
+            matches!(types.resolve(*ty), Type::Struct(id)
+            if types.resolve_struct(*id).name == "app.Item")
+        })
+        .unwrap();
+    let other = types
+        .type_ids()
+        .find(|ty| {
+            matches!(types.resolve(*ty), Type::Struct(id)
+            if types.resolve_struct(*id).name == "app.Other")
+        })
+        .unwrap();
+    let bad_error = types.intern(Type::Result(item, TypeInterner::BOOL));
+    let bad_success = types.intern(Type::Result(other, TypeInterner::STRING));
+    for corruption in 0..7 {
+        let mut program = baseline.clone();
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "make")
+            .unwrap();
+        let TerminatorKind::Return(Some(value)) = &mut function.blocks
+            [function.entry.index() as usize]
+            .terminator
+            .kind
+        else {
+            panic!("validating constructor return");
+        };
+        let ExpressionKind::InterfaceCoerce { value: inner, .. } = &mut value.kind else {
+            panic!("result qualification boundary");
+        };
+        if corruption == 0 {
+            value.kind = inner.kind.clone();
+        } else {
+            let ExpressionKind::StructConstruct {
+                struct_type,
+                validates_refinements,
+                ..
+            } = &mut inner.kind
+            else {
+                panic!("empty predicate chain remains a validating constructor");
+            };
+            match corruption {
+                1 => inner.ty = value.ty,
+                2 => *struct_type = other,
+                3 => *validates_refinements = false,
+                4 => inner.ty = bad_error,
+                5 => inner.ty = bad_success,
+                6 => inner.ty = item,
+                _ => unreachable!(),
+            }
+        }
+        let error =
+            emit_host_object(&program, &types).expect_err("invalid validating struct result");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("struct")),
+            "corruption {corruption}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn qualified_bitfield_and_machine_constructors_keep_exact_contracts() {
     use jett_hir::{Expression, ExpressionKind, StateId};
     let (baseline, mut types) = lower_source(

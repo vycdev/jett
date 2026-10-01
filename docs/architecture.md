@@ -934,6 +934,12 @@ the peeled checked TypeId exactly matches its nominal `struct_type`. Field
 conversions and lexical evaluation order remain inside that constructor. Calls
 to ordinary producers, reflected builders, mismatched nominal types, and
 refinement-validating result constructors retain their existing metadata.
+For a checked validating struct call, HIR also separates leading secret wrappers
+from an exact `result[Struct, string]` output. The nominal success type,
+validation flag, per-field predicate chains, and source evaluation order remain
+inside the constructor. MIR extracts predicate control flow within the existing
+qualification coercion. An empty predicate chain keeps the validating result
+shape; predicate failures retain ordinary result-data handling.
 Resolved bitfield and machine declaration calls use the same qualification
 boundary. HIR removes only leading `Secret` wrappers to identify an exact
 bitfield value or `result[Bitfield, string]`, retaining `validates_widths` and

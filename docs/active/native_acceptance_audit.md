@@ -822,7 +822,10 @@ and secret-field regressions. The independent inventory gates also passed:
 182 HIR/MIR fixtures, 182 native objects, 30 entry cases, 25 runtime contracts,
 155 verify fixtures, and three property fixtures with 100 trials each.
 This checkpoint does not certify a later revision or Linux-only execution;
-the supported-host distribution run for this revision remains in progress.
+the [supported-host run for this revision](https://github.com/vycdev/jett/actions/runs/36884693314)
+has since passed both Linux and Windows workspace/build/package jobs and both
+clean installed-package jobs. This certifies that checkpoint's distribution,
+not a later compiler revision.
 
 The contextual secret bitfield and exact-state machine constructor gap is now
 resolved. HIR peels only leading secret wrappers while selecting an already
@@ -848,11 +851,54 @@ validation-flag, state-index, payload, and qualification contracts. Three adjace
 bitfield regressions, machine-transition and baked-machine regressions, and both
 contextual collection/sum constructor regressions also pass.
 
-A separate admitted validating struct constructor still exposes a qualification
-gap: `secret[result[Item, string]] hidden = Item(value: input)` with a refined
-field runs successfully in the reference backend, but MIR's generated sums keep
-the outer secret result type and native validation rejects it. The required
-repair must preserve the exact struct/result identity, predicates and their
-failure data, including already-refined fields without predicates. Supplemental
-cases do not change the inventory denominator; full workspace and supported-host
-distribution validation remain obligations for the final revision.
+The contextual secret validating struct constructor gap is resolved. HIR moves
+leading secret qualification outside the exact `result[Struct, string]`
+constructor while preserving its checked construction fact, nominal success
+type, validation flag, predicate chains and lexical field order. MIR's generated
+sums now retain their ordinary result type inside the qualification coercion.
+Empty predicate chains keep the constructor's result shape; ordinary producers
+and nonmatching nominal or result types are unchanged.
+
+The HIR and strict object regressions pass, including malformed outer/inner
+qualification, different nominal success types, wrong error or success types,
+validation flags and erased result shape. Three linked regressions in
+`native_conformance/secret_validating_struct_constructors.rs` pass in both
+profiles after source removal. Eight handwritten successful output lines cover
+generic/nested/parenthesized constructors, returned and inline values, public
+producers, closed comptime, full joins and independent string/list copies.
+Compiled verify and 100 property trials pass. Predicate failures retain captured
+result data and source order; field evaluation failures remain terminal, precede
+later predicates/handlers and exit 71 with successful cleanup.
+
+Qualified result joins now preserve their checked outer boundary in both
+backends. Exact results retain their type; secret-qualified and nominally
+refined results receive an additional result around the joined payload. The
+interpreter also reconstructs Join types from the active checked facts before
+declared fallback, so refinement handlers extract that outer result correctly.
+The native move planner admits only explicit-view borrowing for Join's owned
+copy and preserves ordinary view-consumption and escape rejections.
+
+All 339 interpreter, 69 MIR, 100 HIR, 86 codegen and 598 frontend tests pass.
+Three linked regressions in `native_conformance/qualified_result_tasks.rs` pass in both
+profiles after source removal. Handwritten Unicode output and typed debug
+observations pin exact/qualified/refined/aliased results, generic and reflected
+bodies, nested secrecy, closed comptime, one-layer joins, independent list
+copies, explicit-view owner reuse, pending scalar children and nonstring inner
+errors. Compiled verify and 100 property trials pass. The inner failure handler
+remains separate from the outer Join handler; its later terminal failure retains
+the first error, effect order and exit 71 cleanup. No runtime leaf signature,
+verifier type rule or fixture denominator changes.
+
+A separate traced-field probe still exposes reference predicate reuse:
+constructing a field from an already established primitive refinement evaluates
+its predicate again in the interpreter, while native code skips it. The design
+already selects reuse of established invariants, including validated ancestors;
+this needs a reference repair, not a new language policy. The original source
+type must survive primitive normalization, and owned aggregate refinements need
+checked source facts rather than primitive-layout equality. Exact, ancestor,
+sibling, effect-order, owned-payload and pending controls remain required.
+
+The admitted alias-as-constructor spelling also remains an unresolved source
+contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).
+Supplemental cases do not change the inventory denominator. Full workspace and
+supported-host distribution validation remain obligations for the final revision.

@@ -3124,6 +3124,9 @@ Checked struct constructors can likewise receive outer secret qualification.
 The constructor retains its exact nominal struct type before qualification,
 including generic arguments and field conversions. Constructors that validate
 refinement fields keep their existing `result[Struct, string]` contract.
+Outer secret qualification can wrap that result without handling it or skipping
+its refinement predicates. Already-refined fields still produce the checked
+result shape even when they need no additional predicate evaluation.
 
 Checked bitfield and machine constructors also retain their exact inner type
 before outer secret qualification. A literal bitfield constructor produces its

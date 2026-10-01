@@ -6520,6 +6520,18 @@ fn normalize_secret_constructor(mut expression: Expression, types: &TypeInterner
             Type::Struct(_),
         ) => *struct_type == constructor_type,
         (
+            ExpressionKind::StructConstruct {
+                struct_type,
+                validates_refinements: true,
+                ..
+            },
+            Type::Result(ok, error),
+        ) => {
+            *ok == *struct_type
+                && *error == TypeInterner::STRING
+                && matches!(types.resolve(*struct_type), Type::Struct(_))
+        }
+        (
             ExpressionKind::BitfieldConstruct {
                 bitfield_type,
                 validates_widths: false,
@@ -8917,6 +8929,224 @@ function validated(count: Count) returns result[Validated, string]:
     }
 
     #[test]
+    fn secret_validating_structs_preserve_result_types_predicates_and_source_order() {
+        let source = r#"type Positive = int8 where value > 0
+struct Item:
+    value: Positive
+    label: string
+struct Box[T]:
+    value: Positive
+    payload: T
+function direct(input: int8) returns secret[result[Item, string]]:
+    return Item(label: "direct", value: input)
+function exact(input: Positive) returns secret[result[Item, string]]:
+    return Item(label: "exact", value: input)
+function nested(input: int8) returns secret[secret[result[Item, string]]]:
+    return ((Item)(label: "nested", value: input))
+function pending(input: int8) returns secret[result[Item, string]]:
+    return run (Item(label: "pending", value: input))
+function handled(input: optional[int8], fallback: int8) returns secret[result[Item, string]]:
+    return Item(label: "handled", value: input handle:
+        default fallback
+    )
+function generic[T](input: int8, payload: T) returns secret[result[Box[T], string]]:
+    return Box[T](payload: payload, value: input)
+function ordinary(input: int8) returns result[Item, string]:
+    return Item(label: "ordinary", value: input)
+function producer(input: int8) returns secret[result[Item, string]]:
+    return ordinary(input)
+function main() returns nothing:
+    int8 seed = 7
+    secret[result[Item, string]] local = Item(label: "local", value: seed)
+    secret[result[Box[int64], string]] specialized = generic[int64](seed, 11)
+    return nothing
+"#;
+        let (program, checked) = lower_source_with_check(source, false);
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        let source_calls = parsed
+            .module
+            .items
+            .iter()
+            .filter_map(|item| {
+                let Item::Function(function) = item else {
+                    return None;
+                };
+                let Stmt::Return(ast::ReturnStmt {
+                    value: Some(mut_value),
+                    ..
+                }) = function.body.stmts.first()?
+                else {
+                    return None;
+                };
+                let mut value = mut_value;
+                while let Expr::Run(inner, _) | Expr::Paren(inner, _) = value {
+                    value = inner;
+                }
+                Some((function.name.name.as_str(), value.span()))
+            })
+            .collect::<HashMap<_, _>>();
+        for name in ["direct", "exact", "nested", "pending", "handled", "generic"] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .unwrap();
+            let StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
+                panic!("{name}: constructor return");
+            };
+            assert_eq!(value.ty, function.return_type, "{name}");
+            let value = if name == "pending" {
+                let ExpressionKind::Run(inner) = &value.kind else {
+                    panic!("pending constructor keeps its source run");
+                };
+                assert_eq!(inner.ty, value.ty);
+                inner.as_ref()
+            } else {
+                value
+            };
+            let mut result_type = value.ty;
+            let mut depth = 0;
+            while let Type::Secret(inner) = checked.interner.resolve(result_type) {
+                result_type = *inner;
+                depth += 1;
+            }
+            assert_eq!(depth, if name == "nested" { 2 } else { 1 }, "{name}");
+            let ExpressionKind::InterfaceCoerce {
+                value: constructor,
+                adapters,
+            } = &value.kind
+            else {
+                panic!("{name}: exact result qualification");
+            };
+            assert!(adapters.is_empty());
+            assert_eq!(constructor.ty, result_type);
+            let ExpressionKind::StructConstruct {
+                struct_type,
+                fields,
+                evaluation_order,
+                validates_refinements,
+                refinement_predicates,
+            } = &constructor.kind
+            else {
+                panic!("{name}: validating constructor");
+            };
+            assert!(*validates_refinements);
+            assert_eq!(
+                checked.interner.resolve(result_type),
+                &Type::Result(*struct_type, TypeInterner::STRING)
+            );
+            assert_eq!(evaluation_order, &[1, 0]);
+            assert_eq!(fields.len(), 2);
+            assert_eq!(refinement_predicates.len(), fields.len());
+            assert!(refinement_predicates[1].is_empty());
+            let Type::Struct(id) = checked.interner.resolve(*struct_type) else {
+                panic!("exact nominal struct");
+            };
+            let definition = checked.interner.resolve_struct(*id);
+            assert_eq!(fields[1].ty, definition.fields[1].1);
+            if name == "exact" {
+                assert!(refinement_predicates[0].is_empty());
+                assert_eq!(fields[0].ty, definition.fields[0].1);
+            } else {
+                let [predicate] = refinement_predicates[0].as_slice() else {
+                    panic!("{name}: preserved refinement predicate");
+                };
+                assert_eq!(predicate.refined_type, definition.fields[0].1);
+                assert_eq!(fields[0].ty, TypeInterner::INT8);
+                assert_eq!(
+                    program.functions[predicate.function.index() as usize].return_type,
+                    TypeInterner::BOOL
+                );
+            }
+            if name == "handled" {
+                assert!(matches!(fields[0].kind, ExpressionKind::Handle { .. }));
+            }
+            let source_span = source_calls[name];
+            assert_eq!(constructor.span.file, source_span.file);
+            assert!(
+                constructor.span.start <= source_span.start
+                    && constructor.span.end >= source_span.end
+            );
+            let fact = checked
+                .struct_constructions
+                .get(&source_span)
+                .or_else(|| {
+                    checked
+                        .generic_function_instantiations
+                        .iter()
+                        .find_map(|body| body.struct_constructions.get(&source_span))
+                })
+                .expect("checked source construction fact");
+            assert_eq!(fact.struct_type, *struct_type);
+            assert!(fact.validates_refinements);
+        }
+        let ordinary = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "ordinary")
+            .unwrap();
+        let StatementKind::Return(Some(value)) = &ordinary.body.statements[0].kind else {
+            panic!("ordinary constructor return");
+        };
+        assert!(matches!(
+            value.kind,
+            ExpressionKind::StructConstruct {
+                validates_refinements: true,
+                ..
+            }
+        ));
+        assert_eq!(value.ty, checked.type_map[&value.span]);
+        let producer = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "producer")
+            .unwrap();
+        let StatementKind::Return(Some(value)) = &producer.body.statements[0].kind else {
+            panic!("producer return");
+        };
+        let call = match &value.kind {
+            ExpressionKind::InterfaceCoerce { value, .. } => value.as_ref(),
+            _ => value,
+        };
+        let ExpressionKind::Call { function, .. } = &call.kind else {
+            panic!("ordinary producer must remain a call");
+        };
+        let target = &program.functions[function.index() as usize];
+        assert_eq!(target.identity, ordinary.identity);
+        assert_eq!(target.return_type, ordinary.return_type);
+        assert!(matches!(
+            checked.interner.resolve(target.return_type),
+            Type::Result(_, TypeInterner::STRING)
+        ));
+        assert_eq!(call.span, source_calls["producer"]);
+        assert_eq!(call.ty, checked.type_map[&call.span]);
+        assert!(!checked.struct_constructions.contains_key(&call.span));
+        let main = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .unwrap();
+        let StatementKind::Let { local, value } = &main.body.statements[1].kind else {
+            panic!("qualified constructor local");
+        };
+        assert_eq!(value.ty, main.locals[local.index() as usize].ty);
+        let ExpressionKind::InterfaceCoerce {
+            value: constructor, ..
+        } = &value.kind
+        else {
+            panic!("local result qualification");
+        };
+        assert_eq!(constructor.span, value.span);
+        assert!(matches!(
+            constructor.kind,
+            ExpressionKind::StructConstruct {
+                validates_refinements: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn secret_struct_normalization_keeps_nominal_and_validation_boundaries_exact() {
         let mut types = TypeInterner::new();
         let first_id = types.add_struct(jett_types::StructDef {
@@ -8936,10 +9166,21 @@ function validated(count: Count) returns result[Validated, string]:
             base: first,
         });
         let result = types.intern(Type::Result(first, TypeInterner::STRING));
+        let wrong_ok = types.intern(Type::Result(second, TypeInterner::STRING));
+        let wrong_error = types.intern(Type::Result(first, TypeInterner::INT64));
+        let refined_ok = types.intern(Type::Result(refined, TypeInterner::STRING));
+        let refined_result = types.intern(Type::Refinement {
+            name: "CheckedResult".into(),
+            base: result,
+        });
         let secret_first = types.intern(Type::Secret(first));
         let secret_second = types.intern(Type::Secret(second));
         let secret_refined = types.intern(Type::Secret(refined));
         let secret_result = types.intern(Type::Secret(result));
+        let secret_wrong_ok = types.intern(Type::Secret(wrong_ok));
+        let secret_wrong_error = types.intern(Type::Secret(wrong_error));
+        let secret_refined_ok = types.intern(Type::Secret(refined_ok));
+        let secret_refined_result = types.intern(Type::Secret(refined_result));
         let span = Span::new(FileId::new(0), 3, 9);
         let make = |ty, validates_refinements| Expression {
             kind: ExpressionKind::StructConstruct {
@@ -8965,7 +9206,11 @@ function validated(count: Count) returns result[Validated, string]:
             (secret_second, false),
             (secret_refined, false),
             (result, true),
-            (secret_result, true),
+            (secret_result, false),
+            (secret_wrong_ok, true),
+            (secret_wrong_error, true),
+            (secret_refined_ok, true),
+            (secret_refined_result, true),
             (secret_first, true),
         ] {
             let original = make(ty, validating);
@@ -8974,24 +9219,43 @@ function validated(count: Count) returns result[Validated, string]:
                 original
             );
         }
-        let original = make(secret_first, false);
-        let normalized = normalize_secret_constructor(original.clone(), &types);
-        assert_eq!(normalized.ty, secret_first);
-        assert_eq!(normalized.span, span);
-        let ExpressionKind::InterfaceCoerce {
-            value: inner,
-            adapters,
-        } = &normalized.kind
+        for (qualified, validating, output) in
+            [(secret_first, false, first), (secret_result, true, result)]
+        {
+            let nested = types.intern(Type::Secret(qualified));
+            for ty in [qualified, nested] {
+                let original = make(ty, validating);
+                let normalized = normalize_secret_constructor(original.clone(), &types);
+                assert_eq!(normalized.ty, ty);
+                assert_eq!(normalized.span, span);
+                let ExpressionKind::InterfaceCoerce {
+                    value: inner,
+                    adapters,
+                } = &normalized.kind
+                else {
+                    panic!("expected exact struct qualification");
+                };
+                assert_eq!(inner.ty, output);
+                assert_eq!(inner.span, span);
+                assert_eq!(inner.kind, original.kind);
+                assert!(adapters.is_empty());
+                assert_eq!(
+                    normalize_secret_constructor(normalized.clone(), &types),
+                    normalized
+                );
+            }
+        }
+        // Even a matching result success TypeId must denote the exact struct,
+        // rather than a refinement whose representation happens to be one.
+        let mut refined_constructor = make(secret_refined_ok, true);
+        let ExpressionKind::StructConstruct { struct_type, .. } = &mut refined_constructor.kind
         else {
-            panic!("expected exact struct qualification");
+            unreachable!();
         };
-        assert_eq!(inner.ty, first);
-        assert_eq!(inner.span, span);
-        assert_eq!(inner.kind, original.kind);
-        assert!(adapters.is_empty());
+        *struct_type = refined;
         assert_eq!(
-            normalize_secret_constructor(normalized.clone(), &types),
-            normalized
+            normalize_secret_constructor(refined_constructor.clone(), &types),
+            refined_constructor
         );
     }
 

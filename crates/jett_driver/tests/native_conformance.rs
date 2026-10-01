@@ -48,6 +48,9 @@ mod secret_fields;
 #[path = "native_conformance/secret_bitfield_machine_constructors.rs"]
 mod secret_bitfield_machine_constructors;
 
+#[path = "native_conformance/secret_validating_struct_constructors.rs"]
+mod secret_validating_struct_constructors;
+
 #[path = "native_conformance/qualified_result_tasks.rs"]
 mod qualified_result_tasks;
 
