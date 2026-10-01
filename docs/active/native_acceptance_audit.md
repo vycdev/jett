@@ -707,6 +707,10 @@ cases, 25 runtime contracts, 155 verify fixtures, and three property fixtures
 with 100 trials each. Source remained frozen throughout the run. Linux-only
 tests and both supported hosts' clean package jobs still require CI results for
 the final revision; a local Windows pass does not substitute for those gates.
+The [supported-host run for `7cdf24b1`](https://github.com/vycdev/jett/actions/runs/36872780921)
+has since completed successfully: both Linux and Windows workspace/build/package
+jobs and both clean installed-package jobs passed. That result proves the prior
+checkpoint's distribution gates, not those of a later compiler revision.
 
 Additional source probes at that checkpoint found two gaps outside the fixed inventory. A direct
 struct `Equatable.equals` returning `run true` is accepted by the checker but
@@ -741,9 +745,33 @@ Supplemental cases do not change the inventory denominator; the prior locked
 workspace result remains specific to `7cdf24b1`, and the final revision still
 requires workspace and supported-host distribution validation.
 
-Direct `secret[Item]` initialization from `Item(...)` is a separate native
-admission gap: its checked struct construction retains the outer secret type
-without an inner constructor/qualification split, and native verification
-correctly rejects the inconsistent constructor metadata. Initializing the
-secret from an existing ready `Item` local works. Neither probe changes the
-inventory denominator or authorizes a broader equality or constructor policy.
+The separate direct `secret[Item]` constructor admission gap is also resolved.
+Its checked construction previously retained the outer secret type without an
+inner constructor/qualification split, and native verification correctly
+rejected the inconsistent metadata. HIR now normalizes only source calls with
+their checked struct-construction fact and an exact, nonvalidating nominal
+target. Leading secret qualifiers are restored through the existing coercion
+after construction; field conversions, source order, pending depth, and owner
+identity remain intact. Validating result constructors, nominal refinements,
+ordinary producers, and reflected builder calls are preserved unchanged.
+
+All 96 HIR, 66 MIR, and 83 codegen tests pass. Three focused HIR tests cover
+direct/local/generic/specialized and parenthesized constructors, nested
+qualification and `run`, interface/function/refinement payloads, handlers,
+source construction provenance, unchanged producers and validating results,
+and strict normalization controls. The object regression independently rejects
+raw secret construction, a qualified inner constructor, a different nominal
+target with the same fields, and invalid refinement-validation metadata.
+
+Two linked regressions in `native_conformance/secret_struct_constructors.rs`
+pass in both profiles after source removal. Successful controls pin eight
+handwritten output lines and root-secret trace redaction, narrow fields,
+generic and nested constructors, function and inline returns, full joins,
+closed comptime, refinement-backed interface dispatch, callback adaptation,
+independent owned field copies, unchanged public producers, compiled verify,
+and 100 property trials. Three terminal field cases pin reversed named-field
+evaluation order, the exact earlier error, suppressed later effects, and exit
+71 cleanup. Both existing linked contextual collection/sum constructor
+regressions also pass. Neither repair changes the inventory denominator or authorizes a
+broader equality or constructor policy. Final-revision workspace and
+supported-host distribution validation remain required.

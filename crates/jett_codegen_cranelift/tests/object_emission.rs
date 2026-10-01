@@ -1660,6 +1660,64 @@ fn malformed_sequence_element_type_returns_error_without_panicking() {
 }
 
 #[test]
+fn qualified_struct_constructors_keep_strict_nominal_contracts() {
+    use jett_hir::ExpressionKind;
+    let (baseline, types) = lower_source(
+        "namespace app\nstruct Item:\n    number: int64\nstruct Other:\n    number: int64\nfunction make() returns secret[Item]:\n    return Item(number: 7)\n",
+    );
+    emit_host_object(&baseline, &types).expect("qualified nominal struct construction");
+    let other = types
+        .type_ids()
+        .find(|ty| {
+            matches!(types.resolve(*ty), Type::Struct(id)
+            if types.resolve_struct(*id).name == "app.Other")
+        })
+        .unwrap();
+    for corruption in 0..4 {
+        let mut program = baseline.clone();
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "make")
+            .unwrap();
+        let TerminatorKind::Return(Some(value)) = &mut function.blocks
+            [function.entry.index() as usize]
+            .terminator
+            .kind
+        else {
+            panic!("qualified constructor return");
+        };
+        let ExpressionKind::InterfaceCoerce { value: inner, .. } = &mut value.kind else {
+            panic!("separate checked secret qualification");
+        };
+        if corruption == 0 {
+            value.kind = inner.kind.clone();
+        } else {
+            let ExpressionKind::StructConstruct {
+                struct_type,
+                validates_refinements,
+                ..
+            } = &mut inner.kind
+            else {
+                panic!("exact nominal constructor");
+            };
+            match corruption {
+                1 => inner.ty = value.ty,
+                2 => *struct_type = other,
+                3 => *validates_refinements = true,
+                _ => unreachable!(),
+            }
+        }
+        let error = emit_host_object(&program, &types).expect_err("invalid nominal constructor");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("struct")),
+            "corruption {corruption}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn struct_layout_and_projection_contracts_are_validated_before_emission() {
     use jett_hir::ExpressionKind;
     let (baseline, types) = lower_source(

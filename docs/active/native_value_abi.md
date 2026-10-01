@@ -2,6 +2,12 @@
 
 This is an implementation contract, not a full-parity claim.
 
+Contextually secret struct construction uses an exact nominal inner
+`StructConstruct` followed by the existing qualification coercion. Only checked
+plain struct constructors qualify; validating result constructors retain their
+predicate and result contract. Field conversions, source evaluation order,
+pending depth, and ownership are preserved without a runtime ABI change.
+
 Secret-wrapped enum constructors retain an unwrapped nominal enum target and a
 separately checked secret expression type. Equality uses the value representation
 for its root layout, while debug observation keeps the redacted root. This also

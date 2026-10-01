@@ -39,6 +39,9 @@ mod display_results;
 #[path = "native_conformance/equality_results.rs"]
 mod equality_results;
 
+#[path = "native_conformance/secret_struct_constructors.rs"]
+mod secret_struct_constructors;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

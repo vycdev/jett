@@ -3112,6 +3112,11 @@ producer identities remain intact; interface, function, and inferred `never`
 payload conversions keep their existing rules. This lowering correction adds
 no language policy and does not relax native constructor shape checks.
 
+Checked struct constructors can likewise receive outer secret qualification.
+The constructor retains its exact nominal struct type before qualification,
+including generic arguments and field conversions. Constructors that validate
+refinement fields keep their existing `result[Struct, string]` contract.
+
 Local bindings retain their declared outer secret qualification when an
 initializer has fewer secret layers. Each `declassify` removes one outer layer;
 the initializer keeps its checked type and existing contextual inference.

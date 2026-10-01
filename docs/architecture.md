@@ -928,6 +928,12 @@ Payload interface boxing, function adapters, and inferred `never` conversions
 still run against that exact inner type. Native constructor validation remains
 strict, and the outer qualification preserves the existing representation,
 evaluation order, pending metadata, and ownership.
+Source `Call` and `GenericCall` expressions with a checked struct-construction
+fact use the same split when the constructor does not validate refinements and
+the peeled checked TypeId exactly matches its nominal `struct_type`. Field
+conversions and lexical evaluation order remain inside that constructor. Calls
+to ordinary producers, reflected builders, mismatched nominal types, and
+refinement-validating result constructors retain their existing metadata.
 HIR local allocation also retains the checked declaration TypeId when it has
 outer `Secret` qualification, including repeated wrappers. A less-qualified
 initializer keeps its checked producer type; the existing `Let` coercion adds
