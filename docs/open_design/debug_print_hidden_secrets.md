@@ -29,6 +29,13 @@ check uses the checked layout and preserves redaction. Public pending values
 have differential coverage; hidden secret payloads need the same explicit
 observation-policy decision before their parity can be claimed.
 
+Direct field reads from a pending `secret[Struct]` expose the same remaining
+boundary even when the root qualification is statically visible. For example,
+the reference error renders `pending(app.Item(value: 7))` after stripping its
+typed wrapper, while native field readiness renders `[redacted]` from the
+original receiver's checked graph. Qualified field admission preserves native
+redaction and does not select an observation policy for the reference backend.
+
 After the decision, compare source checking and native/interpreter output for
 public and secret-bearing erased records, generic fields, incomplete builders,
 nested containers, and pending payloads. Public text equal to `[redacted]` must

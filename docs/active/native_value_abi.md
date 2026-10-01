@@ -8,6 +8,13 @@ plain struct constructors qualify; validating result constructors retain their
 predicate and result contract. Field conversions, source evaluation order,
 pending depth, and ownership are preserved without a runtime ABI change.
 
+Direct-secret aggregate field reads use the exact unqualified nominal layout
+and the checker's qualified result TypeId. Ready scalar and owned field paths,
+pending-child depth, and machine-state indexing reuse the existing runtime ABI.
+Owner readiness still uses the original checked receiver's debug graph, so a
+pending secret receiver remains redacted. That separate observation-policy gap
+with raw reference diagnostics is not closed by qualified-field admission.
+
 Secret-wrapped enum constructors retain an unwrapped nominal enum target and a
 separately checked secret expression type. Equality uses the value representation
 for its root layout, while debug observation keeps the redacted root. This also

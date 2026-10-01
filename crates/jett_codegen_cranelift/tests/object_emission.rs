@@ -1660,6 +1660,101 @@ fn malformed_sequence_element_type_returns_error_without_panicking() {
 }
 
 #[test]
+fn secret_field_reads_preserve_exact_qualification_and_nominal_contracts() {
+    use jett_hir::{ExpressionKind, FieldId};
+    let (baseline, mut types) = lower_source(
+        r#"namespace app
+type Hidden = secret[int64] where true
+struct Item:
+    number: int64
+    text: string
+    hidden: secret[int64]
+    nominal: Hidden
+    unit: nothing
+struct Other:
+    number: int64
+function read(view item: secret[Item]) returns secret[int64]:
+    return item.number
+function text(view item: secret[Item]) returns secret[string]:
+    return item.text
+function already(view item: secret[Item]) returns secret[int64]:
+    return item.hidden
+function nominal(view item: secret[Item]) returns Hidden:
+    return item.nominal
+function unit(view item: secret[Item]) returns nothing:
+    return item.unit
+function public_read(view item: Item) returns int64:
+    return item.number
+"#,
+    );
+    emit_host_object(&baseline, &types).expect("exact source-qualified field reads");
+    let secret_int = types.intern(Type::Secret(TypeInterner::INT64));
+    let twice_secret_int = types.intern(Type::Secret(secret_int));
+    let secret_nothing = types.intern(Type::Secret(TypeInterner::NOTHING));
+    let other = types
+        .type_ids()
+        .find(|ty| {
+            matches!(types.resolve(*ty), Type::Struct(id)
+            if types.resolve_struct(*id).name == "app.Other")
+        })
+        .unwrap();
+    for (name, corruption) in [
+        ("read", "declassify"),
+        ("public_read", "classify"),
+        ("already", "double"),
+        ("nominal", "erase nominal"),
+        ("unit", "qualify nothing"),
+        ("read", "different owner"),
+        ("read", "invalid index"),
+        ("read", "nested owner"),
+    ] {
+        let mut program = baseline.clone();
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == name)
+            .unwrap();
+        if corruption == "nested owner" {
+            let nested = types.intern(Type::Secret(function.params[0].ty));
+            function.params[0].ty = nested;
+            function.locals[function.params[0].local.index() as usize].ty = nested;
+        }
+        let TerminatorKind::Return(Some(value)) = &mut function.blocks
+            [function.entry.index() as usize]
+            .terminator
+            .kind
+        else {
+            panic!("field return");
+        };
+        let ExpressionKind::Field {
+            base,
+            owner_type,
+            field,
+        } = &mut value.kind
+        else {
+            panic!("nominal field read");
+        };
+        match corruption {
+            "declassify" => value.ty = TypeInterner::INT64,
+            "classify" | "erase nominal" => value.ty = secret_int,
+            "double" => value.ty = twice_secret_int,
+            "qualify nothing" => value.ty = secret_nothing,
+            "different owner" => *owner_type = other,
+            "invalid index" => *field = FieldId::new(99),
+            "nested owner" => base.ty = function.params[0].ty,
+            _ => unreachable!(),
+        }
+        function.return_type = value.ty;
+        let error = emit_host_object(&program, &types).expect_err("invalid field metadata");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("field")),
+            "{corruption}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn qualified_struct_constructors_keep_strict_nominal_contracts() {
     use jett_hir::ExpressionKind;
     let (baseline, types) = lower_source(

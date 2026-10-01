@@ -2826,13 +2826,25 @@ impl Verifier<'_> {
                 field,
             } => {
                 self.expression(function, base)?;
-                self.require_same_type(
-                    function,
-                    expression.span,
-                    base.ty,
-                    *owner_type,
-                    "field owner mismatch",
-                )?;
+                // The checker exposes one direct secret-qualified aggregate's
+                // fields through its exact nominal layout. Keep the receiver's
+                // checked type for pending diagnostics and ownership handling.
+                let secret_owner = matches!(
+                    self.types.resolve(base.ty),
+                    Type::Secret(inner)
+                        if *inner == *owner_type
+                            && matches!(
+                                self.types.resolve(*inner),
+                                Type::Struct(_) | Type::Bitfield(_) | Type::MachineState { .. }
+                            )
+                );
+                if base.ty != *owner_type && !secret_owner {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "field owner mismatch",
+                    ));
+                }
                 let ty = match self.types.resolve(*owner_type) {
                     Type::Struct(id) => self
                         .types
@@ -2863,13 +2875,25 @@ impl Verifier<'_> {
                 .ok_or_else(|| {
                     self.contract_error(function, expression.span, "invalid aggregate field index")
                 })?;
-                self.require_same_type(
-                    function,
-                    expression.span,
-                    ty,
-                    expression.ty,
-                    "projected field type mismatch",
-                )
+                // Match maybe_wrap_secret exactly: nothing stays public and an
+                // already secret field keeps its full nominal type, including
+                // refinements over secret values. Other fields gain one wrapper.
+                let valid_result = if secret_owner
+                    && ty != TypeInterner::NOTHING
+                    && self.secret_inner_type(ty).is_none()
+                {
+                    matches!(self.types.resolve(expression.ty), Type::Secret(inner) if *inner == ty)
+                } else {
+                    expression.ty == ty
+                };
+                if !valid_result {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "projected field type mismatch",
+                    ));
+                }
+                Ok(())
             }
         }
     }

@@ -3117,6 +3117,11 @@ The constructor retains its exact nominal struct type before qualification,
 including generic arguments and field conversions. Constructors that validate
 refinement fields keep their existing `result[Struct, string]` contract.
 
+Field reads from a directly secret-qualified struct, bitfield, or state-qualified
+machine preserve the exact nominal field type and add outer secrecy. `nothing`
+remains `nothing`; an already-secret field, including a nominal refinement over
+a secret value, retains its declared type without another wrapper.
+
 Local bindings retain their declared outer secret qualification when an
 initializer has fewer secret layers. Each `declassify` removes one outer layer;
 the initializer keeps its checked type and existing contextual inference.

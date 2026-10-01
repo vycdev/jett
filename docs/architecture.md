@@ -940,6 +940,18 @@ initializer keeps its checked producer type; the existing `Let` coercion adds
 the declared qualification. This does not extend contextual literal inference,
 and `declassify` continues to remove one outer secret layer at a time.
 
+Native field validation follows the checker's direct-secret receiver rule for
+structs, bitfields, and state-qualified machines. A receiver is either the exact
+nominal owner or exactly one `Secret` around that owner. The declared field
+TypeId remains exact for public receivers, `nothing`, and already-secret fields
+(including secret-backed refinements); other secret receiver fields require
+exactly `Secret(field TypeId)`. Emission retains the original receiver type for
+pending diagnostics and ownership, uses the existing machine-state field offset,
+and preserves field depth and owned-copy behavior. Nested-secret or refinement
+receivers, mismatched nominal owners, invalid indexes, and forged result types
+remain rejected. Pending secret receiver diagnostics retain native redaction;
+their raw reference observation remains an explicit open policy boundary.
+
 For refinement boundaries, HIR lowers each checked predicate to a
 compiler-owned pure function. MIR calls unvalidated ancestor predicates in
 base-first order and branches to the source `handle error` block on a false

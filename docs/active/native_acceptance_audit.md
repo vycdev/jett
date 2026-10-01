@@ -775,3 +775,42 @@ evaluation order, the exact earlier error, suppressed later effects, and exit
 regressions also pass. Neither repair changes the inventory denominator or authorizes a
 broader equality or constructor policy. Final-revision workspace and
 supported-host distribution validation remain required.
+
+Direct field reads from secret-qualified aggregates now pass native admission.
+A minimal ready `Item` promoted to `secret[Item]` previously printed `7` in the
+reference backend, while native verification rejected `hidden.value` with
+`field owner mismatch`. The verifier now mirrors the existing checker rule:
+one direct secret wrapper around the exact struct, bitfield, or machine-state
+owner; unchanged `nothing` and already-secret field types, including nominal
+secret-backed refinements; otherwise exactly one wrapper around the declared
+field TypeId. Nominal owners, indexes, and result qualification remain strict.
+Emission, pending checks, machine-state indexing, and field ownership paths
+are unchanged; no ABI operation is added.
+
+All 84 codegen tests pass. The new object regression rejects eight malformed
+field contracts, including erased secrecy or nominal identity, added or doubled
+secrecy, qualified `nothing`, different owners, invalid indexes, and nested
+secret receivers. Three linked regressions in `native_conformance/secret_fields.rs`
+pass in both profiles after source removal. Successful controls pin eight
+handwritten output lines, narrow numbers and Unicode strings, lists, refined
+interface owners and captured callbacks, already-secret fields, `nothing`,
+secret-backed nominal fields, bitfield and state-qualified machine reads,
+generic/reflected controls, owned field copies surviving their helper scope,
+independent list mutation, nested child depth and joins, closed comptime,
+compiled verify, and 100 property trials. Pending-child failures preserve exact
+depth, first-error precedence, and exit 71 cleanup.
+
+Pending secret receiver errors intentionally retain native typed redaction.
+Depth-one, depth-two, and partially joined receiver regressions pin the raw
+reference error separately from native `[redacted]`, with exact output and
+cleanup in both profiles. Those tests do not claim diagnostic parity or resolve
+the [hidden-secret observation policy](../open_design/debug_print_hidden_secrets.md).
+
+A separate accepted-source probe still exposes direct contextual secret
+bitfield construction: `secret[Header] hidden = Header(value: 7)` runs and
+prints `7` in the reference backend, but HIR reports `checked bitfield
+construction has an invalid type`. Public construction followed by secret
+qualification works, as the linked field suite demonstrates. This is an
+implementation gap outside the fixed inventory; width-validating constructors
+and machine construction need their own evidence before extending that repair.
+Final-revision workspace and supported-host distribution gates remain open.
