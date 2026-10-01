@@ -447,11 +447,28 @@ pub type Environment = HashMap<String, Value>;
 /// the recursive interpreter.
 #[derive(Debug)]
 enum Signal {
-    Return(Value),
+    Return(Value, Option<String>),
     Default(Value),
     Respond(Value),
     Break,
     Continue,
+}
+
+#[derive(Debug, Clone)]
+enum ProducedValueStep {
+    Typed,
+    Sequence(usize),
+    MapKey(usize),
+    MapValue(usize),
+    Some,
+    Ok,
+    Fail,
+}
+
+struct ProducedRefinementCheck {
+    path: Vec<ProducedValueStep>,
+    requested: TypeExpr,
+    source: Option<String>,
 }
 
 #[derive(Debug)]
@@ -650,6 +667,9 @@ pub struct Interpreter {
     checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
     active_checked_function: Option<Arc<CheckedFunctionTypes>>,
     active_checked_scope: Option<Arc<CheckedScopedTypes>>,
+    /// Checked source identities prove invariants only in checked invocation trees.
+    /// Raw callers may supply aggregate payloads with stale refined children.
+    allow_checked_refinement_proofs: bool,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     /// Values produced for explicit `comptime` expressions by the build.
     explicit_comptime_values: Option<Arc<crate::ExplicitComptimeValues>>,
@@ -725,6 +745,7 @@ impl Interpreter {
             checked_expression_types: None,
             active_checked_function: None,
             active_checked_scope: None,
+            allow_checked_refinement_proofs: true,
             breakpoint_exclusions: Arc::new(HashMap::new()),
             explicit_comptime_values: None,
             constants: HashMap::new(),
@@ -1032,6 +1053,14 @@ impl Interpreter {
             );
         }
         aliases
+    }
+
+    fn with_resolved_type_aliases<T>(&mut self, action: impl FnOnce(&mut Self) -> T) -> T {
+        let blank_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let saved_aliases = std::mem::replace(&mut self.namespace_alias_scopes, blank_aliases);
+        let result = action(self);
+        self.namespace_alias_scopes = saved_aliases;
+        result
     }
 
     fn runtime_name(&self, name: &str) -> String {
@@ -1493,6 +1522,17 @@ impl Interpreter {
         self.check_refinement_from_source(type_name, value, None)
     }
 
+    fn check_refinement_from_resolved_source(
+        &mut self,
+        type_name: &str,
+        value: &Value,
+        source_type: Option<&str>,
+    ) -> Result<(), String> {
+        self.with_resolved_type_aliases(|interpreter| {
+            interpreter.check_refinement_from_source(type_name, value, source_type)
+        })
+    }
+
     /// Reuse only an original checked expression's established refinement.
     /// A runtime `Typed` label is not proof: property shrinking and raw API
     /// callers can retain that label while replacing the payload.
@@ -1502,6 +1542,7 @@ impl Interpreter {
         value: &Value,
         source_type: Option<&str>,
     ) -> Result<(), String> {
+        let source_type = source_type.filter(|_| self.allow_checked_refinement_proofs);
         let type_name = self
             .registry_name(&self.type_aliases, type_name)
             .unwrap_or_else(|| type_name.to_string());
@@ -1550,7 +1591,10 @@ impl Interpreter {
             .and_then(Option::as_ref)
             .is_some_and(|definition| definition.constraint.span().file.is_stdlib());
 
+        let saved_proofs = self.allow_checked_refinement_proofs;
+        self.allow_checked_refinement_proofs &= source_type.is_some();
         let result = self.check_refinement_in_declaration(&type_name, value, source_type);
+        self.allow_checked_refinement_proofs = saved_proofs;
 
         self.current_function_trusted_stdlib = saved_trusted;
         self.active_checked_scope = saved_scope;
@@ -1585,11 +1629,11 @@ impl Interpreter {
             .map(|base_ty| {
                 let namespace =
                     Self::type_name_namespace(type_name).or(self.current_namespace.as_deref());
-                self.substitute_type_expr_in_namespace(&base_ty, namespace)
+                self.qualify_declared_type_expr(&base_ty, namespace)
             });
         if let Some(base_ty) = &constraint_value_ty {
             let base_type_name = type_expr_name(base_ty);
-            self.check_refinement_from_source(&base_type_name, value, source_type)?;
+            self.check_refinement_from_resolved_source(&base_type_name, value, source_type)?;
         }
 
         let def = match self.type_aliases.get(type_name) {
@@ -1600,7 +1644,7 @@ impl Interpreter {
 
         self.push_scope();
         if let Some(base_ty) = constraint_value_ty {
-            let predicate_ty = self.inference_base_type(&base_ty);
+            let predicate_ty = self.resolved_inference_base_type(&base_ty);
             let predicate_ty = match predicate_ty {
                 TypeExpr::Generic(name, mut args, _)
                     if name.name == "secret" && args.len() == 1 =>
@@ -1644,7 +1688,7 @@ impl Interpreter {
         bind_name: Option<&Ident>,
         body: &Block,
     ) -> Result<ExprFlow, String> {
-        match self.check_refinement_from_source(type_name, &value, source_type) {
+        match self.check_refinement_from_resolved_source(type_name, &value, source_type) {
             Ok(()) => Ok(ExprFlow::Value(value)),
             Err(message) => {
                 self.exec_handle_block(bind_name, Some(Value::String(message)), body, None)
@@ -1764,7 +1808,7 @@ impl Interpreter {
             };
             let namespace =
                 Self::type_name_namespace(&alias_name).or(self.current_namespace.as_deref());
-            let base_ty = self.substitute_type_expr_in_namespace(base_ty, namespace);
+            let base_ty = self.qualify_declared_type_expr(base_ty, namespace);
             current = Self::unwrapped_secret_type_expr_name(&base_ty);
         }
 
@@ -1836,17 +1880,62 @@ impl Interpreter {
         Ok(self.retain_checked_identity(&name, value))
     }
 
+    fn normalize_value_for_resolved_type(
+        &mut self,
+        ty: &TypeExpr,
+        value: Value,
+    ) -> Result<Value, String> {
+        self.with_resolved_type_aliases(|interpreter| {
+            let name = interpreter.resolved_concrete_type_display(ty);
+            let value = interpreter.normalize_value_for_type_name(&name, value)?;
+            Ok(interpreter.retain_checked_identity(&name, value))
+        })
+    }
+
     fn normalize_and_validate_value(
         &mut self,
         ty: &TypeExpr,
         value: Value,
     ) -> Result<Value, String> {
-        let name = self.concrete_type_display(ty);
-        let value = self.normalize_value_for_type_name(&name, value)?;
-        self.check_refinement(&name, &value)?;
-        // Attach the destination's nominal identity only after its invariant
-        // holds, especially when the incoming value is still pending.
-        Ok(self.retain_checked_identity(&name, value))
+        self.normalize_and_validate_value_from_source(ty, value, None)
+    }
+
+    fn normalize_and_validate_value_from_source(
+        &mut self,
+        ty: &TypeExpr,
+        value: Value,
+        source_type: Option<&str>,
+    ) -> Result<Value, String> {
+        // Every caller resolves its written target in the owning lexical
+        // context first. Canonical owners must not pass through local namespace
+        // aliases again during normalization, predicate lookup, or identity
+        // retention. Preserve the stack shape for predicates' own imports.
+        let declaration_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let caller_aliases =
+            std::mem::replace(&mut self.namespace_alias_scopes, declaration_aliases);
+        let result = (|| {
+            let ty = self.resolve_installed_type_expr(ty);
+            let name = self.resolved_concrete_type_display(&ty);
+            let value = self.normalize_value_for_type_name(&name, value)?;
+            // A written view describes the access mode, not a separate
+            // refinement owner. Keep its existing normalization and retained
+            // identity while checking the underlying declared invariant.
+            let validation_name = Self::refinement_validation_owner(&name);
+            let source_type = source_type.map(Self::refinement_validation_owner);
+            self.check_refinement_from_source(validation_name, &value, source_type)?;
+            // Attach the destination's nominal identity only after its invariant
+            // holds, especially when the incoming value is still pending.
+            Ok(self.retain_checked_identity(&name, value))
+        })();
+        self.namespace_alias_scopes = caller_aliases;
+        result
+    }
+
+    fn refinement_validation_owner(mut name: &str) -> &str {
+        while let Some(inner) = name.strip_prefix("view ") {
+            name = inner;
+        }
+        name
     }
 
     fn retain_checked_identity(&self, name: &str, value: Value) -> Value {
@@ -1998,8 +2087,7 @@ impl Interpreter {
             Some(None) => self.type_alias_bases.get(&type_name).is_some_and(|base| {
                 let namespace =
                     Self::type_name_namespace(&type_name).or(self.current_namespace.as_deref());
-                let base_name =
-                    type_expr_name(&self.substitute_type_expr_in_namespace(base, namespace));
+                let base_name = type_expr_name(&self.qualify_declared_type_expr(base, namespace));
                 self.type_name_has_refinement(&base_name)
             }),
             None => false,
@@ -2021,7 +2109,7 @@ impl Interpreter {
             ExprFlow::Signal(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
-            ExprFlow::Signal(Signal::Return(_)) => {
+            ExprFlow::Signal(Signal::Return(..)) => {
                 Err("`return` cannot escape expression evaluation".to_string())
             }
             ExprFlow::Signal(Signal::Break) => {
@@ -2142,16 +2230,19 @@ impl Interpreter {
             self.substitute_type_expr(bound_type_expr)
         } else if let Some((source_ty, index)) = comptime_type_arg_binding(&bind.value) {
             let source_ty = self.substitute_type_expr(source_ty);
-            self.checked_type_info_arg_types(&source_ty)
-                .unwrap_or_else(|| self.type_info_arg_types(&source_ty))
-                .get(index)
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "`comptime type` type.arg index {index} is out of range for type '{}'",
-                        type_expr_display(&source_ty)
-                    )
-                })?
+            self.with_resolved_type_aliases(|interpreter| {
+                interpreter
+                    .checked_type_info_arg_types(&source_ty)
+                    .unwrap_or_else(|| interpreter.type_info_arg_types(&source_ty))
+            })
+            .get(index)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "`comptime type` type.arg index {index} is out of range for type '{}'",
+                    type_expr_display(&source_ty)
+                )
+            })?
         } else if let Some(field_name) = reflected_field_type_info_binding(&bind.value) {
             self.bound_reflected_field_type(field_name)?
         } else if let Some(info_name) = reflected_type_info_binding(&bind.value) {
@@ -2159,10 +2250,17 @@ impl Interpreter {
         } else {
             return Err("`comptime type` currently requires a direct `type.info[T]()` initializer or trusted reflected metadata".to_string());
         };
-        let bound_type = self.concrete_type_display(&bound_type_expr);
-        let reflection = Some(self.reflection_type_argument(&bound_type_expr)?);
-        let checked_scope =
-            self.checked_scoped_types(bind.span, &bound_type, reflection.as_ref())?;
+        let (bound_type, reflection, checked_scope) =
+            self.with_resolved_type_aliases(|interpreter| {
+                let bound_type = interpreter.resolved_concrete_type_display(&bound_type_expr);
+                let reflection = Some(interpreter.reflection_type_argument(&bound_type_expr)?);
+                let checked_scope = interpreter.checked_scoped_types(
+                    bind.span,
+                    &bound_type,
+                    reflection.as_ref(),
+                )?;
+                Ok::<_, String>((bound_type, reflection, checked_scope))
+            })?;
         let saved_checked_scope = std::mem::replace(&mut self.active_checked_scope, checked_scope);
         self.scoped_type_bindings.push(ClosureScopedTypeBinding {
             name: bind.name.name.clone(),
@@ -2193,6 +2291,12 @@ impl Interpreter {
                     .as_ref()
                     .and_then(|types| types.get(&span))
             })
+    }
+
+    fn checked_refinement_source_type(&self, span: Span) -> Option<&String> {
+        self.allow_checked_refinement_proofs
+            .then(|| self.checked_expression_type(span))
+            .flatten()
     }
 
     fn checked_sum_success_type(source_type: Option<&str>, span: Span) -> Option<String> {
@@ -2298,17 +2402,36 @@ impl Interpreter {
         Self::reflection_info_from_value(&self.type_info_value(ty))
     }
 
-    fn captured_type_arguments(&self, args: &[TypeExpr]) -> Vec<ClosureTypeArgument> {
-        args.iter()
-            .map(|ty| ClosureTypeArgument {
-                ty: ty.clone(),
-                canonical_name: self.concrete_type_display(ty),
-                reflection: self.reflection_type_argument(ty).ok(),
-            })
-            .collect()
+    fn captured_type_arguments(&mut self, args: &[TypeExpr]) -> Vec<ClosureTypeArgument> {
+        self.with_resolved_type_aliases(|interpreter| {
+            args.iter()
+                .map(|ty| {
+                    let ty = interpreter.resolve_installed_type_expr(ty);
+                    ClosureTypeArgument {
+                        canonical_name: interpreter.resolved_concrete_type_display(&ty),
+                        reflection: interpreter.reflection_type_argument(&ty).ok(),
+                        ty,
+                    }
+                })
+                .collect()
+        })
     }
 
-    fn normalize_value_for_checked_expr(&self, expr: &Expr, value: Value) -> Result<Value, String> {
+    fn normalize_value_for_checked_expr(
+        &mut self,
+        expr: &Expr,
+        value: Value,
+    ) -> Result<Value, String> {
+        self.with_resolved_type_aliases(|interpreter| {
+            interpreter.normalize_value_for_checked_expr_resolved(expr, value)
+        })
+    }
+
+    fn normalize_value_for_checked_expr_resolved(
+        &self,
+        expr: &Expr,
+        value: Value,
+    ) -> Result<Value, String> {
         // A live binding also has its invocation's type when a compiler-owned
         // facade has no checked source instance. Other expressions use the
         // selected body map rather than another generic instantiation.
@@ -2318,7 +2441,7 @@ impl Interpreter {
         }
         let binding_type = if let Expr::Ident(ident) = binding_expr {
             self.get_variable_type(&ident.name)
-                .map(|ty| self.concrete_type_display(ty))
+                .map(|ty| self.resolved_concrete_type_display(ty))
         } else {
             None
         };
@@ -2597,9 +2720,9 @@ impl Interpreter {
             },
 
             // Function / method calls
-            Expr::Call(callee, args, _) => self.eval_call_flow(callee, &[], args),
-            Expr::GenericCall(callee, type_args, args, _) => {
-                self.eval_call_flow(callee, type_args, args)
+            Expr::Call(callee, args, span) => self.eval_call_flow(callee, &[], args, *span),
+            Expr::GenericCall(callee, type_args, args, span) => {
+                self.eval_call_flow(callee, type_args, args, *span)
             }
 
             // List construction
@@ -2810,9 +2933,9 @@ impl Interpreter {
                 Ok(ExprFlow::Value(Value::Nothing))
             }
 
-            Expr::InlineFn(params, _return_type, body, _) => {
-                Ok(ExprFlow::Value(self.capture_closure(params, body)))
-            }
+            Expr::InlineFn(params, return_type, body, _) => Ok(ExprFlow::Value(
+                self.capture_closure(params, return_type.as_ref(), body),
+            )),
 
             // Unsupported expressions produce a clear error.
             _ => Err(format!(
@@ -2895,7 +3018,12 @@ impl Interpreter {
         Ok(ExprFlow::Value(Value::Actor(id)))
     }
 
-    fn capture_closure(&self, params: &[Param], body: &Block) -> Value {
+    fn capture_closure(
+        &mut self,
+        params: &[Param],
+        return_type: Option<&TypeExpr>,
+        body: &Block,
+    ) -> Value {
         // Capture the current environment (all visible variables) for closure semantics.
         let mut captures = HashMap::new();
         for (index, scope) in self.scopes.iter().enumerate() {
@@ -2913,8 +3041,11 @@ impl Interpreter {
                     .map(|ty| (name.clone(), ty.clone()))
             })
             .collect();
+        let type_arguments = self.current_type_arguments.clone();
+        let captured_arguments = self.captured_type_arguments(&type_arguments);
         Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                return_type: return_type.cloned(),
                 checked_scope: self.active_checked_scope.clone(),
                 scoped_type_bindings: self.scoped_type_bindings.clone(),
                 checked_function: self.active_checked_function.clone(),
@@ -2922,9 +3053,9 @@ impl Interpreter {
                     .type_arg_scopes
                     .iter()
                     .flat_map(|scope| scope.iter())
-                    .map(|(name, ty)| (name.clone(), self.substitute_type_expr(ty)))
+                    .map(|(name, ty)| (name.clone(), self.resolve_installed_type_expr(ty)))
                     .collect(),
-                arguments: self.captured_type_arguments(&self.current_type_arguments),
+                arguments: captured_arguments,
             }),
             params: params.to_vec(),
             body: body.clone(),
@@ -3092,7 +3223,7 @@ impl Interpreter {
         let function = self.generic_function_for_inference(callee, type_args)?;
         let mut inferred = HashMap::new();
         for (param, actual) in function.params.iter().zip(actual_types) {
-            let actual = self.inference_base_type(actual);
+            let actual = self.resolved_inference_base_type(actual);
             self.infer_type_arguments(&param.ty, &actual, &function.type_params, &mut inferred);
         }
         function
@@ -3121,25 +3252,23 @@ impl Interpreter {
         (!function.type_params.is_empty()).then_some(function.as_ref())
     }
 
-    fn inference_base_type(&self, ty: &TypeExpr) -> TypeExpr {
-        let mut current = self.substitute_type_expr(ty);
+    fn resolved_inference_base_type(&self, ty: &TypeExpr) -> TypeExpr {
+        let mut current = ty.clone();
         let mut seen = HashSet::new();
         loop {
             let TypeExpr::Named(ident) = &current else {
                 return current;
             };
-            let Some(alias_name) = self.registry_name(&self.type_alias_bases, &ident.name) else {
+            let alias_name = ident.name.clone();
+            let Some(base) = self.type_alias_bases.get(&alias_name) else {
                 return current;
             };
             if !seen.insert(alias_name.clone()) {
                 return current;
             }
-            let Some(base) = self.type_alias_bases.get(&alias_name) else {
-                return current;
-            };
             let namespace =
                 Self::type_name_namespace(&alias_name).or(self.current_namespace.as_deref());
-            current = self.substitute_type_expr_in_namespace(base, namespace);
+            current = self.qualify_declared_type_expr(base, namespace);
         }
     }
 
@@ -3149,19 +3278,21 @@ impl Interpreter {
             Expr::Ident(argument) if self.get_variable_type(&argument.name).is_some() => {
                 self.get_variable_type(&argument.name).cloned()
             }
-            Expr::InlineFn(params, return_type, _, span) => Some(TypeExpr::Function(
-                params
-                    .iter()
-                    .map(|param| Self::type_witness_parameter(param, param.ty.clone()))
-                    .collect(),
-                Box::new(return_type.clone().unwrap_or_else(|| {
-                    TypeExpr::Named(Ident {
-                        name: "nothing".to_string(),
-                        span: *span,
-                    })
-                })),
-                *span,
-            )),
+            Expr::InlineFn(params, return_type, _, span) => Some(
+                self.substitute_type_expr(&TypeExpr::Function(
+                    params
+                        .iter()
+                        .map(|param| Self::type_witness_parameter(param, param.ty.clone()))
+                        .collect(),
+                    Box::new(return_type.clone().unwrap_or_else(|| {
+                        TypeExpr::Named(Ident {
+                            name: "nothing".to_string(),
+                            span: *span,
+                        })
+                    })),
+                    *span,
+                )),
+            ),
             _ => self.named_function_argument_type(source).or_else(|| {
                 self.checked_expression_type(expression.span())
                     .and_then(|type_name| {
@@ -3192,14 +3323,14 @@ impl Interpreter {
             .map(|param| {
                 Self::type_witness_parameter(
                     param,
-                    self.substitute_type_expr_in_namespace(&param.ty, namespace),
+                    self.qualify_declared_type_expr(&param.ty, namespace),
                 )
             })
             .collect();
         let return_type = function
             .return_type
             .as_ref()
-            .map(|ty| self.substitute_type_expr_in_namespace(ty, namespace))
+            .map(|ty| self.qualify_declared_type_expr(ty, namespace))
             .unwrap_or_else(|| {
                 TypeExpr::Named(Ident {
                     name: "nothing".to_string(),
@@ -3330,7 +3461,11 @@ impl Interpreter {
         callee: &Expr,
         type_args: &[TypeExpr],
         args: &[CallArg],
+        call_span: Span,
     ) -> Result<ExprFlow, String> {
+        // Only a fact at this actual result can be reused after the call; an
+        // unrelated installed map must not alter metadata-free API validation.
+        let checked_producer = self.checked_refinement_source_type(call_span).is_some();
         let callee = Self::unparenthesized(callee);
         // Check for machine construction/transition BEFORE evaluating args,
         // since state-name arguments are bare identifiers (not variables) and
@@ -3374,30 +3509,41 @@ impl Interpreter {
             args,
             argument_order.as_deref(),
         );
-        let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
-        // Struct parameters belong to the selected declaration. Resolve their
+        // Constructor and intrinsic parameters belong to the selected call. Resolve
         // actual arguments in the caller before evaluating nested expressions.
-        let constructor_type_args: Vec<_> = type_args
-            .iter()
-            .map(|ty| self.substitute_type_expr(ty))
-            .collect();
+        let resolved_type_args = inferred_type_args.unwrap_or_else(|| {
+            type_args
+                .iter()
+                .map(|ty| self.substitute_type_expr(ty))
+                .collect()
+        });
         // Capture caller facts before evaluating any argument or entering a
-        // nested generic/reflected body. Only struct field boundaries consume
-        // these witnesses; ordinary calls retain their forced validation.
+        // nested generic/reflected body. Reorder each witness with its value;
+        // destination parameter types never supply caller proof.
         let argument_source_types: Vec<_> = args
             .iter()
-            .map(|arg| self.checked_expression_type(arg.value.span()).cloned())
+            .map(|arg| {
+                self.checked_refinement_source_type(arg.value.span())
+                    .cloned()
+            })
             .collect();
-        let mut arg_values = Vec::with_capacity(args.len());
-        for arg in args {
-            arg_values.push(value_or_signal!(self, &arg.value));
+        let mut evaluated_args = Vec::with_capacity(args.len());
+        for (arg, source_type) in args.iter().zip(argument_source_types) {
+            evaluated_args.push((value_or_signal!(self, &arg.value), source_type));
         }
-        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
+        let (arg_values, argument_source_types): (Vec<_>, Vec<_>) =
+            Self::reorder_function_arguments(evaluated_args, argument_order.as_deref())?
+                .into_iter()
+                .unzip();
 
         if self.is_value_call_target(callee) {
             let function = value_or_signal!(self, callee);
-            return Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?));
+            return Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                function,
+                arg_values,
+                Some(&argument_source_types),
+            )?));
         }
 
         match callee {
@@ -3405,7 +3551,7 @@ impl Interpreter {
                 if let Some(name) = self.registry_name(&self.structs, &ident.name) {
                     return Ok(ExprFlow::Value(self.construct_struct(
                         &name,
-                        &constructor_type_args,
+                        &resolved_type_args,
                         args,
                         arg_values,
                         &argument_source_types,
@@ -3419,8 +3565,11 @@ impl Interpreter {
                 let name = self
                     .registry_name(&self.functions, &ident.name)
                     .unwrap_or_else(|| ident.name.clone());
-                Ok(ExprFlow::Value(self.call_function_with_type_args(
-                    &name, type_args, arg_values,
+                Ok(ExprFlow::Value(self.call_function_from_resolved_source(
+                    &name,
+                    &resolved_type_args,
+                    arg_values,
+                    Some(&argument_source_types),
                 )?))
             }
             // Handle enum variant construction: Type.variant(args)
@@ -3442,7 +3591,7 @@ impl Interpreter {
                     if let Some(struct_name) = self.registry_name(&self.structs, name) {
                         return Ok(ExprFlow::Value(self.construct_struct(
                             &struct_name,
-                            &constructor_type_args,
+                            &resolved_type_args,
                             args,
                             arg_values,
                             &argument_source_types,
@@ -3456,21 +3605,30 @@ impl Interpreter {
                         )?));
                     }
                     // Try higher-order built-ins first (require &mut self).
-                    if let Some(result) = self.call_higher_order_builtin(name, &arg_values) {
+                    if let Some(result) = self.call_higher_order_builtin_with_type_args(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     let runtime_name = self.runtime_name(name);
                     if self.is_trusted_stdlib_first_function(&runtime_name) {
-                        return Ok(ExprFlow::Value(self.call_user_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_user_function_from_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
                     // Try type-reflection built-ins before ordinary built-ins.
-                    if let Some(result) =
-                        self.call_builtin_with_type_args(name, type_args, &arg_values)
-                    {
+                    if let Some(result) = self.call_builtin_with_type_args_from_source(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     if let Some(result) = self.call_builtin(name, &arg_values) {
@@ -3482,10 +3640,11 @@ impl Interpreter {
                             .resolve_interface_dispatch(&runtime_name, &arg_values)
                             .is_some()
                     {
-                        return Ok(ExprFlow::Value(self.call_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_function_from_resolved_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
                 }
@@ -3510,18 +3669,29 @@ impl Interpreter {
                     }
                 }
                 match dotted {
-                    Some(name) => Ok(ExprFlow::Value(
-                        self.call_function_with_type_args(&name, type_args, arg_values)?,
-                    )),
+                    Some(name) => Ok(ExprFlow::Value(self.call_function_from_resolved_source(
+                        &name,
+                        &resolved_type_args,
+                        arg_values,
+                        Some(&argument_source_types),
+                    )?)),
                     None => {
                         let function = value_or_signal!(self, callee);
-                        Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?))
+                        Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                            function,
+                            arg_values,
+                            Some(&argument_source_types),
+                        )?))
                     }
                 }
             }
             _ => {
                 let function = value_or_signal!(self, callee);
-                Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?))
+                Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                    function,
+                    arg_values,
+                    Some(&argument_source_types),
+                )?))
             }
         }
     }
@@ -3612,6 +3782,10 @@ impl Interpreter {
         step: &PipelineStep,
         piped_value: Value,
     ) -> Result<ExprFlow, String> {
+        // The step fact describes its input, not its result. Its presence only
+        // establishes checked execution for fresh intrinsic producers; their
+        // validation target still comes from the selected actual type argument.
+        let checked_producer = self.checked_refinement_source_type(step.span).is_some();
         let function = match &step.function {
             Expr::View(inner, _) => inner.as_ref(),
             _ => &step.function,
@@ -3646,18 +3820,43 @@ impl Interpreter {
         }
         let inferred_type_args =
             self.inferred_user_function_type_args_from_types(function, type_args, &actual_types);
-        let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
-        // Build argument list: piped value first, then extra args.
-        let mut arg_values = vec![piped_value];
-        for arg in extra_args {
-            arg_values.push(value_or_signal!(self, &arg.value));
+        let resolved_type_args = inferred_type_args.unwrap_or_else(|| {
+            type_args
+                .iter()
+                .map(|ty| self.substitute_type_expr(ty))
+                .collect()
+        });
+
+        // step.span records the checked inbound type, including a previous
+        // step's handled success type. Capture extra argument facts before any
+        // evaluation, then permute each proof together with its value.
+        let mut evaluated_args = vec![(
+            piped_value,
+            self.checked_refinement_source_type(step.span).cloned(),
+        )];
+        let extra_source_types: Vec<_> = extra_args
+            .iter()
+            .map(|arg| {
+                self.checked_refinement_source_type(arg.value.span())
+                    .cloned()
+            })
+            .collect();
+        for (arg, source_type) in extra_args.iter().zip(extra_source_types) {
+            evaluated_args.push((value_or_signal!(self, &arg.value), source_type));
         }
-        let arg_values = Self::reorder_function_arguments(arg_values, argument_order.as_deref())?;
+        let (arg_values, argument_source_types): (Vec<_>, Vec<_>) =
+            Self::reorder_function_arguments(evaluated_args, argument_order.as_deref())?
+                .into_iter()
+                .unzip();
 
         if self.is_value_call_target(function) {
             let function = value_or_signal!(self, function);
-            return Ok(ExprFlow::Value(self.call_fn_value(function, arg_values)?));
+            return Ok(ExprFlow::Value(self.call_fn_value_from_source(
+                function,
+                arg_values,
+                Some(&argument_source_types),
+            )?));
         }
 
         // Resolve the function name from the expression.
@@ -3676,38 +3875,51 @@ impl Interpreter {
                 let name = self
                     .registry_name(&self.functions, &ident.name)
                     .unwrap_or_else(|| ident.name.clone());
-                Ok(ExprFlow::Value(self.call_function_with_type_args(
-                    &name, type_args, arg_values,
+                Ok(ExprFlow::Value(self.call_function_from_resolved_source(
+                    &name,
+                    &resolved_type_args,
+                    arg_values,
+                    Some(&argument_source_types),
                 )?))
             }
             Expr::FieldAccess(obj, field, _) => {
                 let dotted = Self::extract_dotted_name(obj, &field.name);
                 if let Some(ref name) = dotted {
                     // Check higher-order builtins first (need &mut self).
-                    if let Some(result) = self.call_higher_order_builtin(name, &arg_values) {
+                    if let Some(result) = self.call_higher_order_builtin_with_type_args(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     let runtime_name = self.runtime_name(name);
                     if self.is_trusted_stdlib_first_function(&runtime_name) {
-                        return Ok(ExprFlow::Value(self.call_user_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_user_function_from_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
-                    if let Some(result) =
-                        self.call_builtin_with_type_args(name, type_args, &arg_values)
-                    {
+                    if let Some(result) = self.call_builtin_with_type_args_from_source(
+                        name,
+                        &resolved_type_args,
+                        &arg_values,
+                        checked_producer,
+                    ) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     if let Some(result) = self.call_builtin(name, &arg_values) {
                         return Ok(ExprFlow::Value(result?));
                     }
                     if self.functions.contains_key(runtime_name.as_str()) {
-                        return Ok(ExprFlow::Value(self.call_function_with_type_args(
+                        return Ok(ExprFlow::Value(self.call_function_from_resolved_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?));
                     }
                 }
@@ -3723,10 +3935,11 @@ impl Interpreter {
                 match dotted {
                     Some(name) => {
                         let runtime_name = self.runtime_name(&name);
-                        Ok(ExprFlow::Value(self.call_function_with_type_args(
+                        Ok(ExprFlow::Value(self.call_function_from_resolved_source(
                             &runtime_name,
-                            type_args,
+                            &resolved_type_args,
                             arg_values,
+                            Some(&argument_source_types),
                         )?))
                     }
                     None => {
@@ -3778,7 +3991,8 @@ impl Interpreter {
                 let val = if self.type_aliases.contains_key(&type_name) {
                     match &decl.value {
                         Expr::Handle(target, bind_name, body, _) => {
-                            let source_type = self.checked_expression_type(target.span()).cloned();
+                            let source_type =
+                                self.checked_refinement_source_type(target.span()).cloned();
                             let success_source_type = Self::checked_sum_success_type(
                                 source_type.as_deref(),
                                 target.span(),
@@ -3795,18 +4009,22 @@ impl Interpreter {
                                     | Value::OptionalSome(_)
                                     | Value::OptionalNone
                             );
-                            let refines_whole_sum = self.type_name_has_refinement(&type_name)
-                                && target_type.as_ref().is_some_and(|ty| {
-                                    self.concrete_type_display(
-                                        &self.inference_base_type(&declared_ty),
-                                    ) == self.concrete_type_display(&self.inference_base_type(ty))
-                                });
-                            let handles_sum = sum_payload && !refines_whole_sum
-                                && target_type.as_ref().is_none_or(|ty| {
-                                    !self.type_name_has_refinement(&self.concrete_type_display(ty))
-                                        && matches!(self.inference_base_type(ty), TypeExpr::Generic(name, _, _)
-                                            if matches!(name.name.as_str(), "result" | "optional"))
-                                });
+                            let handles_sum = self.with_resolved_type_aliases(|interpreter| {
+                                let refines_whole_sum = interpreter.type_name_has_refinement(&type_name)
+                                    && target_type.as_ref().is_some_and(|ty| {
+                                        interpreter.resolved_concrete_type_display(
+                                            &interpreter.resolved_inference_base_type(&declared_ty),
+                                        ) == interpreter.resolved_concrete_type_display(
+                                            &interpreter.resolved_inference_base_type(ty),
+                                        )
+                                    });
+                                sum_payload && !refines_whole_sum
+                                    && target_type.as_ref().is_none_or(|ty| {
+                                        !interpreter.type_name_has_refinement(&interpreter.resolved_concrete_type_display(ty))
+                                            && matches!(interpreter.resolved_inference_base_type(ty), TypeExpr::Generic(name, _, _)
+                                                if matches!(name.name.as_str(), "result" | "optional"))
+                                    })
+                            });
                             let flow = if !handles_sum {
                                 self.finish_refinement_boundary(
                                     &type_name,
@@ -3849,13 +4067,14 @@ impl Interpreter {
                             }
                         }
                         _ => {
-                            let source_type =
-                                self.checked_expression_type(decl.value.span()).cloned();
+                            let source_type = self
+                                .checked_refinement_source_type(decl.value.span())
+                                .cloned();
                             let val = match self.eval_expr_flow(&decl.value)? {
                                 ExprFlow::Value(value) => value,
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
-                            self.check_refinement_from_source(
+                            self.check_refinement_from_resolved_source(
                                 &type_name,
                                 &val,
                                 source_type.as_deref(),
@@ -3869,7 +4088,7 @@ impl Interpreter {
                         ExprFlow::Signal(signal) => return Ok(Some(signal)),
                     }
                 };
-                let val = self.normalize_value_for_type(&declared_ty, val)?;
+                let val = self.normalize_value_for_resolved_type(&declared_ty, val)?;
                 self.set_variable_with_type(&decl.name.name, val, declared_ty);
                 Ok(None)
             }
@@ -3901,6 +4120,10 @@ impl Interpreter {
             }
 
             Stmt::Return(ret) => {
+                let source_type = ret.value.as_ref().and_then(|expression| {
+                    self.checked_refinement_source_type(expression.span())
+                        .cloned()
+                });
                 let val = match &ret.value {
                     Some(expr) => match self.eval_expr_flow(expr)? {
                         ExprFlow::Value(value) => value,
@@ -3908,7 +4131,7 @@ impl Interpreter {
                     },
                     None => Value::Nothing,
                 };
-                Ok(Some(Signal::Return(val)))
+                Ok(Some(Signal::Return(val, source_type)))
             }
 
             Stmt::If(if_stmt) => {
@@ -4274,7 +4497,9 @@ impl Interpreter {
     /// public-facing result.
     pub fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match self.exec_stmt_inner(stmt)? {
-            None | Some(Signal::Break) | Some(Signal::Continue) | Some(Signal::Return(_)) => Ok(()),
+            None | Some(Signal::Break) | Some(Signal::Continue) | Some(Signal::Return(..)) => {
+                Ok(())
+            }
             Some(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
@@ -4304,7 +4529,7 @@ impl Interpreter {
     /// (if any).
     pub fn exec_block(&mut self, block: &Block) -> Result<Option<Value>, String> {
         match self.exec_block_inner(block)? {
-            Some(Signal::Return(v)) => Ok(Some(v)),
+            Some(Signal::Return(v, _)) => Ok(Some(v)),
             Some(Signal::Default(_)) => {
                 Err("`default` can only be used inside a `handle` block".to_string())
             }
@@ -4485,7 +4710,7 @@ impl Interpreter {
                         respond_value = val;
                         break;
                     }
-                    Some(Signal::Return(_)) => break,
+                    Some(Signal::Return(..)) => break,
                     Some(Signal::Break) | Some(Signal::Continue) => break,
                     Some(Signal::Default(_)) => break,
                     None => {}
@@ -5093,11 +5318,74 @@ impl Interpreter {
         Some(value)
     }
 
+    #[cfg(test)]
     fn call_builtin_with_type_args(
         &mut self,
         name: &str,
         type_args: &[TypeExpr],
         args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        let resolved_type_args: Vec<_> = type_args
+            .iter()
+            .map(|ty| self.substitute_type_expr(ty))
+            .collect();
+        // Preserve metadata-free declaration lookup in its caller context.
+        // Only the checked AST path owns already-canonical field metadata.
+        self.call_builtin_with_resolved_type_args(name, &resolved_type_args, args, false)
+    }
+
+    /// Type arguments already name their selected caller-resolved owners.
+    fn call_builtin_with_type_args_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+        checked_producer: bool,
+    ) -> Option<Result<Value, String>> {
+        let intrinsic = IntrinsicId::from_callable_name(name)?;
+        // JSON facades execute source bodies and keep their lexical imports.
+        // Reflection leaves consume canonical type names; caller aliases must
+        // not reinterpret the prefix of an already-selected owner.
+        // Metadata-free field readers still resolve declaration field spelling
+        // through their existing lexical lookup. This is distinct from the
+        // canonical type arguments used by pure metadata operations.
+        let lexical_field_lookup = matches!(
+            intrinsic,
+            IntrinsicId::TypeFieldValue
+                | IntrinsicId::TypeMachineFieldValue
+                | IntrinsicId::TypeVariantFieldValue
+        ) && (!checked_producer
+            || !self.allow_checked_refinement_proofs);
+        if lexical_field_lookup
+            || matches!(
+                intrinsic,
+                IntrinsicId::JsonParse
+                    | IntrinsicId::JsonParseExact
+                    | IntrinsicId::JsonSerialize
+                    | IntrinsicId::JsonSerializePublic
+            )
+        {
+            return self.call_builtin_with_resolved_type_args(
+                name,
+                type_args,
+                args,
+                checked_producer,
+            );
+        }
+        let blank_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let saved_aliases = std::mem::replace(&mut self.namespace_alias_scopes, blank_aliases);
+        let result =
+            self.call_builtin_with_resolved_type_args(name, type_args, args, checked_producer);
+        self.namespace_alias_scopes = saved_aliases;
+        result
+    }
+
+    fn call_builtin_with_resolved_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+        checked_producer: bool,
     ) -> Option<Result<Value, String>> {
         let intrinsic = IntrinsicId::from_callable_name(name)?;
         let expected_type_arg_count = match intrinsic {
@@ -5138,7 +5426,7 @@ impl Interpreter {
             )));
         }
 
-        let ty = self.substitute_type_expr(&type_args[0]);
+        let ty = type_args[0].clone();
         if let Some(error) = self.missing_checked_type_info_error(&ty) {
             return Some(Err(error));
         }
@@ -5250,7 +5538,7 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 3, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
+                let expected_field_ty = type_args[1].clone();
                 self.reflected_construct_put(&ty, &expected_field_ty, &args[0], &args[1], &args[2])
             }
             IntrinsicId::TypeConstructFinish => {
@@ -5420,22 +5708,40 @@ impl Interpreter {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
-                self.reflected_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+                let expected_field_ty = type_args[1].clone();
+                self.reflected_field_value(
+                    &args[0],
+                    &ty,
+                    &args[1],
+                    &expected_field_ty,
+                    checked_producer,
+                )
             }
             IntrinsicId::TypeMachineFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
-                self.reflected_machine_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+                let expected_field_ty = type_args[1].clone();
+                self.reflected_machine_field_value(
+                    &args[0],
+                    &ty,
+                    &args[1],
+                    &expected_field_ty,
+                    checked_producer,
+                )
             }
             IntrinsicId::TypeVariantFieldValue => {
                 if let Some(err) = check_args(name, 2, args) {
                     return Some(err);
                 }
-                let expected_field_ty = self.substitute_type_expr(&type_args[1]);
-                self.reflected_variant_field_value(&args[0], &ty, &args[1], &expected_field_ty)
+                let expected_field_ty = type_args[1].clone();
+                self.reflected_variant_field_value(
+                    &args[0],
+                    &ty,
+                    &args[1],
+                    &expected_field_ty,
+                    checked_producer,
+                )
             }
             IntrinsicId::JsonParse | IntrinsicId::JsonParseExact => {
                 if let Some(err) = check_args(name, 1, args) {
@@ -5492,6 +5798,71 @@ impl Interpreter {
             .find_map(|scope| scope.get(name).cloned())
     }
 
+    /// Installed arguments already have their lexical declaration identity.
+    /// Follow binding-name chains without resolving terminal names as source
+    /// spellings again. The cycle guard also bounds metadata-free API maps.
+    fn resolve_installed_type_expr(&self, ty: &TypeExpr) -> TypeExpr {
+        self.resolve_installed_type_expr_with_map(ty, &HashMap::new(), &mut HashSet::new())
+    }
+
+    fn resolve_installed_type_expr_with_map(
+        &self,
+        ty: &TypeExpr,
+        substitutions: &HashMap<String, TypeExpr>,
+        seen: &mut HashSet<String>,
+    ) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(ident) => {
+                // This is a canonical value, so an exact registered terminal
+                // remains its selected type even if a caller binding uses the
+                // same name. Written source substitution resolves its binding
+                // before entering here and retains lexical priority.
+                if self.type_name_is_registered(&ident.name) {
+                    return ty.clone();
+                }
+                if let Some(bound) = substitutions
+                    .get(&ident.name)
+                    .cloned()
+                    .or_else(|| self.current_type_binding(&ident.name))
+                    && seen.insert(ident.name.clone())
+                {
+                    let resolved =
+                        self.resolve_installed_type_expr_with_map(&bound, substitutions, seen);
+                    seen.remove(&ident.name);
+                    resolved
+                } else {
+                    ty.clone()
+                }
+            }
+            TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+                ident.clone(),
+                args.iter()
+                    .map(|arg| self.resolve_installed_type_expr_with_map(arg, substitutions, seen))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.resolve_installed_type_expr_with_map(inner, substitutions, seen)),
+                *span,
+            ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.resolve_installed_type_expr_with_map(inner, substitutions, seen)),
+                state.clone(),
+                *span,
+            ),
+            TypeExpr::Function(params, result, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| {
+                        self.resolve_installed_type_expr_with_map(param, substitutions, seen)
+                    })
+                    .collect(),
+                Box::new(self.resolve_installed_type_expr_with_map(result, substitutions, seen)),
+                *span,
+            ),
+        }
+    }
+
     fn substitute_type_expr(&self, ty: &TypeExpr) -> TypeExpr {
         self.substitute_type_expr_in_namespace(ty, self.current_namespace.as_deref())
     }
@@ -5504,7 +5875,7 @@ impl Interpreter {
         match ty {
             TypeExpr::Named(ident) => {
                 if let Some(bound) = self.current_type_binding(&ident.name) {
-                    self.substitute_type_expr_in_namespace(&bound, namespace)
+                    self.resolve_installed_type_expr(&bound)
                 } else {
                     TypeExpr::Named(self.expand_type_ident(ident, namespace))
                 }
@@ -5537,10 +5908,18 @@ impl Interpreter {
     }
 
     fn expand_type_ident(&self, ident: &Ident, namespace: Option<&str>) -> Ident {
-        let mut expanded = ident.clone();
         if let Some(name) = self.expand_namespace_alias_name(&ident.name) {
+            let mut expanded = ident.clone();
             expanded.name = name;
-        } else if !ident.name.contains('.') && !Self::is_builtin_type_name(&ident.name) {
+            expanded
+        } else {
+            self.qualify_declared_type_ident(ident, namespace)
+        }
+    }
+
+    fn qualify_declared_type_ident(&self, ident: &Ident, namespace: Option<&str>) -> Ident {
+        let mut expanded = ident.clone();
+        if !ident.name.contains('.') && !Self::is_builtin_type_name(&ident.name) {
             if let Some(namespace) = namespace {
                 let qualified = format!("{namespace}.{}", ident.name);
                 if self.type_name_is_registered(&qualified) {
@@ -5549,6 +5928,40 @@ impl Interpreter {
             }
         }
         expanded
+    }
+
+    /// Namespace-level alias bases are declaration templates, not references
+    /// to a validating caller's generic bindings or local namespace imports.
+    fn qualify_declared_type_expr(&self, ty: &TypeExpr, namespace: Option<&str>) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(ident) => {
+                TypeExpr::Named(self.qualify_declared_type_ident(ident, namespace))
+            }
+            TypeExpr::Generic(ident, args, span) => TypeExpr::Generic(
+                self.qualify_declared_type_ident(ident, namespace),
+                args.iter()
+                    .map(|arg| self.qualify_declared_type_expr(arg, namespace))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.qualify_declared_type_expr(inner, namespace)),
+                *span,
+            ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.qualify_declared_type_expr(inner, namespace)),
+                state.clone(),
+                *span,
+            ),
+            TypeExpr::Function(params, result, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| self.qualify_declared_type_expr(param, namespace))
+                    .collect(),
+                Box::new(self.qualify_declared_type_expr(result, namespace)),
+                *span,
+            ),
+        }
     }
 
     fn is_builtin_type_name(name: &str) -> bool {
@@ -5583,18 +5996,6 @@ impl Interpreter {
             || self.actor_defs.contains_key(name)
     }
 
-    fn substitute_type_expr_with_map(
-        &self,
-        ty: &TypeExpr,
-        substitutions: &HashMap<String, TypeExpr>,
-    ) -> TypeExpr {
-        self.substitute_type_expr_with_map_in_namespace(
-            ty,
-            substitutions,
-            self.current_namespace.as_deref(),
-        )
-    }
-
     fn substitute_type_expr_with_map_in_namespace(
         &self,
         ty: &TypeExpr,
@@ -5608,10 +6009,10 @@ impl Interpreter {
                     .cloned()
                     .or_else(|| self.current_type_binding(&ident.name))
                 {
-                    self.substitute_type_expr_with_map_in_namespace(
+                    self.resolve_installed_type_expr_with_map(
                         &bound,
                         substitutions,
-                        namespace,
+                        &mut HashSet::new(),
                     )
                 } else {
                     TypeExpr::Named(self.expand_type_ident(ident, namespace))
@@ -6365,7 +6766,7 @@ impl Interpreter {
     }
 
     fn reflected_field_loop_bindings(
-        &self,
+        &mut self,
         iterable: &Expr,
     ) -> Result<Option<Vec<ReflectedFieldBinding>>, String> {
         let Some(owner_ty) = comptime_type_fields_binding(iterable) else {
@@ -6392,7 +6793,7 @@ impl Interpreter {
         }
 
         Ok(Some(
-            self.type_expr_fields(&owner_ty)
+            self.with_resolved_type_aliases(|interpreter| interpreter.type_expr_fields(&owner_ty))
                 .into_iter()
                 .enumerate()
                 .map(|(index, field)| ReflectedFieldBinding {
@@ -6739,7 +7140,7 @@ impl Interpreter {
     }
 
     fn reflected_type_info_arg_loop_bindings(
-        &self,
+        &mut self,
         iterable: &Expr,
     ) -> Result<Option<Vec<ReflectedTypeInfoBinding>>, String> {
         let Some(source_ty) = reflected_type_info_args_source(iterable) else {
@@ -6760,13 +7161,14 @@ impl Interpreter {
                 ty
             }
         };
-        Ok(Some(
-            self.checked_type_info_arg_types(&ty)
-                .unwrap_or_else(|| self.type_info_arg_types(&ty))
+        Ok(Some(self.with_resolved_type_aliases(|interpreter| {
+            interpreter
+                .checked_type_info_arg_types(&ty)
+                .unwrap_or_else(|| interpreter.type_info_arg_types(&ty))
                 .into_iter()
                 .map(|ty| ReflectedTypeInfoBinding { ty })
-                .collect(),
-        ))
+                .collect()
+        })))
     }
 
     fn bound_reflected_field_type(&self, field_name: &str) -> Result<TypeExpr, String> {
@@ -6813,7 +7215,7 @@ impl Interpreter {
                 metadata.type_name
             ));
         }
-        Ok(Some(self.substitute_type_expr(&binding.ty)))
+        Ok(Some(binding.ty.clone()))
     }
 
     fn bound_reflected_type_info_type(&self, info_name: &str) -> Result<TypeExpr, String> {
@@ -6847,7 +7249,7 @@ impl Interpreter {
         if type_name != expected_type_name {
             return Err("`comptime type` reflected TypeInfo metadata no longer matches the trusted `args` loop item".to_string());
         }
-        Ok(Some(self.substitute_type_expr(&binding.ty)))
+        Ok(Some(binding.ty.clone()))
     }
 
     fn type_info_arg_types(&self, ty: &TypeExpr) -> Vec<TypeExpr> {
@@ -6860,7 +7262,12 @@ impl Interpreter {
             TypeExpr::Named(ident) if self.type_aliases.contains_key(&ident.name) => self
                 .type_alias_bases
                 .get(&ident.name)
-                .map(|base_ty| vec![self.substitute_type_expr(base_ty)])
+                .map(|base_ty| {
+                    vec![self.qualify_declared_type_expr(
+                        base_ty,
+                        Self::type_name_namespace(&ident.name),
+                    )]
+                })
                 .unwrap_or_default(),
             TypeExpr::Generic(_, args, _) => args
                 .iter()
@@ -7649,11 +8056,12 @@ impl Interpreter {
     }
 
     fn reflected_field_value(
-        &self,
+        &mut self,
         value: &Value,
         owner_ty: &TypeExpr,
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
+        checked_producer: bool,
     ) -> Result<Value, String> {
         let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.field_value")?;
@@ -7731,7 +8139,7 @@ impl Interpreter {
             ));
         }
 
-        match value {
+        let selected = match value {
             Value::Struct { fields, .. } => fields
                 .iter()
                 .find(|(name, _)| name == &field_name)
@@ -7742,7 +8150,13 @@ impl Interpreter {
                 type_expr_display(owner_ty),
                 self.format_debug_value(other, Some(owner_ty))
             )),
-        }
+        }?;
+        self.establish_reflected_field_refinement(
+            selected,
+            expected_field_ty,
+            &actual_type_name,
+            checked_producer,
+        )
     }
 
     fn reflected_machine_state_value(
@@ -7814,11 +8228,12 @@ impl Interpreter {
     }
 
     fn reflected_machine_field_value(
-        &self,
+        &mut self,
         value: &Value,
         owner_ty: &TypeExpr,
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
+        checked_producer: bool,
     ) -> Result<Value, String> {
         let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.machine_field_value")?;
@@ -7936,9 +8351,15 @@ impl Interpreter {
             ));
         }
 
-        fields.get(metadata.index).cloned().ok_or_else(|| {
+        let selected = fields.get(metadata.index).cloned().ok_or_else(|| {
             format!("type.machine_field_value: value is missing payload field '{field_name}'")
-        })
+        })?;
+        self.establish_reflected_field_refinement(
+            selected,
+            expected_field_ty,
+            &actual_type_name,
+            checked_producer,
+        )
     }
 
     fn reflected_variant_value(&self, value: &Value, owner_ty: &TypeExpr) -> Result<Value, String> {
@@ -7995,11 +8416,12 @@ impl Interpreter {
     }
 
     fn reflected_variant_field_value(
-        &self,
+        &mut self,
         value: &Value,
         owner_ty: &TypeExpr,
         field_metadata: &Value,
         expected_field_ty: &TypeExpr,
+        checked_producer: bool,
     ) -> Result<Value, String> {
         let value = value.payload();
         let metadata = Self::type_field_metadata_for(field_metadata, "type.variant_field_value")?;
@@ -8070,12 +8492,19 @@ impl Interpreter {
                 ));
             }
 
-            return fields.get(metadata.index).cloned().ok_or_else(|| {
+            let selected = fields.get(metadata.index).cloned().ok_or_else(|| {
                 format!(
                     "type.variant_field_value: value is missing payload field '{}'",
                     field.name
                 )
-            });
+            })?;
+            let actual_type_name = field.type_name.clone();
+            return self.establish_reflected_field_refinement(
+                selected,
+                expected_field_ty,
+                &actual_type_name,
+                checked_producer,
+            );
         }
 
         if self.checked_metadata_kind_is(owner_ty, &["enum"]) {
@@ -8122,12 +8551,298 @@ impl Interpreter {
             ));
         }
 
-        fields.get(metadata.index).cloned().ok_or_else(|| {
+        let selected = fields.get(metadata.index).cloned().ok_or_else(|| {
             format!(
                 "type.variant_field_value: value is missing payload field '{}'",
                 field.name
             )
-        })
+        })?;
+        self.establish_reflected_field_refinement(
+            selected,
+            expected_field_ty,
+            &actual_type_name,
+            checked_producer,
+        )
+    }
+
+    /// Reflection's existing requested-type compatibility can erase refinement
+    /// identities. A requested refinement therefore needs its remaining checks
+    /// before its declared result becomes reusable proof in checked source.
+    fn establish_reflected_field_refinement(
+        &mut self,
+        mut value: Value,
+        requested: &TypeExpr,
+        actual_type_name: &str,
+        checked_producer: bool,
+    ) -> Result<Value, String> {
+        if !checked_producer || !self.allow_checked_refinement_proofs {
+            return Ok(value);
+        }
+        let requested = self.concrete_resolved_type_expr(requested, &mut HashSet::new());
+        if !self.producer_type_has_refinement(&requested) {
+            return Ok(value);
+        }
+        let actual = Self::simple_type_expr_from_name(actual_type_name, requested.span())
+            .map(|actual| self.concrete_resolved_type_expr(&actual, &mut HashSet::new()));
+        if matches!(&requested, TypeExpr::Named(_)) {
+            if let Some(actual) = &actual {
+                let source = type_expr_display(actual);
+                if source == type_expr_display(&requested) {
+                    // Preserve the original bare-refinement boundary's carrier
+                    // normalization and retained identity. The exact declared
+                    // schema supplies proof without rerunning any predicate.
+                    return self.normalize_and_validate_value_from_source(
+                        &requested,
+                        value,
+                        Some(&source),
+                    );
+                }
+            }
+        }
+        let mut checks = Vec::new();
+        self.plan_produced_refinements(
+            &requested,
+            actual.as_ref(),
+            &value,
+            &mut Vec::new(),
+            &mut checks,
+        )?;
+        // Finish structural preflight before any predicate can execute. The
+        // plan follows occupied arms and collection order; it never joins.
+        for check in checks {
+            let slot = Self::produced_value_slot(&mut value, &check.path).ok_or_else(|| {
+                "reflected field refinement: checked payload shape changed during validation"
+                    .to_string()
+            })?;
+            *slot = self.normalize_and_validate_value_from_source(
+                &check.requested,
+                slot.clone(),
+                check.source.as_deref(),
+            )?;
+        }
+        Ok(value)
+    }
+
+    fn producer_type_has_refinement(&self, ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::Named(name) => self.type_name_has_refinement(&name.name),
+            TypeExpr::Generic(_, args, _) => {
+                args.iter().any(|ty| self.producer_type_has_refinement(ty))
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.producer_type_has_refinement(inner)
+            }
+            TypeExpr::Function(params, result, _) => params
+                .iter()
+                .chain(std::iter::once(result.as_ref()))
+                .any(|ty| self.producer_type_has_refinement(ty)),
+        }
+    }
+
+    fn producer_refinement_base(&self, name: &str) -> Option<TypeExpr> {
+        let base = self.type_alias_bases.get(name)?;
+        // Refinement declarations have no caller type parameters. Resolve the
+        // stored spelling in its declaration, using the existing declaration-
+        // only resolver rather than the caller's generic bindings.
+        Some(self.struct_field_type(base, &HashMap::new(), Self::type_name_namespace(name)))
+    }
+
+    fn producer_schema_carrier(&self, ty: &TypeExpr) -> TypeExpr {
+        let mut ty = self.concrete_resolved_type_expr(ty, &mut HashSet::new());
+        let mut visited = HashSet::new();
+        while let TypeExpr::Named(name) = &ty {
+            if !visited.insert(name.name.clone()) {
+                break;
+            }
+            let Some(base) = self.producer_refinement_base(&name.name) else {
+                break;
+            };
+            ty = self.concrete_resolved_type_expr(&base, &mut HashSet::new());
+        }
+        ty
+    }
+
+    fn plan_produced_refinements(
+        &self,
+        requested: &TypeExpr,
+        actual: Option<&TypeExpr>,
+        value: &Value,
+        path: &mut Vec<ProducedValueStep>,
+        checks: &mut Vec<ProducedRefinementCheck>,
+    ) -> Result<(), String> {
+        let requested = self.concrete_resolved_type_expr(requested, &mut HashSet::new());
+        let actual = actual.map(|ty| self.concrete_resolved_type_expr(ty, &mut HashSet::new()));
+        if actual
+            .as_ref()
+            .is_some_and(|actual| type_expr_display(actual) == type_expr_display(&requested))
+            || !self.producer_type_has_refinement(&requested)
+        {
+            return Ok(());
+        }
+        if let TypeExpr::Named(name) = &requested {
+            let Some(base) = self.producer_refinement_base(&name.name) else {
+                return Ok(());
+            };
+            self.plan_produced_refinements(&base, actual.as_ref(), value, path, checks)?;
+            checks.push(ProducedRefinementCheck {
+                path: path.clone(),
+                requested,
+                // The base was either already established by the actual schema
+                // or established by an earlier check in this private plan.
+                source: Some(self.resolved_concrete_type_display(&base)),
+            });
+            return Ok(());
+        }
+        if let TypeExpr::View(inner, _) = &requested {
+            let actual = actual.as_ref().map(|ty| match ty {
+                TypeExpr::View(inner, _) => inner.as_ref(),
+                ty => ty,
+            });
+            return self.plan_produced_refinements(inner, actual, value, path, checks);
+        }
+        let TypeExpr::Generic(owner, requested_args, _) = &requested else {
+            return Err(
+                "reflected field refinement: unsupported callable or nominal refinement conversion"
+                    .into(),
+            );
+        };
+        if owner.name == "secret" {
+            return Err(
+                "reflected field refinement: cannot establish new invariants beneath secret".into(),
+            );
+        }
+        let expected_arity = match owner.name.as_str() {
+            "list" | "set" | "optional" => 1,
+            "map" | "result" => 2,
+            _ => return Err(
+                "reflected field refinement: unsupported callable or nominal refinement conversion"
+                    .into(),
+            ),
+        };
+        if requested_args.len() != expected_arity {
+            return Err("reflected field refinement: unsupported requested wrapper shape".into());
+        }
+        let actual_carrier = actual.as_ref().map(|ty| self.producer_schema_carrier(ty));
+        let actual_args = match &actual_carrier {
+            Some(TypeExpr::Generic(actual_owner, args, _))
+                if actual_owner.name == owner.name && args.len() == expected_arity =>
+            {
+                Some(args.as_slice())
+            }
+            _ => None,
+        };
+        if let Value::Typed { value, .. } = value {
+            path.push(ProducedValueStep::Typed);
+            let result =
+                self.plan_produced_refinements(&requested, actual.as_ref(), value, path, checks);
+            path.pop();
+            return result;
+        }
+        let child_actual = |index| actual_args.and_then(|args| args.get(index));
+        match (owner.name.as_str(), value) {
+            ("list", Value::List(items)) | ("set", Value::Set(items)) => {
+                for (index, item) in items.iter().enumerate() {
+                    path.push(ProducedValueStep::Sequence(index));
+                    self.plan_produced_refinements(
+                        &requested_args[0],
+                        child_actual(0),
+                        item,
+                        path,
+                        checks,
+                    )?;
+                    path.pop();
+                }
+            }
+            ("map", Value::Map(items)) => {
+                for (index, (key, value)) in items.iter().enumerate() {
+                    path.push(ProducedValueStep::MapKey(index));
+                    self.plan_produced_refinements(
+                        &requested_args[0],
+                        child_actual(0),
+                        key,
+                        path,
+                        checks,
+                    )?;
+                    path.pop();
+                    path.push(ProducedValueStep::MapValue(index));
+                    self.plan_produced_refinements(
+                        &requested_args[1],
+                        child_actual(1),
+                        value,
+                        path,
+                        checks,
+                    )?;
+                    path.pop();
+                }
+            }
+            ("optional", Value::OptionalNone) => {}
+            ("optional", Value::OptionalSome(inner)) => {
+                path.push(ProducedValueStep::Some);
+                self.plan_produced_refinements(
+                    &requested_args[0],
+                    child_actual(0),
+                    inner,
+                    path,
+                    checks,
+                )?;
+                path.pop();
+            }
+            ("result", Value::ResultOk(inner)) => {
+                path.push(ProducedValueStep::Ok);
+                self.plan_produced_refinements(
+                    &requested_args[0],
+                    child_actual(0),
+                    inner,
+                    path,
+                    checks,
+                )?;
+                path.pop();
+            }
+            ("result", Value::ResultFail(inner)) => {
+                path.push(ProducedValueStep::Fail);
+                self.plan_produced_refinements(
+                    &requested_args[1],
+                    child_actual(1),
+                    inner,
+                    path,
+                    checks,
+                )?;
+                path.pop();
+            }
+            // Pending owners are not joined or inspected to prove children.
+            _ => {
+                return Err(format!(
+                    "reflected field refinement: expected a ready {} value",
+                    owner.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn produced_value_slot<'a>(
+        mut value: &'a mut Value,
+        path: &[ProducedValueStep],
+    ) -> Option<&'a mut Value> {
+        for step in path {
+            value = match (step, value) {
+                (ProducedValueStep::Typed, Value::Typed { value, .. }) => value.as_mut(),
+                (ProducedValueStep::Sequence(index), Value::List(items) | Value::Set(items)) => {
+                    items.get_mut(*index)?
+                }
+                (ProducedValueStep::MapKey(index), Value::Map(items)) => {
+                    &mut items.get_mut(*index)?.0
+                }
+                (ProducedValueStep::MapValue(index), Value::Map(items)) => {
+                    &mut items.get_mut(*index)?.1
+                }
+                (ProducedValueStep::Some, Value::OptionalSome(inner))
+                | (ProducedValueStep::Ok, Value::ResultOk(inner))
+                | (ProducedValueStep::Fail, Value::ResultFail(inner)) => inner.as_mut(),
+                _ => return None,
+            };
+        }
+        Some(value)
     }
 
     fn reflected_construct_put(
@@ -11354,6 +12069,30 @@ impl Interpreter {
         result
     }
 
+    /// Enter a checked source function after the embedding compiler has
+    /// established every input invariant, including refined aggregate children.
+    /// Main capabilities and zero-argument verify entries satisfy this contract;
+    /// arbitrary host values and generated/shrunk candidates do not by default.
+    /// Entry parameters still undergo ordinary normalization and validation: no
+    /// source proof is synthesized from their destination annotations. The
+    /// checked body may reuse its own source facts, unless nested under a raw call.
+    pub fn call_checked_function_in_namespace(
+        &mut self,
+        namespace: Option<&str>,
+        name: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, String> {
+        let saved_namespace = self.current_namespace.clone();
+        self.current_namespace = namespace.map(str::to_string);
+        let runtime_name = self
+            .registry_name(&self.functions, name)
+            .unwrap_or_else(|| name.to_string());
+        let source_types = vec![None; args.len()];
+        let result = self.call_function_from_source(&runtime_name, &[], args, Some(&source_types));
+        self.current_namespace = saved_namespace;
+        result
+    }
+
     /// Execute a block while resolving unqualified names as if execution is
     /// currently inside `namespace`.
     pub fn exec_block_in_namespace(
@@ -11374,15 +12113,60 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        self.call_function_from_source(name, type_args, args, None)
+    }
+
+    fn call_function_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        let resolved_type_args: Vec<_> = type_args
+            .iter()
+            .map(|ty| self.substitute_type_expr(ty))
+            .collect();
+        self.call_function_from_resolved_source(name, &resolved_type_args, args, source_types)
+    }
+
+    fn call_function_from_resolved_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        // Raw higher-order and actor builtins can execute source bodies before
+        // reaching a registered function. Keep their complete dispatch raw too.
+        let saved_proofs = self.allow_checked_refinement_proofs;
+        self.allow_checked_refinement_proofs &= source_types.is_some();
+        let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
+        let result = self.dispatch_function_from_source(name, type_args, args, source_types);
+        self.allow_checked_refinement_proofs = saved_proofs;
+        result
+    }
+
+    fn dispatch_function_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
         if self.is_trusted_stdlib_first_function(name) {
-            return self.call_user_function_with_type_args(name, type_args, args);
+            return self.call_user_function_from_source(name, type_args, args, source_types);
         }
 
         // Check higher-order built-ins first (require &mut self).
-        if let Some(result) = self.call_higher_order_builtin(name, &args) {
+        if let Some(result) =
+            self.call_higher_order_builtin_with_type_args(name, type_args, &args, false)
+        {
             return result;
         }
-        if let Some(result) = self.call_builtin_with_type_args(name, type_args, &args) {
+        if let Some(result) =
+            self.call_builtin_with_type_args_from_source(name, type_args, &args, false)
+        {
             return result;
         }
         // Check built-in functions first.
@@ -11390,7 +12174,7 @@ impl Interpreter {
             return result;
         }
 
-        self.call_user_function_with_type_args(name, type_args, args)
+        self.call_user_function_from_source(name, type_args, args, source_types)
     }
 
     fn is_trusted_stdlib_first_function(&self, name: &str) -> bool {
@@ -11410,24 +12194,58 @@ impl Interpreter {
         type_args: &[TypeExpr],
         args: Vec<Value>,
     ) -> Result<Value, String> {
+        // Compiler-owned JSON facade forwarding inherits its caller's trust.
+        // Its destination inputs remain forced; a raw dispatch already disabled
+        // proofs and cannot regain them through this internal bridge.
+        let source_types = vec![None; args.len()];
+        self.call_user_function_from_source(name, type_args, args, Some(&source_types))
+    }
+
+    fn call_user_function_from_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
         // Check if the name refers to a variable holding a function value (closure).
         if let Some(fn_val) = self.get_variable(name).cloned() {
             if matches!(
                 fn_val.payload(),
                 Value::Function { .. } | Value::NamedFunction(_)
             ) {
-                return self.call_fn_value(fn_val, args);
+                return self.call_fn_value_from_source(fn_val, args, source_types);
             }
         }
 
-        self.call_registered_function_with_type_args(name, type_args, args)
+        self.call_registered_function_from_resolved_source(name, type_args, args, source_types)
     }
 
-    fn call_registered_function_with_type_args(
+    fn call_registered_function_from_source(
         &mut self,
         name: &str,
         type_args: &[TypeExpr],
         args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
+        let resolved_type_args: Vec<_> = type_args
+            .iter()
+            .map(|ty| self.substitute_type_expr(ty))
+            .collect();
+        self.call_registered_function_from_resolved_source(
+            name,
+            &resolved_type_args,
+            args,
+            source_types,
+        )
+    }
+
+    fn call_registered_function_from_resolved_source(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
     ) -> Result<Value, String> {
         let resolved_name = match (
             self.resolve_interface_dispatch(name, &args),
@@ -11466,13 +12284,10 @@ impl Interpreter {
             .iter()
             .map(|param| type_scope[&param.name].clone())
             .collect();
+        let captured_arguments = self.captured_type_arguments(&arguments);
         let expression_types = match &self.checked_expression_types {
             Some(types) => types
-                .select(
-                    func.name.span,
-                    &self.captured_type_arguments(&arguments),
-                    &args,
-                )
+                .select(func.name.span, &captured_arguments, &args)
                 .map_err(|error| format!("{resolved_name}: {error}"))?,
             None => None,
         };
@@ -11494,29 +12309,44 @@ impl Interpreter {
         let saved_scope_floor = self.lexical_scope_floor;
         self.lexical_scope_floor = scope_depth;
         self.push_scope();
+        let saved_proofs = self.allow_checked_refinement_proofs;
+        self.allow_checked_refinement_proofs &= source_types.is_some();
+        let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
         let call_result = (|| {
-            for (param, arg) in func.params.iter().zip(args) {
+            for (index, (param, arg)) in func.params.iter().zip(args).enumerate() {
                 let param_ty = self.substitute_type_expr(&param.ty);
-                let arg = self.normalize_and_validate_value(&param_ty, arg)?;
+                let source_type = source_types
+                    .and_then(|types| types.get(index))
+                    .and_then(Option::as_deref);
+                let arg =
+                    self.normalize_and_validate_value_from_source(&param_ty, arg, source_type)?;
                 self.set_variable_with_type(&param.name.name, arg, param_ty);
             }
 
             let result = self.exec_block_inner(&func.body)?;
-            let mut value = match result {
-                Some(Signal::Return(v)) => v,
+            let (mut value, return_source_type) = match result {
+                Some(Signal::Return(value, source_type)) => (value, source_type),
                 Some(Signal::Default(_)) => {
                     return Err("`default` can only be used inside a `handle` block".to_string());
                 }
-                _ => Value::Nothing,
+                _ => (Value::Nothing, None),
             };
 
             if let Some(return_type) = &func.return_type {
                 let return_type = self.substitute_type_expr(return_type);
-                value = self.normalize_and_validate_value(&return_type, value)?;
+                // Public/raw API invocations remain forced boundaries even
+                // when a checked body happens to be installed on the runtime.
+                let source_type = source_types.and(return_source_type.as_deref());
+                value = self.normalize_and_validate_value_from_source(
+                    &return_type,
+                    value,
+                    source_type,
+                )?;
             }
 
             Ok(value)
         })();
+        self.allow_checked_refinement_proofs = saved_proofs;
         while self.scopes.len() > scope_depth {
             self.pop_scope();
         }
@@ -11548,16 +12378,11 @@ impl Interpreter {
             ));
         }
 
-        let raw: HashMap<String, TypeExpr> = func
+        Ok(func
             .type_params
             .iter()
             .zip(type_args.iter())
-            .map(|(param, arg)| (param.name.clone(), self.substitute_type_expr(arg)))
-            .collect();
-
-        Ok(raw
-            .iter()
-            .map(|(name, ty)| (name.clone(), self.substitute_type_expr_with_map(ty, &raw)))
+            .map(|(param, arg)| (param.name.clone(), arg.clone()))
             .collect())
     }
 
@@ -11602,13 +12427,118 @@ impl Interpreter {
         self.wrap_integer_value_for_type_name(type_name, Value::Uint64(total))
     }
 
+    fn sum_fallback_list(name: &str, items: &[Value]) -> Result<Value, String> {
+        if items.is_empty() {
+            return Ok(Value::Int64(0));
+        }
+        // Keep the existing fallback's int64/float64 arithmetic and errors.
+        match items[0].payload() {
+            Value::Int64(_) => {
+                let mut total = 0i64;
+                for item in items {
+                    match item.payload() {
+                        Value::Int64(n) => total = total.wrapping_add(*n),
+                        _ => return Err(format!("{name}: mixed types")),
+                    }
+                }
+                Ok(Value::Int64(total))
+            }
+            Value::Float64(_) => {
+                let mut total = 0.0f64;
+                for item in items {
+                    match item.payload() {
+                        Value::Float64(n) => total += n,
+                        _ => return Err(format!("{name}: mixed types")),
+                    }
+                }
+                Ok(Value::Float64(total))
+            }
+            _ => Err(format!("{name}: list elements must be int64 or float64")),
+        }
+    }
+
+    fn sum_resolved_list(
+        &mut self,
+        name: &str,
+        element_type: Option<TypeExpr>,
+        args: &[Value],
+        checked_producer: bool,
+    ) -> Result<Value, String> {
+        if args.len() != 1 {
+            return Err(format!("{name} expects 1 argument, got {}", args.len()));
+        }
+        let Value::List(items) = args[0].payload() else {
+            return Err(format!("{name}: argument must be a list"));
+        };
+        let element = element_type
+            .as_ref()
+            .map(|ty| self.resolved_concrete_type_display(ty));
+        if let Some(type_name) = element
+            && matches!(
+                type_name.as_str(),
+                "int8"
+                    | "int16"
+                    | "int32"
+                    | "int64"
+                    | "uint8"
+                    | "uint16"
+                    | "uint32"
+                    | "uint64"
+                    | "float32"
+                    | "float64"
+            )
+        {
+            return self.sum_primitive_list(name, &type_name, items);
+        }
+        let value = Self::sum_fallback_list(name, items)?;
+        match element_type {
+            // Fresh fallback output needs the selected invariant before any
+            // checked local, argument or return can reuse its result type.
+            Some(ty) if self.allow_checked_refinement_proofs && checked_producer => {
+                let canonical = self.concrete_resolved_type_expr(&ty, &mut HashSet::new());
+                let mut unqualified = &canonical;
+                let mut qualified = false;
+                while let TypeExpr::Generic(owner, arguments, _) = unqualified {
+                    if owner.name != "secret" || arguments.len() != 1 {
+                        break;
+                    }
+                    qualified = true;
+                    unqualified = &arguments[0];
+                }
+                if qualified
+                    && matches!(unqualified, TypeExpr::Named(name) if self.type_name_has_refinement(&name.name))
+                {
+                    return Err(format!(
+                        "{name}: cannot establish new invariants beneath secret"
+                    ));
+                }
+                self.normalize_and_validate_value(&ty, value)
+            }
+            // Raw/no-fact facades retain their one existing return check.
+            _ => Ok(value),
+        }
+    }
+
     /// Try to call a higher-order built-in that requires `&mut self` (because
     /// it needs to invoke a user-supplied function value). Returns `None` if
     /// the name is not a higher-order built-in.
+    #[cfg(test)]
     fn call_higher_order_builtin(
         &mut self,
         name: &str,
         args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        self.call_higher_order_builtin_with_type_args(name, &[], args, false)
+    }
+
+    /// Explicit arguments are resolved; absent arguments retain the legacy
+    /// metadata-free enclosing-generic fallback.
+    fn call_higher_order_builtin_with_type_args(
+        &mut self,
+        name: &str,
+        type_args: &[TypeExpr],
+        args: &[Value],
+        checked_producer: bool,
     ) -> Option<Result<Value, String>> {
         let intrinsic = IntrinsicId::from_callable_name(name)?;
         match intrinsic {
@@ -11647,69 +12577,17 @@ impl Interpreter {
                 Some(Ok(Value::List(keyed.into_iter().map(|(_, v)| v).collect())))
             }
             IntrinsicId::ListSum if self.current_function_trusted_stdlib => {
-                if args.len() != 1 {
-                    return Some(Err(format!(
-                        "{name} expects 1 argument, got {}",
-                        args.len()
-                    )));
-                }
-                match args[0].payload() {
-                    Value::List(items) => {
-                        let element = self
-                            .current_type_arguments
-                            .first()
-                            .map(|ty| self.concrete_type_display(ty));
-                        if let Some(type_name) = element
-                            && matches!(
-                                type_name.as_str(),
-                                "int8"
-                                    | "int16"
-                                    | "int32"
-                                    | "int64"
-                                    | "uint8"
-                                    | "uint16"
-                                    | "uint32"
-                                    | "uint64"
-                                    | "float32"
-                                    | "float64"
-                            )
-                        {
-                            return Some(self.sum_primitive_list(name, &type_name, items));
-                        }
-                        if items.is_empty() {
-                            return Some(Ok(Value::Int64(0)));
-                        }
-                        // Detect int64 vs float64 from first element.
-                        match items[0].payload() {
-                            Value::Int64(_) => {
-                                let mut total = 0i64;
-                                for item in items {
-                                    match item.payload() {
-                                        Value::Int64(n) => {
-                                            total = total.wrapping_add(*n);
-                                        }
-                                        _ => return Some(Err(format!("{name}: mixed types"))),
-                                    }
-                                }
-                                Some(Ok(Value::Int64(total)))
-                            }
-                            Value::Float64(_) => {
-                                let mut total = 0.0f64;
-                                for item in items {
-                                    match item.payload() {
-                                        Value::Float64(n) => total += n,
-                                        _ => return Some(Err(format!("{name}: mixed types"))),
-                                    }
-                                }
-                                Some(Ok(Value::Float64(total)))
-                            }
-                            _ => Some(Err(format!(
-                                "{name}: list elements must be int64 or float64"
-                            ))),
-                        }
-                    }
-                    _ => Some(Err(format!("{name}: argument must be a list"))),
-                }
+                let selected = type_args.first().cloned().or_else(|| {
+                    self.current_type_arguments
+                        .first()
+                        .map(|ty| self.resolve_installed_type_expr(ty))
+                });
+                let blank_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+                let saved_aliases =
+                    std::mem::replace(&mut self.namespace_alias_scopes, blank_aliases);
+                let result = self.sum_resolved_list(name, selected, args, checked_producer);
+                self.namespace_alias_scopes = saved_aliases;
+                Some(result)
             }
             IntrinsicId::ListGroupBy if self.current_function_trusted_stdlib => {
                 if args.len() != 2 {
@@ -11755,9 +12633,18 @@ impl Interpreter {
 
     /// Call a `Value::Function` (inline function) with the given arguments.
     fn call_fn_value(&mut self, fn_val: Value, args: Vec<Value>) -> Result<Value, String> {
+        self.call_fn_value_from_source(fn_val, args, None)
+    }
+
+    fn call_fn_value_from_source(
+        &mut self,
+        fn_val: Value,
+        args: Vec<Value>,
+        source_types: Option<&[Option<String>]>,
+    ) -> Result<Value, String> {
         match fn_val.into_payload() {
             Value::NamedFunction(name) => {
-                self.call_registered_function_with_type_args(&name, &[], args)
+                self.call_registered_function_from_source(&name, &[], args, source_types)
             }
             Value::Function {
                 type_context,
@@ -11813,14 +12700,43 @@ impl Interpreter {
                     self.set_namespace_alias(name, target);
                 }
                 self.push_scope();
+                let saved_proofs = self.allow_checked_refinement_proofs;
+                self.allow_checked_refinement_proofs &= source_types.is_some();
+                let source_types = source_types.filter(|_| self.allow_checked_refinement_proofs);
                 let result = (|| {
-                    for (param, arg) in params.iter().zip(args) {
+                    for (index, (param, arg)) in params.iter().zip(args).enumerate() {
                         let param_ty = self.substitute_type_expr(&param.ty);
-                        let arg = self.normalize_value_for_type(&param_ty, arg)?;
+                        let source_type = source_types
+                            .and_then(|types| types.get(index))
+                            .and_then(Option::as_deref);
+                        let arg = self.normalize_and_validate_value_from_source(
+                            &param_ty,
+                            arg,
+                            source_type,
+                        )?;
                         self.set_variable_with_type(&param.name.name, arg, param_ty);
                     }
-                    self.exec_block_inner(&body)
+                    let (mut value, return_source_type) = match self.exec_block_inner(&body)? {
+                        Some(Signal::Return(value, source_type)) => (value, source_type),
+                        Some(Signal::Default(_)) => {
+                            return Err(
+                                "`default` can only be used inside a `handle` block".to_string()
+                            );
+                        }
+                        _ => (Value::Nothing, None),
+                    };
+                    if let Some(return_type) = &type_context.return_type {
+                        let return_type = self.substitute_type_expr(return_type);
+                        let source_type = source_types.and(return_source_type.as_deref());
+                        value = self.normalize_and_validate_value_from_source(
+                            &return_type,
+                            value,
+                            source_type,
+                        )?;
+                    }
+                    Ok(value)
                 })();
+                self.allow_checked_refinement_proofs = saved_proofs;
                 while self.scopes.len() > scope_depth {
                     self.pop_scope();
                 }
@@ -11832,10 +12748,7 @@ impl Interpreter {
                 self.type_arg_scopes = saved_type_scopes;
                 self.current_type_arguments = saved_type_arguments;
                 self.active_checked_function = saved_expression_types;
-                Ok(match result? {
-                    Some(Signal::Return(v)) => v,
-                    _ => Value::Nothing,
-                })
+                result
             }
             other => Err(format!("expected function value, got {other}")),
         }
@@ -13117,6 +14030,3128 @@ mod tests {
     use jett_parser::ast::*;
 
     use super::*;
+
+    fn nested_reflected_case(
+        shape: &str,
+        actual: &str,
+        requested: &str,
+        payload: Value,
+    ) -> (Interpreter, Expr) {
+        let (interpreter, mut expression) =
+            reflected_proof_case(shape, actual, requested, payload, true);
+        let Expr::GenericCall(_, types, _, _) = &mut expression else {
+            unreachable!()
+        };
+        types[1] = Interpreter::simple_type_expr_from_name(requested, sp()).unwrap();
+        (interpreter, expression)
+    }
+
+    #[test]
+    fn nested_reflected_producers_validate_ready_wrappers_in_payload_order() {
+        for shape in ["record", "enum", "machine"] {
+            for (actual, requested, payload, markers) in [
+                (
+                    "list[int64]",
+                    "list[models.Positive]",
+                    Value::List(vec![Value::Int64(1), Value::Int64(2)]),
+                    vec!["trace positive", "trace positive"],
+                ),
+                (
+                    "set[int64]",
+                    "set[models.Positive]",
+                    Value::Set(vec![Value::Int64(1), Value::Int64(2)]),
+                    vec!["trace positive", "trace positive"],
+                ),
+                (
+                    "map[int64, int64]",
+                    "map[int64, models.Large]",
+                    Value::Map(vec![
+                        (Value::Int64(1), Value::Int64(7)),
+                        (Value::Int64(2), Value::Int64(9)),
+                    ]),
+                    vec![
+                        "trace positive",
+                        "trace large",
+                        "trace positive",
+                        "trace large",
+                    ],
+                ),
+                (
+                    "optional[int64]",
+                    "optional[models.Positive]",
+                    Value::OptionalNone,
+                    vec![],
+                ),
+                (
+                    "optional[int64]",
+                    "optional[models.Positive]",
+                    Value::OptionalSome(Box::new(Value::Int64(2))),
+                    vec!["trace positive"],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[models.Positive, int64]",
+                    Value::ResultOk(Box::new(Value::Int64(2))),
+                    vec!["trace positive"],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[int64, models.Large]",
+                    Value::ResultFail(Box::new(Value::Int64(7))),
+                    vec!["trace positive", "trace large"],
+                ),
+                (
+                    "list[models.Positive]",
+                    "list[models.Large]",
+                    Value::List(vec![Value::Int64(7), Value::Int64(9)]),
+                    vec!["trace large", "trace large"],
+                ),
+                (
+                    "list[optional[result[int64, int64]]]",
+                    "list[optional[result[int64, models.Large]]]",
+                    Value::List(vec![
+                        Value::OptionalNone,
+                        Value::OptionalSome(Box::new(Value::ResultFail(Box::new(Value::Int64(7))))),
+                        Value::OptionalSome(Box::new(Value::ResultOk(Box::new(Value::Int64(2))))),
+                    ]),
+                    vec!["trace positive", "trace large"],
+                ),
+            ] {
+                let (mut interpreter, expression) =
+                    nested_reflected_case(shape, actual, requested, payload.clone());
+                let original = format!("{:?}", interpreter.get_variable("input").unwrap());
+                assert_eq!(
+                    interpreter.eval_expr(&expression).unwrap().payload(),
+                    &payload,
+                    "{shape}/{requested}"
+                );
+                assert_eq!(
+                    reuse_markers(&mut interpreter),
+                    markers,
+                    "{shape}/{requested}"
+                );
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    original
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+                assert_eq!(interpreter.scopes.len(), 1);
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[int64]",
+                "list[models.Positive]",
+                Value::List(vec![Value::Int64(1), Value::Int64(-2), Value::Int64(3)]),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive", "trace positive"]
+            );
+        }
+    }
+
+    #[test]
+    fn nested_reflected_preflight_preserves_pending_and_shape_failure_precedence() {
+        for shape in ["record", "enum", "machine"] {
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[optional[int64]]",
+                "list[optional[models.Positive]]",
+                Value::List(vec![
+                    Value::OptionalSome(Box::new(Value::Int64(7))),
+                    Value::Bool(false),
+                ]),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("reflected field refinement: expected a ready optional value".into())
+            );
+            assert!(
+                reuse_markers(&mut interpreter).is_empty(),
+                "preflight precedes first predicate"
+            );
+            for depth in [1, 2] {
+                let mut pending = Value::List(vec![Value::Int64(7)]);
+                for _ in 0..depth {
+                    pending = Value::Pending(Box::new(pending));
+                }
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "list[int64]",
+                    "list[models.Positive]",
+                    pending.clone(),
+                );
+                let joined = Expr::Join(Box::new(expression), Span::new(FileId::new(0), 941, 942));
+                assert_eq!(
+                    interpreter.eval_expr(&joined),
+                    Err("reflected field refinement: expected a ready list value".into())
+                );
+                assert!(
+                    reuse_markers(&mut interpreter).is_empty(),
+                    "no implicit join"
+                );
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "list[models.Positive]",
+                    "list[models.Positive]",
+                    pending.clone(),
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(pending));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[int64]",
+                "list[models.Positive]",
+                Value::List(vec![Value::Pending(Box::new(Value::Int64(7)))]),
+            );
+            let error = interpreter.eval_expr(&expression).unwrap_err();
+            assert!(error.contains("error evaluating refinement constraint for 'models.Positive'"));
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+    }
+
+    #[test]
+    fn nested_reflected_refusals_stop_future_secret_callable_and_nominal_consumers() {
+        for shape in ["record", "enum", "machine"] {
+            for route in ["secret", "callable", "nominal"] {
+                let (actual, requested, payload, expected) = match route {
+                    "secret" => (
+                        "secret[int64]",
+                        "secret[models.Positive]",
+                        Value::Int64(-913),
+                        "reflected field refinement: cannot establish new invariants beneath secret",
+                    ),
+                    "callable" => (
+                        "function() returns int64",
+                        "function() returns models.Positive",
+                        Value::NamedFunction("plain".into()),
+                        "reflected field refinement: unsupported callable or nominal refinement conversion",
+                    ),
+                    _ => (
+                        "Box[int64]",
+                        "Box[models.Positive]",
+                        Value::Struct {
+                            concrete_type: Some("Box[int64]".into()),
+                            type_name: "Box".into(),
+                            fields: vec![("value".into(), Value::Int64(-913))],
+                        },
+                        "reflected field refinement: unsupported callable or nominal refinement conversion",
+                    ),
+                };
+                let (mut interpreter, expression) =
+                    nested_reflected_case(shape, actual, requested, payload);
+                let consumer_span = Span::new(FileId::new(0), 943, 944);
+                let exposed = match route {
+                    "secret" => Expr::Declassify(Box::new(expression.clone()), consumer_span),
+                    "callable" => Expr::Call(Box::new(expression.clone()), vec![], consumer_span),
+                    _ => Expr::FieldAccess(
+                        Box::new(expression.clone()),
+                        ident("value"),
+                        consumer_span,
+                    ),
+                };
+                let mut plain = func_def("plain", vec![], block(vec![return_stmt(int(-913))]));
+                plain.return_type = Some(type_named("int64"));
+                interpreter.register_function(&plain);
+                let mut echo = func_def(
+                    "echo",
+                    vec![("value", "models.Positive")],
+                    block(vec![return_stmt(Expr::Coarsen(
+                        Box::new(var("value")),
+                        sp(),
+                    ))]),
+                );
+                echo.return_type = Some(type_named("int64"));
+                interpreter.register_function(&echo);
+                reuse_facts(
+                    &mut interpreter,
+                    &[
+                        (expression.span(), requested),
+                        (consumer_span, "models.Positive"),
+                    ],
+                );
+                let error = interpreter
+                    .eval_expr(&call("echo", vec![exposed]))
+                    .unwrap_err();
+                assert_eq!(error, expected, "{shape}/{route}");
+                assert!(!error.contains("913"));
+                assert!(
+                    reuse_markers(&mut interpreter).is_empty(),
+                    "no hidden predicate or observer"
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+            }
+            let hidden = Value::Pending(Box::new(Value::Pending(Box::new(Value::Int64(7)))));
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "secret[models.Positive]",
+                "secret[models.Positive]",
+                hidden.clone(),
+            );
+            assert_eq!(interpreter.eval_expr(&expression), Ok(hidden));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+            // Inactive hidden arms cannot expose any unchecked value.
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "result[secret[int64], int64]",
+                "result[secret[models.Positive], int64]",
+                Value::ResultFail(Box::new(Value::Int64(7))),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Ok(Value::ResultFail(Box::new(Value::Int64(7))))
+            );
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+    }
+
+    #[test]
+    fn nested_reflected_checks_remain_private_and_validate_refinement_bases() {
+        for shape in ["record", "enum", "machine"] {
+            for proof_mode in [false, true] {
+                let payload = Value::List(vec![Value::Int64(-1)]);
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "list[int64]",
+                    "list[models.Positive]",
+                    payload.clone(),
+                );
+                interpreter.allow_checked_refinement_proofs = proof_mode;
+                interpreter.checked_expression_types = None;
+                assert_eq!(interpreter.eval_expr(&expression), Ok(payload));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.allow_checked_refinement_proofs, proof_mode);
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "list[int64]",
+                "ValidatedList",
+                Value::List(vec![Value::Int64(-1)]),
+            );
+            let mut alias = type_alias("ValidatedList", "int64", Some(bool_expr(true)));
+            alias.base_type =
+                Interpreter::simple_type_expr_from_name("list[models.Positive]", sp()).unwrap();
+            interpreter.register_type_alias(&alias);
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+    }
+
+    #[test]
+    fn qualified_sum_refinement_refusal_preserves_primitive_and_domain_errors() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.current_function_trusted_stdlib = true;
+        for selected in ["secret[models.Positive]", "secret[secret[models.Positive]]"] {
+            let ty = Interpreter::simple_type_expr_from_name(selected, sp()).unwrap();
+            for values in [vec![], vec![Value::Int64(1), Value::Int64(2)]] {
+                assert_eq!(
+                    interpreter.call_higher_order_builtin_with_type_args(
+                        "list.__sum",
+                        std::slice::from_ref(&ty),
+                        &[Value::List(values)],
+                        true
+                    ),
+                    Some(Err(
+                        "list.__sum: cannot establish new invariants beneath secret".into()
+                    ))
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    std::slice::from_ref(&ty),
+                    &[Value::List(vec![Value::String("hidden".into())])],
+                    true
+                ),
+                Some(Err(
+                    "list.__sum: list elements must be int64 or float64".into()
+                ))
+            );
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    std::slice::from_ref(&ty),
+                    &[Value::Bool(false)],
+                    true
+                ),
+                Some(Err("list.__sum: argument must be a list".into()))
+            );
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    std::slice::from_ref(&ty),
+                    &[Value::List(vec![])],
+                    false
+                ),
+                Some(Ok(Value::Int64(0)))
+            );
+        }
+        for selected in [
+            "secret[int64]",
+            "list[models.Positive]",
+            "secret[list[models.Positive]]",
+        ] {
+            let ty = Interpreter::simple_type_expr_from_name(selected, sp()).unwrap();
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &[ty],
+                    &[Value::List(vec![])],
+                    true
+                ),
+                Some(Ok(Value::Int64(0))),
+                "existing empty fallback domain: {selected}"
+            );
+        }
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    fn install_colliding_type_aliases(interpreter: &mut Interpreter) {
+        for owner in ["Positive", "Large"] {
+            interpreter.register_type_alias_in_namespace(
+                Some("shadow"),
+                &type_alias(owner, "int64", Some(bool_expr(false))),
+            );
+        }
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+    }
+
+    #[test]
+    fn resolved_reflected_field_types_do_not_reexpand_caller_imports() {
+        for shape in ["record", "enum", "machine"] {
+            for (actual, requested, number, markers) in [
+                ("int64", "Positive", 7, vec!["trace positive"]),
+                ("int64", "Positive", -1, vec!["trace positive"]),
+                ("models.Positive", "Positive", 7, vec![]),
+                ("models.Positive", "Large", 7, vec!["trace large"]),
+                ("models.Positive", "Large", 3, vec!["trace large"]),
+            ] {
+                let target = format!("models.{requested}");
+                let (mut interpreter, mut expression) =
+                    reflected_proof_case(shape, actual, &target, Value::Int64(number), true);
+                install_colliding_type_aliases(&mut interpreter);
+                let aliases = interpreter.namespace_alias_scopes.clone();
+                let Expr::GenericCall(callee, types, args, span) = &mut expression else {
+                    unreachable!()
+                };
+                types[1] = type_named(&format!("selected.{requested}"));
+                // Inspect this call boundary directly: its output is canonical.
+                // General expression-normalization alias handling is separate.
+                let output = interpreter.eval_call_flow(callee, types, args, *span);
+                if number < 0 || (requested == "Large" && number <= 5) {
+                    assert!(
+                        matches!(output, Err(ref error) if error == &format!("refinement type constraint failed for '{target}'")),
+                        "{shape}/{actual}/{requested}: {output:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(output, Ok(ExprFlow::Value(Value::Typed { ref type_name, ref value })) if type_name == &target && value.payload() == &Value::Int64(number)),
+                        "{shape}/{actual}/{requested}: {output:?}"
+                    );
+                }
+                assert_eq!(reuse_markers(&mut interpreter), markers);
+                assert_eq!(interpreter.namespace_alias_scopes, aliases);
+                assert!(interpreter.allow_checked_refinement_proofs);
+            }
+        }
+    }
+
+    #[test]
+    fn exact_reflected_root_refinements_retain_identity_without_predicates() {
+        for shape in ["record", "enum", "machine"] {
+            for depth in 0..=2 {
+                let mut payload = Value::Int64(7);
+                for _ in 0..depth {
+                    payload = Value::Pending(Box::new(payload));
+                }
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "models.Positive",
+                    payload,
+                    true,
+                );
+                let original = format!("{:?}", interpreter.get_variable("input").unwrap());
+                let Expr::GenericCall(callee, types, args, span) = &expression else {
+                    unreachable!()
+                };
+                let ExprFlow::Value(output) = interpreter
+                    .eval_call_flow(callee, types, args, *span)
+                    .unwrap()
+                else {
+                    panic!("field read must produce a value")
+                };
+                let mut ready = &output;
+                for _ in 0..depth {
+                    let Value::Pending(inner) = ready else {
+                        panic!("{shape}/{depth}: pending depth changed: {output:?}")
+                    };
+                    ready = inner;
+                }
+                assert!(
+                    matches!(ready, Value::Typed { type_name, value }
+                        if type_name == "models.Positive" && value.payload() == &Value::Int64(7)),
+                    "{shape}/{depth}: {output:?}"
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    original
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+                assert_eq!(interpreter.scopes.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_free_reflected_declaration_aliases_keep_their_lexical_lookup() {
+        for shape in ["record", "enum", "machine"] {
+            for direct_api in [false, true] {
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "selected.Positive",
+                    "models.Positive",
+                    Value::Int64(7),
+                    false,
+                );
+                interpreter.set_namespace_alias("selected".into(), "models".into());
+                let mut selector = interpreter.get_variable("selector").unwrap().clone();
+                let Value::Struct { fields, .. } = &mut selector else {
+                    unreachable!()
+                };
+                fields
+                    .iter_mut()
+                    .find(|(name, _)| name == "type_name")
+                    .unwrap()
+                    .1 = Value::String("models.Positive".into());
+                interpreter.set_variable("selector", selector);
+                interpreter.checked_expression_types = None;
+                let aliases = interpreter.namespace_alias_scopes.clone();
+                let result = if direct_api {
+                    let Expr::GenericCall(callee, types, _, _) = &expression else {
+                        unreachable!()
+                    };
+                    let Expr::FieldAccess(owner, member, _) = callee.as_ref() else {
+                        unreachable!()
+                    };
+                    let name = Interpreter::extract_dotted_name(owner, &member.name).unwrap();
+                    let values = vec![
+                        interpreter.get_variable("input").unwrap().clone(),
+                        interpreter.get_variable("selector").unwrap().clone(),
+                    ];
+                    interpreter
+                        .call_builtin_with_type_args(&name, types, &values)
+                        .unwrap()
+                } else {
+                    interpreter.eval_expr(&expression)
+                };
+                assert_eq!(result, Ok(Value::Int64(7)), "{shape}/{direct_api}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.namespace_alias_scopes, aliases);
+            }
+        }
+    }
+
+    #[test]
+    fn raw_and_resolved_typed_builtin_entries_restore_aliases_on_all_results() {
+        let mut interpreter = reuse_interpreter();
+        install_colliding_type_aliases(&mut interpreter);
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        assert_eq!(
+            interpreter.call_builtin_with_type_args(
+                "type.name",
+                &[type_named("selected.Positive")],
+                &[]
+            ),
+            Some(Ok(Value::String("models.Positive".into())))
+        );
+        assert_eq!(
+            interpreter.call_builtin_with_type_args_from_source(
+                "type.name",
+                &[type_named("models.Positive")],
+                &[],
+                false
+            ),
+            Some(Ok(Value::String("models.Positive".into())))
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert!(matches!(
+            interpreter.call_builtin_with_type_args_from_source("type.field_value", &[], &[], true),
+            Some(Err(_))
+        ));
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert!(
+            interpreter
+                .call_builtin_with_type_args_from_source("not.a.builtin", &[], &[], true)
+                .is_none()
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn resolved_sum_actual_type_keeps_canonical_owner_and_callback_imports() {
+        let mut interpreter = reuse_interpreter();
+        install_colliding_type_aliases(&mut interpreter);
+        interpreter.current_function_trusted_stdlib = true;
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        let call_span = Span::new(FileId::new(0), 921, 922);
+        reuse_facts(&mut interpreter, &[(call_span, "models.Positive")]);
+        for values in [vec![int(1), int(2)], vec![]] {
+            let output = interpreter.eval_call_flow(
+                &field_access(var("list"), "__sum"),
+                &[type_named("selected.Positive")],
+                &[CallArg {
+                    name: None,
+                    value: Expr::ListConstruct(values.clone(), sp()),
+                    span: sp(),
+                }],
+                call_span,
+            );
+            if values.is_empty() {
+                assert!(
+                    matches!(output, Err(ref error) if error == "refinement type constraint failed for 'models.Positive'")
+                );
+            } else {
+                assert!(
+                    matches!(output, Ok(ExprFlow::Value(Value::Typed { ref type_name, ref value })) if type_name == "models.Positive" && value.payload() == &Value::Int64(3))
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.namespace_alias_scopes, aliases);
+            assert!(interpreter.current_function_trusted_stdlib);
+        }
+        let mut rank = func_def(
+            "rank",
+            vec![("number", "int64")],
+            block(vec![return_stmt(var("number"))]),
+        );
+        rank.return_type = Some(type_named("int64"));
+        interpreter.register_function_in_namespace(Some("helpers"), &rank);
+        let mut key = func_def(
+            "key",
+            vec![("number", "int64")],
+            block(vec![return_stmt(dotted_call(
+                "chosen",
+                "rank",
+                vec![var("number")],
+            ))]),
+        );
+        key.return_type = Some(type_named("int64"));
+        interpreter.register_function(&key);
+        interpreter.set_namespace_alias("chosen".into(), "helpers".into());
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        assert_eq!(
+            interpreter.call_higher_order_builtin_with_type_args(
+                "list.__sort_by",
+                &[],
+                &[
+                    Value::List(vec![Value::Int64(2), Value::Int64(1)]),
+                    Value::NamedFunction("key".into())
+                ],
+                false,
+            ),
+            Some(Ok(Value::List(vec![Value::Int64(1), Value::Int64(2)])))
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+    }
+
+    fn reflected_proof_case(
+        shape: &str,
+        actual: &str,
+        requested: &str,
+        payload: Value,
+        checked_layout: bool,
+    ) -> (Interpreter, Expr) {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias(&type_alias("PositiveAlias", "models.Positive", None));
+        let kind = if actual == "int64" {
+            "primitive"
+        } else if actual == "PositiveAlias" {
+            "alias"
+        } else {
+            "refinement"
+        };
+        let primitive = ReflectionTypeInfo::new(
+            "int64",
+            "primitive",
+            Some("int64_type".into()),
+            false,
+            vec![],
+        );
+        let children = match kind {
+            "primitive" => vec![],
+            "alias" => vec![ReflectionTypeInfo::new(
+                "models.Positive",
+                "refinement",
+                Some("int64_type".into()),
+                false,
+                vec![primitive],
+            )],
+            _ => vec![primitive],
+        };
+        let field = ReflectionFieldInfo::new(
+            0,
+            "value",
+            actual,
+            kind,
+            "value",
+            false,
+            ReflectionTypeInfo::new(actual, kind, Some("int64_type".into()), false, children),
+        );
+        let mut metadata = ReflectionMetadata::new();
+        let (owner, builtin, member, value) = match shape {
+            "record" => {
+                interpreter.register_struct(&struct_def("Holder", vec![("value", actual)], vec![]));
+                metadata.insert_type_fields("Holder", vec![field.clone()]);
+                (
+                    "Holder",
+                    "field_value",
+                    None,
+                    Value::Struct {
+                        concrete_type: None,
+                        type_name: "Holder".into(),
+                        fields: vec![("value".into(), payload)],
+                    },
+                )
+            }
+            "enum" => {
+                interpreter.register_enum(&enum_def_with_field("Choice", "item", "value", actual));
+                metadata.insert_type_variants(
+                    "Choice",
+                    vec![ReflectionVariantInfo::new(
+                        0,
+                        "item",
+                        0,
+                        false,
+                        vec![field.clone()],
+                    )],
+                );
+                (
+                    "Choice",
+                    "variant_field_value",
+                    Some("item"),
+                    Value::Enum {
+                        type_name: "Choice".into(),
+                        variant: "item".into(),
+                        fields: vec![payload],
+                    },
+                )
+            }
+            "machine" => {
+                interpreter.register_machine(&machine_def(
+                    "Session",
+                    vec![("active", vec![("value", type_named(actual))])],
+                    vec![],
+                ));
+                metadata.insert_machine(
+                    "Session",
+                    ReflectionMachineInfo::new(
+                        vec![ReflectionMachineStateInfo::new(
+                            0,
+                            "active",
+                            false,
+                            vec![field.clone()],
+                        )],
+                        vec![],
+                    ),
+                );
+                (
+                    "Session",
+                    "machine_field_value",
+                    Some("active"),
+                    Value::Machine {
+                        type_name: "Session".into(),
+                        state: "active".into(),
+                        fields: vec![payload],
+                    },
+                )
+            }
+            _ => unreachable!(),
+        };
+        if checked_layout {
+            interpreter.set_reflection_metadata(Arc::new(metadata));
+        }
+        interpreter.set_variable("input", value);
+        interpreter.set_variable(
+            "selector",
+            Interpreter::reflection_field_info_value(owner, member, &field),
+        );
+        let expression = Expr::GenericCall(
+            Box::new(field_access(var("type"), builtin)),
+            vec![type_named(owner), type_named(requested)],
+            vec![
+                named_arg("value", var("input")),
+                named_arg("field", var("selector")),
+            ],
+            Span::new(FileId::new(0), 701, 702),
+        );
+        reuse_facts(&mut interpreter, &[(expression.span(), requested)]);
+        (interpreter, expression)
+    }
+
+    #[test]
+    fn reflected_field_producers_establish_new_requested_refinements_for_all_shapes() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for payload in [-1, 7] {
+                    // A runtime label cannot turn an actual int64 field into
+                    // refinement proof, even if it claims the requested owner.
+                    let raw = Value::Typed {
+                        type_name: "models.Positive".into(),
+                        value: Box::new(Value::Int64(payload)),
+                    };
+                    let (mut interpreter, expression) = reflected_proof_case(
+                        shape,
+                        "int64",
+                        "models.Positive",
+                        raw,
+                        checked_layout,
+                    );
+                    let original = interpreter.get_variable("input").unwrap().clone();
+                    let output = interpreter.eval_expr(&expression);
+                    if payload < 0 {
+                        assert_eq!(
+                            output,
+                            Err("refinement type constraint failed for 'models.Positive'".into()),
+                            "{shape}/{checked_layout}"
+                        );
+                    } else {
+                        assert_eq!(
+                            output.unwrap(),
+                            Value::Typed {
+                                type_name: "models.Positive".into(),
+                                value: Box::new(Value::Int64(7))
+                            }
+                        );
+                    }
+                    assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                    assert_eq!(interpreter.get_variable("input"), Some(&original));
+                    assert!(interpreter.allow_checked_refinement_proofs);
+                    assert_eq!(interpreter.scopes.len(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_field_producers_reuse_exact_and_ancestor_declared_types_only() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for (actual, requested, markers) in [
+                    ("models.Positive", "models.Positive", vec![]),
+                    ("PositiveAlias", "models.Positive", vec![]),
+                    ("models.Positive", "PositiveAlias", vec![]),
+                    ("models.Positive", "models.Large", vec!["trace large"]),
+                    ("PositiveAlias", "models.Large", vec!["trace large"]),
+                    ("models.Positive", "models.Sibling", vec!["trace sibling"]),
+                ] {
+                    let (mut interpreter, expression) = reflected_proof_case(
+                        shape,
+                        actual,
+                        requested,
+                        Value::Int64(7),
+                        checked_layout,
+                    );
+                    assert_eq!(
+                        interpreter.eval_expr(&expression).unwrap().payload(),
+                        &Value::Int64(7)
+                    );
+                    assert_eq!(
+                        reuse_markers(&mut interpreter),
+                        markers,
+                        "{shape}/{actual}/{requested}/{checked_layout}"
+                    );
+                }
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "models.Large",
+                    Value::Int64(3),
+                    checked_layout,
+                );
+                assert_eq!(
+                    interpreter.eval_expr(&expression),
+                    Err("refinement type constraint failed for 'models.Large'".into())
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+                // Ordinary requested types retain the original value and owner.
+                let original = Value::Typed {
+                    type_name: "models.Positive".into(),
+                    value: Box::new(Value::Int64(7)),
+                };
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "int64",
+                    original.clone(),
+                    checked_layout,
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(original));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_field_producer_gates_preserve_raw_and_metadata_free_boundaries() {
+        for shape in ["record", "enum", "machine"] {
+            for mode in ["no_fact", "unrelated_fact", "raw", "disabled"] {
+                let (mut interpreter, expression) =
+                    reflected_proof_case(shape, "int64", "models.Positive", Value::Int64(-1), true);
+                if mode == "no_fact" {
+                    interpreter.checked_expression_types = None;
+                } else if mode == "unrelated_fact" {
+                    reuse_facts(
+                        &mut interpreter,
+                        &[(Span::new(FileId::new(0), 910, 911), "models.Positive")],
+                    );
+                } else if mode == "disabled" {
+                    interpreter.allow_checked_refinement_proofs = false;
+                }
+                let output = if mode == "raw" {
+                    let Expr::GenericCall(callee, types, _, _) = &expression else {
+                        unreachable!()
+                    };
+                    let Expr::FieldAccess(owner, member, _) = callee.as_ref() else {
+                        unreachable!()
+                    };
+                    let name = Interpreter::extract_dotted_name(owner, &member.name).unwrap();
+                    let values = vec![
+                        interpreter.get_variable("input").unwrap().clone(),
+                        interpreter.get_variable("selector").unwrap().clone(),
+                    ];
+                    interpreter.call_function_with_type_args(&name, types, values)
+                } else {
+                    interpreter.eval_expr(&expression)
+                };
+                assert_eq!(output, Ok(Value::Int64(-1)), "{shape}/{mode}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    interpreter.normalize_and_validate_value(
+                        &type_named("models.Positive"),
+                        output.unwrap()
+                    ),
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                assert_eq!(
+                    interpreter.allow_checked_refinement_proofs,
+                    mode != "disabled"
+                );
+            }
+            // A checked private pipeline must establish its explicit requested
+            // type even though the step fact records only the inbound owner.
+            let (mut interpreter, expression) =
+                reflected_proof_case(shape, "int64", "models.Positive", Value::Int64(-1), true);
+            let Expr::GenericCall(callee, mut types, mut args, _) = expression else {
+                unreachable!()
+            };
+            let inbound = type_expr_display(&types[0]);
+            types[1] = type_named("Requested");
+            interpreter.type_arg_scopes.push(HashMap::from([(
+                "Requested".into(),
+                type_named("models.Positive"),
+            )]));
+            let input = args.remove(0).value;
+            let step_span = Span::new(FileId::new(0), 703, 704);
+            let piped = Expr::Pipeline(
+                Box::new(input),
+                vec![PipelineStep {
+                    function: Expr::GenericCall(callee, types, args, sp()),
+                    extra_args: vec![],
+                    handle: None,
+                    span: step_span,
+                }],
+                sp(),
+            );
+            reuse_facts(&mut interpreter, &[(step_span, &inbound)]);
+            assert_eq!(
+                interpreter.eval_expr(&piped),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.type_arg_scopes.len(), 1);
+            assert!(interpreter.allow_checked_refinement_proofs);
+        }
+    }
+
+    #[test]
+    fn reflected_field_producers_preserve_pending_and_selector_failure_order() {
+        for shape in ["record", "enum", "machine"] {
+            for depth in [1, 2] {
+                let mut pending = Value::Typed {
+                    type_name: "models.Positive".into(),
+                    value: Box::new(Value::Int64(7)),
+                };
+                for _ in 0..depth {
+                    pending = Value::Pending(Box::new(pending));
+                }
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Positive",
+                    "models.Positive",
+                    pending.clone(),
+                    true,
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(pending));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            for malformed in [
+                "root_pending",
+                "missing_payload",
+                "wrong_owner",
+                "wrong_index",
+            ] {
+                let (mut interpreter, expression) =
+                    reflected_proof_case(shape, "int64", "models.Positive", Value::Int64(-1), true);
+                let mut input = interpreter.get_variable("input").unwrap().clone();
+                let mut selector = interpreter.get_variable("selector").unwrap().clone();
+                match malformed {
+                    "root_pending" => input = Value::Pending(Box::new(input)),
+                    "missing_payload" => match &mut input {
+                        Value::Struct { fields, .. } => fields.clear(),
+                        Value::Enum { fields, .. } | Value::Machine { fields, .. } => {
+                            fields.clear()
+                        }
+                        _ => unreachable!(),
+                    },
+                    _ => {
+                        let Value::Struct { fields, .. } = &mut selector else {
+                            unreachable!()
+                        };
+                        let (name, replacement) = if malformed == "wrong_owner" {
+                            ("owner_type", Value::String("Other".into()))
+                        } else {
+                            ("index", Value::Int64(9))
+                        };
+                        fields
+                            .iter_mut()
+                            .find(|(field, _)| field == name)
+                            .unwrap()
+                            .1 = replacement;
+                    }
+                }
+                interpreter.set_variable("input", input.clone());
+                interpreter.set_variable("selector", selector.clone());
+                let checked_error = interpreter.eval_expr(&expression).unwrap_err();
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                interpreter.checked_expression_types = None;
+                assert_eq!(
+                    interpreter.eval_expr(&expression),
+                    Err(checked_error),
+                    "{shape}/{malformed}"
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.get_variable("input"), Some(&input));
+                assert_eq!(interpreter.get_variable("selector"), Some(&selector));
+            }
+            let (mut interpreter, expression) = reflected_proof_case(
+                shape,
+                "int64",
+                "models.Positive",
+                Value::Pending(Box::new(Value::Int64(7))),
+                true,
+            );
+            let error = interpreter.eval_expr(&expression).unwrap_err();
+            assert!(error.contains("error evaluating refinement constraint for 'models.Positive'"));
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+    }
+
+    #[test]
+    fn sum_producer_validates_fresh_refinements_before_they_become_source_proofs() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.current_function_trusted_stdlib = true;
+        reuse_facts(
+            &mut interpreter,
+            &[(Span::new(FileId::new(0), 601, 602), "models.Positive")],
+        );
+        let selected = [type_named("models.Positive")];
+        for items in [vec![], vec![Value::Int64(i64::MAX), Value::Int64(1)]] {
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &selected,
+                    &[Value::List(items)],
+                    true
+                ),
+                Some(Err(
+                    "refinement type constraint failed for 'models.Positive'".into()
+                ))
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert!(interpreter.allow_checked_refinement_proofs);
+        }
+        assert_eq!(
+            interpreter.call_higher_order_builtin_with_type_args(
+                "list.__sum",
+                &selected,
+                &[Value::List(vec![Value::Int64(1), Value::Int64(2)])],
+                true
+            ),
+            Some(Ok(Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(3))
+            }))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        for (value, expected) in [
+            (
+                Value::Pending(Box::new(Value::List(vec![]))),
+                "argument must be a list",
+            ),
+            (
+                Value::List(vec![Value::Pending(Box::new(Value::Int64(1)))]),
+                "list elements must be int64 or float64",
+            ),
+            (
+                Value::List(vec![Value::Int64(1), Value::Bool(true)]),
+                "mixed types",
+            ),
+        ] {
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &selected,
+                    &[value],
+                    true
+                ),
+                Some(Err(format!("list.__sum: {expected}")))
+            );
+            assert!(
+                reuse_markers(&mut interpreter).is_empty(),
+                "producer errors precede predicates"
+            );
+        }
+    }
+
+    #[test]
+    fn sum_producer_uses_actual_intrinsic_type_arguments_and_preserves_primitive_aliases() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.current_function_trusted_stdlib = true;
+        reuse_facts(
+            &mut interpreter,
+            &[(Span::new(FileId::new(0), 601, 602), "models.Positive")],
+        );
+        interpreter.current_type_arguments =
+            vec![type_named("int8"), type_named("models.Positive")];
+        interpreter.type_arg_scopes.push(HashMap::from([
+            ("X".into(), type_named("int8")),
+            ("Y".into(), type_named("models.Positive")),
+        ]));
+        assert_eq!(
+            interpreter.call_higher_order_builtin_with_type_args(
+                "list.__sum",
+                &[interpreter.substitute_type_expr(&type_named("Y"))],
+                &[Value::List(vec![])],
+                true
+            ),
+            Some(Err(
+                "refinement type constraint failed for 'models.Positive'".into()
+            ))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        interpreter.current_type_arguments = vec![type_named("models.Positive")];
+        interpreter.register_type_alias(&type_alias("Small", "int8", None));
+        for selected in ["int8", "Small"] {
+            assert_eq!(
+                interpreter.call_higher_order_builtin_with_type_args(
+                    "list.__sum",
+                    &[type_named(selected)],
+                    &[Value::List(vec![Value::Int64(127), Value::Int64(1)])],
+                    true
+                ),
+                Some(Ok(Value::Int64(-128))),
+                "{selected}"
+            );
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+        interpreter.type_arg_scopes.clear();
+        interpreter.current_type_arguments.clear();
+        assert_eq!(
+            interpreter.call_higher_order_builtin("list.__sum", &[Value::List(vec![])]),
+            Some(Ok(Value::Int64(0)))
+        );
+        assert_eq!(
+            interpreter.call_higher_order_builtin(
+                "list.__sum",
+                &[Value::List(vec![Value::Int64(1), Value::Int64(2)])]
+            ),
+            Some(Ok(Value::Int64(3)))
+        );
+    }
+
+    #[test]
+    fn sum_producer_rejects_invalid_results_before_checked_locals_arguments_and_returns() {
+        for route in ["local", "argument", "return", "pipeline"] {
+            let mut interpreter = reuse_interpreter();
+            let kernel_span = Span::new(FileId::new(0), 601, 602);
+            let kernel = Expr::GenericCall(
+                Box::new(field_access(var("list"), "__sum")),
+                vec![type_named("Y")],
+                vec![CallArg {
+                    name: None,
+                    value: var("items"),
+                    span: sp(),
+                }],
+                kernel_span,
+            );
+            let returned = reuse_source("value", 603);
+            let mut echo = func_def(
+                "echo",
+                vec![("value", "models.Positive")],
+                block(vec![return_stmt(returned.clone())]),
+            );
+            echo.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&echo);
+            let body = match route {
+                "pipeline" => block(vec![return_stmt(Expr::Pipeline(
+                    Box::new(var("items")),
+                    vec![PipelineStep {
+                        function: Expr::GenericCall(
+                            Box::new(field_access(var("list"), "__sum")),
+                            vec![type_named("Y")],
+                            vec![],
+                            sp(),
+                        ),
+                        extra_args: vec![],
+                        handle: None,
+                        span: Span::new(FileId::new(0), 609, 610),
+                    }],
+                    kernel_span,
+                ))]),
+                "local" => block(vec![
+                    typed_var_decl("Y", "selected", kernel),
+                    return_stmt(reuse_source("selected", 606)),
+                ]),
+                "argument" => block(vec![return_stmt(Expr::Call(
+                    Box::new(var("echo")),
+                    vec![CallArg {
+                        name: None,
+                        value: kernel,
+                        span: sp(),
+                    }],
+                    Span::new(FileId::new(0), 607, 608),
+                ))]),
+                _ => block(vec![return_stmt(kernel)]),
+            };
+            let mut facade = func_def("facade", vec![("items", "list")], body);
+            facade.span = Span::new(FileId::new(STDLIB_FILE_ID_START), 604, 605);
+            facade.type_params = vec![ident("X"), ident("Y")];
+            facade.params[0].ty = TypeExpr::Generic(ident("list"), vec![type_named("Y")], sp());
+            facade.return_type = Some(type_named("Y"));
+            interpreter.register_function(&facade);
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (kernel_span, "models.Positive"),
+                    (returned.span(), "models.Positive"),
+                    (Span::new(FileId::new(0), 606, 607), "models.Positive"),
+                    (Span::new(FileId::new(0), 607, 608), "models.Positive"),
+                    (Span::new(FileId::new(0), 609, 610), "list[models.Positive]"),
+                ],
+            );
+            let invocation = Expr::GenericCall(
+                Box::new(var("facade")),
+                vec![type_named("int8"), type_named("models.Positive")],
+                vec![CallArg {
+                    name: None,
+                    value: Expr::ListConstruct(vec![], sp()),
+                    span: sp(),
+                }],
+                sp(),
+            );
+            assert_eq!(
+                interpreter.eval_expr(&invocation),
+                Err("refinement type constraint failed for 'models.Positive'".into()),
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+            assert!(interpreter.allow_checked_refinement_proofs);
+            assert!(!interpreter.current_function_trusted_stdlib);
+            assert!(interpreter.current_type_arguments.is_empty());
+            assert!(interpreter.type_arg_scopes.is_empty());
+
+            let mut successful = invocation.clone();
+            let Expr::GenericCall(_, _, args, _) = &mut successful else {
+                unreachable!()
+            };
+            args[0].value = Expr::ListConstruct(vec![int(1), int(2)], sp());
+            assert_eq!(
+                interpreter.eval_expr(&successful).unwrap().payload(),
+                &Value::Int64(3),
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+
+            if route == "return" {
+                // Raw calls inherit proof-disabled execution and keep their
+                // existing single forced facade-return validation.
+                assert_eq!(
+                    interpreter
+                        .call_function_with_type_args(
+                            "facade",
+                            &[type_named("int8"), type_named("models.Positive")],
+                            vec![Value::List(vec![Value::Int64(1), Value::Int64(2)])],
+                        )
+                        .unwrap()
+                        .payload(),
+                    &Value::Int64(3),
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                assert!(interpreter.allow_checked_refinement_proofs);
+
+                // No fact at the actual ordinary Call result means no new
+                // producer check, even when unrelated checked facts exist.
+                for partial_metadata in [false, true] {
+                    interpreter.checked_expression_types = None;
+                    if partial_metadata {
+                        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+                    }
+                    assert_eq!(
+                        interpreter.eval_expr(&successful).unwrap().payload(),
+                        &Value::Int64(3),
+                    );
+                    assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                    assert!(interpreter.allow_checked_refinement_proofs);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sum_pipeline_uses_checked_input_only_as_execution_evidence() {
+        let step_span = Span::new(FileId::new(0), 611, 612);
+        let expression = Expr::Pipeline(
+            Box::new(Expr::ListConstruct(vec![int(1), int(2)], sp())),
+            vec![PipelineStep {
+                function: Expr::GenericCall(
+                    Box::new(field_access(var("list"), "__sum")),
+                    vec![type_named("models.Positive")],
+                    vec![],
+                    sp(),
+                ),
+                extra_args: vec![],
+                handle: None,
+                span: step_span,
+            }],
+            Span::new(FileId::new(0), 613, 614),
+        );
+        for (has_step_fact, allow_proofs) in [(true, true), (false, true), (true, false)] {
+            let mut interpreter = reuse_interpreter();
+            interpreter.current_function_trusted_stdlib = true;
+            interpreter.allow_checked_refinement_proofs = allow_proofs;
+            // Deliberately omit the output fact. The input list type cannot
+            // serve as the output proof or replace the explicit Positive T.
+            if has_step_fact {
+                reuse_facts(&mut interpreter, &[(step_span, "list[models.Positive]")]);
+            }
+            let output = interpreter.eval_expr(&expression).unwrap();
+            assert_eq!(output.payload(), &Value::Int64(3));
+            if has_step_fact && allow_proofs {
+                assert!(
+                    matches!(output, Value::Typed { ref type_name, .. } if type_name == "models.Positive")
+                );
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            } else {
+                assert_eq!(output, Value::Int64(3));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+            }
+            assert_eq!(interpreter.allow_checked_refinement_proofs, allow_proofs);
+        }
+    }
+
+    fn raw_proof_holder(value: i64) -> Value {
+        Value::Struct {
+            concrete_type: None,
+            type_name: "Holder".into(),
+            fields: vec![(
+                "value".into(),
+                Value::Typed {
+                    type_name: "models.Positive".into(),
+                    value: Box::new(Value::Int64(value)),
+                },
+            )],
+        }
+    }
+
+    fn raw_proof_echo(value: Expr) -> Expr {
+        Expr::Call(
+            Box::new(var("echo")),
+            vec![named_arg("input", value)],
+            Span::new(FileId::new(0), 506, 507),
+        )
+    }
+
+    fn raw_proof_interpreter() -> (Interpreter, Expr, Expr) {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_struct(&struct_def(
+            "Holder",
+            vec![("value", "models.Positive")],
+            vec![],
+        ));
+        let returned = reuse_source("input", 501);
+        let mut echo = func_def(
+            "echo",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        echo.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&echo);
+        let field = Expr::FieldAccess(
+            Box::new(var("holder")),
+            ident("value"),
+            Span::new(FileId::new(0), 502, 503),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+                (field.span(), "models.Positive"),
+            ],
+        );
+        (interpreter, field, returned)
+    }
+
+    #[test]
+    fn raw_call_disables_nested_field_proofs_for_calls_locals_and_callbacks() {
+        for route in ["local", "call", "pipeline", "named", "inline"] {
+            let (mut interpreter, field, _) = raw_proof_interpreter();
+            let initializer = match route {
+                "local" => field,
+                "pipeline" => Expr::Pipeline(
+                    Box::new(field),
+                    vec![PipelineStep {
+                        function: var("echo"),
+                        extra_args: vec![],
+                        handle: None,
+                        span: Span::new(FileId::new(0), 502, 503),
+                    }],
+                    Span::new(FileId::new(0), 507, 508),
+                ),
+                _ => raw_proof_echo(field),
+            };
+            let body = block(vec![
+                typed_var_decl("models.Positive", "selected", initializer),
+                return_stmt(Expr::Coarsen(Box::new(var("selected")), sp())),
+            ]);
+            let mut raw = func_def("raw", vec![("holder", "Holder")], body.clone());
+            raw.return_type = Some(type_named("int64"));
+            interpreter.register_function(&raw);
+            let result = match route {
+                "named" => interpreter.call_fn_value(
+                    Value::NamedFunction("raw".into()),
+                    vec![raw_proof_holder(-1)],
+                ),
+                "inline" => {
+                    let callback = interpreter
+                        .eval_expr(&Expr::InlineFn(
+                            raw.params.clone(),
+                            Some(type_named("int64")),
+                            body,
+                            sp(),
+                        ))
+                        .unwrap();
+                    interpreter.call_fn_value(callback, vec![raw_proof_holder(-1)])
+                }
+                _ => interpreter.call_function("raw", vec![raw_proof_holder(-1)]),
+            };
+            assert_eq!(
+                result,
+                Err("refinement type constraint failed for 'models.Positive'".into()),
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+            assert!(interpreter.allow_checked_refinement_proofs, "{route}");
+            assert_eq!(interpreter.scopes.len(), 1, "{route}");
+            assert!(
+                interpreter
+                    .checked_expression_type(Span::new(FileId::new(0), 502, 503))
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn raw_call_disables_list_element_and_direct_constructor_field_proofs() {
+        let (mut interpreter, field, returned) = raw_proof_interpreter();
+        let element = reuse_source("item", 504);
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (field.span(), "models.Positive"),
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+                (element.span(), "models.Positive"),
+            ],
+        );
+        let mut raw = func_def(
+            "raw_list",
+            vec![("items", "list")],
+            block(vec![
+                Stmt::For(ForStmt {
+                    variable: ident("item"),
+                    value_variable: None,
+                    view: false,
+                    iterable: var("items"),
+                    body: block(vec![typed_var_decl(
+                        "models.Positive",
+                        "selected",
+                        raw_proof_echo(element),
+                    )]),
+                    span: sp(),
+                }),
+                return_stmt(int(0)),
+            ]),
+        );
+        raw.params[0].ty =
+            TypeExpr::Generic(ident("list"), vec![type_named("models.Positive")], sp());
+        raw.return_type = Some(type_named("int64"));
+        interpreter.register_function(&raw);
+        let Value::Struct { fields, .. } = raw_proof_holder(-1) else {
+            unreachable!()
+        };
+        assert_eq!(
+            interpreter.call_function("raw_list", vec![Value::List(vec![fields[0].1.clone()])]),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+
+        let mut rebuild = func_def(
+            "rebuild",
+            vec![("holder", "Holder")],
+            block(vec![return_stmt(call("Holder", vec![field]))]),
+        );
+        rebuild.return_type = Some(TypeExpr::Generic(
+            ident("result"),
+            vec![type_named("Holder"), type_named("string")],
+            sp(),
+        ));
+        interpreter.register_function(&rebuild);
+        assert_eq!(
+            interpreter.call_function("rebuild", vec![raw_proof_holder(-1)]),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'models.Positive'".into()
+            ))))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+
+        // This repair does not recursively validate arbitrary raw aggregates:
+        // only the already-existing consuming boundaries force their checks.
+        let mut untouched = func_def(
+            "untouched",
+            vec![("holder", "Holder")],
+            block(vec![return_stmt(int(0))]),
+        );
+        untouched.return_type = Some(type_named("int64"));
+        interpreter.register_function(&untouched);
+        assert_eq!(
+            interpreter.call_function("untouched", vec![raw_proof_holder(-1)]),
+            Ok(Value::Int64(0))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn checked_entry_reuses_body_proofs_but_forces_inputs_and_restores_raw_mode() {
+        let (mut interpreter, field, returned) = raw_proof_interpreter();
+        let called = Expr::Call(
+            Box::new(var("echo")),
+            vec![named_arg("input", field)],
+            Span::new(FileId::new(0), 505, 506),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (Span::new(FileId::new(0), 502, 503), "models.Positive"),
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+                (called.span(), "models.Positive"),
+            ],
+        );
+        let mut checked = func_def(
+            "checked",
+            vec![("holder", "Holder")],
+            block(vec![
+                typed_var_decl("models.Positive", "selected", called),
+                return_stmt(Expr::Coarsen(Box::new(var("selected")), sp())),
+            ]),
+        );
+        checked.return_type = Some(type_named("int64"));
+        interpreter.register_function(&checked);
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(
+                None,
+                "checked",
+                vec![raw_proof_holder(7)]
+            ),
+            Ok(Value::Int64(7))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert_eq!(
+            interpreter.call_function("checked", vec![raw_proof_holder(7)]),
+            Ok(Value::Int64(7))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), vec!["trace positive"; 3]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(None, "echo", vec![Value::Int64(-1)]),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+
+        // Compiler-owned facade forwarding inherits source trust while keeping
+        // its own destination inputs forced.
+        assert_eq!(
+            interpreter.call_user_function_with_type_args(
+                "checked",
+                &[],
+                vec![raw_proof_holder(7)]
+            ),
+            Ok(Value::Int64(7))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        // A trusted bridge cannot re-enable proofs inside a raw invocation tree.
+        interpreter.allow_checked_refinement_proofs = false;
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(
+                None,
+                "checked",
+                vec![raw_proof_holder(-1)]
+            ),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(!interpreter.allow_checked_refinement_proofs);
+        assert_eq!(
+            interpreter.call_user_function_with_type_args(
+                "checked",
+                &[],
+                vec![raw_proof_holder(-1)]
+            ),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(!interpreter.allow_checked_refinement_proofs);
+        interpreter.allow_checked_refinement_proofs = true;
+        assert_eq!(
+            interpreter.call_checked_function_in_namespace(
+                None,
+                "checked",
+                vec![raw_proof_holder(7)]
+            ),
+            Ok(Value::Int64(7))
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn forced_refinement_validator_does_not_trust_predicate_body_field_facts() {
+        let (mut interpreter, field, returned) = raw_proof_interpreter();
+        let mut predicate = func_def(
+            "holder_valid",
+            vec![("holder", "Holder")],
+            block(vec![
+                typed_var_decl("models.Positive", "selected", raw_proof_echo(field.clone())),
+                return_stmt(bool_expr(true)),
+            ]),
+        );
+        predicate.return_type = Some(type_named("bool"));
+        interpreter.register_function(&predicate);
+        interpreter.register_type_alias(&type_alias(
+            "ValidHolder",
+            "Holder",
+            Some(call("holder_valid", vec![var("value")])),
+        ));
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (field.span(), "models.Positive"),
+                (returned.span(), "models.Positive"),
+                (Span::new(FileId::new(0), 506, 507), "models.Positive"),
+                (Span::new(FileId::new(0), 507, 508), "models.Positive"),
+            ],
+        );
+        assert_eq!(
+            interpreter.check_refinement_type("ValidHolder", &raw_proof_holder(-1)),
+            Err("error evaluating refinement constraint for 'ValidHolder': refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.allow_checked_refinement_proofs);
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn checked_call_reuses_named_and_named_value_boundaries_but_raw_calls_still_validate() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 100);
+        let mut echo = func_def(
+            "echo",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        echo.params[0].view = true;
+        echo.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function_in_namespace(Some("models"), &echo);
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Positive", "source", int(7)))
+            .unwrap();
+        reuse_markers(&mut interpreter);
+        let argument = Expr::View(
+            Box::new(reuse_source("source", 101)),
+            Span::new(FileId::new(0), 102, 103),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (returned.span(), "models.Positive"),
+                (argument.span(), "models.Positive"),
+            ],
+        );
+        assert_eq!(
+            interpreter
+                .eval_expr(&call("models.echo", vec![argument.clone()]))
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        interpreter.set_variable("callback", Value::NamedFunction("models.echo".into()));
+        assert_eq!(
+            interpreter
+                .eval_expr(&call("callback", vec![argument]))
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        assert_eq!(
+            interpreter
+                .call_function("models.echo", vec![Value::Int64(7)])
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace positive"]
+        );
+        let stale = Value::Typed {
+            type_name: "models.Positive".into(),
+            value: Box::new(Value::Int64(-1)),
+        };
+        assert_eq!(
+            interpreter.call_fn_value(
+                Value::NamedFunction("models.echo".into()),
+                vec![stale.clone()]
+            ),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        interpreter.set_variable("stale", stale);
+        let returned = reuse_source("stale", 104);
+        let mut producer = func_def(
+            "producer",
+            vec![],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        producer.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&producer);
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        assert_eq!(
+            interpreter.call_function("producer", vec![]),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+    }
+
+    #[test]
+    fn checked_call_reorders_proofs_with_named_values_and_evaluates_arguments_first() {
+        let mut interpreter = reuse_interpreter();
+        let mut choose = func_def(
+            "choose",
+            vec![("first", "models.Positive"), ("second", "models.Large")],
+            block(vec![return_stmt(var("first"))]),
+        );
+        choose.params.iter_mut().for_each(|param| param.view = true);
+        choose.return_type = Some(type_named("int64"));
+        interpreter.register_function(&choose);
+        interpreter.set_variable("small", Value::Int64(7));
+        interpreter.set_variable("establishedLarge", Value::Int64(9));
+        let small = reuse_source("small", 110);
+        let large = reuse_source("establishedLarge", 111);
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (small.span(), "models.Positive"),
+                (large.span(), "models.Large"),
+            ],
+        );
+        let reordered = Expr::Call(
+            Box::new(var("choose")),
+            vec![named_arg("second", large), named_arg("first", small)],
+            sp(),
+        );
+        assert_eq!(interpreter.eval_expr(&reordered), Ok(Value::Int64(7)));
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        for name in ["one", "two"] {
+            let mut producer = func_def(
+                name,
+                vec![],
+                block(vec![
+                    var_decl(name, int(7)),
+                    Stmt::Trace(TraceStmt {
+                        name: ident(name),
+                        span: sp(),
+                    }),
+                    return_stmt(var(name)),
+                ]),
+            );
+            producer.return_type = Some(type_named("int64"));
+            interpreter.register_function(&producer);
+        }
+        reuse_facts(&mut interpreter, &[]);
+        let ordered = Expr::Call(
+            Box::new(var("choose")),
+            vec![
+                named_arg("second", call("one", vec![])),
+                named_arg("first", call("two", vec![])),
+            ],
+            sp(),
+        );
+        assert_eq!(interpreter.eval_expr(&ordered), Ok(Value::Int64(7)));
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            [
+                "trace one",
+                "trace two",
+                "trace positive",
+                "trace positive",
+                "trace large"
+            ]
+        );
+    }
+
+    #[test]
+    fn checked_call_return_proofs_preserve_ancestor_suffix_and_unvalidated_inputs() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 120);
+        let mut extend = func_def(
+            "extend",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        extend.params[0].view = true;
+        extend.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&extend);
+        let argument = reuse_source("source", 121);
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (returned.span(), "models.Positive"),
+                (argument.span(), "models.Positive"),
+            ],
+        );
+        assert_eq!(
+            interpreter
+                .eval_expr(&call("extend", vec![argument.clone()]))
+                .unwrap()
+                .payload(),
+            &Value::Int64(7)
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        interpreter.set_variable("source", Value::Int64(2));
+        assert_eq!(
+            interpreter.eval_expr(&call("extend", vec![argument])),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+        let returned = Expr::IntLiteral(2, Span::new(FileId::new(0), 122, 123));
+        let mut create = func_def("create", vec![], block(vec![return_stmt(returned.clone())]));
+        create.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&create);
+        reuse_facts(&mut interpreter, &[(returned.span(), "int64")]);
+        let caller_scope = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Large".into(),
+            expressions: HashMap::from([(returned.span(), "models.Large".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_scope = Some(caller_scope.clone());
+        interpreter.current_namespace = Some("app".into());
+        assert_eq!(
+            interpreter.eval_expr(&call("create", vec![])),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace large"]
+        );
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_scope.as_ref().unwrap(),
+            &caller_scope
+        ));
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+        assert_eq!(interpreter.scopes.len(), 1);
+        assert!(interpreter.type_arg_scopes.is_empty());
+    }
+
+    #[test]
+    fn checked_call_generic_body_and_caller_scoped_proofs_remain_separate() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 130);
+        let mut identity = func_def(
+            "identity",
+            vec![("input", "T")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        identity.name.span = Span::new(FileId::new(0), 131, 132);
+        identity.type_params = vec![ident("T")];
+        identity.params[0].view = true;
+        identity.return_type = Some(type_named("T"));
+        interpreter.register_function(&identity);
+        let generic = Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["models.Positive".into()],
+            expressions: Arc::new(HashMap::from([(returned.span(), "models.Positive".into())])),
+            ..Default::default()
+        });
+        let argument = reuse_source("source", 132);
+        interpreter.set_variable("source", Value::Int64(7));
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([
+                (argument.span(), "int64".into()),
+                (returned.span(), "int64".into()),
+            ]),
+            functions: HashMap::from([(identity.name.span, vec![generic])]),
+            ..Default::default()
+        }));
+        let caller_scope = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Positive".into(),
+            expressions: HashMap::from([(argument.span(), "models.Positive".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_scope = Some(caller_scope.clone());
+        let expression = Expr::GenericCall(
+            Box::new(var("identity")),
+            vec![type_named("models.Positive")],
+            vec![named_arg("input", argument)],
+            sp(),
+        );
+        assert_eq!(
+            interpreter.eval_expr(&expression).unwrap().payload(),
+            &Value::Int64(7)
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_scope.as_ref().unwrap(),
+            &caller_scope
+        ));
+        assert!(interpreter.active_checked_function.is_none());
+        assert!(interpreter.type_arg_scopes.is_empty());
+    }
+
+    #[test]
+    fn checked_call_nested_returns_cannot_lend_proof_to_the_outer_expression() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("ready", 140);
+        let mut inner = func_def(
+            "inner",
+            vec![],
+            block(vec![
+                typed_var_decl("models.Large", "ready", reuse_handle(int(9), int(9), 141)),
+                return_stmt(returned.clone()),
+            ]),
+        );
+        inner.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&inner);
+        let derived = Expr::Binary(
+            Box::new(Expr::Coarsen(
+                Box::new(call("inner", vec![])),
+                Span::new(FileId::new(0), 142, 143),
+            )),
+            BinOp::Sub,
+            Box::new(int(7)),
+            Span::new(FileId::new(0), 144, 145),
+        );
+        let mut outer = func_def("outer", vec![], block(vec![return_stmt(derived.clone())]));
+        outer.return_type = Some(type_named("models.Large"));
+        interpreter.register_function(&outer);
+        reuse_facts(
+            &mut interpreter,
+            &[(returned.span(), "models.Large"), (derived.span(), "int64")],
+        );
+        assert_eq!(
+            interpreter.eval_expr(&call("outer", vec![])),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            [
+                "trace positive",
+                "trace large",
+                "trace positive",
+                "trace large"
+            ]
+        );
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn checked_call_pipeline_and_pending_values_keep_their_original_proofs() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 150);
+        let mut echo = func_def(
+            "echo",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        echo.params[0].view = true;
+        echo.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&echo);
+        let mut choose = func_def(
+            "choose",
+            vec![("input", "models.Positive"), ("other", "models.Large")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        choose.params.iter_mut().for_each(|param| param.view = true);
+        choose.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&choose);
+        interpreter.set_variable("other", Value::Int64(9));
+        let source = reuse_source("source", 151);
+        let extra = reuse_source("other", 152);
+        let first_step = Span::new(FileId::new(0), 153, 154);
+        let second_step = Span::new(FileId::new(0), 155, 156);
+        reuse_facts(
+            &mut interpreter,
+            &[
+                (source.span(), "models.Positive"),
+                (extra.span(), "models.Large"),
+                (returned.span(), "models.Positive"),
+                (first_step, "models.Positive"),
+                (second_step, "models.Positive"),
+            ],
+        );
+        let pipeline = Expr::Pipeline(
+            Box::new(source),
+            vec![
+                PipelineStep {
+                    function: var("choose"),
+                    extra_args: vec![named_arg("other", extra)],
+                    handle: None,
+                    span: first_step,
+                },
+                PipelineStep {
+                    function: var("echo"),
+                    extra_args: vec![],
+                    handle: None,
+                    span: second_step,
+                },
+            ],
+            sp(),
+        );
+        for depth in 0..=2 {
+            let mut input = Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(7)),
+            };
+            for _ in 0..depth {
+                input = Value::Pending(Box::new(input));
+            }
+            interpreter.set_variable("source", input.clone());
+            assert_eq!(interpreter.eval_expr(&pipeline), Ok(input.clone()));
+            assert_eq!(interpreter.get_variable("source"), Some(&input));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+    }
+
+    #[test]
+    fn checked_call_handle_returns_carry_the_selected_return_witness() {
+        for returns_from_handler in [false, true] {
+            let mut interpreter = reuse_interpreter();
+            let copied = Expr::Clone(
+                Box::new(reuse_source("input", 160)),
+                Span::new(FileId::new(0), 161, 162),
+            );
+            let handler_statement = if returns_from_handler {
+                return_stmt(copied.clone())
+            } else {
+                Stmt::Expr(ExprStmt {
+                    expr: Expr::Default(Box::new(copied.clone()), sp()),
+                    span: sp(),
+                })
+            };
+            let handled = Expr::Handle(
+                Box::new(Expr::None(sp())),
+                None,
+                block(vec![handler_statement]),
+                Span::new(FileId::new(0), 163, 164),
+            );
+            let mut select = func_def(
+                "select",
+                vec![("input", "models.Positive")],
+                block(vec![return_stmt(handled.clone())]),
+            );
+            select.params[0].view = true;
+            select.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&select);
+            let source = reuse_source("source", 165);
+            interpreter.set_variable("source", Value::Int64(7));
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (source.span(), "models.Positive"),
+                    (copied.span(), "models.Positive"),
+                    // A Return escaping the handler supplies its own source fact;
+                    // the unreachable outer Return expression must not replace it.
+                    (
+                        handled.span(),
+                        if returns_from_handler {
+                            "int64"
+                        } else {
+                            "models.Positive"
+                        },
+                    ),
+                ],
+            );
+            assert_eq!(
+                interpreter
+                    .eval_expr(&call("select", vec![source]))
+                    .unwrap()
+                    .payload(),
+                &Value::Int64(7)
+            );
+            assert!(reuse_markers(&mut interpreter).is_empty());
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn canonical_type_bindings_follow_chains_without_redirecting_terminal_owners() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Positive")),
+            ("Field".into(), type_named("T")),
+        ])];
+        for name in ["T", "Field"] {
+            assert_eq!(
+                type_expr_display(&interpreter.substitute_type_expr(&type_named(name))),
+                "models.Positive"
+            );
+        }
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("models.Positive"))),
+            "shadow.Positive"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("selected.Positive"))),
+            "models.Positive"
+        );
+        let template = TypeExpr::Generic(
+            ident("map"),
+            vec![type_named("T"), type_named("selected.Positive")],
+            sp(),
+        );
+        assert_eq!(
+            interpreter.concrete_type_display(&template),
+            "map[models.Positive, models.Positive]"
+        );
+        let actual = HashMap::from([("Item".into(), type_named("models.Positive"))]);
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr_with_map_in_namespace(
+                &type_named("Item"),
+                &actual,
+                Some("app")
+            )),
+            "models.Positive"
+        );
+        interpreter.type_arg_scopes[0].insert("Cycle".into(), type_named("Cycle"));
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("Cycle"))),
+            "Cycle"
+        );
+        interpreter.register_struct(&struct_def("T", vec![("value", "int64")], vec![]));
+        interpreter.type_arg_scopes[0].insert("T".into(), type_named("bool"));
+        interpreter.type_arg_scopes[0].insert("Actual".into(), type_named("T"));
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("Actual"))),
+            "T"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.resolve_installed_type_expr(&type_named("T"))),
+            "T"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.substitute_type_expr(&type_named("T"))),
+            "bool"
+        );
+        assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+    }
+
+    #[test]
+    fn canonical_type_arguments_select_callee_without_caller_parameter_or_alias_rebinding() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.type_arg_scopes = vec![HashMap::from([("T".into(), type_named("bool"))])];
+        let returned = reuse_source("input", 710);
+        let mut identity = func_def(
+            "identity",
+            vec![("input", "T")],
+            block(vec![return_stmt(returned.clone())]),
+        );
+        identity.name.span = Span::new(FileId::new(0), 711, 712);
+        identity.type_params = vec![ident("T")];
+        identity.return_type = Some(type_named("T"));
+        interpreter.register_function(&identity);
+        let body = Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["models.Positive".into()],
+            expressions: Arc::new(HashMap::from([(returned.span(), "models.Positive".into())])),
+            ..Default::default()
+        });
+        let argument = reuse_source("source", 712);
+        interpreter.set_variable_with_type(
+            "source",
+            Value::Int64(7),
+            type_named("models.Positive"),
+        );
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(argument.span(), "models.Positive".into())]),
+            functions: HashMap::from([(identity.name.span, vec![body])]),
+            ..Default::default()
+        }));
+        let invocation = Expr::GenericCall(
+            Box::new(var("identity")),
+            vec![type_named("selected.Positive")],
+            vec![named_arg("input", argument)],
+            sp(),
+        );
+        let result = interpreter.eval_expr(&invocation).unwrap();
+        assert!(
+            matches!(result, Value::Typed { ref type_name, ref value } if type_name == "models.Positive" && value.payload() == &Value::Int64(7))
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.debug_expression_type(&invocation).unwrap()),
+            "models.Positive"
+        );
+        interpreter.set_variable_with_type(
+            "sources",
+            Value::List(vec![Value::Int64(7)]),
+            TypeExpr::Generic(ident("list"), vec![type_named("models.Positive")], sp()),
+        );
+        let inferred = call("identity", vec![var("sources")]);
+        assert_eq!(
+            type_expr_display(&interpreter.debug_expression_type(&inferred).unwrap()),
+            "list[models.Positive]"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert_eq!(
+            type_expr_display(&interpreter.type_arg_scopes[0]["T"]),
+            "bool"
+        );
+        assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+        assert!(interpreter.active_checked_function.is_none());
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn canonical_closure_capture_preserves_generic_reflected_metadata_and_imports() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Positive")),
+            ("Field".into(), type_named("T")),
+        ])];
+        interpreter.current_type_arguments = vec![type_named("models.Positive")];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "models.Positive".into(),
+            reflection: None,
+        }];
+        let returned = reuse_source("input", 720);
+        reuse_facts(&mut interpreter, &[(returned.span(), "int64")]);
+        let closure = interpreter.capture_closure(
+            &func_def("unused", vec![("input", "int64")], block(vec![])).params,
+            Some(&type_named("Field")),
+            &block(vec![return_stmt(returned)]),
+        );
+        let Value::Function {
+            ref type_context,
+            ref namespace_aliases,
+            ..
+        } = closure
+        else {
+            panic!("expected closure")
+        };
+        assert_eq!(
+            type_expr_display(&type_context.bindings["T"]),
+            "models.Positive"
+        );
+        assert_eq!(
+            type_expr_display(&type_context.bindings["Field"]),
+            "models.Positive"
+        );
+        assert_eq!(type_context.arguments[0].canonical_name, "models.Positive");
+        assert_eq!(
+            type_context.scoped_type_bindings[0].canonical_name,
+            "models.Positive"
+        );
+        assert_eq!(namespace_aliases["models"], "shadow");
+        for input in [7, -1] {
+            let result = interpreter.call_fn_value_from_source(
+                closure.clone(),
+                vec![Value::Int64(input)],
+                Some(&[None]),
+            );
+            if input > 0 {
+                assert!(
+                    matches!(result, Ok(Value::Typed { ref type_name, ref value }) if type_name == "models.Positive" && value.payload() == &Value::Int64(7))
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+            assert_eq!(
+                interpreter.scoped_type_bindings[0].canonical_name,
+                "models.Positive"
+            );
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn canonical_locals_and_checked_expressions_keep_owner_and_primitive_width() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Small", "int8", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Small", "uint64", None));
+        let source = reuse_source("source", 730);
+        interpreter.set_variable_with_type(
+            "source",
+            Value::Int64(7),
+            type_named("models.Positive"),
+        );
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        interpreter
+            .exec_stmt(&typed_var_decl(
+                "selected.Positive",
+                "copied",
+                source.clone(),
+            ))
+            .unwrap();
+        assert!(
+            matches!(interpreter.get_variable("copied"), Some(Value::Typed { type_name, value }) if type_name == "models.Positive" && value.payload() == &Value::Int64(7))
+        );
+        assert_eq!(
+            type_expr_display(interpreter.get_variable_type("copied").unwrap()),
+            "models.Positive"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        let base = Expr::IntLiteral(-1, Span::new(FileId::new(0), 731, 732));
+        reuse_facts(&mut interpreter, &[(base.span(), "int64")]);
+        assert_eq!(
+            interpreter.exec_stmt(&typed_var_decl("selected.Positive", "rejected", base)),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.get_variable("rejected").is_none());
+        let field = Expr::IntLiteral(127, Span::new(FileId::new(0), 732, 733));
+        reuse_facts(&mut interpreter, &[(field.span(), "models.Small")]);
+        assert_eq!(interpreter.eval_expr(&field), Ok(Value::Int64(127)));
+        interpreter
+            .exec_stmt(&typed_var_decl("selected.Small", "small", field))
+            .unwrap();
+        assert_eq!(interpreter.get_variable("small"), Some(&Value::Int64(127)));
+        assert_eq!(interpreter.visible_namespace_aliases()["models"], "shadow");
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn canonical_declaration_alias_bases_ignore_caller_generic_and_namespace_bindings() {
+        let mut interpreter = Interpreter::new();
+        interpreter.register_struct_in_namespace(
+            Some("models"),
+            &struct_def("T", vec![("value", "int64")], vec![]),
+        );
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Wrapped", "T", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Wrapped", "bool", None));
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([("T".into(), type_named("bool"))])];
+        assert_eq!(
+            interpreter.concrete_type_display(&type_named("selected.Wrapped")),
+            "models.T"
+        );
+        assert_eq!(
+            interpreter.resolved_concrete_type_display(&type_named("models.Wrapped")),
+            "models.T"
+        );
+        assert_eq!(
+            interpreter.concrete_type_display(&type_named("models.Wrapped")),
+            "bool"
+        );
+        assert!(
+            interpreter
+                .merge_inferred_never(&type_named("models.Wrapped"), &type_named("bool"), false)
+                .is_none()
+        );
+        assert_eq!(
+            interpreter.with_resolved_type_aliases(|interpreter| interpreter
+                .primitive_base_type_name("models.Wrapped")
+                .into_owned()),
+            "models.T"
+        );
+        assert_eq!(
+            type_expr_display(&interpreter.type_arg_scopes[0]["T"]),
+            "bool"
+        );
+    }
+
+    #[test]
+    fn canonical_source_locals_closures_and_reflected_bindings_work_in_closed_comptime() {
+        let source = r#"namespace models
+export type Positive = int64 where value > 0
+export type Alias = Positive
+export function identity[T](value: T) returns T:
+    return value
+export function make[T]() returns function(int64) returns T:
+    return function(value: int64) returns T: return value
+namespace shadow
+export type Positive = int64 where value < 0
+export type Alias = Positive
+namespace app
+function report() returns string:
+    use models as selected
+    use shadow as models
+    selected.Positive first = 7 handle error:
+        return error
+    selected.Alias copied = first
+    selected.Positive generic = selected.identity[selected.Positive](clone first)
+    function(int64) returns selected.Positive callback = selected.make[selected.Positive]()
+    selected.Positive returned = callback(9)
+    comptime type Bound = type.info[selected.Alias]():
+        function(int64) returns Bound reflected = function(value: int64) returns Bound: return value
+        Bound scoped = reflected(11)
+        return "{coarsen first}:{coarsen copied}:{coarsen generic}:{coarsen returned}:{coarsen scoped}:{type.name[Bound]()}"
+function main() returns string:
+    return comptime report()
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        assert_eq!(
+            interpreter.call_function("app.main", vec![]),
+            Ok(Value::String("7:7:7:9:11:models.Alias".into()))
+        );
+        assert_eq!(interpreter.scopes.len(), 1);
+        assert_eq!(interpreter.lexical_scope_floor, 0);
+        assert!(interpreter.type_arg_scopes.is_empty());
+        assert!(interpreter.scoped_type_bindings.is_empty());
+        assert!(interpreter.visible_namespace_aliases().is_empty());
+    }
+
+    #[test]
+    fn canonical_reflected_field_and_argument_loop_bindings_keep_selected_owners() {
+        let source = r#"namespace models
+export type Positive = int64 where value > 0
+export struct Scalar:
+    value: Positive
+export struct Items:
+    values: list[Positive]
+namespace shadow
+export type Positive = int64 where value < 0
+namespace app
+function field_name() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for field in type.fields[selected.Scalar]():
+        comptime type Field = field.type_info:
+            found = type.name[Field]()
+    return found
+function direct_argument() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for arg in type.info[list[selected.Positive]]().args:
+        comptime type Arg = arg:
+            found = type.name[Arg]()
+    return found
+function field_argument() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for field in type.fields[selected.Items]():
+        for arg in field.type_info.args:
+            comptime type Arg = arg:
+                found = type.name[Arg]()
+    return found
+function nested_argument() returns string:
+    use models as selected
+    use shadow as models
+    mutable string found = "missing"
+    for outer in type.info[list[optional[selected.Positive]]]().args:
+        comptime type Outer = outer:
+            for inner in outer.args:
+                comptime type Inner = inner:
+                    found = type.name[Inner]()
+    return found
+function main() returns string:
+    return comptime "{field_name()}|{direct_argument()}|{field_argument()}|{nested_argument()}"
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        assert_eq!(
+            interpreter.call_function("app.main", vec![]),
+            Ok(Value::String(
+                "models.Positive|models.Positive|models.Positive|models.Positive".into()
+            ))
+        );
+        assert_eq!(interpreter.scopes.len(), 1);
+        assert!(interpreter.type_arg_scopes.is_empty());
+        assert!(interpreter.scoped_type_bindings.is_empty());
+        assert!(interpreter.reflected_field_scopes.is_empty());
+        assert!(interpreter.reflected_type_info_scopes.is_empty());
+        assert!(interpreter.visible_namespace_aliases().is_empty());
+    }
+
+    #[test]
+    fn call_view_refinement_parameters_validate_without_changing_binding_metadata() {
+        for inline in [false, true] {
+            for depth in 1..=2 {
+                let mut interpreter = reuse_interpreter();
+                let mut parameter_type = type_named("models.Positive");
+                for _ in 0..depth {
+                    parameter_type = TypeExpr::View(Box::new(parameter_type), sp());
+                }
+                let mut function = func_def(
+                    "capture",
+                    vec![("input", "models.Positive")],
+                    block(vec![return_stmt(Expr::InlineFn(
+                        vec![],
+                        None,
+                        block(vec![return_stmt(var("input"))]),
+                        sp(),
+                    ))]),
+                );
+                function.params[0].ty = parameter_type.clone();
+                interpreter.register_function(&function);
+                let closure = interpreter.capture_closure(&function.params, None, &function.body);
+                let wrapped_fact = type_expr_display(&parameter_type);
+                for (number, checked) in [(-1, false), (7, false), (7, true)] {
+                    let input = Value::Typed {
+                        type_name: "models.Positive".into(),
+                        value: Box::new(Value::Int64(number)),
+                    };
+                    let facts = [Some(wrapped_fact.clone())];
+                    let result = if inline {
+                        interpreter.call_fn_value_from_source(
+                            closure.clone(),
+                            vec![input],
+                            checked.then_some(facts.as_slice()),
+                        )
+                    } else {
+                        interpreter.call_registered_function_from_source(
+                            "capture",
+                            &[],
+                            vec![input],
+                            checked.then_some(facts.as_slice()),
+                        )
+                    };
+                    if number < 0 {
+                        assert_eq!(
+                            result,
+                            Err("refinement type constraint failed for 'models.Positive'".into())
+                        );
+                    } else {
+                        let Value::Function {
+                            capture_types,
+                            captures,
+                            ..
+                        } = result.unwrap()
+                        else {
+                            panic!("capture body did not return a closure");
+                        };
+                        assert_eq!(type_expr_display(&capture_types["input"]), wrapped_fact);
+                        assert_eq!(captures["input"].payload(), &Value::Int64(number));
+                    }
+                    assert_eq!(
+                        reuse_markers(&mut interpreter),
+                        if checked {
+                            vec![]
+                        } else {
+                            vec!["trace positive"]
+                        }
+                    );
+                    assert!(interpreter.allow_checked_refinement_proofs);
+                    assert_eq!(interpreter.scopes.len(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn call_canonical_refinement_targets_keep_written_alias_resolution_and_restore_imports() {
+        let mut interpreter = reuse_interpreter();
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Small", "int8", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Small", "uint64", None));
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias(
+                "Positive",
+                "int64",
+                Some(binary(var("value"), BinOp::Lt, int(0))),
+            ),
+        );
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        let original_aliases = interpreter.visible_namespace_aliases();
+        let positive = interpreter.capture_closure(
+            &func_def("unused", vec![("input", "int64")], block(vec![])).params,
+            Some(&type_named("selected.Positive")),
+            &block(vec![return_stmt(var("input"))]),
+        );
+        let small = interpreter.capture_closure(
+            &[],
+            Some(&type_named("selected.Small")),
+            &block(vec![return_stmt(int(42))]),
+        );
+        for input in [7, -1] {
+            let result = interpreter.call_fn_value_from_source(
+                positive.clone(),
+                vec![Value::Int64(input)],
+                Some(&[None]),
+            );
+            if input > 0 {
+                assert!(matches!(
+                    result,
+                    Ok(Value::Typed { ref type_name, ref value })
+                        if type_name == "models.Positive" && value.payload() == &Value::Int64(7)
+                ));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.visible_namespace_aliases(), original_aliases);
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+        assert_eq!(
+            interpreter.call_fn_value_from_source(small, vec![], Some(&[])),
+            Ok(Value::Int64(42))
+        );
+        assert_eq!(interpreter.visible_namespace_aliases(), original_aliases);
+        let overflow = interpreter.capture_closure(
+            &[],
+            Some(&type_named("selected.Small")),
+            &block(vec![return_stmt(int(128))]),
+        );
+        assert!(
+            interpreter
+                .call_fn_value_from_source(overflow, vec![], Some(&[]))
+                .unwrap_err()
+                .contains("int8 value 128 is outside range")
+        );
+        assert_eq!(interpreter.visible_namespace_aliases(), original_aliases);
+        assert_eq!(interpreter.scopes.len(), 1);
+    }
+
+    #[test]
+    fn call_canonical_refinement_normalization_keeps_bound_generic_and_reflected_owners() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Positive")),
+            ("Field".into(), type_named("models.Positive")),
+        ])];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "models.Positive".into(),
+            reflection: None,
+        }];
+        let aliases = interpreter.visible_namespace_aliases();
+        for binding in ["T", "Field"] {
+            for input in [7, -1] {
+                let result = interpreter
+                    .normalize_and_validate_value(&type_named(binding), Value::Int64(input));
+                if input > 0 {
+                    assert!(matches!(
+                        result,
+                        Ok(Value::Typed { ref type_name, ref value })
+                            if type_name == "models.Positive" && value.payload() == &Value::Int64(7)
+                    ));
+                } else {
+                    assert_eq!(
+                        result,
+                        Err("refinement type constraint failed for 'models.Positive'".into())
+                    );
+                }
+                assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+                assert_eq!(interpreter.visible_namespace_aliases(), aliases);
+                assert_eq!(
+                    type_expr_display(&interpreter.type_arg_scopes[0][binding]),
+                    "models.Positive"
+                );
+                assert_eq!(
+                    interpreter.scoped_type_bindings[0].canonical_name,
+                    "models.Positive"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inline_refinement_new_return_checks_before_checked_consumers() {
+        for route in ["direct", "local", "argument", "return"] {
+            let mut interpreter = reuse_interpreter();
+            let returned = Expr::IntLiteral(-1, Span::new(FileId::new(0), 610, 611));
+            let inline = Expr::InlineFn(
+                vec![],
+                Some(type_named("models.Positive")),
+                block(vec![return_stmt(returned.clone())]),
+                Span::new(FileId::new(0), 611, 612),
+            );
+            let invocation = Expr::Call(
+                Box::new(inline),
+                vec![],
+                Span::new(FileId::new(0), 612, 613),
+            );
+            let echoed = reuse_source("input", 613);
+            let mut echo = func_def(
+                "echo",
+                vec![("input", "models.Positive")],
+                block(vec![return_stmt(echoed.clone())]),
+            );
+            echo.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&echo);
+            let mut relay = func_def(
+                "relay",
+                vec![],
+                block(vec![return_stmt(invocation.clone())]),
+            );
+            relay.return_type = Some(type_named("models.Positive"));
+            interpreter.register_function(&relay);
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (returned.span(), "int64"),
+                    (invocation.span(), "models.Positive"),
+                    (echoed.span(), "models.Positive"),
+                ],
+            );
+            let error = match route {
+                "local" => interpreter
+                    .exec_stmt(&typed_var_decl("models.Positive", "ready", invocation))
+                    .unwrap_err(),
+                "argument" => interpreter
+                    .eval_expr(&call("echo", vec![invocation]))
+                    .unwrap_err(),
+                "return" => interpreter.eval_expr(&call("relay", vec![])).unwrap_err(),
+                _ => interpreter.eval_expr(&invocation).unwrap_err(),
+            };
+            assert_eq!(
+                error, "refinement type constraint failed for 'models.Positive'",
+                "{route}"
+            );
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive"],
+                "{route}"
+            );
+            assert!(interpreter.get_variable("ready").is_none(), "{route}");
+            assert!(interpreter.allow_checked_refinement_proofs, "{route}");
+            assert_eq!(interpreter.scopes.len(), 1, "{route}");
+        }
+    }
+
+    #[test]
+    fn inline_refinement_parameters_force_unproven_values_and_reuse_exact_facts() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 620);
+        let params = func_def("unused", vec![("input", "models.Positive")], block(vec![])).params;
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        let closure = interpreter.capture_closure(
+            &params,
+            Some(&type_named("models.Positive")),
+            &block(vec![return_stmt(returned)]),
+        );
+        for (input, facts, expected_markers, succeeds) in [
+            (7, Some(vec![Some("models.Positive".into())]), vec![], true),
+            (
+                7,
+                Some(vec![Some("int64".into())]),
+                vec!["trace positive"],
+                true,
+            ),
+            (
+                -1,
+                Some(vec![Some("int64".into())]),
+                vec!["trace positive"],
+                false,
+            ),
+            (-1, None, vec!["trace positive"], false),
+        ] {
+            let value = Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(input)),
+            };
+            let result = interpreter.call_fn_value_from_source(
+                closure.clone(),
+                vec![value],
+                facts.as_deref(),
+            );
+            if succeeds {
+                assert_eq!(result.unwrap().payload(), &Value::Int64(input));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Positive'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), expected_markers);
+            assert!(interpreter.allow_checked_refinement_proofs);
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_returns_check_only_the_unproven_ancestor_suffix() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("input", 630);
+        let params = func_def("unused", vec![("input", "models.Positive")], block(vec![])).params;
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        let closure = interpreter.capture_closure(
+            &params,
+            Some(&type_named("models.Large")),
+            &block(vec![return_stmt(returned)]),
+        );
+        let facts = [Some("models.Positive".into())];
+        for input in [7, 2] {
+            let result = interpreter.call_fn_value_from_source(
+                closure.clone(),
+                vec![Value::Int64(input)],
+                Some(&facts),
+            );
+            if input == 7 {
+                assert!(matches!(
+                    result,
+                    Ok(Value::Typed { ref type_name, ref value })
+                        if type_name == "models.Large" && value.payload() == &Value::Int64(7)
+                ));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Large'".into())
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_return_context_restores_generic_reflected_and_alias_scopes() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Large", "int64", Some(bool_expr(false))),
+        );
+        interpreter.current_namespace = Some("models".into());
+        interpreter.set_namespace_alias("selected".into(), "models".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("models.Large")),
+            ("Field".into(), type_named("T")),
+        ])];
+        interpreter.current_type_arguments = vec![type_named("models.Large")];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "models.Large".into(),
+            reflection: None,
+        }];
+        let returned = Expr::IntLiteral(7, Span::new(FileId::new(0), 640, 641));
+        let captured_function = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(returned.span(), "int64".into())])),
+            ..Default::default()
+        });
+        let captured_scope = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Large".into(),
+            expressions: HashMap::from([(returned.span(), "int64".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_function = Some(captured_function);
+        interpreter.active_checked_scope = Some(captured_scope);
+        let successful = interpreter.capture_closure(
+            &[],
+            Some(&type_named("Field")),
+            &block(vec![return_stmt(returned.clone())]),
+        );
+        let failed = interpreter.capture_closure(
+            &[],
+            Some(&type_named("Field")),
+            &block(vec![return_stmt(Expr::IntLiteral(2, returned.span()))]),
+        );
+        let caller_function = Arc::new(CheckedFunctionTypes::default());
+        let caller_scope = Arc::new(CheckedScopedTypes::default());
+        interpreter.active_checked_function = Some(caller_function.clone());
+        interpreter.active_checked_scope = Some(caller_scope.clone());
+        interpreter.current_namespace = Some("app".into());
+        interpreter.set_namespace_alias("selected".into(), "shadow".into());
+        interpreter.type_arg_scopes = vec![HashMap::from([
+            ("T".into(), type_named("bool")),
+            ("Field".into(), type_named("string")),
+        ])];
+        interpreter.current_type_arguments = vec![type_named("bool")];
+        interpreter.scoped_type_bindings = vec![ClosureScopedTypeBinding {
+            name: "Field".into(),
+            canonical_name: "string".into(),
+            reflection: None,
+        }];
+        interpreter.current_function_trusted_stdlib = true;
+        for (closure, succeeds) in [(successful, true), (failed, false)] {
+            let result = interpreter.call_fn_value_from_source(closure, vec![], Some(&[]));
+            if succeeds {
+                assert_eq!(result.unwrap().payload(), &Value::Int64(7));
+            } else {
+                assert_eq!(
+                    result,
+                    Err("refinement type constraint failed for 'models.Large'".into())
+                );
+            }
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                ["trace positive", "trace large"]
+            );
+            assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+            assert_eq!(
+                interpreter.visible_namespace_aliases()["selected"],
+                "shadow"
+            );
+            assert_eq!(
+                type_expr_display(&interpreter.type_arg_scopes[0]["T"]),
+                "bool"
+            );
+            assert_eq!(
+                type_expr_display(&interpreter.type_arg_scopes[0]["Field"]),
+                "string"
+            );
+            assert_eq!(
+                type_expr_display(&interpreter.current_type_arguments[0]),
+                "bool"
+            );
+            assert_eq!(interpreter.scoped_type_bindings[0].canonical_name, "string");
+            assert!(Arc::ptr_eq(
+                interpreter.active_checked_function.as_ref().unwrap(),
+                &caller_function
+            ));
+            assert!(Arc::ptr_eq(
+                interpreter.active_checked_scope.as_ref().unwrap(),
+                &caller_scope
+            ));
+            assert!(interpreter.current_function_trusted_stdlib);
+            assert!(interpreter.allow_checked_refinement_proofs);
+            assert_eq!(interpreter.scopes.len(), 1);
+            assert_eq!(interpreter.lexical_scope_floor, 0);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_exact_owned_and_pending_returns_preserve_values() {
+        for (owner, base, input) in [
+            (
+                "Text",
+                type_named("string"),
+                Value::String("Agent-λ🙂".into()),
+            ),
+            (
+                "Items",
+                TypeExpr::Generic(ident("list"), vec![type_named("int64")], sp()),
+                Value::List(vec![Value::Int64(7), Value::Int64(9)]),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            let mut predicate = func_def(
+                "accept",
+                vec![("observed", "int64")],
+                block(vec![
+                    Stmt::Trace(TraceStmt {
+                        name: ident("observed"),
+                        span: sp(),
+                    }),
+                    return_stmt(bool_expr(true)),
+                ]),
+            );
+            predicate.params[0].ty = base.clone();
+            predicate.params[0].view = true;
+            predicate.return_type = Some(type_named("bool"));
+            interpreter.register_function_in_namespace(Some("models"), &predicate);
+            let mut alias = type_alias(owner, "int64", Some(call("accept", vec![var("value")])));
+            alias.base_type = base;
+            interpreter.register_type_alias_in_namespace(Some("models"), &alias);
+            let canonical = format!("models.{owner}");
+            let returned = reuse_source("input", 650);
+            let mut params = func_def("unused", vec![("input", &canonical)], block(vec![])).params;
+            params[0].view = true;
+            reuse_facts(&mut interpreter, &[(returned.span(), &canonical)]);
+            let closure = interpreter.capture_closure(
+                &params,
+                Some(&type_named(&canonical)),
+                &block(vec![return_stmt(Expr::Clone(
+                    Box::new(returned),
+                    Span::new(FileId::new(0), 651, 652),
+                ))]),
+            );
+            reuse_facts(
+                &mut interpreter,
+                &[(Span::new(FileId::new(0), 651, 652), &canonical)],
+            );
+            for depth in 0..=2 {
+                let mut value = Value::Typed {
+                    type_name: canonical.clone(),
+                    value: Box::new(input.clone()),
+                };
+                for _ in 0..depth {
+                    value = Value::Pending(Box::new(value));
+                }
+                let facts = [Some(canonical.clone())];
+                assert_eq!(
+                    interpreter.call_fn_value_from_source(
+                        closure.clone(),
+                        vec![value.clone()],
+                        Some(&facts)
+                    ),
+                    Ok(value)
+                );
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.scopes.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn inline_refinement_declared_primitive_returns_normalize_without_inventing_annotations() {
+        let mut interpreter = Interpreter::new();
+        for (annotation, expected) in [
+            (Some(type_named("uint64")), Value::Uint64(42)),
+            (None, Value::Int64(42)),
+        ] {
+            let expression =
+                Expr::InlineFn(vec![], annotation, block(vec![return_stmt(int(42))]), sp());
+            let closure = interpreter.eval_expr(&expression).unwrap();
+            assert_eq!(interpreter.call_fn_value(closure, vec![]), Ok(expected));
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+    }
+
+    #[test]
+    fn inline_refinement_raw_callbacks_force_return_and_preserve_disabled_mode() {
+        let mut interpreter = reuse_interpreter();
+        let returned = reuse_source("forged", 660);
+        interpreter.set_variable(
+            "forged",
+            Value::Typed {
+                type_name: "models.Positive".into(),
+                value: Box::new(Value::Int64(-1)),
+            },
+        );
+        reuse_facts(&mut interpreter, &[(returned.span(), "models.Positive")]);
+        let closure = interpreter.capture_closure(
+            &[],
+            Some(&type_named("models.Positive")),
+            &block(vec![return_stmt(returned)]),
+        );
+        for previously_enabled in [true, false] {
+            interpreter.allow_checked_refinement_proofs = previously_enabled;
+            assert_eq!(
+                interpreter.call_fn_value(closure.clone(), vec![]),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(
+                interpreter.allow_checked_refinement_proofs,
+                previously_enabled
+            );
+            assert_eq!(interpreter.scopes.len(), 1);
+        }
+        assert_eq!(
+            interpreter.call_fn_value_from_source(closure, vec![], Some(&[])),
+            Err("refinement type constraint failed for 'models.Positive'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(!interpreter.allow_checked_refinement_proofs);
+    }
 
     fn reuse_source(name: &str, offset: u32) -> Expr {
         Expr::Ident(Ident {
@@ -14976,7 +19011,7 @@ function joined(candidate: result[int64, string]) returns int64:
             } else {
                 assert!(matches!(
                     result.unwrap(),
-                    Some(Signal::Return(Value::Typed { type_name, value }))
+                    Some(Signal::Return(Value::Typed { type_name, value }, _))
                         if type_name == "int8" && *value == Value::Int64(-128)
                 ));
             }
@@ -18454,6 +22489,7 @@ function joined(candidate: result[int64, string]) returns int64:
         interp.current_function_trusted_stdlib = true;
         let closure = Value::Function {
             type_context: Box::new(ClosureTypeContext {
+                return_type: None,
                 checked_scope: None,
                 scoped_type_bindings: Vec::new(),
                 checked_function: None,
@@ -19350,13 +23386,13 @@ function make() returns Triple:
         let expression = call_expression(signal.clone(), vec![marker()]);
         assert!(matches!(
             interp.eval_expr_flow(&expression),
-            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7))))
+            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7), None)))
         ));
         assert_eq!(interp.get_variable("events"), Some(&Value::Int64(1)));
         let expression = call_expression(marker(), vec![signal]);
         assert!(matches!(
             interp.eval_expr_flow(&expression),
-            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7))))
+            Ok(ExprFlow::Signal(Signal::Return(Value::Int64(7), None)))
         ));
         assert_eq!(
             interp.get_variable("events"),

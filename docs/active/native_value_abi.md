@@ -564,8 +564,26 @@ Reference execution captures that proof before evaluation and normalization;
 raw API inputs and changed property candidates retain their existing validation
 entry points. Generic fields and result wrapping follow the constructor's selected
 type arguments and declaration namespace. This repair adds no runtime ABI
-operation or representation. Checked function parameter and return proof
-transport remains separate from these boundaries and builder finish validation.
+operation or representation. Checked named calls and returns likewise transport
+original expression proofs in the reference engine, including reordered named
+arguments, generic/reflected bodies, NamedFunction values, and source pipelines.
+Raw calls disable proof reuse throughout nested bodies and callbacks; checked
+program and zero-argument verify entries use an explicit bridge with forced
+input normalization. Changed property candidates and forced validators retain
+their separate validation boundaries. Builder finish also remains forced.
+Reference inline closures retain their declared return annotations and validate
+parameters and results inside their captured context before exposing a typed
+call result. Fresh private sum fallback results also validate before checked
+proof reuse; refined summation remains outside native admission. Native checks
+for newly refined returns remain separate implementation work.
+Reference reflected reads also establish new requested invariants in ready
+builtin containers before exposing checked result proof. Exact declared schemas
+preserve pending values; unsupported changed pending, secret, callable, or nominal
+generic conversions fail before exposing a result. Requested-type admission and
+secret observation remain open policy questions. Canonical generic, captured,
+reflected, and checked type identities survive caller import shadowing. These
+reference safeguards add no runtime operation or representation and do not certify
+equivalent native reflected producer validation.
 
 ## Result and optional ownership and handlers
 

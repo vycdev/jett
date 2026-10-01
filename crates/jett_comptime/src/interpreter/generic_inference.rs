@@ -25,7 +25,7 @@ impl Interpreter {
     ) -> Option<TypeExpr> {
         // Equal canonical types retain the first parameter's source spelling.
         // Root alias peeling happens before inference, never recursively here.
-        if self.concrete_type_display(first) == self.concrete_type_display(next) {
+        if self.resolved_concrete_type_display(first) == self.resolved_concrete_type_display(next) {
             return Some(first.clone());
         }
         let first_never = is_never(first);

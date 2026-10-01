@@ -921,11 +921,76 @@ The existing native shrink regression for refinement chains and nested
 predicates also passes in both profiles, preserving validation of changed
 candidates and caught predicate errors.
 
-Checked function parameter and return boundaries still force reference
-validation; source-proof transport through those boundaries remains separate
-semantic work. Reflected builder finish retains its documented validation of
-provided base values. Pure success controls do not establish predicate-event
-parity for these remaining boundaries.
+Checked named function parameters and exact returns now retain their original
+expression proofs. Arguments and proofs are captured before evaluation and
+permuted together for named calls and source pipelines. Actual return-expression
+facts travel with return signals through nested handlers; destination annotations
+and runtime labels never supply that proof. Raw call entry points still force
+parameter and return validation, even with a checked body map installed. Proof
+reuse stays disabled throughout their nested invocation tree, including calls,
+locals, constructors, callbacks, and forced validators. Four additional unit
+controls reject forged refined struct children and list elements and check mode
+restoration after success and failure. Checked program and zero-argument legacy
+verify entries use an explicit bridge without synthesizing argument proofs.
+Reflected builder finish retains its documented validation of provided values.
+
+Seven new interpreter tests and four linked regressions in
+`native_conformance/refinement_calls.rs` pass. Debug and release programs run
+after source removal with handwritten output and trace expectations for scalar,
+string/list, method, NamedFunction, generic/reflected, pipeline, named-order,
+handler/default, and pending-depth cases. Pure closed comptime, compiled verify,
+100 property trials, and forced builder completion also pass. Inline descriptors
+now retain their declared return annotation in captured lexical context.
+Seven additional interpreter tests cover invalid fresh inline results before
+local, argument and return consumers; exact and ancestor proofs; owned Unicode
+strings and lists; pending depth; generic/reflected and namespace alias scope
+restoration; primitive normalization; and forced raw callbacks. Host-generated
+callbacks retain their separate forced-call path; these tests do not establish
+proof reuse for that scope.
+
+The proof audit found that the private list sum fallback can produce raw zero
+under a checked Positive result annotation. Source execution now forces
+validation of the fresh result against its actual intrinsic type argument before
+that annotation becomes reusable proof. Actual arguments resolve before nested
+evaluation. Four unit tests cover invalid/valid results, pending and mixed-type
+errors, second-generic selection, primitive aliases, ordinary and pipeline
+consumers, raw/no-metadata behavior, and partial checked maps. A driver control
+pins empty Positive summation's reference constraint failure and native codegen
+refusal in both profiles, preserving an existing publication before launcher
+lookup. This repairs proof safety without selecting the unresolved refined-sum
+domain or widening native admission.
+
+Ten reflected producer unit tests cover root refinements and admitted ready
+builtin wrappers across record, enum, and machine fields. Shape preflight finishes
+before predicates; only occupied arms and collection members are checked, in
+their existing order. Declared schemas preserve exact invariants and skip proven
+ancestor prefixes. Exact roots retain nominal identity and pending depth without
+rechecking. Changed nested pending, secret, callable, and nominal generic requests
+fail conservatively before publishing proof; diagnostics do not render values.
+Raw and metadata-free field readers preserve their existing consuming boundaries.
+Five frontend-admitted source probes now reject zero-as-Positive before optional,
+list, declassify, callable, or nominal-field consumers. This reference safeguard
+does not select broader reflected admission or certify native producer predicates.
+
+Fourteen additional boundary and canonical-type unit tests preserve written view
+validation, resolved primitive widths, generic parameter identities, captured
+closure metadata, reflected bindings, inferred call/debug types, and caller
+imports on success and failure. Written aliases resolve once; installed and checked
+types keep their canonical owners. Fresh CLI runtime and closed comptime probes
+pass under colliding imports, including enum and machine payload loops and a
+closure fixture containing Unicode strings and owned lists. All 396 interpreter
+tests and all 598 frontend fixtures pass. The four linked call regressions and the
+refined-sum refusal control also pass against this combined source revision.
+Final workspace and supported-host distribution validation remain required.
+
+The audit also exposes missing native predicates for a newly refined return.
+The checker admits returning a base or ancestor value under a refined return
+annotation. Reference validation rejects `return -1` under Positive and a
+Positive value of 7 under High constrained above 10. Native Return lowering
+currently inserts only a representation coercion, so these unproven returns
+can bypass their predicates. This is a selected invariant implementation gap;
+do not suppress reference validation to match it. Exact return-proof reuse is
+distinct from validation of new return values.
 
 The locked Windows workspace run at `52bd4dcb` passed every target and doc-test
 with tracked source frozen throughout. All 284 native conformance tests passed,
@@ -934,8 +999,20 @@ The independent gates passed for 182 HIR/MIR fixtures, 182 native objects,
 30 entry cases, 25 runtime contracts, 155 verify fixtures, and three property
 fixtures with 100 trials each. The
 [supported-host run for that revision](https://github.com/vycdev/jett/actions/runs/36898786909)
-is still in progress. This checkpoint does not certify the later refinement
+passed both workspace/build/package jobs and both clean installed jobs.
+This checkpoint does not certify the later refinement
 reuse repair or its final workspace and distribution obligations.
+
+The locked Windows workspace run at `a57d69a6` also passed every target and
+doc-test with source frozen throughout. All 288 native conformance tests passed,
+including the four direct refinement reuse regressions. Its independent inventory
+gates passed for 182 HIR/MIR fixtures, 182 native objects, 30 entry cases,
+25 runtime contracts, 155 verify fixtures, and three property fixtures with
+100 trials each. The
+[supported-host run for this revision](https://github.com/vycdev/jett/actions/runs/36905939310)
+passed both workspace/build/package jobs and both clean installed jobs. This
+certifies that checkpoint, not the later
+call-proof or native-return changes.
 
 The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).

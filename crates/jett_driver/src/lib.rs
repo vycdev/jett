@@ -4044,27 +4044,24 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
     // Register items from the entry file (may override sibling definitions).
     register_module_items(&mut interp, &module);
 
-    // Call main(). Scripted providers are exact expectations: a successful
-    // deterministic run must consume every supplied operation sample.
-    let terminal_result =
-        match interp.call_function_in_namespace(main_namespace.as_deref(), "main", main_args) {
-            Ok(_) => {
-                reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())
-                    .and_then(|()| {
-                        reject_unconsumed_test_samples(
-                            "Clock",
-                            interp.clock_test_samples_remaining(),
-                        )
-                    })
-                    .and_then(|()| {
-                        reject_unconsumed_test_samples(
-                            "Graphics",
-                            interp.graphics_test_events_remaining(),
-                        )
-                    })
-            }
-            Err(error) => Err(format!("runtime error: {error}")),
-        };
+    // The checked entry's arguments were granted by default_runtime_args_for_main;
+    // no arbitrary host aggregate enters this trusted source-body boundary.
+    // Scripted providers are exact expectations: a successful deterministic run
+    // must consume every supplied operation sample.
+    let terminal_result = match interp.call_checked_function_in_namespace(
+        main_namespace.as_deref(),
+        "main",
+        main_args,
+    ) {
+        Ok(_) => reject_unconsumed_test_samples("Random", interp.random_test_samples_remaining())
+            .and_then(|()| {
+                reject_unconsumed_test_samples("Clock", interp.clock_test_samples_remaining())
+            })
+            .and_then(|()| {
+                reject_unconsumed_test_samples("Graphics", interp.graphics_test_events_remaining())
+            }),
+        Err(error) => Err(format!("runtime error: {error}")),
+    };
     let output = RunOutput {
         stdout: interp.take_stdout_output(),
         debug_output: interp.take_debug_output(),

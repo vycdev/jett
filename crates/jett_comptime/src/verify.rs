@@ -539,9 +539,14 @@ fn run_verify_blocks_detailed_inner(
         }
     }
 
-    // Execute legacy verify functions (zero-arg functions with asserts).
+    // Zero-argument legacy verify entries carry no unvalidated host payload.
+    // Keep checked source facts available inside their bodies.
     for (namespace, func) in &legacy_verify_functions {
-        match interp.call_function_in_namespace(namespace.as_deref(), &func.name.name, vec![]) {
+        match interp.call_checked_function_in_namespace(
+            namespace.as_deref(),
+            &func.name.name,
+            vec![],
+        ) {
             Ok(_) => {
                 results.push(VerifyResult {
                     name: func.name.name.clone(),

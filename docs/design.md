@@ -550,6 +550,10 @@ representation supplies no proof. Validation uses the checked source type,
 including the success payload type when a result or optional is handled.
 Runtime labels alone cannot establish an invariant for replaced payloads.
 
+Checked function parameters and returns retain the same established invariant.
+A return entering a new refinement must validate its unproven constraints;
+the function's return annotation alone does not prove the returned expression.
+
 Generic struct fields use the constructor's selected concrete type arguments,
 resolved in the caller. Field declarations then resolve in the struct's own
 namespace. A caller's unrelated generic parameter or namespace alias cannot

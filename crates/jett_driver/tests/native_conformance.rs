@@ -57,6 +57,12 @@ mod qualified_result_tasks;
 #[path = "native_conformance/refinement_reuse.rs"]
 mod refinement_reuse;
 
+#[path = "native_conformance/refinement_calls.rs"]
+mod refinement_calls;
+
+#[path = "native_conformance/refinement_sum.rs"]
+mod refinement_sum;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

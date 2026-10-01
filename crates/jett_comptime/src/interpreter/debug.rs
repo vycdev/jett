@@ -102,8 +102,14 @@ impl Interpreter {
         let name = self.registry_name(&self.functions, &source_name)?;
         let registered = self.functions.get(&name)?;
         let definition = &registered.definition;
-        let inferred = self.inferred_user_function_type_args_from_types(callee, type_args, actual);
-        let args = inferred.as_deref().unwrap_or(type_args);
+        let args = self
+            .inferred_user_function_type_args_from_types(callee, type_args, actual)
+            .unwrap_or_else(|| {
+                type_args
+                    .iter()
+                    .map(|arg| self.substitute_type_expr(arg))
+                    .collect()
+            });
         if args.len() != definition.type_params.len() {
             return None;
         }
@@ -111,7 +117,7 @@ impl Interpreter {
             .type_params
             .iter()
             .zip(args)
-            .map(|(param, arg)| (param.name.clone(), self.substitute_type_expr(arg)))
+            .map(|(param, arg)| (param.name.clone(), arg))
             .collect();
         definition.return_type.as_ref().map(|ty| {
             self.substitute_type_expr_with_map_in_namespace(
@@ -156,7 +162,7 @@ impl Interpreter {
     }
 
     pub(super) fn debug_type_args(&self, ty: Option<&TypeExpr>) -> Vec<TypeExpr> {
-        match ty.map(|ty| self.inference_base_type(ty)) {
+        match ty.map(|ty| self.resolved_inference_base_type(ty)) {
             Some(TypeExpr::Generic(_, args, _)) => args,
             Some(ty @ TypeExpr::Named(_)) => vec![ty],
             _ => Vec::new(),
@@ -281,7 +287,7 @@ impl Interpreter {
     }
 
     pub(super) fn format_debug_value(&self, value: &Value, ty: Option<&TypeExpr>) -> String {
-        let ty = ty.map(|ty| self.inference_base_type(ty));
+        let ty = ty.map(|ty| self.resolved_inference_base_type(ty));
         if let Some(TypeExpr::View(inner, _)) = &ty {
             return self.format_debug_value(value, Some(inner));
         }

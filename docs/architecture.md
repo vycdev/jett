@@ -994,8 +994,39 @@ Direct generic struct construction resolves actual type arguments in caller
 context, maps them to the struct's own parameters, and resolves declared fields
 in declaration context. The selected concrete field types determine fallible
 result wrapping, independently of the caller's generic bindings and imports.
-Function parameter and return boundaries still use forced reference validation;
-their checked-source proof transport remains a separate parity obligation.
+Checked named calls, method calls, NamedFunction values, and source pipelines
+transport each argument's original source proof alongside its value. Named
+argument permutation moves both together. Return signals retain the checked
+return expression type until the named function boundary; a declared return
+type is never a proof of that expression. Public/raw call entry points disable
+refinement proof reuse throughout nested execution, including checked bodies,
+callbacks, and forced refinement validators. This prevents forged refined
+aggregate children from gaining proof through their declared field or element
+types. Checked program and zero-argument verify entries use an explicit bridge;
+their inputs still undergo forced normalization without invented source proofs.
+Inline closures retain their declared return annotation in the captured lexical
+context. Parameter and return normalization and refinement validation run before
+that context is restored; actual return-expression facts supply the same proof
+as named calls. Host-generated callbacks retain their separate forced-call path.
+Fresh private sum fallback results validate their selected actual type before
+checked source execution can reuse it as a proof. Raw and metadata-free calls
+keep the existing forced facade return boundary. This does not select a broader
+summation domain or change primitive arithmetic.
+Checked reflected field producers establish newly requested refinements before
+their result type becomes reusable proof. Ready builtin containers undergo a
+complete shape preflight, then validate occupied payloads in collection order.
+Actual declared schemas supply exact or ancestor proof; runtime labels do not.
+Exact schemas preserve pending values. Changed nested invariants beneath pending
+containers, secret qualifiers, callable signatures, or nominal generic instances
+fail conservatively where conversion or observer contracts remain unresolved.
+These safeguards preserve selector checks and source ownership without selecting
+the broader reflected requested-type admission rule.
+Written type aliases resolve once in lexical context. Resolved checked owners,
+installed generic arguments, captured bindings, and reflected metadata retain
+their canonical declaration identities through selection and normalization.
+Canonical operations isolate caller aliases; function bodies keep their imports.
+Written view wrappers retain borrowing metadata while their underlying refinement
+still validates at raw boundaries.
 Explicit comptime HIR retains its original source span for evaluated-value lookup,
 independently of an enclosing expression span widened by parentheses.
 Interpolation selects the exact checked `Displayable.display` owner before
