@@ -7743,11 +7743,15 @@ window request returns a host failure without entering AppKit.
 The interpreter and native executables support `graphics.run[State]` for a
 synchronous native window session. `main` requests a `Graphics` capability, and
 the public source-owned wrapper borrows it with `view`. Pure update and render
-functions receive only
-ordinary state and keyboard values; rendering returns a `graphics.Scene` of RGB
-rectangles and bitmap text. The runtime owns the window inside the call and
-closes it on normal return, host failure, or callback failure. No source-visible
-window handle or resource is exposed.
+functions receive only ordinary state and keyboard values; rendering returns a
+`graphics.Scene` of RGB rectangles and bitmap text. The runtime owns the window
+inside the call and closes it on normal return, host failure, or callback failure.
+No source-visible window handle or resource is exposed.
+
+The display capability must be ready on entry. A pending `Graphics` capability,
+including one forwarded through a helper, causes a terminal runtime error before
+configuration decoding or provider access. Joining every pending level restores
+the existing authority; graphics never joins it implicitly.
 
 Configuration and scene decoding requires ready values. A pending record, field,
 list, or list element is a terminal runtime shape error; decoding never joins it

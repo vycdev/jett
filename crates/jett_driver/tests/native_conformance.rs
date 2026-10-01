@@ -30,6 +30,9 @@ mod local_view_aliases;
 #[path = "native_conformance/pending_graphics.rs"]
 mod pending_graphics;
 
+#[path = "native_conformance/graphics_authority.rs"]
+mod graphics_authority;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

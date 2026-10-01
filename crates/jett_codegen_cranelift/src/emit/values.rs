@@ -2089,6 +2089,15 @@ impl Translator<'_, '_> {
             self.reject_pending_handle(evaluated[0], kind, &message, span)?;
         }
         if id == IntrinsicId::GraphicsRun {
+            let display = evaluated.first().copied().ok_or_else(|| {
+                contract_error(self.symbol, span, "Graphics authority operand is absent")
+            })?;
+            self.reject_pending_handle(
+                display,
+                3,
+                "graphics.__run expects a Graphics capability",
+                span,
+            )?;
             return self.graphics_run(type_arguments, args, &evaluated, span);
         }
         if matches!(

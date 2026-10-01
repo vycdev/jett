@@ -1781,8 +1781,11 @@ focus flag in the exactly pinned minifb 0.28.0 backend before reconciling held k
 the adapter must be rechecked when that dependency changes. Focus/repeat unit tests
 exercise both backend conventions without requiring a native window.
 
-Native graphics uses the existing typed validation and session leaves. Its
-configuration and scene decoders reject pending owners, fields, strings, list
+Native graphics uses the existing typed validation and session leaves. Kernel
+entry rejects pending Graphics authority through the existing capability depth
+check after evaluating arguments and before decoding configuration or using the
+provider. Complete joins preserve the original context-bound token. Configuration
+and scene decoders reject pending owners, fields, strings, list
 containers, and list elements before reading their payloads. Decoding follows
 the interpreter's field order and precedes domain validation; terminal shape
 errors remain distinct from handled domain failures. The emitter reads window

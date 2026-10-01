@@ -33,6 +33,11 @@ apply to direct and pipeline calls, with explicit or inferred generic arguments.
 Callback call-graph auditing waits until module typechecking has resolved method
 dispatch, so legal `mutual` declaration order cannot conceal an effectful helper.
 
+The borrowed display must be ready when entering the graphics kernel. A pending
+`Graphics` capability forwarded through a helper is a terminal runtime error
+before configuration validation or provider access. A partial join remains
+pending; complete joins restore the existing authority without an implicit join.
+
 `State` is concrete data: primitive values, structs, enums, and supported
 collections containing only concrete data. Function values, capabilities,
 resources, actors, and interfaces are rejected recursively, including behind

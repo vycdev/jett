@@ -304,6 +304,10 @@ namespaces, and actor responses.
 
 `Graphics` now has a distinct context-bound entry authority token, and native
 function signatures can carry that token through checked `view` parameters.
+The Graphics kernel checks capability pending depth before configuration
+validation, using the existing pending-handle leaf. A forwarded still-pending
+authority reports the reference terminal capability error; every required join
+must complete before a session can use the original token.
 The native ABI now validates checked `graphics.Config` and `graphics.Scene`
 records and exposes open, present, next-key, and close leaves. The session stays
 on its creating thread; context destruction closes an unfinished session before

@@ -625,3 +625,22 @@ runtime tests, 78 codegen tests, nine linked graphics tests, and fourteen graphi
 frontend/reference integration tests pass. These supplemental cases leave the
 inventory denominator unchanged; full workspace, inventory execution, and
 supported-host distribution gates remain independent final-revision obligations.
+
+Forwarded pending Graphics authority now fails at kernel entry before Config
+decoding or domain validation. The source-admitted helper probe previously
+returned a handled width-zero failure and continued execution; it now preserves
+the reference terminal `graphics.__run expects a Graphics capability` error.
+The emitter reuses the existing capability pending-depth leaf after lexical
+argument evaluation. It neither consumes nor implicitly joins authority and
+adds no ABI operation or callback policy.
+
+Three linked regressions in `native_conformance/graphics_authority.rs` pass in
+both profiles after source removal. The minimal probe and eleven companion
+cases pin nested depth, partial joins, capability-before-Config error precedence,
+ready/final-joined authority, and explicit-view reuse. Terminal outcomes require
+exact stdout/stderr and exit 71. A separate successful control opens and closes
+two scripted sessions with the same fully joined authority, proving that its
+context-bound identity remains usable at the provider boundary. All twelve
+linked graphics tests and 78 codegen tests pass with the guard. Supplemental
+coverage leaves the inventory denominator unchanged and does not replace the
+workspace, inventory, or supported-host distribution gates for this revision.
