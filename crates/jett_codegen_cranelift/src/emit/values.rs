@@ -1,6 +1,7 @@
 use super::*;
 use jett_hir::{InterfaceFunctionAdapter, IntrinsicId, MapEntry, StringSegment};
 use jett_mir::move_values::is_erased_interface;
+use jett_runtime::native_abi::values::interface_conversion::NativeInterfaceConversion;
 use jett_types::BitfieldFieldKind;
 use std::collections::BTreeSet;
 
@@ -28,6 +29,7 @@ fn interface_conversion(
     let target_rep = representation_type(types, target);
     let source_erased = is_erased_interface(types, source);
     let target_erased = is_erased_interface(types, target);
+    let boxed_owner = interface_box_owner(types, source, target);
     let owned = |ty| is_copy_owned(types, ty) || is_linear(types, ty);
     if (source_rep == target_rep && source_erased == target_erased) || source == TypeInterner::NEVER
     {
@@ -38,10 +40,10 @@ fn interface_conversion(
     Some(
         match (types.resolve(source_rep), types.resolve(target_rep)) {
             (_, _) if target_erased => C::Box {
-                concrete: source.index() as u64,
+                concrete: boxed_owner.index() as u64,
                 owned: owned(source),
                 nothing: source_rep == TypeInterner::NOTHING,
-                layout: debug::debug_layout(types, source)?,
+                layout: debug::debug_layout(types, boxed_owner)?,
             },
             (_, _) if source_erased => C::Unbox {
                 concrete: target.index() as u64,
@@ -74,6 +76,45 @@ fn interface_conversion(
             _ => return None,
         },
     )
+}
+
+fn interface_box_owner(types: &TypeInterner, mut source: TypeId, mut target: TypeId) -> TypeId {
+    // Shared outer secret qualifiers protect the destination rather than
+    // naming its concrete implementation. An unqualified interface destination
+    // can instead select an explicit implementation for the secret source.
+    while let Type::Secret(inner) = types.resolve(target) {
+        target = *inner;
+        if let Type::Secret(inner) = types.resolve(source) {
+            source = *inner;
+        }
+    }
+    source
+}
+
+fn reflected_field_types_compatible(
+    types: &TypeInterner,
+    actual: TypeId,
+    requested: TypeId,
+) -> bool {
+    representation_type(types, actual) == representation_type(types, requested)
+        && jett_mir::move_values::is_secret(types, actual)
+            == jett_mir::move_values::is_secret(types, requested)
+}
+
+fn reflected_field_needs_interface_box(
+    types: &TypeInterner,
+    actual: TypeId,
+    requested: TypeId,
+) -> bool {
+    reflected_field_types_compatible(types, actual, requested)
+        && is_erased_interface(types, requested)
+        && !is_erased_interface(types, actual)
+}
+
+#[derive(Clone, Copy)]
+struct ReflectedFieldConversion {
+    layout: Value,
+    length: Value,
 }
 
 impl Translator<'_, '_> {
@@ -109,11 +150,12 @@ impl Translator<'_, '_> {
             let owned =
                 is_copy_owned(self.types, expression.ty) || is_linear(self.types, expression.ty);
             let owned = self.builder.ins().iconst(ir::types::I32, i64::from(owned));
+            let boxed_owner = interface_box_owner(self.types, expression.ty, target);
             let identity = self
                 .builder
                 .ins()
-                .iconst(ir::types::I64, expression.ty.index() as i64);
-            let layout = debug::debug_layout(self.types, expression.ty).ok_or_else(|| {
+                .iconst(ir::types::I64, boxed_owner.index() as i64);
+            let layout = debug::debug_layout(self.types, boxed_owner).ok_or_else(|| {
                 self.unsupported(expression.span, "interface payload debug layout")
             })?;
             let (layout, length) = self.static_data(&layout)?;
@@ -1902,14 +1944,58 @@ impl Translator<'_, '_> {
         Ok(())
     }
 
+    fn select_reflected_field_conversion(
+        &mut self,
+        selected: &mut Option<ReflectedFieldConversion>,
+        matches: Value,
+        actual: TypeId,
+        requested: TypeId,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        if !reflected_field_needs_interface_box(self.types, actual, requested) {
+            return Ok(());
+        }
+        let conversion = interface_conversion(self.types, actual, requested, &[])
+            .ok_or_else(|| self.unsupported(span, "reflected interface field conversion"))?;
+        let (layout, length) = self.static_data(&conversion.encode())?;
+        let previous = match *selected {
+            Some(previous) => previous,
+            None => {
+                // Other compatible fields already contain an erased interface.
+                // The descriptor is selected before validation, but conversion
+                // runs only after the original metadata and pending checks.
+                let copy = NativeInterfaceConversion::Copy { owned: true };
+                let (layout, length) = self.static_data(&copy.encode())?;
+                ReflectedFieldConversion { layout, length }
+            }
+        };
+        *selected = Some(ReflectedFieldConversion {
+            layout: self.builder.ins().select(matches, layout, previous.layout),
+            length: self.builder.ins().select(matches, length, previous.length),
+        });
+        Ok(())
+    }
+
     fn reflected_field_value(
         &mut self,
         owner: Value,
         index: Value,
         result_type: TypeId,
+        conversion: Option<ReflectedFieldConversion>,
         span: Span,
     ) -> Result<LoweredValue, CodegenError> {
         let bits = self.leaf(NativeLeaf::StructField, &[owner, index], true)?;
+        if let Some(conversion) = conversion {
+            // InterfaceConvert borrows and clones the stored owner. A nominal
+            // interface-backed refinement needs its own outer identity box;
+            // cloning the bits as the requested interface would lose that owner.
+            let owned = self.leaf(
+                NativeLeaf::InterfaceConvert,
+                &[bits, conversion.layout, conversion.length],
+                true,
+            )?;
+            return self.own_linear(owned);
+        }
         if is_linear(self.types, result_type) {
             return self.clone_linear(LoweredValue::Scalar(bits), result_type, span);
         }
@@ -2194,6 +2280,7 @@ impl Translator<'_, '_> {
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
             let mut compatible = zero;
+            let mut conversion = None;
             for (index, field_ty) in field_types.iter().enumerate() {
                 let candidate = self.scalar(evaluated[index + 2], span)?;
                 let index = i64::try_from(index)
@@ -2203,13 +2290,16 @@ impl Translator<'_, '_> {
                     .ins()
                     .icmp_imm(IntCC::Equal, requested_index, index);
                 expected = self.builder.ins().select(matches, candidate, expected);
-                if representation_type(self.types, *field_ty)
-                    == representation_type(self.types, result_type)
-                    && jett_mir::move_values::is_secret(self.types, *field_ty)
-                        == jett_mir::move_values::is_secret(self.types, result_type)
-                {
+                if reflected_field_types_compatible(self.types, *field_ty, result_type) {
                     compatible = self.builder.ins().select(matches, candidate, compatible);
                 }
+                self.select_reflected_field_conversion(
+                    &mut conversion,
+                    matches,
+                    *field_ty,
+                    result_type,
+                    span,
+                )?;
             }
             let requested_type = reflection_arguments
                 .get(1)
@@ -2230,7 +2320,7 @@ impl Translator<'_, '_> {
             )?;
             let owner = self.scalar(evaluated[0], span)?;
             self.check_reflected_owner_pending(owner, args[0].ty, &owner_name, 2)?;
-            return self.reflected_field_value(owner, checked_index, result_type, span);
+            return self.reflected_field_value(owner, checked_index, result_type, conversion, span);
         }
         if matches!(
             id,
@@ -2323,6 +2413,7 @@ impl Translator<'_, '_> {
             let requested_index = self.leaf(NativeLeaf::StructField, &[metadata, zero], true)?;
             let mut expected = zero;
             let mut compatible = zero;
+            let mut conversion = None;
             let mut argument_index = 2;
             for (variant_index, fields) in field_groups.iter().enumerate() {
                 for (field_index, field_ty) in fields.iter().enumerate() {
@@ -2342,13 +2433,16 @@ impl Translator<'_, '_> {
                             .icmp_imm(IntCC::Equal, requested_index, field_index);
                     let matches = self.builder.ins().band(variant_matches, field_matches);
                     expected = self.builder.ins().select(matches, candidate, expected);
-                    if representation_type(self.types, *field_ty)
-                        == representation_type(self.types, result_type)
-                        && jett_mir::move_values::is_secret(self.types, *field_ty)
-                            == jett_mir::move_values::is_secret(self.types, result_type)
-                    {
+                    if reflected_field_types_compatible(self.types, *field_ty, result_type) {
                         compatible = self.builder.ins().select(matches, candidate, compatible);
                     }
+                    self.select_reflected_field_conversion(
+                        &mut conversion,
+                        matches,
+                        *field_ty,
+                        result_type,
+                        span,
+                    )?;
                 }
             }
             let requested_type = reflection_arguments
@@ -2375,7 +2469,7 @@ impl Translator<'_, '_> {
             )?;
             let one = self.builder.ins().iconst(ir::types::I64, 1);
             let slot = self.builder.ins().iadd(checked_index, one);
-            return self.reflected_field_value(owner, slot, result_type, span);
+            return self.reflected_field_value(owner, slot, result_type, conversion, span);
         }
         if id == IntrinsicId::Range {
             self.check_index_count_arguments(id, &evaluated, span)?;
@@ -2657,5 +2751,193 @@ impl Translator<'_, '_> {
             }
             _ => Err(self.unsupported(span, "runtime intrinsic")),
         }
+    }
+}
+
+#[cfg(test)]
+mod reflected_field_tests {
+    use super::*;
+    use jett_types::InterfaceDef;
+
+    fn interface(types: &mut TypeInterner, name: &str) -> TypeId {
+        let id = types.add_interface(InterfaceDef {
+            name: name.into(),
+            methods: vec![],
+        });
+        types.intern(Type::Interface(id))
+    }
+
+    fn refinement(types: &mut TypeInterner, name: &str, base: TypeId) -> TypeId {
+        types.intern(Type::Refinement {
+            name: name.into(),
+            base,
+        })
+    }
+
+    #[test]
+    fn reflected_interface_conversion_retains_the_declared_refinement_owner() {
+        let mut types = TypeInterner::new();
+        let named = interface(&mut types, "app.Named");
+        let selected = refinement(&mut types, "app.Selected", named);
+        let nested = refinement(&mut types, "app.Nested", selected);
+        for actual in [selected, nested] {
+            assert!(reflected_field_types_compatible(&types, actual, named));
+            assert!(reflected_field_needs_interface_box(&types, actual, named));
+            assert_eq!(
+                interface_conversion(&types, actual, named, &[]),
+                Some(NativeInterfaceConversion::Box {
+                    concrete: u64::from(actual.index()),
+                    owned: true,
+                    nothing: false,
+                    layout: debug::debug_layout(&types, actual).unwrap(),
+                }),
+            );
+        }
+        assert!(!reflected_field_needs_interface_box(&types, named, named));
+        assert_eq!(
+            interface_conversion(&types, named, named, &[]),
+            Some(NativeInterfaceConversion::Copy { owned: true }),
+        );
+    }
+
+    #[test]
+    fn reflected_interface_conversion_does_not_add_nominal_casts_or_admission() {
+        let mut types = TypeInterner::new();
+        let named = interface(&mut types, "app.Named");
+        let other = interface(&mut types, "app.Other");
+        let selected = refinement(&mut types, "app.Selected", named);
+        let sibling = refinement(&mut types, "app.Sibling", named);
+        let nested = refinement(&mut types, "app.Nested", selected);
+        let count = refinement(&mut types, "app.Count", TypeInterner::INT64);
+        for (actual, requested) in [
+            (selected, selected),
+            (selected, sibling),
+            (nested, selected),
+            (named, selected),
+            (count, TypeInterner::INT64),
+        ] {
+            assert!(reflected_field_types_compatible(&types, actual, requested));
+            assert!(!reflected_field_needs_interface_box(
+                &types, actual, requested
+            ));
+        }
+        for (actual, requested) in [
+            (selected, other),
+            (TypeInterner::INT64, named),
+            (TypeInterner::STRING, named),
+        ] {
+            assert!(!reflected_field_types_compatible(&types, actual, requested));
+            assert!(!reflected_field_needs_interface_box(
+                &types, actual, requested
+            ));
+        }
+        let actual = types.intern(Type::List(selected));
+        let requested = types.intern(Type::List(named));
+        assert!(!reflected_field_types_compatible(&types, actual, requested));
+        assert!(!reflected_field_needs_interface_box(
+            &types, actual, requested
+        ));
+    }
+
+    #[test]
+    fn reflected_interface_conversion_preserves_secret_admission_and_layout() {
+        let mut types = TypeInterner::new();
+        let named = interface(&mut types, "app.Named");
+        let selected = refinement(&mut types, "app.Selected", named);
+        let secret_named = types.intern(Type::Secret(named));
+        let secret_selected = types.intern(Type::Secret(selected));
+        assert!(reflected_field_needs_interface_box(
+            &types,
+            secret_selected,
+            secret_named,
+        ));
+        assert_eq!(
+            interface_conversion(&types, secret_selected, secret_named, &[]),
+            Some(NativeInterfaceConversion::Box {
+                concrete: u64::from(selected.index()),
+                owned: true,
+                nothing: false,
+                layout: debug::debug_layout(&types, selected).unwrap(),
+            }),
+        );
+        for (actual, requested) in [(selected, secret_named), (secret_selected, named)] {
+            assert!(!reflected_field_types_compatible(&types, actual, requested));
+            assert!(!reflected_field_needs_interface_box(
+                &types, actual, requested
+            ));
+        }
+    }
+
+    #[test]
+    fn interface_box_owner_removes_only_shared_outer_secret_qualifiers() {
+        let mut types = TypeInterner::new();
+        let named = interface(&mut types, "app.Named");
+        let selected = refinement(&mut types, "app.Selected", named);
+        let nested = refinement(&mut types, "app.Nested", selected);
+        let secret_named = types.intern(Type::Secret(named));
+        let secret_nested = types.intern(Type::Secret(nested));
+        let twice_secret_nested = types.intern(Type::Secret(secret_nested));
+        let secret_backed = refinement(&mut types, "app.Hidden", secret_named);
+        for (source, target, owner) in [
+            (nested, secret_named, nested),
+            (secret_nested, secret_named, nested),
+            (secret_nested, named, secret_nested),
+            (twice_secret_nested, secret_named, secret_nested),
+            (secret_backed, secret_named, secret_backed),
+        ] {
+            assert_eq!(interface_box_owner(&types, source, target), owner);
+            assert_eq!(
+                interface_conversion(&types, source, target, &[]),
+                Some(NativeInterfaceConversion::Box {
+                    concrete: u64::from(owner.index()),
+                    owned: true,
+                    nothing: false,
+                    layout: debug::debug_layout(&types, owner).unwrap(),
+                }),
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_interface_box_layout_keeps_payload_secrets_redacted() {
+        let mut types = TypeInterner::new();
+        let named = interface(&mut types, "app.Named");
+        let secret_named = types.intern(Type::Secret(named));
+        let secret_string = types.intern(Type::Secret(TypeInterner::STRING));
+        let id = types.add_struct(jett_types::StructDef {
+            name: "app.Record".into(),
+            fields: vec![("token".into(), secret_string)],
+            methods: vec![],
+        });
+        let record = types.intern(Type::Struct(id));
+        let selected = refinement(&mut types, "app.Selected", record);
+        let secret_selected = types.intern(Type::Secret(selected));
+        let layout = debug::debug_layout(&types, selected).unwrap();
+        assert_eq!(
+            layout.last(),
+            Some(&(jett_runtime::native_abi::values::NativeDebugTag::Redacted as u8)),
+        );
+        assert_eq!(
+            interface_conversion(&types, secret_selected, secret_named, &[]),
+            Some(NativeInterfaceConversion::Box {
+                concrete: u64::from(selected.index()),
+                owned: true,
+                nothing: false,
+                layout,
+            }),
+        );
+        assert_eq!(
+            debug::debug_layout(&types, secret_named).unwrap().last(),
+            Some(&(jett_runtime::native_abi::values::NativeDebugTag::Redacted as u8)),
+        );
+        assert_eq!(
+            interface_conversion(&types, secret_string, named, &[]),
+            Some(NativeInterfaceConversion::Box {
+                concrete: u64::from(secret_string.index()),
+                owned: true,
+                nothing: false,
+                layout: debug::debug_layout(&types, secret_string).unwrap(),
+            }),
+        );
     }
 }

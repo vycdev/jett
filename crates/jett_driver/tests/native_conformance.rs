@@ -7285,3 +7285,158 @@ fn native_capability_view_before_handler_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert!(actual.stderr.is_empty(), "{actual:?}");
 }
+
+#[test]
+fn native_reflected_interface_field_owners_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/reflected_interface_field_owners.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory
+        .path()
+        .join("reflected_interface_field_owners.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source)
+        .expect("reflected interface field owner oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "direct:selected:small:7|nested:selected:small:7\n",
+            "record:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7;record:18446744073709551615\n",
+            "event:active:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7\n",
+            "mirror-event:mirror:selected:small:9|selected:small:9|small:9;nested:selected:small:9|selected:small:9|nested:selected:small:9|selected:small:9\n",
+            "state:active:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7\n",
+            "mirror-state:mirror:selected:small:9|selected:small:9|small:9;nested:selected:small:9|selected:small:9|nested:selected:small:9|selected:small:9\n",
+            "baked:\n",
+            "record:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7;record:18446744073709551615\n",
+            "event:active:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7\n",
+            "mirror-event:mirror:selected:small:9|selected:small:9|small:9;nested:selected:small:9|selected:small:9|nested:selected:small:9|selected:small:9\n",
+            "state:active:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7\n",
+            "mirror-state:mirror:selected:small:9|selected:small:9|small:9;nested:selected:small:9|selected:small:9|nested:selected:small:9|selected:small:9\n",
+            "reuse:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7;record:18446744073709551615=selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7;record:18446744073709551615=selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7;record:18446744073709551615\n",
+            "pending:selected:small:7|nested:selected:small:9|nested:selected:small:9\n",
+            "secret-direct:selected:small:7\n",
+            "secret-reflected:selected:small:7\n",
+            "secret-reuse:selected:small:7\n",
+        )
+    );
+    assert_eq!(
+        expected.debug_output,
+        [
+            "trace copied: app.Named = pending(pending(7))",
+            "trace once: app.Named = pending(7)",
+            "trace copied: app.Named = pending(pending(9))",
+            "trace once: app.Named = pending(9)",
+            "trace copied: app.Named = pending(pending(9))",
+            "trace once: app.Named = pending(9)",
+            "trace ordinary: secret[app.Named] = [redacted]",
+            "trace reflected: secret[app.Named] = [redacted]",
+        ]
+    );
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("field_owners_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native reflected interface field owners");
+        binaries.push((binary, release));
+    }
+    let verify_binary = directory.path().join("field_owners_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native reflected interface field verify suite");
+    let property_binary = directory.path().join("field_owners_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native reflected interface field property suite");
+    fs::remove_file(&source).unwrap();
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        let debug = if release {
+            String::new()
+        } else {
+            format!("{}\n", expected.debug_output.join("\n"))
+        };
+        assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
+    }
+    for suite in [verify_binary, property_binary] {
+        let actual = run_bounded(&suite, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_reflected_interface_field_failures_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/reflected_interface_field_owners.jett");
+    let template = fs::read_to_string(&fixture).unwrap();
+    let declarations = template.split("function main(").next().unwrap();
+    for (operation, message) in [
+        (
+            "wrong_record_request",
+            "type.field_value: field 'item' has type 'app.Selected', requested 'int64'",
+        ),
+        (
+            "wrong_event_member",
+            "type.variant_field_value: field metadata belongs to 'app.Event.active', expected 'app.Event.mirror'",
+        ),
+        (
+            "pending_session_metadata",
+            concat!(
+                "type.machine_field_value: second argument must be TypeField, got pending(pending(",
+                "TypeField(index: 1, owner_type: app.Session, owner_member: some(active), name: item, ",
+                "type_name: app.Selected, kind: refinement, kind_tag: TypeKind.refinement_type, ",
+                "serialize_name: item, has_secret: false, ",
+                "type_info: TypeInfo(type_name: app.Selected, kind: refinement, ",
+                "kind_tag: TypeKind.refinement_type, primitive_tag: none, has_secret: false, ",
+                "args: list(TypeInfo(type_name: app.Named, kind: unknown, kind_tag: TypeKind.unknown_type, ",
+                "primitive_tag: none, has_secret: false, args: list()))))))",
+            ),
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("reflected_interface_failure.jett");
+        fs::write(
+            &source,
+            format!(
+                "{declarations}function main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"before\\n\")\n    string value = {operation}()\n    Stdout.write(view stdout, value)\n    return nothing\n"
+            ),
+        )
+        .unwrap();
+        let expected = jett_driver::run_file_capture_outcome(&source)
+            .expect_err("invalid reflected request or metadata must fail before dispatch");
+        assert_eq!(expected.output.stdout, "before\n", "{operation}");
+        assert!(expected.output.debug_output.is_empty(), "{operation}");
+        assert_eq!(expected.message, format!("runtime error: {message}"));
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory
+                .path()
+                .join(format!("field_failure_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .unwrap_or_else(|error| panic!("{operation}, release={release}: {error}"));
+            binaries.push(binary);
+        }
+        fs::remove_file(&source).unwrap();
+        for binary in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert_eq!(actual.status.code(), Some(71), "{operation}: {actual:?}");
+            assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+            assert_eq!(
+                actual.stderr,
+                format!("{}\n", expected.message).as_bytes(),
+                "{operation}: {actual:?}"
+            );
+        }
+    }
+}

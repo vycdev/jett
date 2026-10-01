@@ -597,6 +597,17 @@ When a `result` or `optional` and its payload both implement a destination
 interface, conversion preserves the whole sum and selects its implementation.
 Extracting the payload still requires explicit `handle`.
 
+Ordinary conversion to a secret-qualified interface and an admitted reflected
+field read preserve the underlying nominal method owner. For example,
+`secret[Selected]` converted to `secret[Named]` dispatches through `Selected`
+after explicit declassification. Matching outer secret qualifiers protect the
+destination; they do not name its implementation. An unqualified interface
+destination instead retains an explicitly secret-owned implementation, such as
+`Named` implemented for `secret[string]`. Additional source secret layers and
+nominal refinements keep their own identities, and nested secret payloads remain
+redacted. The broader requested-type admission rule for reflected fields remains
+unresolved; see [reflected field request compatibility](open_design/reflected_field_request_compatibility.md).
+
 Coarsening or declassifying a value passed as a view preserves that borrow.
 The callee observes the underlying payload without consuming the refinement or
 secret owner. This also applies to borrowed fields and function-value calls;

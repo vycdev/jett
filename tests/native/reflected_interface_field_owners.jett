@@ -1,0 +1,235 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int8:
+    function name(view self: int8) returns string:
+        return "small:{self}"
+type Selected = Named where true
+implement Named for Selected:
+    function name(view self: Selected) returns string:
+        Named base = coarsen clone self
+        return "selected:{Named.name(view base)}"
+type Nested = Selected where true
+implement Named for Nested:
+    function name(view self: Nested) returns string:
+        Selected base = coarsen clone self
+        Named erased = base
+        return "nested:{Named.name(view erased)}"
+function selected_seed(value: int8) returns Selected:
+    Named base = value
+    Selected selected = base handle error:
+        return selected_seed(value)
+    return selected
+function nested_seed(value: int8) returns Nested:
+    Selected base = selected_seed(value)
+    Nested nested = base handle error:
+        return nested_seed(value)
+    return nested
+struct Record:
+    marker: string
+    item: Selected
+    nested: Nested
+    count: uint64
+struct Hidden:
+    item: secret[Selected]
+enum Event:
+    idle
+    active(marker: string, item: Selected, nested: Nested)
+    mirror(marker: int64, nested: Nested, item: Selected)
+machine Session:
+    states:
+        idle
+        active(marker: string, item: Selected, nested: Nested)
+        mirror(marker: int64, nested: Nested, item: Selected)
+    transitions:
+        idle to active
+        active to mirror
+function record_seed(value: int8) returns Record:
+    return Record(marker: "record", item: selected_seed(value), nested: nested_seed(value), count: 18446744073709551615) handle error:
+        return record_seed(value)
+function event_seed(value: int8, reversed: bool) returns Event:
+    if reversed:
+        return Event.mirror(9, nested_seed(value), selected_seed(value))
+    return Event.active("event", selected_seed(value), nested_seed(value))
+function session_seed(value: int8, reversed: bool) returns Session:
+    if reversed:
+        return Session(mirror, 9, nested_seed(value), selected_seed(value))
+    return Session(active, "session", selected_seed(value), nested_seed(value))
+function record_field(index: int64) returns TypeField:
+    return list.get[TypeField](type.fields[Record](), index) handle:
+        return record_field(0)
+function event_field(view source: Event, index: int64) returns TypeField:
+    TypeVariant variant = type.variant_value[Event](view source)
+    return list.get[TypeField](variant.fields, index) handle:
+        return event_field(view source, 0)
+function session_field(view source: Session, index: int64) returns TypeField:
+    TypeMachineState state = type.machine_state_value[Session](view source)
+    return list.get[TypeField](state.fields, index) handle:
+        return session_field(view source, 0)
+function selected_names(erased: Named, exact: Selected) returns string:
+    Named nominal = clone exact
+    Named base = coarsen exact
+    return "{Named.name(view erased)}|{Named.name(view nominal)}|{Named.name(view base)}"
+function nested_names(erased: Named, ancestor: Selected, exact: Nested) returns string:
+    Named ancestor_named = ancestor
+    Named exact_named = clone exact
+    Selected coarsened = coarsen exact
+    Named base = coarsened
+    return "{Named.name(view erased)}|{Named.name(view ancestor_named)}|{Named.name(view exact_named)}|{Named.name(view base)}"
+function record_summary(view source: Record) returns string:
+    TypeField item = record_field(1)
+    TypeField nested = record_field(2)
+    Named selected_named = type.field_value[Record, Named](view source, view item)
+    Selected selected_exact = type.field_value[Record, Selected](view source, view item)
+    Named nested_named = type.field_value[Record, Named](view source, view nested)
+    Selected ancestor = type.field_value[Record, Selected](view source, view nested)
+    Nested nested_exact = type.field_value[Record, Nested](view source, view nested)
+    return "{selected_names(selected_named, selected_exact)};{nested_names(nested_named, ancestor, nested_exact)};{source.marker}:{source.count}"
+function event_summary(view source: Event) returns string:
+    TypeVariant variant = type.variant_value[Event](view source)
+    mutable int64 selected_index = 1
+    mutable int64 nested_index = 2
+    if variant.name == "mirror":
+        selected_index = 2
+        nested_index = 1
+    TypeField item = event_field(view source, selected_index)
+    TypeField nested = event_field(view source, nested_index)
+    Named selected_named = type.variant_field_value[Event, Named](view source, view item)
+    Selected selected_exact = type.variant_field_value[Event, Selected](view source, view item)
+    Named nested_named = type.variant_field_value[Event, Named](view source, view nested)
+    Selected ancestor = type.variant_field_value[Event, Selected](view source, view nested)
+    Nested nested_exact = type.variant_field_value[Event, Nested](view source, view nested)
+    return "{variant.name}:{selected_names(selected_named, selected_exact)};{nested_names(nested_named, ancestor, nested_exact)}"
+function session_summary(view source: Session) returns string:
+    TypeMachineState state = type.machine_state_value[Session](view source)
+    mutable int64 selected_index = 1
+    mutable int64 nested_index = 2
+    if state.name == "mirror":
+        selected_index = 2
+        nested_index = 1
+    TypeField item = session_field(view source, selected_index)
+    TypeField nested = session_field(view source, nested_index)
+    Named selected_named = type.machine_field_value[Session, Named](view source, view item)
+    Selected selected_exact = type.machine_field_value[Session, Selected](view source, view item)
+    Named nested_named = type.machine_field_value[Session, Named](view source, view nested)
+    Selected ancestor = type.machine_field_value[Session, Selected](view source, view nested)
+    Nested nested_exact = type.machine_field_value[Session, Nested](view source, view nested)
+    return "{state.name}:{selected_names(selected_named, selected_exact)};{nested_names(nested_named, ancestor, nested_exact)}"
+function owned_record(source: Record) returns string:
+    return "{record_summary(view source)}={record_summary(view source)}"
+function direct_summary() returns string:
+    Named selected = selected_seed(7)
+    Named nested = nested_seed(7)
+    return "{Named.name(view selected)}|{Named.name(view nested)}"
+function hidden_read(view source: Hidden) returns secret[Named]:
+    TypeField field = list.get[TypeField](type.fields[Hidden](), 0) handle:
+        return hidden_read(view source)
+    return type.field_value[Hidden, secret[Named]](view source, view field)
+function hidden_summary(view source: Hidden) returns string:
+    secret[Named] hidden = hidden_read(view source)
+    Named exposed = declassify hidden
+    return Named.name(view exposed)
+function secret_controls(view stdout: Stdout) returns nothing:
+    secret[Selected] hidden = selected_seed(7)
+    secret[Named] ordinary = clone hidden
+    trace ordinary
+    Named direct = declassify ordinary
+    Stdout.write(view stdout, "secret-direct:{Named.name(view direct)}\n")
+    Hidden source = Hidden(item: hidden)
+    secret[Named] reflected = hidden_read(view source)
+    trace reflected
+    Named exposed = declassify reflected
+    Stdout.write(view stdout, "secret-reflected:{Named.name(view exposed)}\n")
+    Stdout.write(view stdout, "secret-reuse:{hidden_summary(view source)}\n")
+    return nothing
+function pending_record() returns string:
+    Record source = Record(marker: "pending", item: run run selected_seed(7), nested: nested_seed(7), count: 1) handle error:
+        return "invalid record"
+    TypeField field = record_field(1)
+    Named copied = type.field_value[Record, Named](view source, view field)
+    trace copied
+    Named once = join copied handle error:
+        return "first join failed"
+    trace once
+    Named ready = join once handle error:
+        return "second join failed"
+    return Named.name(view ready)
+function pending_event() returns string:
+    Event source = Event.mirror(9, run run nested_seed(9), selected_seed(9))
+    TypeField field = event_field(view source, 1)
+    Named copied = type.variant_field_value[Event, Named](view source, view field)
+    trace copied
+    Named once = join copied handle error:
+        return "first join failed"
+    trace once
+    Named ready = join once handle error:
+        return "second join failed"
+    return Named.name(view ready)
+function pending_session() returns string:
+    Session source = Session(mirror, 9, run run nested_seed(9), selected_seed(9))
+    TypeField field = session_field(view source, 1)
+    Named copied = type.machine_field_value[Session, Named](view source, view field)
+    trace copied
+    Named once = join copied handle error:
+        return "first join failed"
+    trace once
+    Named ready = join once handle error:
+        return "second join failed"
+    return Named.name(view ready)
+function wrong_record_request() returns string:
+    Record source = record_seed(7)
+    TypeField field = record_field(1)
+    int64 value = type.field_value[Record, int64](view source, view field)
+    return "{value}"
+function wrong_event_member() returns string:
+    Event source = event_seed(7, true)
+    Event other = event_seed(7, false)
+    TypeField field = event_field(view other, 1)
+    Named value = type.variant_field_value[Event, Named](view source, view field)
+    return Named.name(view value)
+function pending_session_metadata() returns string:
+    Session source = session_seed(7, false)
+    TypeField field = run run session_field(view source, 1)
+    Named value = type.machine_field_value[Session, Named](view source, view field)
+    return Named.name(view value)
+function summaries() returns string:
+    Record record = record_seed(7)
+    Event event = event_seed(7, false)
+    Event reversed_event = event_seed(9, true)
+    Session session = session_seed(7, false)
+    Session reversed_session = session_seed(9, true)
+    return "record:{record_summary(view record)}\nevent:{event_summary(view event)}\nmirror-event:{event_summary(view reversed_event)}\nstate:{session_summary(view session)}\nmirror-state:{session_summary(view reversed_session)}\n"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "direct:{direct_summary()}\n")
+    Stdout.write(view stdout, summaries())
+    string baked = comptime summaries()
+    Stdout.write(view stdout, "baked:\n{baked}")
+    Record source = record_seed(7)
+    Stdout.write(view stdout, "reuse:{owned_record(clone source)}={record_summary(view source)}\n")
+    Stdout.write(view stdout, "pending:{pending_record()}|{pending_event()}|{pending_session()}\n")
+    secret_controls(view stdout)
+    return nothing
+verify record_owners:
+    Record source = record_seed(7)
+    assert record_summary(view source) == "selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7;record:18446744073709551615"
+    assert owned_record(clone source) == "{record_summary(view source)}={record_summary(view source)}"
+    assert direct_summary() == "selected:small:7|nested:selected:small:7"
+    string baked = comptime summaries()
+    assert baked == summaries()
+    secret[Selected] selected = selected_seed(7)
+    secret[Named] erased = clone selected
+    Named exposed = declassify erased
+    assert Named.name(view exposed) == "selected:small:7"
+    Hidden hidden = Hidden(item: selected)
+    assert hidden_summary(view hidden) == "selected:small:7"
+    assert hidden_summary(view hidden) == "selected:small:7"
+property preserves_member_owners:
+    given reversed: bool
+    Event event = event_seed(7, reversed)
+    Session session = session_seed(7, reversed)
+    mutable string expected = "active:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7"
+    if reversed:
+        expected = "mirror:selected:small:7|selected:small:7|small:7;nested:selected:small:7|selected:small:7|nested:selected:small:7|selected:small:7"
+    assert event_summary(view event) == expected
+    assert session_summary(view session) == expected
+    assert event_summary(view event) == expected

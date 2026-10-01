@@ -75,6 +75,10 @@ The following semantic and implementation gaps prevent a full parity claim:
   source signature still admits refinements, secret wrappers, and nonnumeric
   elements. Native admission rejects them, and some reference empty sums have
   the wrong value shape. The domain and invariant contract remain unresolved.
+- [Reflected field request compatibility](../open_design/reflected_field_request_compatibility.md):
+  current checks admit some refinement/base requests with matching carriers and
+  secrecy. Preserving the actual owner on an admitted interface read does not
+  select the broader requested-type contract or authorize arbitrary nominal casts.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
@@ -442,3 +446,29 @@ profiles and native verify/property execution after source removal. Formatting
 and whitespace checks pass. Complete workspace, inventory execution, and
 platform distribution results for the final revision remain independent gates;
 this handoff does not establish full native parity.
+
+The reflected-field owner audit found that an admitted read of an
+interface-backed refinement as its base interface reused the base box and lost
+the refinement's method implementation. Native record, enum, and machine reads
+now select conversion metadata from the actual declared field type and run the
+conversion after the existing metadata, requested-type, and pending checks.
+Conversion borrows and clones the source, preserves pending depth, and produces
+one owned result.
+Ordinary and reflected secret-qualified destinations choose the underlying
+nominal owner after removing only matching outer secret qualifiers. Unqualified
+interface destinations still select explicit secret-owned implementations;
+additional source qualifiers and nested secret payload redaction remain intact.
+
+All 78 codegen tests pass, including five unit controls pinning owner selection,
+unchanged admission, and nested redaction. Both new native conformance tests pass.
+`native_reflected_interface_field_owners_match_interpreter_in_both_profiles`
+covers direct/reflected dispatch, exact and ancestor reads, runtime/comptime
+values, source reuse, pending joins, qualified secrets, and native verify/property
+suites after source removal.
+`native_reflected_interface_field_failures_match_interpreter_in_both_profiles`
+checks requested-type, active-member, and pending-metadata failures in both
+profiles. All 19 adjacent interface conformance tests, three deep-conversion and
+reflection tests, and eight pending-reflection tests pass, including existing
+explicit secret-owner implementations.
+These supplemental cases leave the inventory denominator unchanged and do not
+settle the open reflected admission contract or establish full native parity.

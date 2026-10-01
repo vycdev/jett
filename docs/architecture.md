@@ -3233,6 +3233,20 @@ struct and enum fields, retaining declaration-site namespaces, visibility checks
 and declaration order before checked layouts and reflection metadata are built.
 Reflected interface fields and lists retain their erased owners through record,
 enum, and machine builders, including baked builders and completed values.
+For an admitted reflected read of an interface-backed refinement as an erased
+interface, native extraction selects conversion metadata from the actual field
+type. After the existing owner, member, requested-type, and pending checks,
+conversion borrows and clones the stored value into one owned result, retaining
+the refinement's method identity rather than reusing its base interface box.
+Ordinary and reflected boxing use the same owner rule: matching outer secret
+qualifiers are removed when choosing the concrete implementation, while nominal
+refinements and additional source secret layers remain intact. A secret source
+converted to an unqualified interface retains its explicitly secret-owned
+implementation and redacted layout. Destination secrecy still redacts the outer
+value; concrete layouts retain recursive redaction for nested secret payloads.
+These conversions preserve pending depth, source ownership, and failure cleanup.
+They do not broaden reflected requested-type admission, whose remaining contract
+is recorded in [reflected field request compatibility](open_design/reflected_field_request_compatibility.md).
 Expected type context also passes through `run`: for example, initializing
 `result[int64, string]` with `run ok(17)` retains both declared result payload
 types in the checked body used by native lowering.
