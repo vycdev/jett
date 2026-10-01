@@ -5625,6 +5625,14 @@ function bad_consume(view data: list[int64]) returns list[int64]:
 
 A view is a borrow — the caller still owns the data. Any operation that would consume (move) the value is a compile error. The function can read the view and pass it as `view` to other functions, but cannot take ownership.
 
+Returning a known move-only view as an owned value, or passing it to an owned
+parameter, reports E0401. This includes view parameters, explicit local views,
+forwarded aliases, parentheses, and move-only results of `coarsen` or
+`declassify`. Ordinary, generic, indirect, and pipeline calls obey the same
+boundary. An explicitly written `view` argument to an owned parameter retains
+E0375. Actual implicitly copyable results, explicit clones, ordinary owned
+field copies, and owned call results remain valid.
+
 Views also forbid projected writes: a field assignment through a known view
 reports E0401, even when its binding is marked `mutable`. An immutable binding
 or temporary assignment root reports E0404. These existing restrictions do not
@@ -5662,6 +5670,12 @@ mutable view list[int64] stored_view
 ```
 
 A view cannot be returned, cannot be stored in a struct field, cannot be assigned to a variable in an outer scope, and cannot be captured in a closure. It exists for exactly one purpose: reading data within the current function, then disappearing. This is why no lifetime annotations are needed — the lifetime is always "this function call, no more."
+
+A directly written `returns view T` annotation reports E0401 even when the body
+returns an owned clone. The restriction covers declared, inline, interface,
+inherent, and implementation functions, and callable result annotations. An
+unused generic header is subject to the same declaration check. Return an owned
+type and use `clone` when duplicating a view's move-only value.
 
 #### Why No Lifetime Annotations
 

@@ -1,0 +1,15 @@
+# ERROR: E0401 x4
+namespace app
+function copy_values(view values: list[int64]) returns list[int64]:
+    return clone values
+function written_return(view values: list[int64]) returns view list[int64]:
+    return clone values
+function unused_generic[T](view value: T) returns view T:
+    return clone value
+function inline_annotation() returns nothing:
+    function(view list[int64]) returns list[int64] callback = function(view values: list[int64]) returns view list[int64]:
+        return clone values
+    trace callback
+    return nothing
+function callable_annotation() returns function(view list[int64]) returns view list[int64]:
+    return copy_values

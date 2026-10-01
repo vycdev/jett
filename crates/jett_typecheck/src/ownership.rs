@@ -58,10 +58,37 @@ fn use_after_move(name: &str, use_span: Span, consumed_span: Span) -> Diagnostic
 }
 
 /// E0401: Cannot consume a view parameter — view parameters are read-only.
-fn cannot_consume_view(name: &str, span: Span) -> Diagnostic {
+pub(crate) fn cannot_consume_view(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         401,
         format!("cannot consume `{name}` because it is a view parameter"),
+        span,
+    )
+}
+
+/// E0401: An owned result cannot retain a borrow from this call.
+pub(crate) fn cannot_return_view(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        401,
+        "cannot return a view; clone the value or take ownership instead",
+        span,
+    )
+}
+
+/// E0401: Function result annotations cannot declare escaping borrows.
+pub(crate) fn cannot_declare_view_return(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        401,
+        "function return type cannot be a view; return an owned value instead",
+        span,
+    )
+}
+
+/// E0401: An owned parameter cannot receive a known borrowed value.
+pub(crate) fn cannot_pass_view_to_owned_parameter(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        401,
+        "cannot pass a view to an owned parameter; clone the value or take ownership instead",
         span,
     )
 }

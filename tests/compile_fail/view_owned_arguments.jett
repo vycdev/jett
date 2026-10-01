@@ -1,0 +1,42 @@
+# ERROR: E0401 x11
+namespace app
+function consume(values: list[int64]) returns int64:
+    return list.length[int64](view values)
+function generic_consume[T](values: list[T]) returns int64:
+    return list.length[T](view values)
+function consume_more(amount: int64, values: list[int64]) returns int64:
+    return amount + list.length[int64](view values)
+function ordinary(view values: list[int64]) returns int64:
+    return consume(values)
+function indirect(view values: list[int64]) returns int64:
+    function(list[int64]) returns int64 callback = consume
+    return callback(values)
+function explicit_generic(view values: list[int64]) returns int64:
+    return generic_consume[int64](values)
+function inferred_generic(view values: list[int64]) returns int64:
+    return generic_consume(values)
+function pipeline_initial(view values: list[int64]) returns int64:
+    return values into consume
+function pipeline_extra(view values: list[int64]) returns int64:
+    return 1 into consume_more(values)
+function local_alias(view values: list[int64]) returns int64:
+    list[int64] borrowed = view values
+    return consume(borrowed)
+function forwarded_alias(view values: list[int64]) returns int64:
+    list[int64] borrowed = view values
+    list[int64] forwarded = borrowed
+    return(consume)(((forwarded)))
+actor Store:
+    receive use_borrowed(view values: list[int64]):
+        int64 count = consume(values)
+        trace count
+verify borrowed_local:
+    list[int64] source = list(7)
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    assert consume(forwarded) == 1
+property borrowed_given:
+    given source: list[int64]
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    assert consume(forwarded) >= 0

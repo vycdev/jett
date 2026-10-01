@@ -318,8 +318,9 @@ known view roots before execution in functions, inline bodies, actor handlers,
 comptime requests, and verify/property bodies. It also rejects rebinding an
 owned mutable local from a move-only view, including parenthesized targets,
 without changing declaration facts across branches. Owned mutable field updates
-still need the open execution contract above. Calls, returned values, and named
-view-type aliases remain separate ownership audit work.
+still need the open execution contract above. The known borrowed return and
+owned argument checks below extend this prerequisite; named view-type aliases
+and general call-produced borrow provenance remain separate ownership work.
 
 `projected_assignment.rs` pins frontend diagnostics, rejection before evaluation,
 and preservation of existing native outputs for both profiles and test suites.
@@ -503,3 +504,42 @@ and host distribution gates
 remain independent obligations for the final revision; the supplemental
 callback fixture does not change the inventory denominator or settle the
 concrete-owner argument policy for erased calls.
+
+The borrowed-boundary audit found known move-only views that could be returned
+or passed to owned parameters through local aliases and unchecked body
+contexts. The checker now reports E0401 for these boundaries across ordinary,
+generic, indirect, and pipeline calls, preserving view facts through
+parentheses, coarsening, and declassification. Explicit written view arguments
+retain E0375. Direct return-view annotations also report E0401, including unused
+generic headers and callable results; the check does not expand named aliases
+or prewalk unused generic bodies.
+
+`view_owned_returns.jett`, `view_owned_arguments.jett`,
+`view_explicit_owned_modes.jett`, and `view_return_annotations.jett` pin these
+diagnostics.
+`view_escapes::borrowed_values_cannot_escape_before_program_or_suite_execution`
+checks rejection before runtime, test suites, and explicit comptime evaluation.
+`view_escapes::borrowed_value_escapes_preserve_existing_native_publications`
+checks existing program outputs in both profiles and compiled test suites.
+`native_borrowed_return_clone_controls_match_interpreter_in_both_profiles` uses
+`borrowed_return_clone_controls.jett` for source removal, exact output, compiled
+verify/property suites, cloned returns and owned arguments, scalar/string
+copies, owned field copies, cloned coarsening/declassification, and closed
+comptime.
+
+Focused validation passes all 213 checker, 332 reference/comptime, 77 HIR,
+47 MIR, 78 codegen, and 598 frontend fixture tests. All eight backend-lowering
+tests pass, including the 182-fixture run-pass obligation. Both new public driver
+regressions and the linked clone-control regression pass, including debug and
+release after source removal and compiled verify/property suites.
+
+These supplemental regressions do not change the inventory denominator or
+establish full view support. Native local view-alias lowering remains
+unsupported; the frontend checks add no lifetime or projection policy. Direct
+contextual secret-list literals, such as
+`secret[list[int64]] hidden = list(5, 7)`, remain a separate native gap: list
+construction can violate the checked MIR type contract and report
+`InvalidMirContract`. The success fixture first binds an owned public list,
+then assigns it to the secret binding; it does not establish contextual secret
+collection construction support. Complete backend, workspace, inventory, and
+host distribution gates remain independent obligations for the final revision.

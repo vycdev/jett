@@ -334,7 +334,16 @@ pub fn check_with_options(
 
     let mut diagnostics = checker.sink.into_diagnostics();
     diagnostics.extend(complexity_diagnostics);
-    diagnostics.extend(ownership_diagnostics);
+    diagnostics.extend(ownership_diagnostics.into_iter().filter(|diagnostic| {
+        // The typed boundary check has the precise declaration provenance and
+        // guidance. Suppress only its exact legacy consume-view counterpart.
+        !checker
+            .diagnosed_owned_view_consumptions
+            .get(&diagnostic.span)
+            .is_some_and(|previous| {
+                previous.code == diagnostic.code && previous.message == diagnostic.message
+            })
+    }));
 
     let method_value_definitions = checker
         .method_definitions_by_owner
@@ -534,6 +543,10 @@ struct TypeChecker<'a> {
     /// Declaration identity preserves assignment policy across scopes and
     /// generic rechecks. Other bindings are immutable by default.
     assignment_bindings: HashMap<Span, AssignmentBinding>,
+    /// Exact legacy consume-view diagnostics replaced by typed boundary errors.
+    diagnosed_owned_view_consumptions: HashMap<Span, Diagnostic>,
+    /// A written return annotation may be resolved in several specializations.
+    diagnosed_view_return_annotations: HashSet<Span>,
     /// Whether the function currently being type-checked is pure.
     current_function_pure: bool,
     /// Whether we are inside a verify block.
@@ -690,6 +703,8 @@ impl<'a> TypeChecker<'a> {
             current_function_name: None,
             constant_declarations: HashSet::new(),
             assignment_bindings: HashMap::new(),
+            diagnosed_owned_view_consumptions: HashMap::new(),
+            diagnosed_view_return_annotations: HashSet::new(),
             current_function_pure: false,
             in_verify_block: false,
             in_property_block: false,
@@ -5314,7 +5329,104 @@ impl<'a> TypeChecker<'a> {
     // Module
     // ------------------------------------------------------------------
 
+    fn check_written_function_return_views(&mut self, module: &Module) {
+        // Signature syntax is checked even for unused generic declarations.
+        // Do not resolve named aliases or inspect deferred function bodies here.
+        for item in &module.items {
+            match item {
+                Item::Function(function) => self.check_function_return_view_syntax(
+                    &function.params,
+                    function.return_type.as_ref(),
+                ),
+                Item::Mutual(block) => {
+                    for function in &block.declarations {
+                        self.check_function_return_view_syntax(
+                            &function.params,
+                            function.return_type.as_ref(),
+                        );
+                    }
+                }
+                Item::Interface(interface) => {
+                    for method in &interface.methods {
+                        self.check_function_return_view_syntax(
+                            &method.params,
+                            method.return_type.as_ref(),
+                        );
+                    }
+                }
+                Item::Struct(definition) => {
+                    for field in &definition.fields {
+                        self.check_callable_return_view_syntax(&field.ty);
+                    }
+                    for method in &definition.methods {
+                        self.check_function_return_view_syntax(
+                            &method.params,
+                            method.return_type.as_ref(),
+                        );
+                    }
+                }
+                Item::Implement(block) => {
+                    for method in &block.methods {
+                        self.check_function_return_view_syntax(
+                            &method.params,
+                            method.return_type.as_ref(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn check_function_return_view_syntax(
+        &mut self,
+        params: &[ast::Param],
+        return_type: Option<&TypeExpr>,
+    ) {
+        for param in params {
+            self.check_callable_return_view_syntax(&param.ty);
+        }
+        if let Some(return_type) = return_type {
+            self.check_return_view_annotation(return_type);
+            self.check_callable_return_view_syntax(return_type);
+        }
+    }
+
+    fn check_return_view_annotation(&mut self, return_type: &TypeExpr) {
+        if Self::type_is_view(return_type)
+            && self
+                .diagnosed_view_return_annotations
+                .insert(return_type.span())
+        {
+            self.sink.emit(crate::ownership::cannot_declare_view_return(
+                return_type.span(),
+            ));
+        }
+    }
+
+    fn check_callable_return_view_syntax(&mut self, ty: &TypeExpr) {
+        match ty {
+            TypeExpr::Function(params, result, _) => {
+                self.check_return_view_annotation(result);
+                for param in params {
+                    self.check_callable_return_view_syntax(param);
+                }
+                self.check_callable_return_view_syntax(result);
+            }
+            TypeExpr::Generic(_, args, _) => {
+                for arg in args {
+                    self.check_callable_return_view_syntax(arg);
+                }
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.check_callable_return_view_syntax(inner);
+            }
+            TypeExpr::Named(_) => {}
+        }
+    }
+
     fn check_module(&mut self, module: &Module) {
+        self.check_written_function_return_views(module);
         self.constant_declarations = module
             .items
             .iter()
@@ -9179,6 +9291,16 @@ impl<'a> TypeChecker<'a> {
         };
 
         if let Some(expected) = self.current_return_type {
+            if expected != TypeInterner::ERROR
+                && ret_type != TypeInterner::ERROR
+                && let Some(value) = &ret.value
+                && (Self::is_explicit_view(value)
+                    || !crate::ownership::is_implicitly_copyable(&self.interner, ret_type))
+                && self.initializer_is_view(value)
+            {
+                self.sink
+                    .emit(crate::ownership::cannot_return_view(value.span()));
+            }
             if !self.satisfies_expected_type(expected, ret_type) {
                 self.sink.emit(errors::return_type_mismatch(
                     &self.type_name(expected),
@@ -10052,6 +10174,7 @@ impl<'a> TypeChecker<'a> {
                 self.check_enum_variant(type_name, variant, &[], *span)
             }
             Expr::InlineFn(params, return_type, body, inline_span) => {
+                self.check_function_return_view_syntax(params, return_type.as_ref());
                 // Type-check the inline function body with parameters bound.
                 let saved_return_type = self.current_return_type;
                 let saved_fn_name = self.current_function_name.take();
@@ -10260,6 +10383,7 @@ impl<'a> TypeChecker<'a> {
                 current_ty,
                 extra_args,
                 piped_as_view,
+                initial,
                 step.span,
             ) {
                 return return_type;
@@ -10272,6 +10396,7 @@ impl<'a> TypeChecker<'a> {
                 current_ty,
                 extra_args,
                 piped_as_view,
+                initial,
                 step.span,
             ) {
                 return return_type;
@@ -10409,6 +10534,20 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
+            if let Some(view_parameter) = function_view_modes
+                .as_ref()
+                .and_then(|modes| modes.get(parameter_index))
+            {
+                self.check_pipeline_owned_argument(
+                    *view_parameter,
+                    source_index,
+                    piped_as_view,
+                    initial,
+                    extra_args,
+                    param_ty,
+                    arg_ty,
+                );
+            }
             checked_arg_types.push(arg_ty);
             tainted_return |= self.check_argument_against_param_type(
                 callee_name.as_deref(),
@@ -10474,6 +10613,7 @@ impl<'a> TypeChecker<'a> {
         current_ty: TypeId,
         extra_args: &[ast::CallArg],
         piped_as_view: bool,
+        initial: Option<&Expr>,
         span: Span,
     ) -> Option<TypeId> {
         let function_name = callee_name?;
@@ -10529,6 +10669,15 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
+            self.check_pipeline_owned_argument(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                initial,
+                extra_args,
+                expected,
+                got,
+            );
             if !self.graphics_callback_mode_only_mismatch(
                 function_name,
                 parameter_index,
@@ -10596,6 +10745,7 @@ impl<'a> TypeChecker<'a> {
         current_ty: TypeId,
         extra_args: &[ast::CallArg],
         piped_as_view: bool,
+        initial: Option<&Expr>,
         span: Span,
     ) -> Option<TypeId> {
         let function_name = callee_name?;
@@ -10703,6 +10853,15 @@ impl<'a> TypeChecker<'a> {
                     arg.value.span(),
                 )
             };
+            self.check_pipeline_owned_argument(
+                template.params[parameter_index].view,
+                source_index,
+                piped_as_view,
+                initial,
+                extra_args,
+                expected,
+                got,
+            );
             if !self.graphics_callback_mode_only_mismatch(
                 function_name,
                 parameter_index,
@@ -12138,6 +12297,12 @@ impl<'a> TypeChecker<'a> {
                             arg.value.span(),
                         );
                         let got = self.check_expr_for_expected(&arg.value, expected, false);
+                        self.check_owned_argument(
+                            template.params[parameter_index].view,
+                            &arg.value,
+                            expected,
+                            got,
+                        );
                         self.check_graphics_opaque_argument(function_name, expected, got, arg);
                         if !self.graphics_callback_mode_only_mismatch(
                             function_name,
@@ -12419,6 +12584,11 @@ impl<'a> TypeChecker<'a> {
                 );
             }
             let arg_ty = self.check_expr_for_expected(&arg.value, param_ty, false);
+            if let Some(view_parameter) =
+                function_view_modes.as_ref().and_then(|modes| modes.get(i))
+            {
+                self.check_owned_argument(*view_parameter, &arg.value, param_ty, arg_ty);
+            }
             checked_arg_types.push(arg_ty);
 
             if self.is_refinement_type(param_ty)
@@ -13019,6 +13189,69 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn check_owned_argument(
+        &mut self,
+        view_parameter: bool,
+        argument: &Expr,
+        expected: TypeId,
+        actual: TypeId,
+    ) {
+        if view_parameter
+            || Self::is_explicit_view(argument)
+            || expected == TypeInterner::ERROR
+            || actual == TypeInterner::ERROR
+            || crate::ownership::is_implicitly_copyable(&self.interner, actual)
+            || !self.initializer_is_view(argument)
+        {
+            return;
+        }
+        self.sink
+            .emit(crate::ownership::cannot_pass_view_to_owned_parameter(
+                argument.span(),
+            ));
+
+        let mut subject = argument;
+        while let Expr::View(inner, _)
+        | Expr::Paren(inner, _)
+        | Expr::Coarsen(inner, _)
+        | Expr::Declassify(inner, _) = subject
+        {
+            subject = inner;
+        }
+        if let Expr::Ident(ident) = subject {
+            self.diagnosed_owned_view_consumptions.insert(
+                ident.span,
+                crate::ownership::cannot_consume_view(&ident.name, ident.span),
+            );
+        }
+    }
+
+    fn check_pipeline_owned_argument(
+        &mut self,
+        view_parameter: bool,
+        source_index: usize,
+        piped_as_view: bool,
+        initial: Option<&Expr>,
+        extra_args: &[ast::CallArg],
+        expected: TypeId,
+        actual: TypeId,
+    ) {
+        let argument = if source_index == 0 {
+            // Explicit pipeline borrowing already has the E0375 gate. Only the
+            // first step has an original expression; later call results own
+            // their values and must not inherit the initial borrow provenance.
+            if piped_as_view {
+                return;
+            }
+            initial
+        } else {
+            Some(&extra_args[source_index - 1].value)
+        };
+        if let Some(argument) = argument {
+            self.check_owned_argument(view_parameter, argument, expected, actual);
+        }
+    }
+
     fn check_pipeline_argument_view(
         &mut self,
         view_parameter: bool,
@@ -13202,6 +13435,12 @@ impl<'a> TypeChecker<'a> {
                 arg.value.span(),
             );
             let got = self.check_expr_for_expected(&arg.value, expected, false);
+            self.check_owned_argument(
+                template.params[parameter_index].view,
+                &arg.value,
+                expected,
+                got,
+            );
             self.check_graphics_opaque_argument(function_name, expected, got, arg);
             if !self.graphics_callback_mode_only_mismatch(
                 function_name,
@@ -14687,6 +14926,7 @@ impl<'a> TypeChecker<'a> {
                 self.resolve_type_expr(inner)
             }
             TypeExpr::Function(param_types, return_type, _span) => {
+                self.check_return_view_annotation(return_type);
                 let params = param_types
                     .iter()
                     .map(|t| self.resolve_type_expr(t))
@@ -21297,6 +21537,380 @@ function local(view source: Record) returns nothing:
                 .iter()
                 .all(|diagnostic| diagnostic.code.code() == 404)
         );
+    }
+
+    #[test]
+    fn written_view_return_annotations_reject_headers_and_callable_results() {
+        for (source, count) in [
+            (
+                "function copy(view values: list[int64]) returns view list[int64]:\n    return clone values\n",
+                1,
+            ),
+            (
+                "function unused[T](value: T) returns view T:\n    return value\n",
+                1,
+            ),
+            (
+                "mutual:\n    function value(number: int64) returns view int64\nfunction value(number: int64) returns view int64:\n    return number\n",
+                2,
+            ),
+            (
+                "struct Item:\n    value: int64\n    function read(view self: Item) returns view int64:\n        return self.value\n",
+                1,
+            ),
+            (
+                "interface Reader:\n    function read(view self: Reader) returns view int64\nstruct Item:\n    value: int64\nimplement Reader for Item:\n    function read(view self: Item) returns view int64:\n        return self.value\n",
+                2,
+            ),
+            (
+                "function callback() returns nothing:\n    function() returns int64 value = function() returns view int64:\n        return 1\n",
+                1,
+            ),
+            (
+                "function callback() returns nothing:\n    mutable function() returns view int64 selected = function() returns int64:\n        return 1\n",
+                1,
+            ),
+            (
+                "function unused[T](value: T, callback: function() returns view T) returns nothing:\n    return nothing\n",
+                1,
+            ),
+            (
+                "struct Unused[T]:\n    callback: function() returns view T\n",
+                1,
+            ),
+            (
+                "function factory() returns function() returns view int64:\n    return function() returns int64:\n        return 1\n",
+                1,
+            ),
+        ] {
+            let errors = check_source_errors(source);
+            assert_eq!(errors.len(), count, "{source}\n{errors:?}");
+            for error in errors {
+                assert_eq!(error.code.code(), 401, "{error:?}");
+                assert_eq!(
+                    error.message,
+                    "function return type cannot be a view; return an owned value instead"
+                );
+                assert!(
+                    source[error.span.start as usize..error.span.end as usize].starts_with("view ")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn written_view_return_annotations_are_reported_once_per_source_span() {
+        let errors = check_source_errors(
+            r#"function identity[T](value: T) returns view T:
+    return value
+function main() returns nothing:
+    int64 first = identity[int64](1)
+    int64 second = identity[int64](2)
+    string third = identity[string]("three")
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("return type cannot be a view"));
+
+        let errors = check_source_errors(
+            "function escape(view values: list[int64]) returns view list[int64]:\n    return values\n",
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].message.contains("return type cannot be a view"));
+        assert!(errors[1].message.contains("cannot return a view"));
+        assert_ne!(errors[0].span, errors[1].span);
+    }
+
+    #[test]
+    fn owned_returns_reject_known_views_and_forwarded_aliases() {
+        for (parameter, returned) in [
+            ("view values: list[int64]", "values"),
+            ("values: view list[int64]", "values"),
+            ("view values: list[int64]", "((values))"),
+            ("view values: list[int64]", "view values"),
+            ("view values: list[int64]", "(view values)"),
+            ("view values: list[int64]", "forwarded"),
+        ] {
+            let source = format!(
+                "function escape({parameter}) returns list[int64]:\n    list[int64] borrowed = view values\n    list[int64] forwarded = borrowed\n    return {returned}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            assert_eq!(
+                errors[0].message,
+                "cannot return a view; clone the value or take ownership instead"
+            );
+            assert_eq!(
+                &source[errors[0].span.start as usize..errors[0].span.end as usize],
+                returned
+            );
+        }
+    }
+
+    #[test]
+    fn owned_returns_check_inline_and_instantiated_generic_bodies() {
+        for source in [
+            r#"function make() returns function(view list[int64]) returns list[int64]:
+    return function(view values: list[int64]) returns list[int64]:
+        return values
+"#,
+            r#"function escape[T](view value: T) returns T:
+    return value
+function main() returns nothing:
+    list[int64] source = list(7)
+    list[int64] escaped = escape[list[int64]](view source)
+"#,
+        ] {
+            let errors = check_source_errors(source);
+            assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            assert!(errors[0].message.contains("cannot return a view"));
+        }
+    }
+
+    #[test]
+    fn owned_call_boundaries_reject_views_across_call_forms_once() {
+        let prefix = r#"function consume(values: list[int64]) returns nothing:
+    return nothing
+function generic[T](values: T) returns nothing:
+    return nothing
+"#;
+        for call in [
+            "consume(values)",
+            "consume((values))",
+            "consume(forwarded)",
+            "(consume)(forwarded)",
+            "generic[list[int64]](forwarded)",
+            "generic(forwarded)",
+            "callback(forwarded)",
+        ] {
+            let source = format!(
+                "{prefix}function reject(view values: list[int64], callback: function(list[int64]) returns nothing) returns nothing:\n    list[int64] borrowed = view values\n    list[int64] forwarded = borrowed\n    {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{call}: {errors:?}");
+            assert_eq!(
+                errors[0].message,
+                "cannot pass a view to an owned parameter; clone the value or take ownership instead"
+            );
+        }
+
+        let errors = check_source_errors(
+            r#"struct Item:
+    value: int64
+    function consume(self: Item) returns nothing:
+        return nothing
+function reject(view source: Item) returns nothing:
+    Item borrowed = source
+    Item.consume(borrowed)
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+        assert!(errors[0].message.contains("owned parameter"));
+    }
+
+    #[test]
+    fn owned_view_call_diagnostics_do_not_hide_other_view_errors() {
+        let errors = check_source_errors(
+            r#"struct Record:
+    value: int64
+function consume(item: Record) returns nothing:
+    return nothing
+function reject(view item: Record) returns nothing:
+    consume(item)
+    item.value = 2
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].message.contains("owned parameter"));
+        assert!(errors[1].message.contains("views are read-only"));
+        assert!(errors.iter().all(|error| error.code.code() == 401));
+    }
+
+    #[test]
+    fn owned_pipeline_boundaries_check_initial_values_and_extra_arguments() {
+        let prefix = r#"function consume(values: list[int64]) returns nothing:
+    return nothing
+function second(number: int64, values: list[int64]) returns nothing:
+    return nothing
+function generic[T](values: T) returns nothing:
+    return nothing
+function generic_second[T](number: int64, values: T) returns nothing:
+    return nothing
+"#;
+        for call in [
+            "values into consume()",
+            "borrowed into consume()",
+            "borrowed into generic[list[int64]]()",
+            "borrowed into generic()",
+            "borrowed into callback()",
+            "1 into second(borrowed)",
+            "1 into generic_second[list[int64]](borrowed)",
+            "1 into generic_second(borrowed)",
+        ] {
+            let source = format!(
+                "{prefix}function reject(view values: list[int64], callback: function(list[int64]) returns nothing) returns nothing:\n    list[int64] borrowed = view values\n    {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{call}: {errors:?}");
+            assert!(errors[0].message.contains("owned parameter"));
+            let reported = &source[errors[0].span.start as usize..errors[0].span.end as usize];
+            assert!(matches!(reported, "values" | "borrowed"), "{reported}");
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_preserve_explicit_view_call_diagnostics() {
+        for call in [
+            "consume(view values)",
+            "consume((view values))",
+            "generic[list[int64]](view values)",
+            "generic(view values)",
+            "callback(view values)",
+            "values into view consume()",
+            "(view values) into consume()",
+            "values into view generic[list[int64]]()",
+            "values into view generic()",
+        ] {
+            let source = format!(
+                "function consume(values: list[int64]) returns nothing:\n    return nothing\nfunction generic[T](values: T) returns nothing:\n    return nothing\nfunction reject(view values: list[int64], callback: function(list[int64]) returns nothing) returns nothing:\n    {call}\n"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{call}: {errors:?}");
+            assert_eq!(errors[0].code.code(), 375, "{call}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_follow_transparent_wrappers_but_not_type_errors() {
+        let prefix = r#"type Numbers = list[int64] where true
+function consume(values: list[int64]) returns nothing:
+    return nothing
+"#;
+        for (parameter, value) in [
+            ("view values: Numbers", "coarsen values"),
+            ("view values: Numbers", "coarsen (view values)"),
+            ("view values: secret[list[int64]]", "declassify values"),
+            (
+                "view values: secret[list[int64]]",
+                "declassify (view values)",
+            ),
+        ] {
+            for body in [
+                format!("    return {value}\n"),
+                format!("    consume({value})\n    return list()\n"),
+            ] {
+                let source =
+                    format!("{prefix}function reject({parameter}) returns list[int64]:\n{body}");
+                let errors = check_source_errors(&source);
+                assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            }
+        }
+        for body in [
+            "    return declassify values\n",
+            "    consume(declassify values)\n    return list()\n",
+        ] {
+            let source = format!(
+                "{prefix}function invalid(view values: list[int64]) returns list[int64]:\n{body}"
+            );
+            let errors = check_source_errors(&source);
+            assert_eq!(errors.len(), 1, "{source}\n{errors:?}");
+            assert!(errors[0].message.contains("declassify"), "{errors:?}");
+            assert_ne!(errors[0].code.code(), 401, "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_apply_to_actor_verify_and_property_bodies() {
+        let errors = check_source_errors(
+            r#"namespace app
+function consume(values: list[int64]) returns int64:
+    return 1
+actor Store:
+    receive borrowed(view values: list[int64]):
+        list[int64] alias = view values
+        int64 count = consume(alias)
+        trace count
+verify borrowed_alias:
+    list[int64] source = list(7)
+    list[int64] alias = view source
+    list[int64] forwarded = alias
+    assert consume(forwarded) == 1
+property borrowed_property_alias:
+    given source: list[int64]
+    list[int64] alias = view source
+    list[int64] forwarded = alias
+    assert consume(forwarded) == 1
+"#,
+        );
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        for error in errors {
+            assert_eq!(error.code.code(), 401, "{error:?}");
+            assert!(error.message.contains("owned parameter"));
+        }
+    }
+
+    #[test]
+    fn owned_view_boundaries_preserve_copies_clones_fields_and_call_results() {
+        let errors = check_source_errors(
+            r#"struct Record:
+    values: list[int64]
+function consume(values: list[int64]) returns nothing:
+    return nothing
+function copy(view values: list[int64]) returns list[int64]:
+    list[int64] borrowed = view values
+    list[int64] forwarded = borrowed
+    return clone forwarded
+function scalar(view value: int64) returns int64:
+    int64 copied = value
+    return copied
+function text(view value: string) returns string:
+    return value
+function field(view record: Record) returns list[int64]:
+    return record.values
+function copies(view values: list[int64], view record: Record) returns nothing:
+    consume(clone values)
+    consume(clone (view values))
+    consume(record.values)
+    consume(copy(view values))
+    values into view copy() into consume()
+    if true:
+        list[int64] alias = view values
+        consume(clone alias)
+    list[int64] alias = list(7)
+    consume(alias)
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn owned_view_boundaries_preserve_copyable_transformation_results() {
+        let errors = check_source_errors(
+            r#"type Count = int64 where true
+function consume(value: int64) returns nothing:
+    return nothing
+function refined(view value: Count) returns int64:
+    return coarsen value
+function classified(view value: secret[int64]) returns int64:
+    return declassify value
+function copies(view count: Count, view hidden: secret[int64]) returns nothing:
+    consume(coarsen count)
+    consume(declassify hidden)
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let errors = check_source_errors(
+            "function explicit(view value: int64) returns int64:\n    return view value\n",
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("cannot return a view"));
     }
 
     #[test]

@@ -3061,3 +3061,20 @@ compile_fail_fixture!(
     compile_fail_generic_reflection_unknown_guard_invalid_binding,
     "generic_reflection_unknown_guard_invalid_binding.jett"
 );
+
+compile_fail_fixture!(compile_fail_view_owned_returns, "view_owned_returns.jett");
+
+compile_fail_fixture!(
+    compile_fail_view_owned_arguments,
+    "view_owned_arguments.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_view_explicit_owned_modes,
+    "view_explicit_owned_modes.jett"
+);
+
+compile_fail_fixture!(
+    compile_fail_view_return_annotations,
+    "view_return_annotations.jett"
+);

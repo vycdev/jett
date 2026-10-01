@@ -7566,3 +7566,58 @@ fn native_interface_method_value_pending_receiver_matches_qualified_call() {
         }
     }
 }
+
+#[test]
+fn native_borrowed_return_clone_controls_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/borrowed_return_clone_controls.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("borrowed_return_clone_controls.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source)
+        .expect("owned clone and implicit-copy return oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "copies:3:4:3:3:before\n",
+            "owned:3:3:3:3:4:3\n",
+            "scalars:7:before\n",
+            "wrapped:2:2:2:2\n",
+            "baked:3:3:3:3:3:4:3:7:seed\n",
+        )
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("borrowed_clones_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native owned clone and implicit-copy returns");
+        binaries.push(binary);
+    }
+    let verify_binary = directory.path().join("borrowed_clones_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native borrowed clone verify suite");
+    let property_binary = directory.path().join("borrowed_clones_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native borrowed clone property suite");
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+    for binary in [verify_binary, property_binary] {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}

@@ -1,0 +1,86 @@
+namespace app
+struct Record:
+    values: list[int64]
+    label: string
+type NonEmptyNumbers = list[int64] where list.length(value) > 0
+function copy_values[T](view values: list[T]) returns list[T]:
+    return clone values
+function copy_record(view source: Record) returns Record:
+    return clone source
+function copy_field(view source: Record) returns list[int64]:
+    return source.values
+function copy_scalar(view value: int64) returns int64:
+    return value
+function copy_text(view text: string) returns string:
+    return text
+function coarsen_copy(view source: NonEmptyNumbers) returns list[int64]:
+    return coarsen clone source
+function reveal_copy(view source: secret[list[int64]]) returns list[int64]:
+    return declassify clone source
+function consume(values: list[int64]) returns int64:
+    return list.length[int64](view values)
+function generic_consume[T](values: list[T]) returns int64:
+    return list.length[T](view values)
+function consume_more(amount: int64, values: list[int64]) returns int64:
+    return amount + list.length[int64](view values)
+function first(view values: list[int64]) returns int64:
+    return list.get[int64](view values, 0) handle:
+        default 0
+function owned_paths(view source: list[int64]) returns string:
+    int64 ordinary = consume(clone source)
+    function(list[int64]) returns int64 callback = consume
+    int64 indirect = callback(clone source)
+    int64 generic = generic_consume[int64](clone source)
+    int64 pipeline =(clone source) into consume
+    int64 extra = 1 into consume_more(clone source)
+    return "{ordinary}:{indirect}:{generic}:{pipeline}:{extra}:{list.length(view source)}"
+function copy_report() returns string:
+    Record source = Record(values: list(3, 5, 7), label: "before")
+    Record copied_record = copy_record(view source)
+    mutable list[int64] copied_values = copy_values[int64](view source.values)
+    copied_values = list.append[int64](copied_values, 9)
+    list[int64] copied_field = copy_field(view source)
+    return "{list.length(view source.values)}:{list.length(view copied_values)}:{list.length(view copied_record.values)}:{list.length(view copied_field)}:{source.label}"
+function scalar_report() returns string:
+    int64 number = 7
+    string text = "before"
+    return "{copy_scalar(view number)}:{copy_text(view text)}"
+function wrapped_report() returns string:
+    NonEmptyNumbers refined = list(5, 7) handle error:
+        return error
+    list[int64] coarse = coarsen_copy(view refined)
+    list[int64] again_coarse = coarsen_copy(view refined)
+    list[int64] public_source = list(5, 7)
+    secret[list[int64]] hidden = public_source
+    list[int64] public = reveal_copy(view hidden)
+    list[int64] again = reveal_copy(view hidden)
+    return "{list.length(view coarse)}:{list.length(view again_coarse)}:{list.length(view public)}:{list.length(view again)}"
+function baked_report() returns string:
+    list[int64] baked = comptime copy_values[int64](view list(2, 3, 5))
+    string paths = comptime owned_paths(view list(2, 3, 5))
+    int64 number = comptime copy_scalar(view 7)
+    string text = comptime copy_text(view "seed")
+    return "{list.length(view baked)}:{paths}:{number}:{text}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "copies:{copy_report()}\n")
+    list[int64] source = list(2, 3, 5)
+    Stdout.write(view stdout, "owned:{owned_paths(view source)}\n")
+    Stdout.write(view stdout, "scalars:{scalar_report()}\n")
+    Stdout.write(view stdout, "wrapped:{wrapped_report()}\n")
+    Stdout.write(view stdout, "baked:{baked_report()}\n")
+verify borrowed_copies:
+    assert copy_report() == "3:4:3:3:before"
+    assert owned_paths(view list(2, 3, 5)) == "3:3:3:3:4:3"
+    assert scalar_report() == "7:before"
+    assert wrapped_report() == "2:2:2:2"
+    assert baked_report() == "3:3:3:3:3:4:3:7:seed"
+property copied_source_survives:
+    given seed: int64
+    list[int64] source = list(seed, seed + 1, seed + 2)
+    list[int64] copied = copy_values[int64](view source)
+    assert first(view copied) == seed
+    assert list.length(view source) == 3
+    assert owned_paths(view source) == "3:3:3:3:4:3"
+    assert copy_scalar(view seed) == seed
+    assert copy_text(view "seed") == "seed"
+    assert wrapped_report() == "2:2:2:2"

@@ -669,6 +669,22 @@ reject execution. The
 [open contract](open_design/projected_field_assignment.md) must settle safe
 updates or rejection of all projected writes before extending this handoff.
 
+The checker also rejects known move-only views at owned return and argument
+boundaries with E0401. It reuses declaration facts for view parameters, local
+views, and forwarded aliases, retaining the borrow through parentheses,
+`coarsen`, and `declassify` when the checked result is move-only. These checks
+cover ordinary, generic, indirect, and pipeline calls, including actor handlers
+and verify/property bodies. Explicit written view arguments retain E0375;
+implicit-copy results, clones, ordinary owned field copies, and owned call
+results remain valid.
+
+Directly written return-view annotations report E0401 by unique annotation
+span, including unused generic headers, interface/inherent/implementation
+methods, inline functions, and callable result types. This declaration check
+does not expand named aliases or prewalk unused generic bodies. It adds no
+lifetime or projected-place policy. Native lowering of local view aliases and
+general call-produced borrow provenance remain separate gaps.
+
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 
 ```
