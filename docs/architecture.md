@@ -694,6 +694,9 @@ are owned. MIR retains and remaps the backing chain, expands alias reads into
 owner liveness, and excludes aliases from cleanup slots. Borrowed matches clone
 their scrutinee before taking payloads, and callbacks borrow their descriptor
 while it is invoked. Explicit clones still acquire independent ownership.
+MIR preserves validated borrowed initializers through transparent `coarsen` and
+`declassify` wrappers. Those bindings keep their backing handle; the owning
+snapshots used for ordinary value expressions must not replace their origin.
 Copy-owned alias expressions acquire retained string or cloned descriptor
 temporaries before entering containers; borrowed argument lowering reads their
 existing handles. Plain string view expressions retain ordinary copy behavior.

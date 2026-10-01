@@ -1322,10 +1322,26 @@ function main() returns nothing:
 
 #[test]
 fn native_user_struct_projection_loans_cannot_escape_or_conflict() {
+    enum ExpectedRejection {
+        Hir(&'static str),
+        Contains(&'static str),
+    }
+
     for (body, expected) in [
-        ("bytes stolen = view item.data", "view cannot escape"),
-        ("consume(view item.data, item)", "while borrowed"),
-        ("Packet moved = item\n    println(item.label)", "moved"),
+        (
+            "bytes stolen = view item.data",
+            ExpectedRejection::Hir(
+                "native borrowed alias requires a stable local origin; temporary and projected views remain unsupported",
+            ),
+        ),
+        (
+            "consume(view item.data, item)",
+            ExpectedRejection::Contains("while borrowed"),
+        ),
+        (
+            "Packet moved = item\n    println(item.label)",
+            ExpectedRejection::Contains("moved"),
+        ),
     ] {
         let source = format!(
             r#"
@@ -1344,7 +1360,22 @@ function main() returns nothing:
         std::fs::write(&path, source).unwrap();
         let error = build_host_executable(&path, &launcher(), &directory.path().join("program"))
             .unwrap_err();
-        assert!(error.to_string().contains(expected), "{expected}: {error}");
+        match expected {
+            ExpectedRejection::Hir(message) => {
+                let jett_driver::native::NativeBuildError::Lowering { source, .. } = error else {
+                    panic!("expected HIR admission failure: {error}");
+                };
+                let errors = match *source {
+                    jett_driver::BackendLoweringError::Hir(errors) => errors,
+                    error => panic!("expected HIR admission failure: {error}"),
+                };
+                assert_eq!(errors.len(), 1, "{errors:?}");
+                assert_eq!(errors[0].message, message);
+            }
+            ExpectedRejection::Contains(message) => {
+                assert!(error.to_string().contains(message), "{message}: {error}");
+            }
+        }
     }
 }
 

@@ -1969,7 +1969,7 @@ impl Builder<'_> {
 mod tests {
     use super::*;
 
-    fn lower_handler_source(source: &str) -> (Program, TypeInterner) {
+    fn handler_source_hir(source: &str) -> (hir::Program, TypeInterner) {
         let file = jett_common::FileId::new(0);
         let parsed = jett_parser::parse(source, file);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
@@ -1990,10 +1990,12 @@ mod tests {
             &std::collections::HashMap::from([(file, jett_common::SourceOrigin::Project)]),
         )
         .expect("HIR lowering");
-        (
-            lower(&hir, &checked.interner).expect("MIR lowering"),
-            checked.interner,
-        )
+        (hir, checked.interner)
+    }
+
+    fn lower_handler_source(source: &str) -> (Program, TypeInterner) {
+        let (hir, types) = handler_source_hir(source);
+        (lower(&hir, &types).expect("MIR lowering"), types)
     }
 
     fn inspected_handler_function(program: &Program) -> &Function {
@@ -2002,6 +2004,195 @@ mod tests {
             .iter()
             .find(|function| function.identity.declaration.name == "inspect")
             .unwrap()
+    }
+
+    #[test]
+    fn alias_let_preserves_coarsen_declassify_and_forwarded_backing() {
+        let (hir, types) = handler_source_hir(
+            r#"namespace app
+type Numbers = list[int64] where true
+function inspect(view refined: Numbers, view hidden: secret[list[int64]]) returns list[int64]:
+    list[int64] plain = coarsen refined
+    list[int64] forwarded = plain
+    list[int64] exposed = declassify hidden
+    list[int64] exposed_alias = exposed
+    trace forwarded
+    return clone exposed_alias
+"#,
+        );
+        let program = lower(&hir, &types).expect("MIR lowering");
+        validate(&program).expect("preserved alias MIR");
+        let function = inspected_handler_function(&program);
+        let original = hir
+            .functions
+            .iter()
+            .find(|original| original.id == function.id)
+            .unwrap();
+        let plan = crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        let mut aliases = 0;
+        for statement in &original.body.statements {
+            let hir::StatementKind::Let { local, value } = &statement.kind else {
+                continue;
+            };
+            let metadata = function.local(*local).unwrap();
+            let Some(source) = metadata.view_source else {
+                continue;
+            };
+            aliases += 1;
+            let lowered = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match &statement.kind {
+                    StatementKind::Let {
+                        local: target,
+                        value,
+                    } if target == local => Some(value),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(lowered, value, "{} initializer was changed", metadata.name);
+            hir::validate_local_view_initializer(lowered, source, metadata.ty, &types).unwrap();
+            assert!(!plan.owned_locals.contains(&(local.index() as usize)));
+            if metadata.name == "forwarded" || metadata.name == "exposed_alias" {
+                assert!(function.local(source).unwrap().view_source.is_some());
+            }
+        }
+        assert_eq!(aliases, 4);
+    }
+
+    #[test]
+    fn owned_let_keeps_coarsen_and_declassify_snapshots() {
+        let (program, types) = lower_handler_source(
+            r#"namespace app
+type Numbers = list[int64] where true
+function inspect(refined: Numbers, hidden: secret[list[int64]]) returns list[int64]:
+    list[int64] plain = coarsen refined
+    list[int64] exposed = declassify hidden
+    trace refined
+    trace hidden
+    trace plain
+    return exposed
+"#,
+        );
+        let function = inspected_handler_function(&program);
+        let plan = crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        for name in ["plain", "exposed"] {
+            let local = function
+                .locals
+                .iter()
+                .find(|local| local.name == name)
+                .unwrap();
+            assert!(local.view_source.is_none());
+            assert!(plan.owned_locals.contains(&(local.id.index() as usize)));
+            let value = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match &statement.kind {
+                    StatementKind::Let {
+                        local: target,
+                        value,
+                    } if *target == local.id => Some(value),
+                    _ => None,
+                })
+                .unwrap();
+            let (ExpressionKind::Coarsen(snapshot) | ExpressionKind::Declassify(snapshot)) =
+                &value.kind
+            else {
+                panic!("expected a qualification wrapper: {value:?}");
+            };
+            assert!(matches!(&snapshot.kind, ExpressionKind::Clone(value)
+                if matches!(value.kind, ExpressionKind::Local(_))));
+        }
+    }
+
+    #[test]
+    fn alias_let_does_not_sanitize_invalid_hir_initializers() {
+        for invalid in ["clone", "handle", "different source"] {
+            let (mut hir, mut types) = handler_source_hir(
+                r#"namespace app
+function inspect(view source: list[int64], view other: list[int64]) returns list[int64]:
+    list[int64] borrowed = view source
+    return clone borrowed
+"#,
+            );
+            let function = hir
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "inspect")
+                .unwrap();
+            let source = function
+                .locals
+                .iter()
+                .find(|local| local.name == "source")
+                .unwrap();
+            let other = function
+                .locals
+                .iter()
+                .find(|local| local.name == "other")
+                .unwrap();
+            let input = Expression {
+                kind: ExpressionKind::Local(source.id),
+                ty: source.ty,
+                span: source.span,
+            };
+            let other = Expression {
+                kind: ExpressionKind::Local(other.id),
+                ty: other.ty,
+                span: other.span,
+            };
+            let clone = Expression {
+                kind: ExpressionKind::Clone(Box::new(input.clone())),
+                ..input.clone()
+            };
+            let malformed = match invalid {
+                "clone" => clone,
+                "different source" => other,
+                "handle" => Expression {
+                    kind: ExpressionKind::Handle {
+                        target: Box::new(Expression {
+                            kind: ExpressionKind::OptionalSome(Box::new(clone)),
+                            ty: types.intern(Type::Optional(input.ty)),
+                            span: input.span,
+                        }),
+                        kind: HandleKind::Optional,
+                        error_local: None,
+                        failure: hir::Block {
+                            statements: vec![hir::Statement {
+                                kind: hir::StatementKind::HandleDefault(Expression {
+                                    kind: ExpressionKind::Clone(Box::new(other)),
+                                    ..input.clone()
+                                }),
+                                span: input.span,
+                            }],
+                            span: input.span,
+                        },
+                    },
+                    ..input.clone()
+                },
+                _ => unreachable!(),
+            };
+            let hir::StatementKind::Let { value, .. } = &mut function.body.statements[0].kind
+            else {
+                panic!("expected alias declaration");
+            };
+            *value = malformed;
+            hir::validate(&hir).expect("malformed alias remains structurally valid HIR");
+            assert!(
+                hir::validate_backend_types(&hir, &types).is_err(),
+                "{invalid}"
+            );
+            let program = lower(&hir, &types).expect("structural HIR lowering");
+            validate(&program).expect("malformed alias remains structurally valid MIR");
+            let error = crate::move_values::MoveValuePlan::analyze(
+                &program,
+                inspected_handler_function(&program),
+                &types,
+            )
+            .unwrap_err();
+            assert!(error.contains("stable backing local"), "{invalid}: {error}");
+        }
     }
 
     #[test]

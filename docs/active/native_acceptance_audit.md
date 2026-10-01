@@ -644,3 +644,31 @@ context-bound identity remains usable at the provider boundary. All twelve
 linked graphics tests and 78 codegen tests pass with the guard. Supplemental
 coverage leaves the inventory denominator unchanged and does not replace the
 workspace, inventory, or supported-host distribution gates for this revision.
+
+The locked Windows workspace run at `22fcbf13` passed all inventory gates:
+182 HIR/MIR fixtures, 182 native objects, 30 entry cases, 25 runtime contracts,
+155 verify fixtures, and three property fixtures with 100 trials each. Its
+native conformance target reported 259 passes and three failures; all other
+workspace targets and doc-tests passed. The three failures exposed borrowed
+`coarsen` initializers that MIR had replaced with owned snapshots, invalidating
+their checked backing origins.
+
+MIR now preserves only local alias initializers accepted by the shared typed
+origin validator. Borrowed `coarsen`, `declassify`, and forwarded aliases retain
+their backing handles; ordinary owned expressions still acquire snapshots.
+Malformed clone, handler, and different-source initializers remain rejected.
+The earlier projected-local admission error is pinned directly, separately from
+source escape, conflicting borrow, and moved-owner errors. A portable debug and
+release regression verifies rejection before launcher lookup and preserves an
+existing executable.
+
+All 62 MIR tests, 78 codegen tests, 21 linked interface tests, both public
+view-escape tests, and five local alias regressions pass with this repair.
+The linked nonstring qualification regression runs in both profiles after
+source removal, checks independent returned clones and unchanged backing
+owners, and requires the exact later terminal failure with successful cleanup.
+The Linux-only projection-loan test
+expectation is updated but requires Linux validation. This repair does not
+change the inventory denominator or extend native view origins; full workspace
+and supported-host distribution results must still be established for the
+final revision.

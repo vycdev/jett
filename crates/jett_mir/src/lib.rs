@@ -1090,7 +1090,17 @@ impl<'a> Builder<'a> {
     fn lower_statement(&mut self, statement: &hir::Statement) {
         match &statement.kind {
             hir::StatementKind::Let { local, value } => {
-                let value = self.lower_value(value);
+                let value = if let Some(metadata) = self.locals.get(local.index() as usize)
+                    && let Some(source) = metadata.view_source
+                    && hir::validate_local_view_initializer(value, source, metadata.ty, self.types)
+                        .is_ok()
+                {
+                    // Stable aliases contain only transparent reads. Taking an
+                    // owned snapshot would replace their checked backing local.
+                    value.clone()
+                } else {
+                    self.lower_value(value)
+                };
                 self.push(
                     StatementKind::Let {
                         local: *local,

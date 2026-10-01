@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn native_projected_local_view_aliases_reject_before_publication() {
+    use jett_driver::native::{NativeBuildError, build_host_executable_with_options};
+    use jett_driver::{BackendLoweringError, BuildOptions, build_file_with_options};
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("main.jett");
+    fs::write(
+        &source,
+        r#"namespace app
+struct Packet:
+    data: bytes
+function main() returns nothing:
+    Packet item = Packet(data: bytes.new())
+    bytes borrowed = view item.data
+"#,
+    )
+    .unwrap();
+    let output = directory.path().join("preserved.exe");
+    let sentinel = b"existing native publication";
+    fs::write(&output, sentinel).unwrap();
+    let launcher = if cfg!(windows) {
+        NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("unused.lib"))
+    } else {
+        NativeLauncherBundle::linux_gnu_v1(directory.path().join("unused.a"))
+    };
+    assert!(!launcher.archive_path.exists());
+
+    for release in [false, true] {
+        let options = BuildOptions { release };
+        let checked = build_file_with_options(&source, options);
+        assert!(
+            !checked.has_errors,
+            "projected local views remain frontend-valid: {:?}",
+            checked.diagnostics
+        );
+        let error = build_host_executable_with_options(&source, &launcher, &output, options)
+            .expect_err("unsupported native origin must fail before emission or archive lookup");
+        let NativeBuildError::Lowering { source, .. } = error else {
+            panic!("expected HIR admission failure: {error}");
+        };
+        let errors = match *source {
+            BackendLoweringError::Hir(errors) => errors,
+            error => panic!("expected HIR admission failure: {error}"),
+        };
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(
+            errors[0].message,
+            "native borrowed alias requires a stable local origin; temporary and projected views remain unsupported"
+        );
+        assert_eq!(fs::read(&output).unwrap(), sentinel);
+    }
+}
+
+#[test]
 fn native_local_view_aliases_match_interpreter_in_both_profiles() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/local_view_aliases.jett");
@@ -125,6 +179,84 @@ function main(stdout: Stdout) returns nothing:
             jett_driver::BuildOptions { release },
         )
         .expect("native alias borrow followed by terminal owned argument failure");
+        binaries.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{actual:?}"
+        );
+    }
+}
+
+#[test]
+fn native_nonstring_qualified_local_aliases_preserve_owners_and_cleanup_in_both_profiles() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("main.jett");
+    fs::write(
+        &source,
+        r#"namespace app
+type Numbers = list[int64] where true
+function peek(view values: list[int64], index: int64) returns int64:
+    return list.get[int64](view values, index) handle: default -1
+function refined_copy(view source: Numbers) returns list[int64]:
+    list[int64] borrowed = coarsen view source
+    list[int64] forwarded = borrowed
+    return clone forwarded
+function revealed_copy(view source: secret[list[int64]]) returns list[int64]:
+    list[int64] borrowed = declassify view source
+    list[int64] forwarded = borrowed
+    return clone forwarded
+function main(stdout: Stdout) returns nothing:
+    list[string] earlier = list("owned", "cleanup")
+    Numbers refined = list(2, 3) handle error:
+        Stdout.write(view stdout, "unexpected:{error}\n")
+        return nothing
+    mutable list[int64] refined_clone = refined_copy(view refined)
+    refined_clone = list.append[int64](refined_clone, 13)
+    list[int64] coarse = coarsen view refined
+    Stdout.write(view stdout, "coarsen:{list.length(view coarse)}:{list.length(view refined_clone)}:{peek(view coarse, 0)}:{peek(view coarse, 1)}:{peek(view refined_clone, 2)}\n")
+    list[int64] public_values = list(5, 7)
+    secret[list[int64]] hidden = public_values
+    mutable list[int64] hidden_clone = revealed_copy(view hidden)
+    hidden_clone = list.append[int64](hidden_clone, 17)
+    list[int64] revealed = declassify view hidden
+    Stdout.write(view stdout, "declassify:{list.length(view revealed)}:{list.length(view hidden_clone)}:{peek(view revealed, 0)}:{peek(view revealed, 1)}:{peek(view hidden_clone, 2)}\n")
+    string title = list.get[string](view earlier, 0) handle: default "missing"
+    Stdout.write(view stdout, "earlier:{title}:{list.length(view earlier)}\n")
+    list[string] unreachable = list.remove_at[string](earlier, -1)
+    Stdout.write(view stdout, "must not run")
+"#,
+    )
+    .unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&source)
+        .expect_err("terminal list failure follows qualified aliases and independent clones");
+    assert_eq!(
+        expected.output.stdout,
+        "coarsen:2:3:2:3:13\ndeclassify:2:3:5:7:17\nearlier:owned:2\n"
+    );
+    assert!(expected.output.debug_output.is_empty());
+    assert_eq!(
+        expected.message,
+        "runtime error: list.__remove_at: index -1 out of bounds"
+    );
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("qualified_alias_cleanup_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native nonstring coarsened and declassified local view aliases");
         binaries.push(binary);
     }
     fs::remove_file(&source).unwrap();

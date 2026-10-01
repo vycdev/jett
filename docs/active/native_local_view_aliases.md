@@ -32,6 +32,12 @@ calls, and explicit clones.
 Preserve the checked type, including secret and refinement identity. Do not infer
 view-type semantics from named aliases or turn arbitrary call results into views.
 
+Carrier-preserving `coarsen` and `declassify` bindings retain their checked backing
+chain through MIR lowering. Only a destination with a valid borrowed origin and
+a validated transparent initializer takes this path. Ordinary owning expressions
+keep their existing snapshots; an explicit `clone`, handler, or allocating
+conversion cannot be reinterpreted as an alias initializer.
+
 1. Export typed binding facts through ordinary, generic, and reflected comptime
    body handoffs. Facts must belong to the concrete instantiation: the same
    generic source span can describe a scalar copy or an aggregate borrow.

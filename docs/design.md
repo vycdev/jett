@@ -5658,7 +5658,9 @@ Native lowering currently supports direct and forwarded immutable local views
 with a stable immutable local or view-parameter origin. Explicit clones acquire
 ownership; aliases carry no cleanup obligation. Temporary-backed views, mutable
 chains, and owner consumption or rebinding after alias creation remain native
-implementation limits. These limits do not settle source loan expiry or change
+implementation limits. Carrier-preserving `coarsen` and `declassify` aliases
+retain the same backing owner; ordinary owned expressions retain their copy
+behavior. These limits do not settle source loan expiry or change
 the checker rules above; see the
 [local view implementation note](active/native_local_view_aliases.md).
 
