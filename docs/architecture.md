@@ -2913,6 +2913,16 @@ comparison cases without reading their payloads. Sortedness uses IEEE `<=` for
 ready floating pairs, so NaN makes an adjacent comparison false; sorting retains
 its stable equal-comparison fallback for unordered floating values.
 
+Native `math.average[T]` and `math.median[T]` admit every checked primitive
+numeric list carrier and require an exact `float64` result. Runtime conversion
+sign-extends narrow signed values, zero-extends unsigned values, and widens
+already-rounded binary32 values to binary64 before the shared aggregate
+algorithm. It validates carrier bits and checks outer pending depth, empty
+input, and pending elements before decoding values. The kernel leaves list
+storage and ownership intact; the source wrapper retains its consuming input
+contract. Refinements, secret wrappers, and nonnumeric types remain rejected,
+independently of sort's refinement support and the open summation domain.
+
 Native aggregate consumers check the owner's outer pending depth before public
 field reads, machine state tests/transitions, enum matches, and each ancestor in
 a projected sequence path. `StructPendingAccessCheck` leaves ready owners and

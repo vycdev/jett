@@ -555,6 +555,188 @@ fn native_pending_refined_list_sort_rejects_outer_pending_in_both_profiles() {
 }
 
 #[test]
+fn native_math_aggregate_primitives_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/math_aggregate_primitives.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("math_aggregate_primitives.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).expect("primitive math oracle");
+    let reports = [
+        "int8:-0.5:-0.5",
+        "int16:-0.5:-0.5",
+        "int32:-0.5:-0.5",
+        "int64:0:0",
+        "uint8:127.5:127.5",
+        "uint16:32767.5:32767.5",
+        "uint32:2147483647.5:2147483647.5",
+        "uint64:13835058055282164000:13835058055282164000",
+        "float32:5592405.333333333:16777216",
+        "float64:5592405.666666667:16777216",
+    ];
+    let mut stdout = String::new();
+    for context in ["runtime", "comptime"] {
+        for report in reports {
+            stdout.push_str(&format!("{context}:{report}\n"));
+        }
+    }
+    stdout.push_str(concat!(
+        "ieee32:nan:true:true;infinity:inf:inf;opposite:true:true\n",
+        "ieee64:nan:true:true;infinity:inf:inf;opposite:true:true\n",
+        "maximum:true:true;residual:true\n",
+        "baked:ieee32:nan:true:true;infinity:inf:inf;opposite:true:true\n",
+    ));
+    assert_eq!(expected.stdout, stdout);
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("math_aggregate_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native primitive math aggregate program");
+        binaries.push(binary);
+    }
+    let verify_binary = directory.path().join("math_aggregate_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native primitive math aggregate verify suite");
+    let property_binary = directory.path().join("math_aggregate_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native primitive math aggregate property suite");
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+    for suite in [verify_binary, property_binary] {
+        let actual = run_bounded(&suite, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_math_aggregate_primitives_reject_empty_and_pending_in_both_profiles() {
+    let mut cases = Vec::new();
+    for operation in ["average", "median"] {
+        for ty in [
+            "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32",
+            "float64",
+        ] {
+            cases.push((
+                format!("{operation}_{ty}_empty"),
+                operation,
+                ty,
+                "list()".to_owned(),
+                format!("math.{operation}: list is empty"),
+            ));
+        }
+    }
+    for (name, operation, ty, initializer, message) in [
+        (
+            "average_first",
+            "average",
+            "int8",
+            "list(run run 2, 3)",
+            "math.average expects a list of numeric values",
+        ),
+        (
+            "average_later",
+            "average",
+            "float32",
+            "list(2.0, run run 3.0)",
+            "math.average expects a list of numeric values",
+        ),
+        (
+            "average_outer",
+            "average",
+            "uint64",
+            "run run list(2, 3)",
+            "math.__average expects a list of numbers",
+        ),
+        (
+            "median_first",
+            "median",
+            "uint64",
+            "list(run run 2, 3)",
+            "math.median expects a list of numeric values",
+        ),
+        (
+            "median_later",
+            "median",
+            "int16",
+            "list(2, run run 3)",
+            "math.median expects a list of numeric values",
+        ),
+        (
+            "median_outer",
+            "median",
+            "float32",
+            "run run list(2.0, 3.0)",
+            "math.__median expects a list of numbers",
+        ),
+    ] {
+        cases.push((
+            name.to_owned(),
+            operation,
+            ty,
+            initializer.to_owned(),
+            message.to_owned(),
+        ));
+    }
+    for (name, operation, ty, initializer, message) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("math_aggregate_failure.jett");
+        fs::write(
+            &source,
+            format!(
+                "namespace app\nfunction aggregate[T](values: list[T]) returns float64:\n    return math.{operation}[T](values)\nfunction main(stdout: Stdout) returns nothing:\n    list[{ty}] values = {initializer}\n    Stdout.write(view stdout, \"before\\n\")\n    float64 value = aggregate[{ty}](values)\n    trace value\n    Stdout.write(view stdout, \"after\\n\")\n"
+            ),
+        )
+        .unwrap();
+        let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+        assert_eq!(expected.output.stdout, "before\n", "{name}");
+        assert!(expected.output.debug_output.is_empty(), "{name}");
+        assert_eq!(
+            expected.message,
+            format!("runtime error: {message}"),
+            "{name}"
+        );
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory.path().join(format!("math_failure_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .unwrap_or_else(|error| panic!("{name}, release={release}: {error}"));
+            binaries.push(binary);
+        }
+        fs::remove_file(&source).unwrap();
+        for binary in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert_eq!(actual.status.code(), Some(71), "{name}: {actual:?}");
+            assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+            assert_eq!(
+                actual.stderr,
+                format!("{}\n", expected.message).as_bytes(),
+                "{name}: {actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_generic_lexical_type_scope_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_lexical_type_scope.jett");

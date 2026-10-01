@@ -1,0 +1,104 @@
+namespace app
+type Small = int8
+type WideUnsigned = uint64
+function summarize[T](values: list[T]) returns string:
+    float64 average = math.average[T](clone values)
+    float64 median = math.median[T](values)
+    return "{average}:{median}"
+function signed8_report() returns string:
+    list[Small] values = list(-128, 127)
+    return "int8:{summarize[Small](values)}"
+function signed16_report() returns string:
+    list[int16] values = list(-32768, 32767)
+    return "int16:{summarize[int16](values)}"
+function signed32_report() returns string:
+    list[int32] values = list(-2147483648, 2147483647)
+    return "int32:{summarize[int32](values)}"
+function signed64_report() returns string:
+    list[int64] values = list(-9223372036854775808, 9223372036854775807)
+    return "int64:{summarize[int64](values)}"
+function unsigned8_report() returns string:
+    list[uint8] values = list(0, 255)
+    return "uint8:{summarize[uint8](values)}"
+function unsigned16_report() returns string:
+    list[uint16] values = list(0, 65535)
+    return "uint16:{summarize[uint16](values)}"
+function unsigned32_report() returns string:
+    list[uint32] values = list(0, 4294967295)
+    return "uint32:{summarize[uint32](values)}"
+function unsigned64_report() returns string:
+    list[WideUnsigned] values = list(9223372036854775808, 18446744073709551615)
+    return "uint64:{summarize[WideUnsigned](values)}"
+function decimal32_report() returns string:
+    list[float32] values = list(16777216.0, 16777217.0, -16777216.0)
+    return "float32:{summarize[float32](values)}"
+function decimal64_report() returns string:
+    list[float64] values = list(16777216.0, 16777217.0, -16777216.0)
+    return "float64:{summarize[float64](values)}"
+function numeric_reports() returns list[string]:
+    return list(signed8_report(), signed16_report(), signed32_report(), signed64_report(), unsigned8_report(), unsigned16_report(), unsigned32_report(), unsigned64_report(), decimal32_report(), decimal64_report())
+function ieee_summary[T](nan: T, positive: T, negative: T) returns string:
+    float64 nan_average = math.average[T](list(clone nan, clone positive))
+    float64 nan_median = math.median[T](list(nan, clone positive))
+    float64 infinite_average = math.average[T](list(clone positive, clone positive))
+    float64 infinite_median = math.median[T](list(clone positive, clone positive))
+    float64 opposite_average = math.average[T](list(clone positive, clone negative))
+    float64 opposite_median = math.median[T](list(positive, negative))
+    return "nan:{nan_average != nan_average}:{nan_median != nan_median};infinity:{infinite_average}:{infinite_median};opposite:{opposite_average != opposite_average}:{opposite_median != opposite_median}"
+function ieee32_report() returns string:
+    float32 zero = 0.0
+    float32 one = 1.0
+    float32 nan = zero / zero
+    float32 positive = one / zero
+    return "ieee32:{ieee_summary[float32](nan, positive, -positive)}"
+function ieee64_report() returns string:
+    float64 zero = 0.0
+    float64 one = 1.0
+    float64 nan = zero / zero
+    float64 positive = one / zero
+    return "ieee64:{ieee_summary[float64](nan, positive, -positive)}"
+function finite_extremes() returns string:
+    float64 maximum = float64.from_string("1.7976931348623157e308") handle error: return "rejected"
+    float64 residual = float64.from_string("3e-200") handle error: return "rejected"
+    float64 average = math.average[float64](list(maximum, maximum))
+    float64 median = math.median[float64](list(maximum, maximum))
+    float64 residual_average = math.average[float64](list(maximum, -maximum, residual))
+    return "maximum:{average == maximum}:{median == maximum};residual:{residual_average == residual / 3.0}"
+function signed_singleton(value: int8) returns bool:
+    float64 expected = float64.from_string("{value}") handle error: return false
+    float64 average = math.average[int8](list(value))
+    float64 median = math.median[int8](list(value))
+    return average == expected and median == expected
+function unsigned_singleton(value: uint16) returns bool:
+    float64 expected = float64.from_string("{value}") handle error: return false
+    float64 average = math.average[uint16](list(value))
+    float64 median = math.median[uint16](list(value))
+    return average == expected and median == expected
+function main(stdout: Stdout) returns nothing:
+    list[string] live = numeric_reports()
+    for report in live:
+        Stdout.write(view stdout, "runtime:{report}\n")
+    list[string] baked = comptime numeric_reports()
+    for report in baked:
+        Stdout.write(view stdout, "comptime:{report}\n")
+    string baked_ieee = comptime ieee32_report()
+    Stdout.write(view stdout, "{ieee32_report()}\n{ieee64_report()}\n{finite_extremes()}\nbaked:{baked_ieee}\n")
+verify primitive_aggregates:
+    assert signed8_report() == "int8:-0.5:-0.5"
+    assert signed16_report() == "int16:-0.5:-0.5"
+    assert signed32_report() == "int32:-0.5:-0.5"
+    assert signed64_report() == "int64:0:0"
+    assert unsigned8_report() == "uint8:127.5:127.5"
+    assert unsigned16_report() == "uint16:32767.5:32767.5"
+    assert unsigned32_report() == "uint32:2147483647.5:2147483647.5"
+    assert unsigned64_report() == "uint64:13835058055282164000:13835058055282164000"
+    assert decimal32_report() == "float32:5592405.333333333:16777216"
+    assert decimal64_report() == "float64:5592405.666666667:16777216"
+    assert ieee32_report() == "ieee32:nan:true:true;infinity:inf:inf;opposite:true:true"
+    assert ieee64_report() == "ieee64:nan:true:true;infinity:inf:inf;opposite:true:true"
+    assert finite_extremes() == "maximum:true:true;residual:true"
+property singleton_values:
+    given signed: int8
+    given unsigned: uint16
+    assert signed_singleton(signed)
+    assert unsigned_singleton(unsigned)

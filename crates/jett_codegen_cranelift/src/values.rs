@@ -721,6 +721,10 @@ fn primitive_list_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSo
 
 pub(crate) fn list_sum_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
     // Sorting preserves existing refined values; summing can violate their predicates.
+    primitive_numeric_kind(types, element)
+}
+
+fn primitive_numeric_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
     let kind = primitive_list_kind(types, element)?;
     match kind {
         NativeSortKind::Int8
@@ -750,12 +754,7 @@ pub(crate) fn math_aggregate_kind(types: &TypeInterner, list: TypeId) -> Option<
     let Type::List(element) = types.resolve(list) else {
         return None;
     };
-    Some(match *element {
-        TypeInterner::INT64 => NativeSortKind::Int64,
-        TypeInterner::UINT64 => NativeSortKind::Uint64,
-        TypeInterner::FLOAT64 => NativeSortKind::Float64,
-        _ => return None,
-    })
+    primitive_numeric_kind(types, *element)
 }
 pub(crate) fn list_element(
     id: IntrinsicId,
@@ -931,6 +930,93 @@ mod tests {
                         std::slice::from_ref(&arg),
                         arg.ty,
                         &types,
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregates_admit_all_primitive_numeric_lists_with_float64_results() {
+        let mut types = TypeInterner::new();
+        for (element, kind) in [
+            (TypeInterner::INT8, NativeSortKind::Int8),
+            (TypeInterner::INT16, NativeSortKind::Int16),
+            (TypeInterner::INT32, NativeSortKind::Int32),
+            (TypeInterner::INT64, NativeSortKind::Int64),
+            (TypeInterner::UINT8, NativeSortKind::Uint8),
+            (TypeInterner::UINT16, NativeSortKind::Uint16),
+            (TypeInterner::UINT32, NativeSortKind::Uint32),
+            (TypeInterner::UINT64, NativeSortKind::Uint64),
+            (TypeInterner::FLOAT32, NativeSortKind::Float32),
+            (TypeInterner::FLOAT64, NativeSortKind::Float64),
+        ] {
+            let arg = Expression {
+                kind: ExpressionKind::Nothing,
+                ty: types.intern(Type::List(element)),
+                span: Span::new(FileId::new(0), 0, 1),
+            };
+            assert_eq!(math_aggregate_kind(&types, arg.ty), Some(kind));
+            for id in [IntrinsicId::MathAverage, IntrinsicId::MathMedian] {
+                assert_eq!(
+                    verify_intrinsic(
+                        id,
+                        std::slice::from_ref(&arg),
+                        TypeInterner::FLOAT64,
+                        &types
+                    ),
+                    Ok(())
+                );
+                assert!(
+                    verify_intrinsic(id, std::slice::from_ref(&arg), TypeInterner::INT64, &types)
+                        .is_err()
+                );
+                assert!(verify_intrinsic(id, &[], TypeInterner::FLOAT64, &types).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregates_reject_refined_secret_and_nonnumeric_elements() {
+        let mut types = TypeInterner::new();
+        let refined = types.intern(Type::Refinement {
+            name: "Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let nested = types.intern(Type::Refinement {
+            name: "SmallPositive".into(),
+            base: refined,
+        });
+        let secret = types.intern(Type::Secret(TypeInterner::FLOAT64));
+        let list = types.intern(Type::List(TypeInterner::INT64));
+        let secret_list = types.intern(Type::Secret(list));
+        let mut rejected = vec![TypeInterner::INT64, secret_list];
+        for element in [
+            refined,
+            nested,
+            secret,
+            TypeInterner::BOOL,
+            TypeInterner::STRING,
+            TypeInterner::BYTES,
+            list,
+        ] {
+            rejected.push(types.intern(Type::List(element)));
+        }
+        for ty in rejected {
+            let arg = Expression {
+                kind: ExpressionKind::Nothing,
+                ty,
+                span: Span::new(FileId::new(0), 0, 1),
+            };
+            assert_eq!(math_aggregate_kind(&types, ty), None);
+            for id in [IntrinsicId::MathAverage, IntrinsicId::MathMedian] {
+                assert!(
+                    verify_intrinsic(
+                        id,
+                        std::slice::from_ref(&arg),
+                        TypeInterner::FLOAT64,
+                        &types
                     )
                     .is_err()
                 );

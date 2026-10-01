@@ -347,3 +347,23 @@ matches the public failure and exit 71 in both profiles. All 66 codegen tests,
 pending-list and primitive-sum linked regressions. This closes these ordering
 mismatches without changing the inventory denominator or resolving the open
 summation domain.
+
+The native math-aggregate audit found that `math.average` and `math.median`
+accepted all ten primitive numeric list types in the checker and reference path,
+but native admission handled only the three wider carriers. Both native APIs
+now admit the complete checked primitive domain and transparent aliases, retain
+their exact `float64` result, and validate carrier bits before decoding. Signed
+narrow values extend with their sign and binary32 values widen after rounding;
+the existing binary64 aggregate algorithms and input ownership remain unchanged.
+Refinements, secret wrappers, and nonnumeric elements remain rejected.
+
+`native_math_aggregate_primitives_match_interpreter_in_both_profiles` compares
+all widths, aliases, ordinary generic calls, explicit-comptime results, extrema,
+large unsigned values, binary32 precision, and IEEE behavior. Program binaries
+in debug/release and native verify/property suites run after source removal.
+Its failure companion pins 20 typed-empty cases and six outer/first/later pending
+cases against exact interpreter output, diagnostics, and exit 71 in both profiles.
+All 68 codegen tests, 126 runtime unit tests and its integration suites pass,
+alongside the existing linked pending-math and extreme-value regressions.
+These supplemental regressions do not change the inventory denominator or
+settle the separate summation and other open policy gates.

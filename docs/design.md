@@ -1591,6 +1591,14 @@ kernels. `math.abs`, `math.min`, and
 `math.max` retain only their narrow compiler-owned `int64`/`float64` type-policy
 gate, not public runtime dispatch or general overloading.
 
+`math.average[T]` and `math.median[T]` accept all ten primitive numeric types,
+including transparent aliases, and return `float64`. They consume their list
+input and convert its checked values to binary64 before the existing aggregate
+algorithm; binary32 inputs widen after their declared-width rounding. Empty and
+pending inputs retain the current kernel failures. Nominal refinements and secret
+wrappers are not numeric specializations of these APIs. This does not broaden
+the separate `abs`/`min`/`max` type policy.
+
 **Hashing and encoding — no application dependencies:**
 
 > The stable text-digest API, algorithm classifications, reserved HMAC shape,

@@ -2736,10 +2736,7 @@ impl NativeValues {
         invalid_list: Failure,
     ) -> LeafResult<Vec<f64>> {
         let kind = NativeSortKind::from_raw(raw_kind)?;
-        if !matches!(
-            kind,
-            NativeSortKind::Int64 | NativeSortKind::Uint64 | NativeSortKind::Float64
-        ) {
+        if matches!(kind, NativeSortKind::Bool | NativeSortKind::String) {
             return Err(INVALID_LIST);
         }
         let list = self.lists.get(&id).ok_or(INVALID_LIST)?;
@@ -2759,11 +2756,23 @@ impl NativeValues {
             .iter()
             .map(|value| {
                 let bits = (*value).ok_or(INVALID_LIST)?;
+                if !kind.valid_bits(bits) {
+                    return Err(INVALID_LIST);
+                }
                 Ok(match kind {
+                    NativeSortKind::Int8 => f64::from(bits as u8 as i8),
+                    NativeSortKind::Int16 => f64::from(bits as u16 as i16),
+                    NativeSortKind::Int32 => f64::from(bits as u32 as i32),
                     NativeSortKind::Int64 => (bits as i64) as f64,
-                    NativeSortKind::Uint64 => bits as f64,
+                    NativeSortKind::Uint8
+                    | NativeSortKind::Uint16
+                    | NativeSortKind::Uint32
+                    | NativeSortKind::Uint64 => bits as f64,
+                    NativeSortKind::Float32 => f64::from(f32::from_bits(bits as u32)),
                     NativeSortKind::Float64 => f64::from_bits(bits),
-                    _ => unreachable!("numeric kind checked above"),
+                    NativeSortKind::Bool | NativeSortKind::String => {
+                        unreachable!("numeric kind checked above")
+                    }
                 })
             })
             .collect()
@@ -8992,6 +9001,227 @@ mod tests {
     }
 
     #[test]
+    fn math_aggregates_decode_all_numeric_widths_and_borrow_their_inputs() {
+        let cases = [
+            (NativeSortKind::Int8, [128, 127], [-128.0, 127.0], -0.5),
+            (
+                NativeSortKind::Int16,
+                [32768, 32767],
+                [-32768.0, 32767.0],
+                -0.5,
+            ),
+            (
+                NativeSortKind::Int32,
+                [2147483648, 2147483647],
+                [-2147483648.0, 2147483647.0],
+                -0.5,
+            ),
+            (
+                NativeSortKind::Int64,
+                [1_u64 << 63, (1_u64 << 63) - 1],
+                [-9223372036854775808.0, 9223372036854775808.0],
+                0.0,
+            ),
+            (NativeSortKind::Uint8, [0, 255], [0.0, 255.0], 127.5),
+            (NativeSortKind::Uint16, [0, 65535], [0.0, 65535.0], 32767.5),
+            (
+                NativeSortKind::Uint32,
+                [0, 4294967295],
+                [0.0, 4294967295.0],
+                2147483647.5,
+            ),
+            (
+                NativeSortKind::Uint64,
+                [u64::MAX - 1, u64::MAX],
+                [18446744073709551616.0; 2],
+                18446744073709551616.0,
+            ),
+            (
+                NativeSortKind::Uint64,
+                [(1_u64 << 53) + 1, (1_u64 << 53) + 3],
+                [9007199254740992.0, 9007199254740996.0],
+                9007199254740994.0,
+            ),
+            (
+                NativeSortKind::Float32,
+                [
+                    u64::from((-f32::MAX).to_bits()),
+                    u64::from(f32::MAX.to_bits()),
+                ],
+                [-f64::from(f32::MAX), f64::from(f32::MAX)],
+                0.0,
+            ),
+            (
+                NativeSortKind::Float32,
+                [u64::from(0.1_f32.to_bits()); 2],
+                [f64::from(0.1_f32); 2],
+                f64::from(0.1_f32),
+            ),
+            (
+                NativeSortKind::Float32,
+                [1; 2],
+                [f64::from(f32::from_bits(1)); 2],
+                f64::from(f32::from_bits(1)),
+            ),
+            (
+                NativeSortKind::Float64,
+                [1.5_f64.to_bits(), 2.5_f64.to_bits()],
+                [1.5, 2.5],
+                2.0,
+            ),
+            (
+                NativeSortKind::Float64,
+                [f64::MAX.to_bits(); 2],
+                [f64::MAX; 2],
+                f64::MAX,
+            ),
+        ];
+        for (kind, input, decoded, expected) in cases {
+            let context = Context::new();
+            unsafe {
+                let list = jett_rt_v1_list_new(context.pointer(), 0);
+                for bits in input {
+                    assert_eq!(jett_rt_v1_list_append(context.pointer(), list, bits), list);
+                }
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(
+                        values.math_numbers(
+                            list,
+                            kind as u32,
+                            INVALID_LIST,
+                            INVALID_LIST,
+                            INVALID_LIST
+                        ),
+                        Ok(decoded.to_vec())
+                    );
+                }
+                assert_eq!(
+                    jett_rt_v1_math_average(context.pointer(), list, kind as u32).to_bits(),
+                    expected.to_bits(),
+                    "average {kind:?}"
+                );
+                assert_eq!(
+                    jett_rt_v1_math_median(context.pointer(), list, kind as u32).to_bits(),
+                    expected.to_bits(),
+                    "median {kind:?}"
+                );
+                assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(values.lists[&list].elements, input.map(Some));
+                    assert_eq!((values.lists_created, values.lists_destroyed), (1, 0));
+                }
+                jett_rt_v1_value_drop(context.pointer(), list);
+                assert!(
+                    lock_unpoisoned(&lease.entry.state)
+                        .as_ref()
+                        .unwrap()
+                        .values
+                        .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregate_float_carriers_preserve_nan_and_infinity() {
+        for kind in [NativeSortKind::Float32, NativeSortKind::Float64] {
+            for input in [
+                [f64::NAN, 1.0],
+                [f64::INFINITY, f64::INFINITY],
+                [f64::NEG_INFINITY, f64::NEG_INFINITY],
+                [f64::INFINITY, f64::NEG_INFINITY],
+            ] {
+                let context = Context::new();
+                unsafe {
+                    let list = jett_rt_v1_list_new(context.pointer(), 0);
+                    for value in input {
+                        let bits = if kind == NativeSortKind::Float32 {
+                            u64::from((value as f32).to_bits())
+                        } else {
+                            value.to_bits()
+                        };
+                        jett_rt_v1_list_append(context.pointer(), list, bits);
+                    }
+                    for result in [
+                        jett_rt_v1_math_average(context.pointer(), list, kind as u32),
+                        jett_rt_v1_math_median(context.pointer(), list, kind as u32),
+                    ] {
+                        if input[0] == input[1] {
+                            assert_eq!(result, input[0]);
+                        } else {
+                            assert!(result.is_nan());
+                        }
+                    }
+                    assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+                    jett_rt_v1_value_drop(context.pointer(), list);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregates_reject_malformed_or_nonnumeric_carriers_without_consuming_input() {
+        for (kind, bits) in [
+            (NativeSortKind::Int8, 256),
+            (NativeSortKind::Uint8, 256),
+            (NativeSortKind::Int16, 65536),
+            (NativeSortKind::Uint16, 65536),
+            (NativeSortKind::Int32, u64::from(u32::MAX) + 1),
+            (NativeSortKind::Uint32, u64::from(u32::MAX) + 1),
+            (NativeSortKind::Float32, u64::from(u32::MAX) + 1),
+            (NativeSortKind::Bool, 0),
+            (NativeSortKind::String, 0),
+        ] {
+            let mut values = NativeValues::default();
+            let list = values.new_list(false).unwrap();
+            values
+                .lists
+                .get_mut(&list)
+                .unwrap()
+                .elements
+                .push(Some(bits));
+            assert_eq!(
+                values.math_numbers(list, kind as u32, INVALID_LIST, INVALID_LIST, INVALID_LIST),
+                Err(INVALID_LIST)
+            );
+            assert_eq!(values.lists[&list].elements, [Some(bits)]);
+            assert_eq!(
+                values.math_numbers(list, u32::MAX, INVALID_LIST, INVALID_LIST, INVALID_LIST),
+                Err(INVALID_LIST)
+            );
+            values.drop_value(list).unwrap();
+            assert!(values.is_empty());
+        }
+        let mut values = NativeValues::default();
+        let owned = values.new_list(true).unwrap();
+        let text = values.insert("held".into()).unwrap();
+        values
+            .lists
+            .get_mut(&owned)
+            .unwrap()
+            .elements
+            .push(Some(text));
+        assert_eq!(
+            values.math_numbers(
+                owned,
+                NativeSortKind::Int8 as u32,
+                INVALID_LIST,
+                INVALID_LIST,
+                INVALID_LIST
+            ),
+            Err(INVALID_LIST)
+        );
+        assert_eq!(values.strings[&text].references, 1);
+        values.drop_value(owned).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
     fn empty_numeric_aggregates_report_their_checked_runtime_errors() {
         for (operation, expected) in [
             (
@@ -9005,21 +9235,90 @@ mod tests {
                 b"math.median: list is empty".as_slice(),
             ),
         ] {
-            let context = Context::new();
-            unsafe {
-                let list = jett_rt_v1_list_new(context.pointer(), 0);
-                assert_eq!(
-                    operation(context.pointer(), list, NativeSortKind::Float64 as u32),
-                    0.0
-                );
-                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
-                let state = lock_unpoisoned(&lease.entry.state);
-                assert_eq!(
-                    state.as_ref().unwrap().values.failure,
-                    Some((JettRuntimeStatusV1::INVALID_ARGUMENT, expected))
-                );
-                drop(state);
-                jett_rt_v1_value_drop(context.pointer(), list);
+            for raw_kind in 0..10 {
+                let context = Context::new();
+                unsafe {
+                    let list = jett_rt_v1_list_new(context.pointer(), 0);
+                    assert_eq!(operation(context.pointer(), list, raw_kind), 0.0);
+                    let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    assert_eq!(
+                        state.as_ref().unwrap().values.failure,
+                        Some((JettRuntimeStatusV1::INVALID_ARGUMENT, expected))
+                    );
+                    drop(state);
+                    jett_rt_v1_value_drop(context.pointer(), list);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn math_aggregates_preserve_pending_failure_precedence_and_borrowed_input() {
+        for (operation, element_error, list_error) in [
+            (
+                jett_rt_v1_math_average
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.average expects a list of numeric values".as_slice(),
+                b"math.__average expects a list of numbers".as_slice(),
+            ),
+            (
+                jett_rt_v1_math_median
+                    as unsafe extern "C" fn(*const JettRuntimeContextV1, u64, u32) -> f64,
+                b"math.median expects a list of numeric values".as_slice(),
+                b"math.__median expects a list of numbers".as_slice(),
+            ),
+        ] {
+            for raw_kind in 0..10 {
+                for outer_pending in [false, true] {
+                    for depth in [1, 2] {
+                        let context = Context::new();
+                        unsafe {
+                            let list = jett_rt_v1_list_new(context.pointer(), 0);
+                            jett_rt_v1_list_append(context.pointer(), list, 1);
+                            let lease =
+                                acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                            {
+                                let mut state = lock_unpoisoned(&lease.entry.state);
+                                let row =
+                                    state.as_mut().unwrap().values.lists.get_mut(&list).unwrap();
+                                row.element_pending_depths.insert(0, depth);
+                                if outer_pending {
+                                    row.pending_depth = depth;
+                                }
+                            }
+                            assert_eq!(operation(context.pointer(), list, raw_kind), 0.0);
+                            {
+                                let state = lock_unpoisoned(&lease.entry.state);
+                                let values = &state.as_ref().unwrap().values;
+                                assert_eq!(
+                                    values.failure,
+                                    Some((
+                                        JettRuntimeStatusV1::INVALID_ARGUMENT,
+                                        if outer_pending {
+                                            list_error
+                                        } else {
+                                            element_error
+                                        }
+                                    ))
+                                );
+                                assert_eq!(values.lists[&list].elements, [Some(1)]);
+                                assert_eq!(
+                                    values.lists[&list].element_pending_depths.get(&0),
+                                    Some(&depth)
+                                );
+                            }
+                            jett_rt_v1_value_drop(context.pointer(), list);
+                            assert!(
+                                lock_unpoisoned(&lease.entry.state)
+                                    .as_ref()
+                                    .unwrap()
+                                    .values
+                                    .is_empty()
+                            );
+                        }
+                    }
+                }
             }
         }
     }

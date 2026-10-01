@@ -146,6 +146,11 @@ per-element depth map before reading scalar bits. `list.sum` distinguishes a
 pending first element from a later pending element, matching the interpreter's
 two current error paths; `math.average` and `math.median` report their current
 numeric-list errors for pending containers or elements.
+Average and median accept every primitive numeric width and transparent alias.
+Their native decoder validates narrow bits, sign-extends signed integers, and
+widens binary32 to binary64 before the existing shared algorithms, retaining
+the exact `float64` result and empty/pending failure contracts. This does not
+admit nominal refinements or secret element wrappers.
 List intrinsic argument checks reject a pending list container before the
 operation, and reject pending int64 indexes for get, insert, remove, indexed
 sort, and swap with the interpreter's operation-specific errors. Pending scalar
