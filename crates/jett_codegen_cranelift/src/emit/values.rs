@@ -1790,7 +1790,7 @@ impl Translator<'_, '_> {
         )?;
         Ok(())
     }
-    fn reject_pending_scalars(
+    pub(super) fn reject_pending_scalars(
         &mut self,
         evaluated: &[LoweredValue],
         message: &str,

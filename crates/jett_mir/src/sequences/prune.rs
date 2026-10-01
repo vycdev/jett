@@ -268,6 +268,7 @@ fn expression(
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
         | ExpressionKind::DisplayResult(value)
+        | ExpressionKind::EquatableResult(value)
         | ExpressionKind::InterfaceCoerce { value, .. }
         | ExpressionKind::FunctionAdapter { value, .. }
         | ExpressionKind::InterfaceType(value)

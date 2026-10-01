@@ -745,6 +745,11 @@ record creation/destruction counts independently, even for empty records.
 The checker records the exact Equatable.equals method identity for struct
 comparison operators in per-body facts. HIR lowers equality to that direct
 compiled call with its two view parameters; inequality negates its result.
+The implicit `EquatableResult` boundary checks returned pending depth before
+inequality negation or later expressions. It preserves the exact checked bool
+type and any leading secret qualification, borrows the existing scalar result,
+and uses `RejectPendingScalars` with `Equatable.equals must return bool`.
+Explicit method calls keep ordinary boolean task behavior.
 Native primitive comparison rejects raw struct operands. No structural equality,
 handle equality or method-name dispatcher is used.
 

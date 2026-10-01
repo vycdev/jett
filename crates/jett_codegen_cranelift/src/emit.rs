@@ -2268,6 +2268,11 @@ impl Translator<'_, '_> {
                 self.leaf(NativeLeaf::DisplayResultCheck, &[handle], true)?;
                 Ok(lowered)
             }
+            ExpressionKind::EquatableResult(value) => {
+                let lowered = self.expression(value)?;
+                self.reject_pending_scalars(&[lowered], "Equatable.equals must return bool")?;
+                Ok(lowered)
+            }
             ExpressionKind::Declassify(value) => self.expression(value),
             ExpressionKind::Coarsen(value) => self.expression(value),
             ExpressionKind::RefinementValidated(value) => self.expression(value),

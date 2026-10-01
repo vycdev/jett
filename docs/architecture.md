@@ -3439,8 +3439,12 @@ An owned field read clones the selected value, including nested move-only
 payloads, while a field view borrows the parent through the call boundary.
 The checker exports exact Equatable method identities for direct comparisons
 and typed owner-to-method metadata for aggregate payloads. HIR turns direct
-comparisons into ordinary calls; native aggregate traversal yields custom leaves
-to compiled method calls. Both negate the complete result for inequality.
+comparisons into exact method calls with an `EquatableResult` readiness
+boundary; native aggregate traversal yields custom leaves to compiled method
+calls and checks their result depth. Both reject pending method results before
+inequality negation. MIR preserves the direct boundary through handler staging,
+and codegen uses the existing pending-scalar check without an owning temporary
+or new ABI operation. Explicit calls remain ordinary boolean calls.
 Outer `secret` wrappers retain nominal enum constructor targets and taint the
 comparison's boolean result. Mixed public/secret operands compare their checked
 inner types without treating different nominal types as interchangeable.

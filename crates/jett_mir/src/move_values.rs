@@ -668,6 +668,7 @@ impl Flow<'_> {
             ExpressionKind::RefinementValidated(value) => self.expr(value, borrowed)?,
             ExpressionKind::Run(value)
             | ExpressionKind::DisplayResult(value)
+            | ExpressionKind::EquatableResult(value)
             | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value)
             | ExpressionKind::Unary { value, .. }

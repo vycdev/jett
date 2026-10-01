@@ -231,6 +231,7 @@ impl Baker<'_> {
             | E::Coarsen(value)
             | E::RefinementValidated(value)
             | E::DisplayResult(value)
+            | E::EquatableResult(value)
             | E::FunctionAdapter { value, .. }
             | E::InterfaceCoerce { value, .. }
             | E::InterfaceType(value)

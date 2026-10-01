@@ -810,6 +810,7 @@ impl Coercions<'_> {
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::DisplayResult(value)
+            | ExpressionKind::EquatableResult(value)
             | ExpressionKind::FunctionAdapter { value, .. }
             | ExpressionKind::InterfaceCoerce { value, .. }
             | ExpressionKind::InterfaceType(value)

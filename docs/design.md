@@ -7199,6 +7199,11 @@ of that same method. There is no separate `not_equals` method and no derive or
 field-based fallback. This makes identity choices visible at the type rather
 than silently changing when a field is added. A struct without an explicit,
 exact `Equatable` implementation gets a compile error for either operator.
+The implicitly invoked method must produce a ready boolean. A pending result
+reports `Equatable.equals must return bool` before inequality negation or later
+expressions, without implicitly joining it. Explicit calls to `equals` retain
+ordinary boolean task behavior, and secret-qualified operands retain the
+comparison result's checked secrecy.
 
 Enums retain their existing variant-and-payload equality. Equality does not
 grant collection-key eligibility.

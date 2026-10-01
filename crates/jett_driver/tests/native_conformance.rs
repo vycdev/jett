@@ -36,6 +36,9 @@ mod graphics_authority;
 #[path = "native_conformance/display_results.rs"]
 mod display_results;
 
+#[path = "native_conformance/equality_results.rs"]
+mod equality_results;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

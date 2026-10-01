@@ -166,6 +166,127 @@ fn rejects_malformed_display_result_types_before_emission() {
 }
 
 #[test]
+fn equality_result_checks_preserve_qualified_calls_and_method_reachability() {
+    for operator in ["==", "!="] {
+        for qualified in [false, true] {
+            let input = if qualified { "secret[Item]" } else { "Item" };
+            let result = if qualified { "secret[bool]" } else { "bool" };
+            let (mut program, types) = lower_source_with_equatable(
+                &format!(
+                    "namespace app\nstruct Item:\n    value: int64\nimplement Equatable for Item:\n    function equals(view self: Item, view other: Item) returns bool:\n        return run (self.value == other.value)\nfunction compare(view left: {input}, view right: Item) returns {result}:\n    return left {operator} right\n"
+                ),
+                true,
+            );
+            let compare = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == "compare")
+                .unwrap();
+            let TerminatorKind::Return(Some(value)) = &compare.blocks
+                [compare.entry.index() as usize]
+                .terminator
+                .kind
+            else {
+                panic!("expected comparison return");
+            };
+            let checked = if operator == "!=" {
+                let jett_hir::ExpressionKind::Unary {
+                    op: jett_hir::UnaryOp::Not,
+                    value,
+                } = &value.kind
+                else {
+                    panic!("inequality must negate the checked method result");
+                };
+                value.as_ref()
+            } else {
+                value
+            };
+            let jett_hir::ExpressionKind::EquatableResult(call) = &checked.kind else {
+                panic!("implicit equality call must check its result");
+            };
+            assert_eq!(call.ty, checked.ty);
+            assert_eq!(checked.ty, compare.return_type);
+            let jett_hir::ExpressionKind::Call { function, .. } = call.kind else {
+                panic!("expected selected equality method");
+            };
+            for candidate in &mut program.functions {
+                if candidate.identity.declaration.name != "compare" {
+                    candidate.identity.declaration.origin = SourceOrigin::Stdlib;
+                }
+            }
+            let method_symbol = symbol_name(
+                &program.functions[function.index() as usize].identity,
+                &types,
+            )
+            .unwrap();
+            let artifact = emit_host_object(&program, &types).expect("checked equality object");
+            assert!(artifact.symbols.contains(&method_symbol));
+            let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+            let check = jett_runtime::native_abi::values::NativeLeaf::RejectPendingScalars;
+            assert!(
+                object
+                    .symbols()
+                    .any(|symbol| symbol.is_undefined()
+                        && symbol.name().ok() == Some(check.symbol()))
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_malformed_equality_result_types_before_emission() {
+    for mutation in ["integer", "secret mismatch", "refinement"] {
+        let (mut program, mut types) = lower_source(
+            "namespace app\ntype Truth = bool where true\nfunction main() returns nothing:\n    return nothing\n",
+        );
+        let refined = types
+            .type_ids()
+            .find(|id| matches!(types.resolve(*id), Type::Refinement { .. }))
+            .unwrap();
+        let secret = types.intern(Type::Secret(TypeInterner::BOOL));
+        let (input, output) = match mutation {
+            "integer" => (TypeInterner::INT64, TypeInterner::BOOL),
+            "secret mismatch" => (TypeInterner::BOOL, secret),
+            "refinement" => (refined, refined),
+            _ => unreachable!(),
+        };
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "main")
+            .unwrap();
+        let child = jett_hir::Expression {
+            kind: if input == TypeInterner::INT64 {
+                jett_hir::ExpressionKind::Int(7)
+            } else {
+                jett_hir::ExpressionKind::Bool(true)
+            },
+            ty: input,
+            span: function.span,
+        };
+        function.blocks[function.entry.index() as usize]
+            .statements
+            .insert(
+                0,
+                jett_mir::Statement {
+                    kind: jett_mir::StatementKind::Evaluate(jett_hir::Expression {
+                        kind: jett_hir::ExpressionKind::EquatableResult(Box::new(child)),
+                        ty: output,
+                        span: function.span,
+                    }),
+                    span: function.span,
+                },
+            );
+        let error = emit_host_object(&program, &types).expect_err("invalid equality result");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("equality result")),
+            "{mutation}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn rejects_malformed_property_case_metadata_before_emission() {
     for (name, trial, ty) in [
         ("", 1, TypeInterner::NOTHING),

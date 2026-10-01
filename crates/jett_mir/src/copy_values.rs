@@ -637,6 +637,7 @@ fn visit(
         }
         ExpressionKind::FunctionAdapter { value, .. }
         | ExpressionKind::DisplayResult(value)
+        | ExpressionKind::EquatableResult(value)
         | ExpressionKind::InterfaceCoerce { value, .. }
         | ExpressionKind::InterfaceType(value)
         | ExpressionKind::Run(value)

@@ -424,6 +424,9 @@ pub enum ExpressionKind {
     /// Require the string returned by an implicitly selected display method to
     /// be ready before interpolation evaluates its next segment.
     DisplayResult(Box<Expression>),
+    /// Require the bool returned by implicit struct equality to be ready before
+    /// using or negating it, while retaining its checked secret qualification.
+    EquatableResult(Box<Expression>),
     Comptime {
         value: Box<Expression>,
         bindings: Vec<ScopedTypeBinding>,
@@ -831,6 +834,7 @@ impl Validator<'_> {
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::DisplayResult(value)
+            | ExpressionKind::EquatableResult(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
@@ -3334,11 +3338,15 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 if self.method_calls.contains_key(&span) =>
             {
                 let function = self.resolve_user_call_target(left, span)?;
-                let call = ExpressionKind::Call {
-                    function,
-                    args: vec![self.lower_expression(left)?, self.lower_expression(right)?],
-                    evaluation_order: vec![0, 1],
-                };
+                let call = ExpressionKind::EquatableResult(Box::new(Expression {
+                    kind: ExpressionKind::Call {
+                        function,
+                        args: vec![self.lower_expression(left)?, self.lower_expression(right)?],
+                        evaluation_order: vec![0, 1],
+                    },
+                    ty,
+                    span,
+                }));
                 if *op == ast::BinOp::NotEq {
                     ExpressionKind::Unary {
                         op: UnaryOp::Not,
@@ -6526,13 +6534,33 @@ mod tests {
         source: &str,
         include_test_bodies: bool,
     ) -> (Program, jett_typecheck::CheckResult) {
+        lower_source_with_prelude(source, include_test_bodies, false)
+    }
+
+    fn lower_source_with_prelude(
+        source: &str,
+        include_test_bodies: bool,
+        include_equatable: bool,
+    ) -> (Program, jett_typecheck::CheckResult) {
         let file = FileId::new(0);
-        let parsed = jett_parser::parse(source, file);
+        let mut parsed = jett_parser::parse(source, file);
         assert!(
             parsed.errors.is_empty(),
             "parse errors: {:?}",
             parsed.errors
         );
+        let mut origins = HashMap::from([(file, SourceOrigin::Project)]);
+        if include_equatable {
+            let prelude_file = FileId::new(jett_common::STDLIB_FILE_ID_START);
+            let mut prelude = jett_parser::parse(
+                "namespace stdlib\nexport interface Equatable:\n    function equals(view self: Equatable, view other: Equatable) returns bool\n",
+                prelude_file,
+            );
+            assert!(prelude.errors.is_empty());
+            prelude.module.items.append(&mut parsed.module.items);
+            parsed.module.items = prelude.module.items;
+            origins.insert(prelude_file, SourceOrigin::Stdlib);
+        }
         let resolved = jett_resolve::resolve(&parsed.module);
         assert!(
             resolved
@@ -6551,7 +6579,6 @@ mod tests {
             "type errors: {:?}",
             checked.diagnostics
         );
-        let origins = HashMap::from([(file, SourceOrigin::Project)]);
         let program = if include_test_bodies {
             lower_with_test_bodies(&parsed.module, &resolved, &checked, &origins)
                 .expect("test HIR lowering failed")
@@ -6932,6 +6959,132 @@ function render(view values: list[int64]) returns string:
             panic!("expected interpolation assignment");
         };
         assert!(matches!(value.kind, ExpressionKind::StringInterpolation(_)));
+    }
+
+    #[test]
+    fn implicit_struct_equality_checks_results_before_negation_and_preserves_secret_types() {
+        fn initializer<'a>(function: &'a Function, name: &str) -> &'a Expression {
+            let local = function
+                .locals
+                .iter()
+                .find(|local| local.name == name)
+                .unwrap()
+                .id;
+            function
+                .body
+                .statements
+                .iter()
+                .find_map(|statement| match &statement.kind {
+                    StatementKind::Let {
+                        local: target,
+                        value,
+                    } if *target == local => Some(value),
+                    _ => None,
+                })
+                .unwrap()
+        }
+        let (program, checked) = lower_source_with_prelude(
+            r#"namespace app
+struct Item:
+    id: int64
+implement Equatable for Item:
+    function equals(view self: Item, view other: Item) returns bool:
+        return run true
+enum Choice:
+    item(value: Item)
+function inspect(view left: Item, view right: Item) returns bool:
+    bool direct = Item.equals(view left, view right)
+    bool equal = left == right
+    bool different = left != right
+    bool primitive = true == false
+    trace direct
+    trace equal
+    trace primitive
+    return different
+function hidden(view left: secret[Item], view right: Item) returns secret[bool]:
+    secret[bool] equal = left == right
+    secret[bool] different = left != right
+    trace equal
+    return different
+function nested(view left: Choice, view right: Choice) returns bool:
+    return left == right
+"#,
+            false,
+            true,
+        );
+        let inspect = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        let ExpressionKind::Call {
+            function: target, ..
+        } = initializer(inspect, "direct").kind
+        else {
+            panic!("explicit equality method call must remain unwrapped");
+        };
+        assert!(matches!(
+            initializer(inspect, "primitive").kind,
+            ExpressionKind::Binary { .. }
+        ));
+        for name in ["inspect", "hidden"] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .unwrap();
+            for binding in ["equal", "different"] {
+                let value = initializer(function, binding);
+                let boundary = if binding == "different" {
+                    let ExpressionKind::Unary {
+                        op: UnaryOp::Not,
+                        value: inner,
+                    } = &value.kind
+                    else {
+                        panic!("inequality must negate the checked result");
+                    };
+                    assert_eq!(inner.ty, value.ty);
+                    inner.as_ref()
+                } else {
+                    value
+                };
+                let ExpressionKind::EquatableResult(call) = &boundary.kind else {
+                    panic!("implicit equality must check its method result");
+                };
+                assert_eq!(call.ty, boundary.ty);
+                assert_eq!(call.span, boundary.span);
+                assert!(
+                    matches!(call.kind, ExpressionKind::Call { function, .. } if function == target)
+                );
+                if name == "hidden" {
+                    assert!(
+                        matches!(checked.interner.resolve(boundary.ty), Type::Secret(inner)
+                        if *inner == TypeInterner::BOOL)
+                    );
+                    let ExpressionKind::Call { args, .. } = &call.kind else {
+                        unreachable!()
+                    };
+                    assert!(matches!(
+                        checked.interner.resolve(args[0].ty),
+                        Type::Secret(_)
+                    ));
+                } else {
+                    assert_eq!(boundary.ty, TypeInterner::BOOL);
+                }
+            }
+        }
+        let nested = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "nested")
+            .unwrap();
+        assert!(matches!(
+            &nested.body.statements[0].kind,
+            StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::Binary { .. },
+                ..
+            }))
+        ));
     }
 
     #[test]

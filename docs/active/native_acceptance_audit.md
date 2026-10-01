@@ -708,14 +708,38 @@ with 100 trials each. Source remained frozen throughout the run. Linux-only
 tests and both supported hosts' clean package jobs still require CI results for
 the final revision; a local Windows pass does not substitute for those gates.
 
-Additional source probes found two gaps outside the fixed inventory. A direct
+Additional source probes at that checkpoint found two gaps outside the fixed inventory. A direct
 struct `Equatable.equals` returning `run true` is accepted by the checker but
 the reference interpreter reports `Equatable.equals must return bool`. Native
 `==` instead prints `pending(true)` and exits successfully; native `!=` reports
 `'not' requires a boolean operand` with exit 71. Secret-qualified operands show
 the same equality-result gap when the secret is initialized from a ready local.
 The enum payload callback already checks result depth; the direct operator
-call needs its own preserved result boundary before inequality negation.
+call needed its own preserved result boundary before inequality negation.
+
+The direct equality-result gap is now resolved. HIR wraps only implicitly
+selected struct equality calls in `EquatableResult`; MIR preserves that boundary
+through operand and later-handler staging. Codegen checks pending depth with the
+existing `RejectPendingScalars` leaf before using the boolean or negating it.
+The child's exact checked boolean type, including leading secret qualification,
+is retained. Explicit method calls remain ordinary task-producing calls. No
+runtime ABI operation or owned temporary is added, and malformed boolean,
+qualification, and nominal-refinement metadata remains rejected.
+
+All 93 HIR, 66 MIR, 82 codegen, and 332 reference/comptime tests pass. Three
+linked regressions in `native_conformance/equality_results.rs` cover both
+operators in a minimal reproduction, 16 terminal matrix cases, and successful
+controls. Debug and release binaries run after source removal. Failures pin
+true and false payloads at depth one and two, partial joins, exact method-error
+precedence, left-to-right effects, once-only traces, suppressed later handlers
+and short-circuit effects, secret-qualified operands, exact stderr, and exit 71
+with successful cleanup. Successful controls cover ready and fully joined
+implicit equality, ordinary explicit pending calls, unchanged owners,
+namespaced generic and reflected comparisons, closed comptime, compiled verify,
+and 100 property trials. Six adjacent linked enum regressions also pass.
+Supplemental cases do not change the inventory denominator; the prior locked
+workspace result remains specific to `7cdf24b1`, and the final revision still
+requires workspace and supported-host distribution validation.
 
 Direct `secret[Item]` initialization from `Item(...)` is a separate native
 admission gap: its checked struct construction retains the outer secret type

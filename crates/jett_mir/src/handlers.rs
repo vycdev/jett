@@ -15,6 +15,7 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         ExpressionKind::Coarsen(value) | ExpressionKind::Declassify(value)
         | ExpressionKind::RefinementValidated(value)
         | ExpressionKind::DisplayResult(value)
+        | ExpressionKind::EquatableResult(value)
         | ExpressionKind::InterfaceCoerce { value, .. } | ExpressionKind::InterfaceType(value) => {
             has_extractable_handle(value)
         }
@@ -377,6 +378,11 @@ impl Builder<'_> {
         if let ExpressionKind::DisplayResult(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::DisplayResult(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::EquatableResult(value) = &expression.kind {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::EquatableResult(Box::new(self.lower_value(value)));
             return lowered;
         }
         if let ExpressionKind::View(value) = &expression.kind {
@@ -1976,9 +1982,29 @@ mod tests {
     use super::*;
 
     fn handler_source_hir(source: &str) -> (hir::Program, TypeInterner) {
+        handler_source_hir_with_equatable(source, false)
+    }
+
+    fn handler_source_hir_with_equatable(
+        source: &str,
+        include_equatable: bool,
+    ) -> (hir::Program, TypeInterner) {
         let file = jett_common::FileId::new(0);
-        let parsed = jett_parser::parse(source, file);
+        let mut parsed = jett_parser::parse(source, file);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut origins =
+            std::collections::HashMap::from([(file, jett_common::SourceOrigin::Project)]);
+        if include_equatable {
+            let prelude_file = jett_common::FileId::new(jett_common::STDLIB_FILE_ID_START);
+            let mut prelude = jett_parser::parse(
+                "namespace stdlib\nexport interface Equatable:\n    function equals(view self: Equatable, view other: Equatable) returns bool\n",
+                prelude_file,
+            );
+            assert!(prelude.errors.is_empty());
+            prelude.module.items.append(&mut parsed.module.items);
+            parsed.module.items = prelude.module.items;
+            origins.insert(prelude_file, jett_common::SourceOrigin::Stdlib);
+        }
         let resolved = jett_resolve::resolve(&parsed.module);
         let checked = jett_typecheck::check(&parsed.module, &resolved);
         assert!(
@@ -1989,13 +2015,8 @@ mod tests {
             "{:?}",
             checked.diagnostics
         );
-        let hir = jett_hir::lower(
-            &parsed.module,
-            &resolved,
-            &checked,
-            &std::collections::HashMap::from([(file, jett_common::SourceOrigin::Project)]),
-        )
-        .expect("HIR lowering");
+        let hir =
+            jett_hir::lower(&parsed.module, &resolved, &checked, &origins).expect("HIR lowering");
         (hir, checked.interner)
     }
 
@@ -2010,6 +2031,161 @@ mod tests {
             .iter()
             .find(|function| function.identity.declaration.name == "inspect")
             .unwrap()
+    }
+
+    #[test]
+    fn equatable_result_precedes_later_handlers_without_extra_owned_storage() {
+        for operator in ["==", "!="] {
+            let source = r#"namespace app
+struct Item:
+    id: int64
+implement Equatable for Item:
+    function equals(view self: Item, view other: Item) returns bool:
+        return run true
+function combine(first: bool, second: bool) returns bool:
+    return first && second
+function inspect(view left: Item, view right: Item) returns bool:
+    optional[bool] later = none
+    return combine(left OPERATOR right, (later handle: default true))
+"#
+            .replace("OPERATOR", operator);
+            let (hir, types) = handler_source_hir_with_equatable(&source, true);
+            let program = lower(&hir, &types).expect("MIR lowering");
+            validate(&program).expect("equality argument handler CFG");
+            let function = inspected_handler_function(&program);
+            let entry = &function.blocks[function.entry.index() as usize];
+            let guards = entry
+                .statements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, statement)| {
+                    let StatementKind::Let { local, value } = &statement.kind else {
+                        return None;
+                    };
+                    let boundary = if let ExpressionKind::Unary {
+                        op: hir::UnaryOp::Not,
+                        value,
+                    } = &value.kind
+                    {
+                        value.as_ref()
+                    } else {
+                        value
+                    };
+                    matches!(boundary.kind, ExpressionKind::EquatableResult(_))
+                        .then_some((index, *local))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(guards.len(), 1, "{operator}");
+            let (guard_index, guard_local) = guards[0];
+            let handler_index = entry
+                .statements
+                .iter()
+                .position(|statement| matches!(statement.kind, StatementKind::SumTag { .. }))
+                .unwrap();
+            assert!(guard_index < handler_index, "{operator}");
+            let checked =
+                crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+            assert!(
+                !checked
+                    .owned_locals
+                    .contains(&(guard_local.index() as usize))
+            );
+
+            let mut unchecked = program.clone();
+            let lowered = unchecked
+                .functions
+                .iter_mut()
+                .find(|candidate| candidate.id == function.id)
+                .unwrap();
+            let StatementKind::Let { value, .. } =
+                &mut lowered.blocks[function.entry.index() as usize].statements[guard_index].kind
+            else {
+                unreachable!();
+            };
+            if let ExpressionKind::Unary { value: inner, .. } = &mut value.kind {
+                let ExpressionKind::EquatableResult(call) = &inner.kind else {
+                    unreachable!();
+                };
+                **inner = call.as_ref().clone();
+            } else {
+                let ExpressionKind::EquatableResult(call) = &value.kind else {
+                    unreachable!();
+                };
+                *value = call.as_ref().clone();
+            }
+            let unchecked_plan = crate::move_values::MoveValuePlan::analyze(
+                &unchecked,
+                inspected_handler_function(&unchecked),
+                &types,
+            )
+            .unwrap();
+            assert_eq!(
+                checked.temporary_slots, unchecked_plan.temporary_slots,
+                "{operator}"
+            );
+            assert_eq!(
+                checked.owned_locals, unchecked_plan.owned_locals,
+                "{operator}"
+            );
+            assert_eq!(
+                checked.live_after_statement, unchecked_plan.live_after_statement,
+                "{operator}"
+            );
+        }
+    }
+
+    #[test]
+    fn equatable_result_retains_operand_handlers_before_call_and_negation() {
+        for operator in ["==", "!="] {
+            let source = r#"namespace app
+struct Item:
+    id: int64
+implement Equatable for Item:
+    function equals(view self: Item, view other: Item) returns bool:
+        return true
+function inspect(view left: optional[Item], view right: Item) returns bool:
+    return (left handle: default Item(id: 7)) OPERATOR right
+"#
+            .replace("OPERATOR", operator);
+            let (hir, types) = handler_source_hir_with_equatable(&source, true);
+            let program = lower(&hir, &types).expect("MIR lowering");
+            validate(&program).expect("equality operand handler CFG");
+            let function = inspected_handler_function(&program);
+            crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+            assert!(
+                function.blocks[function.entry.index() as usize]
+                    .statements
+                    .iter()
+                    .any(|statement| matches!(statement.kind, StatementKind::SumTag { .. }))
+            );
+            let guards = function
+                .blocks
+                .iter()
+                .filter_map(|block| {
+                    let TerminatorKind::Return(Some(value)) = &block.terminator.kind else {
+                        return None;
+                    };
+                    let boundary = if let ExpressionKind::Unary {
+                        op: hir::UnaryOp::Not,
+                        value,
+                    } = &value.kind
+                    {
+                        value.as_ref()
+                    } else {
+                        value
+                    };
+                    let ExpressionKind::EquatableResult(call) = &boundary.kind else {
+                        return None;
+                    };
+                    Some((block.id, boundary, call))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(guards.len(), 1, "{operator}");
+            let (block, boundary, call) = guards[0];
+            assert_ne!(block, function.entry);
+            assert!(matches!(call.kind, ExpressionKind::Call { .. }));
+            assert!(!has_extractable_handle(boundary));
+        }
     }
 
     #[test]

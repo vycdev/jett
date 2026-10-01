@@ -2498,6 +2498,18 @@ impl Verifier<'_> {
                     Err(self.expression_kind_error(function, expression, "display result"))
                 }
             }
+            ExpressionKind::EquatableResult(value) => {
+                self.expression(function, value)?;
+                let mut result = expression.ty;
+                while let Type::Secret(inner) = self.types.resolve(result) {
+                    result = *inner;
+                }
+                if value.ty == expression.ty && result == TypeInterner::BOOL {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "equality result"))
+                }
+            }
             ExpressionKind::Declassify(value) => {
                 self.expression(function, value)?;
                 if matches!(self.types.resolve(value.ty), Type::Secret(inner) if *inner == expression.ty)

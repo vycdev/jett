@@ -269,6 +269,15 @@ impl BackendTypeValidator<'_> {
                     );
                 }
             }
+            ExpressionKind::EquatableResult(value) => {
+                self.expression(value, function_name);
+                if expression.ty != value.ty || !qualified_bool(self.interner, value.ty) {
+                    self.error(
+                        expression.span,
+                        "equality result boundary requires the same bool type with only outer secret qualification",
+                    );
+                }
+            }
             ExpressionKind::Unary { value, .. }
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
@@ -760,6 +769,22 @@ impl BackendTypeValidator<'_> {
     }
 }
 
+fn qualified_bool(types: &TypeInterner, mut ty: TypeId) -> bool {
+    for _ in 0..types.len() {
+        if ty == TypeInterner::BOOL {
+            return true;
+        }
+        if ty.index() as usize >= types.len() {
+            return false;
+        }
+        match types.resolve(ty) {
+            Type::Secret(inner) => ty = *inner,
+            _ => return false,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -803,6 +828,55 @@ mod tests {
                 body: Block { statements, span },
                 span,
             }],
+        }
+    }
+
+    #[test]
+    fn equatable_result_preserves_exact_bool_qualification_without_refinement_peeling() {
+        let mut interner = TypeInterner::new();
+        let secret = interner.intern(Type::Secret(TypeInterner::BOOL));
+        let nested_secret = interner.intern(Type::Secret(secret));
+        let refined = interner.intern(Type::Refinement {
+            name: "test.Truth".into(),
+            base: TypeInterner::BOOL,
+        });
+        let secret_refined = interner.intern(Type::Secret(refined));
+        for (input, output, valid) in [
+            (TypeInterner::BOOL, TypeInterner::BOOL, true),
+            (secret, secret, true),
+            (nested_secret, nested_secret, true),
+            (TypeInterner::BOOL, secret, false),
+            (secret, TypeInterner::BOOL, false),
+            (secret, nested_secret, false),
+            (refined, refined, false),
+            (secret_refined, secret_refined, false),
+            (TypeInterner::INT64, TypeInterner::INT64, false),
+            (TypeInterner::STRING, TypeInterner::BOOL, false),
+        ] {
+            let expression = Expression {
+                kind: ExpressionKind::EquatableResult(Box::new(Expression {
+                    kind: ExpressionKind::Bool(true),
+                    ty: input,
+                    span: test_span(),
+                })),
+                ty: output,
+                span: test_span(),
+            };
+            let program = program_with(
+                output,
+                vec![Statement {
+                    kind: StatementKind::Return(Some(expression)),
+                    span: test_span(),
+                }],
+            );
+            let result = validate_backend_types(&program, &interner);
+            if valid {
+                result.expect("unchanged qualified bool boundary");
+            } else {
+                let errors = result.expect_err("invalid equality boundary type");
+                assert!(errors.iter().any(|error| error.message ==
+                    "equality result boundary requires the same bool type with only outer secret qualification"));
+            }
         }
     }
 
