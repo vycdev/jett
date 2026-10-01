@@ -286,3 +286,19 @@ element failures. `native_primitive_list_sums_match_interpreter_in_both_profiles
 adds linked program and verify/property execution after source removal. These
 supplemental cases do not change the inventory denominator or establish full
 native acceptance.
+
+The pending-aggregate audit found unchecked public field/tag reads and projected
+sequence ancestors, plus lost scalar payload depth during enum matching. Native
+consumers now reject outer pending owners before observation or transition
+payload execution, while raw internal projections remain usable. Scalar enum
+bindings retain their pending depth through match and one-level joins.
+`native_pending_aggregate_access_fails_before_observation_in_both_profiles`
+pins ten exact public reference failures, debug task traces, and successful
+failure cleanup. `native_ready_and_joined_aggregate_access_preserves_owners_in_both_profiles`
+covers repeated borrowed enum-list matches, ready/projected owners, and fully
+joined records, machines, enums, and scalar payloads. Its `int8`, `float32`,
+`bool`, and `nothing` enum payloads pin depth-two, depth-one, and ready traces
+through successive joins. Both profiles run after source removal. Runtime
+checks also preserve nested pending children and typed
+redaction. Hidden-secret diagnostic observation remains open; missing debug
+layouts use conservative redaction rather than proving public output parity.

@@ -543,6 +543,32 @@ impl Translator<'_, '_> {
         };
         self.leaf(leaf, &[value], true)
     }
+    pub(super) fn check_struct_pending_access(
+        &mut self,
+        value: Value,
+        owner_type: TypeId,
+        message: &str,
+        render: bool,
+    ) -> Result<(), CodegenError> {
+        let layout = super::debug::debug_layout(self.types, owner_type).unwrap_or_default();
+        let (layout_pointer, layout_length) = self.static_data(&layout)?;
+        let (message_pointer, message_length) = self.static_bytes(message)?;
+        let render = self.builder.ins().iconst(ir::types::I32, i64::from(render));
+        self.leaf(
+            NativeLeaf::StructPendingAccessCheck,
+            &[
+                value,
+                layout_pointer,
+                layout_length,
+                message_pointer,
+                message_length,
+                render,
+            ],
+            true,
+        )?;
+        Ok(())
+    }
+
     fn struct_field(
         &mut self,
         base: &Expression,
@@ -553,6 +579,12 @@ impl Translator<'_, '_> {
     ) -> Result<LoweredValue, CodegenError> {
         let parent = self.argument(base, true)?;
         let parent = self.scalar(parent, span)?;
+        self.check_struct_pending_access(
+            parent,
+            base.ty,
+            "field access is not supported on ",
+            true,
+        )?;
         let index = self.builder.ins().iconst(ir::types::I64, i64::from(index));
         let bits = self.leaf(NativeLeaf::StructField, &[parent, index], true)?;
         if is_linear(self.types, ty) {

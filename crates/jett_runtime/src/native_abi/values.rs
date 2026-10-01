@@ -4133,6 +4133,40 @@ impl NativeValues {
             .flatten()
             .ok_or(INVALID_STRUCT)
     }
+    fn check_struct_pending_access(
+        &mut self,
+        value: u64,
+        layout: &[u8],
+        message: &str,
+        render: bool,
+    ) -> LeafResult<u32> {
+        if self
+            .structs
+            .get(&value)
+            .ok_or(INVALID_STRUCT)?
+            .pending_depth
+            == 0
+        {
+            return Ok(0);
+        }
+        let message = if render {
+            // An unavailable layout must not make ready access unsupported or
+            // disclose an opaque payload while reporting pending access.
+            let actual = if layout.is_empty() {
+                "[redacted]".to_owned()
+            } else {
+                let layout = NativeDebugLayout::parse(layout).map_err(|_| INVALID_STRUCT)?;
+                layout
+                    .format_value(self, value, layout.root)
+                    .map_err(|_| INVALID_STRUCT)?
+            };
+            format!("{message}{actual}")
+        } else {
+            message.to_owned()
+        };
+        self.dynamic_failure_message = Some(message.into_bytes());
+        Err(INVALID_STRUCT)
+    }
     fn enum_equal(&self, left: u64, right: u64, layout: &[u8]) -> LeafResult<u32> {
         let mut cursor = BitfieldLayoutCursor {
             bytes: layout,
@@ -5194,6 +5228,15 @@ leaves! {
         |s| { let slot = s.structs.get_mut(&value).and_then(|v| usize::try_from(index).ok().and_then(|i| v.fields.get_mut(i))).ok_or(INVALID_STRUCT)?;
             if slot.is_some() { return Err(INVALID_STRUCT); }
             *slot = Some(NativeField { bits, owned: false, pending_depth: depth }); Ok(0) };
+    StructPendingAccessCheck, jett_rt_v1_struct_pending_access_check, false, (value: u64 => I64, layout: *const u8 => Pointer, layout_length: u64 => I64, message: *const u8 => Pointer, message_length: u64 => I64, render: u32 => I32), u32 => I32,
+        |s| { let layout_length = usize::try_from(layout_length).map_err(|_| INVALID_STRUCT)?;
+            let message_length = usize::try_from(message_length).map_err(|_| INVALID_STRUCT)?;
+            if render > 1 || layout_length > isize::MAX as usize || message_length > isize::MAX as usize
+                || (layout_length != 0 && layout.is_null()) || (message_length != 0 && message.is_null()) { return Err(INVALID_STRUCT); }
+            let layout = if layout_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(layout, layout_length) } };
+            let message = if message_length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(message, message_length) } };
+            let message = std::str::from_utf8(message).map_err(|_| INVALID_STRUCT)?;
+            s.check_struct_pending_access(value, layout, message, render != 0) };
     StructField, jett_rt_v1_struct_field, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
         |s| Ok(s.struct_field(value, index)?.bits);
     StructFieldPendingDepth, jett_rt_v1_struct_field_pending_depth, false, (value: u64 => I64, index: u64 => I64), u64 => I64,
@@ -8416,6 +8459,240 @@ mod tests {
         let context = std::mem::ManuallyDrop::new(context);
         unsafe {
             drop(ptr::read(&context.0));
+        }
+    }
+
+    #[test]
+    fn struct_pending_access_preserves_ready_and_pending_owned_records() {
+        let mut values = NativeValues::default();
+        let bytes = values.insert_bytes(vec![65]).unwrap();
+        values.bytes_pending.insert(bytes, 2);
+        let ready = values.new_struct(2).unwrap();
+        values.structs.get_mut(&ready).unwrap().fields = vec![
+            Some(NativeField {
+                bits: bytes,
+                owned: true,
+                pending_depth: 0,
+            }),
+            Some(NativeField {
+                bits: 7,
+                owned: false,
+                pending_depth: 3,
+            }),
+        ];
+        let pending = values.run_record(ready).unwrap();
+        let twice = values.run_record(pending).unwrap();
+        assert_eq!(
+            values.check_struct_pending_access(ready, b"invalid", "field access: ", true),
+            Ok(0)
+        );
+        assert_eq!(
+            values.check_struct_pending_access(twice, b"invalid", "transition rejected", false),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"transition rejected".as_slice())
+        );
+        for (owner, depth) in [(ready, 0), (pending, 1), (twice, 2)] {
+            let record = values.structs.get(&owner).unwrap();
+            assert_eq!(record.pending_depth, depth);
+            assert!(record.fields.iter().all(Option::is_some));
+            let bytes = values.struct_field(owner, 0).unwrap();
+            assert!(bytes.owned);
+            assert_eq!(values.bytes(bytes.bits), Ok([65].as_slice()));
+            assert_eq!(values.bytes_depth(bytes.bits), Ok(2));
+            let scalar = values.struct_field(owner, 1).unwrap();
+            assert_eq!(
+                (scalar.bits, scalar.owned, scalar.pending_depth),
+                (7, false, 3)
+            );
+        }
+        assert_eq!((values.structs_created, values.structs_destroyed), (3, 0));
+        assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 0));
+        for owner in [ready, pending, twice] {
+            values.drop_value(owner).unwrap();
+        }
+        assert_eq!((values.structs_created, values.structs_destroyed), (3, 3));
+        assert_eq!((values.bytes_created, values.bytes_destroyed), (3, 3));
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn struct_pending_access_typed_errors_preserve_depth_and_redaction() {
+        let mut integer = vec![NativeDebugTag::Primitive as u8];
+        integer.extend_from_slice(&(NativeSortKind::Int64 as u32).to_le_bytes());
+        let mut string = vec![NativeDebugTag::Primitive as u8];
+        string.extend_from_slice(&(NativeSortKind::String as u32).to_le_bytes());
+        let mut record = vec![NativeDebugTag::Record as u8];
+        record.extend_from_slice(&5_u32.to_le_bytes());
+        record.extend_from_slice(b"Vault");
+        record.extend_from_slice(&3_u32.to_le_bytes());
+        for (name, node) in [("number", 0_u32), ("hidden", 1), ("label", 2)] {
+            record.extend_from_slice(&u32::try_from(name.len()).unwrap().to_le_bytes());
+            record.extend_from_slice(name.as_bytes());
+            record.extend_from_slice(&node.to_le_bytes());
+        }
+        let layout = function_debug_layout_bytes(
+            &[
+                integer,
+                vec![NativeDebugTag::Redacted as u8],
+                string,
+                record,
+            ],
+            3,
+        );
+        let mut values = NativeValues::default();
+        let label = values.insert("[redacted]".to_owned()).unwrap();
+        values.strings.get_mut(&label).unwrap().pending_depth = 1;
+        let owner = values.new_struct(3).unwrap();
+        let record = values.structs.get_mut(&owner).unwrap();
+        record.pending_depth = 2;
+        record.fields = vec![
+            Some(NativeField {
+                bits: 7,
+                owned: false,
+                pending_depth: 1,
+            }),
+            Some(NativeField {
+                bits: u64::MAX,
+                owned: false,
+                pending_depth: u64::MAX,
+            }),
+            Some(NativeField {
+                bits: label,
+                owned: true,
+                pending_depth: 0,
+            }),
+        ];
+        assert_eq!(
+            values.check_struct_pending_access(
+                owner,
+                &layout,
+                "field access is not supported on ",
+                true,
+            ),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"field access is not supported on pending(pending(Vault(number: pending(7), hidden: [redacted], label: pending([redacted]))))".as_slice())
+        );
+        assert_eq!(values.struct_field(owner, 1).unwrap().bits, u64::MAX);
+        assert_eq!(values.structs[&owner].pending_depth, 2);
+        assert_eq!(values.strings[&label].pending_depth, 1);
+        values.drop_value(owner).unwrap();
+        assert_eq!((values.structs_created, values.structs_destroyed), (1, 1));
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn struct_pending_access_formats_only_requested_pending_values() {
+        let mut values = NativeValues::default();
+        let owner = values.new_struct(1).unwrap();
+        // Ready access does not inspect even an uninitialized opaque field.
+        assert_eq!(
+            values.check_struct_pending_access(owner, b"invalid", "got ", true),
+            Ok(0)
+        );
+        values.structs.get_mut(&owner).unwrap().pending_depth = 1;
+        assert_eq!(
+            values.check_struct_pending_access(owner, b"invalid", "transition rejected", false),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"transition rejected".as_slice())
+        );
+        assert_eq!(
+            values.check_struct_pending_access(owner, &[], "got ", true),
+            Err(INVALID_STRUCT)
+        );
+        assert_eq!(
+            values.dynamic_failure_message.as_deref(),
+            Some(b"got [redacted]".as_slice())
+        );
+        values.dynamic_failure_message = None;
+        assert_eq!(
+            values.check_struct_pending_access(owner, b"invalid", "got ", true),
+            Err(INVALID_STRUCT)
+        );
+        assert!(values.dynamic_failure_message.is_none());
+        assert!(values.structs[&owner].fields[0].is_none());
+        assert_eq!(
+            values.check_struct_pending_access(0, &[], "got ", false),
+            Err(INVALID_STRUCT)
+        );
+        values.drop_value(owner).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn struct_pending_access_leaf_validates_abi_without_consuming_owner() {
+        let layout = b"invalid";
+        let message = b"got ";
+        let invalid_utf8 = [0xff];
+        for (layout, layout_length, message, message_length, render) in [
+            (layout.as_ptr(), 7, message.as_ptr(), 4, 2),
+            (ptr::null(), 1, message.as_ptr(), 4, 1),
+            (ptr::null(), 0, ptr::null(), 1, 0),
+            (layout.as_ptr(), u64::MAX, message.as_ptr(), 4, 1),
+            (ptr::null(), 0, message.as_ptr(), u64::MAX, 0),
+            (ptr::null(), 0, invalid_utf8.as_ptr(), 1, 0),
+        ] {
+            let context = Context::new();
+            unsafe {
+                let owner = jett_rt_v1_struct_new(context.pointer(), 1);
+                assert_eq!(
+                    jett_rt_v1_struct_init_scalar_task(context.pointer(), owner, 0, 7, 3),
+                    0
+                );
+                assert_eq!(
+                    jett_rt_v1_struct_pending_access_check(
+                        context.pointer(),
+                        owner,
+                        layout,
+                        layout_length,
+                        message,
+                        message_length,
+                        render,
+                    ),
+                    u32::failure_default()
+                );
+                assert_eq!(
+                    jett_rt_v1_value_status(context.pointer()),
+                    JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                );
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                let state = lock_unpoisoned(&lease.entry.state);
+                let values = &state.as_ref().unwrap().values;
+                assert_eq!(values.structs[&owner].pending_depth, 0);
+                let field = values.struct_field(owner, 0).unwrap();
+                assert_eq!(
+                    (field.bits, field.owned, field.pending_depth),
+                    (7, false, 3)
+                );
+                drop(state);
+                jett_rt_v1_value_drop(context.pointer(), owner);
+            }
+        }
+        let context = Context::new();
+        unsafe {
+            let owner = jett_rt_v1_struct_new(context.pointer(), 0);
+            assert_eq!(
+                jett_rt_v1_struct_pending_access_check(
+                    context.pointer(),
+                    owner,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    1,
+                ),
+                0
+            );
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+            jett_rt_v1_value_drop(context.pointer(), owner);
         }
     }
     #[test]

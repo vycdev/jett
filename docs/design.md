@@ -7790,6 +7790,14 @@ The operation borrows the list and preserves existing errors for pending lists
 or elements. This implementation does not add a summation contract for nominal
 refinements or nonnumeric types.
 
+The native sequential task path rejects field reads, machine state tests and
+transitions, and enum matches while the aggregate owner remains pending. A
+projected sequence read checks each enclosing owner. Ready owners may contain
+pending children; extracting a child preserves its depth, and each `join` still
+unwraps exactly one level. A failed transition checks its source before running
+target payload expressions. Typed diagnostics retain native secret redaction;
+hidden-secret terminal observation remains a separate open policy.
+
 Native entry grants cover all eleven checked capability types for the value
 operations already implemented by the interpreter, including direct and
 indirect calls, views, debug output, and task wrapping. Stderr, Stdin,

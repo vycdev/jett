@@ -1114,6 +1114,12 @@ impl Translator<'_, '_> {
                         let borrowed = self.argument(&owner_expr, true)?;
                         let mut value = self.scalar(borrowed, statement.span)?;
                         for step in path {
+                            self.check_struct_pending_access(
+                                value,
+                                step.owner_type,
+                                "field access is not supported on ",
+                                true,
+                            )?;
                             let index = self
                                 .builder
                                 .ins()
@@ -1611,6 +1617,12 @@ impl Translator<'_, '_> {
             } => {
                 let lowered = self.expression(scrutinee)?;
                 let handle = self.scalar(lowered, scrutinee.span)?;
+                self.check_struct_pending_access(
+                    handle,
+                    scrutinee.ty,
+                    "match requires an enum value, got ",
+                    true,
+                )?;
                 let zero = self.builder.ins().iconst(ir::types::I64, 0);
                 let tag = self.leaf(NativeLeaf::StructField, &[handle, zero], true)?;
                 let switch_temporaries = self.next_temporary;
@@ -1627,9 +1639,23 @@ impl Translator<'_, '_> {
                     self.builder.switch_to_block(selected);
                     for (index, binding) in bindings.iter().enumerate() {
                         let field = self.builder.ins().iconst(ir::types::I64, index as i64 + 1);
-                        let bits = self.leaf(NativeLeaf::StructTake, &[handle, field], true)?;
                         let ty = self.local_types[binding.index() as usize].ty;
+                        let depth = if is_task_scalar(self.types, ty)? {
+                            Some(self.leaf(
+                                NativeLeaf::StructFieldPendingDepth,
+                                &[handle, field],
+                                true,
+                            )?)
+                        } else {
+                            None
+                        };
+                        let bits = self.leaf(NativeLeaf::StructTake, &[handle, field], true)?;
                         let value = self.unpack_payload(bits, ty, terminator.span)?;
+                        let value = if let Some(depth) = depth {
+                            LoweredValue::ScalarTask(self.scalar(value, terminator.span)?, depth)
+                        } else {
+                            value
+                        };
                         self.define_local(*binding, value, terminator.span)?;
                     }
                     self.drop_temporaries()?;
@@ -2158,11 +2184,24 @@ impl Translator<'_, '_> {
             ),
             ExpressionKind::MachineTransition {
                 source,
+                state_type,
                 target,
                 payloads,
-                ..
             } => {
-                self.expression(source)?;
+                let lowered = self.expression(source)?;
+                let value = self.scalar(lowered, source.span)?;
+                let machine = match self
+                    .types
+                    .resolve(representation_type(self.types, *state_type))
+                {
+                    Type::Machine(machine) | Type::MachineState { machine, .. } => *machine,
+                    _ => return Err(self.unsupported(expression.span, "machine transition type")),
+                };
+                let message = format!(
+                    "{}.transition: first argument must be a machine value",
+                    self.types.resolve_machine(machine).name
+                );
+                self.check_struct_pending_access(value, source.ty, &message, false)?;
                 self.construct_tagged_record(
                     target.index(),
                     payloads,
@@ -2206,6 +2245,12 @@ impl Translator<'_, '_> {
             ExpressionKind::StateIs { value, state } => {
                 let borrowed = self.argument(value, true)?;
                 let machine = self.scalar(borrowed, value.span)?;
+                self.check_struct_pending_access(
+                    machine,
+                    value.ty,
+                    "'at' requires a machine value, got ",
+                    true,
+                )?;
                 let zero = self.builder.ins().iconst(ir::types::I64, 0);
                 let tag = self.leaf(NativeLeaf::StructField, &[machine, zero], true)?;
                 let expected = self

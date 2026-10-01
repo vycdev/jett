@@ -2886,6 +2886,18 @@ borrowed, and outer pending lists or pending elements retain their terminal
 failure checks. This kernel does not introduce summation for nominal refinements
 or nonnumeric element types.
 
+Native aggregate consumers check the owner's outer pending depth before public
+field reads, machine state tests/transitions, enum matches, and each ancestor in
+a projected sequence path. `StructPendingAccessCheck` leaves ready owners and
+their children untouched. Machine transition checks precede payload evaluation.
+Raw `StructField` remains available for internal reconstruction and reflection.
+Enum matches read numeric/bool payload depth before taking the field and retain
+that depth in the binding's scalar task carrier.
+Pending diagnostics use the typed debug graph and preserve its secret redaction.
+An unavailable graph uses a conservative `[redacted]` rendering without reading
+children; that fallback does not establish exact public diagnostic parity for
+unsupported layouts or settle the open hidden-secret observation policy.
+
 Non-release `print` and `println` validate aggregate arguments through the native
 debug type graph and reuse `DebugAppendAggregate` to format a borrowed value into
 an owned temporary string. Primitive task formatting retains its existing path.

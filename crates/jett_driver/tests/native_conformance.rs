@@ -1129,6 +1129,177 @@ fn native_pending_sum_handles_fail_before_extraction_in_both_profiles() {
 }
 
 #[test]
+fn native_pending_aggregate_access_fails_before_observation_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_aggregate_access.jett");
+    let template = fs::read_to_string(&fixture).unwrap();
+    let (declarations, _) = template.rsplit_once("function main(").unwrap();
+    for (scenario, message) in [
+        (
+            "direct_record_failure",
+            "field access is not supported on pending(app.Record(label: Ada, items: list(7)))",
+        ),
+        (
+            "nested_record_failure",
+            "field access is not supported on pending(pending(app.Record(label: Ada, items: list(7))))",
+        ),
+        (
+            "cloned_record_failure",
+            "field access is not supported on pending(pending(app.Record(label: Ada, items: list(7))))",
+        ),
+        (
+            "machine_field_failure",
+            "field access is not supported on pending(pending(app.Session@active(Ada, 7)))",
+        ),
+        (
+            "machine_state_failure",
+            "'at' requires a machine value, got pending(pending(app.Session@active(Ada, 7)))",
+        ),
+        (
+            "broad_machine_state_failure",
+            "'at' requires a machine value, got pending(pending(app.Session@active(Ada, 7)))",
+        ),
+        (
+            "machine_transition_failure",
+            "app.Session.transition: first argument must be a machine value",
+        ),
+        (
+            "enum_match_failure",
+            "match requires an enum value, got pending(pending(app.Choice.rows(list(7))))",
+        ),
+        (
+            "enum_payload_failure",
+            "unsupported binary operation: pending(7) Add 1",
+        ),
+        (
+            "projected_iteration_failure",
+            "field access is not supported on pending(pending(app.Record(label: Ada, items: list(7))))",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pending_aggregate.jett");
+        fs::write(
+            &source,
+            format!(
+                "{declarations}function main(stdout: Stdout) returns nothing:\n    {scenario}(view stdout)\n"
+            ),
+        )
+        .unwrap();
+        let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+        assert_eq!(expected.output.stdout, "before\n", "{scenario}");
+        assert_eq!(
+            expected.message,
+            format!("runtime error: {message}"),
+            "{scenario}"
+        );
+        let debug = if scenario == "enum_payload_failure" {
+            assert_eq!(
+                expected.output.debug_output,
+                [
+                    "trace value: int64 = pending(pending(7))",
+                    "trace joined: int64 = pending(7)",
+                ],
+                "{scenario}"
+            );
+            format!("{}\n", expected.output.debug_output.join("\n"))
+        } else {
+            assert!(
+                expected.output.debug_output.is_empty(),
+                "{scenario}: {expected:?}"
+            );
+            String::new()
+        };
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory
+                .path()
+                .join(format!("pending_aggregate_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .unwrap_or_else(|error| panic!("{scenario}, release={release}: {error}"));
+            binaries.push((binary, release));
+        }
+        fs::remove_file(&source).unwrap();
+        for (binary, release) in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert_eq!(actual.status.code(), Some(71), "{scenario}: {actual:?}");
+            assert_eq!(
+                actual.stdout,
+                expected.output.stdout.as_bytes(),
+                "{scenario}"
+            );
+            let debug = if release { "" } else { debug.as_str() };
+            assert_eq!(
+                actual.stderr,
+                format!("{debug}{}\n", expected.message).as_bytes(),
+                "{scenario}, release={release}: {actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_ready_and_joined_aggregate_access_preserves_owners_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/pending_aggregate_access.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("ready_aggregate.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).expect("ready aggregate oracle");
+    assert_eq!(
+        expected.stdout,
+        "record:Ada:1\nrecord:Ada:1\nrecord:Ada:1\n7\ntrue:Ada:7\ntrue:Ada:7\n1:1\n1:1\n7\nint8:8\nfloat32:1.5\nbool:false\nnothing joined\n"
+    );
+    assert_eq!(
+        expected.debug_output,
+        [
+            "trace value: int8 = pending(pending(7))",
+            "trace once: int8 = pending(7)",
+            "trace ready: int8 = 7",
+            "trace value: float32 = pending(pending(1.25))",
+            "trace once: float32 = pending(1.25)",
+            "trace ready: float32 = 1.25",
+            "trace value: bool = pending(pending(true))",
+            "trace once: bool = pending(true)",
+            "trace ready: bool = true",
+            "trace value: nothing = pending(pending(nothing))",
+            "trace once: nothing = pending(nothing)",
+            "trace ready: nothing = nothing",
+        ]
+    );
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("ready_aggregate_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native ready and joined aggregate control");
+        binaries.push((binary, release));
+    }
+    fs::remove_file(&source).unwrap();
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        let debug = if release {
+            String::new()
+        } else {
+            format!("{}\n", expected.debug_output.join("\n"))
+        };
+        assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
+    }
+}
+
+#[test]
 fn native_interface_refined_sums_match_interpreter_in_both_profiles() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_refined_sums.jett");
