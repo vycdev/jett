@@ -542,6 +542,19 @@ A field that already has its refinement type carries the established invariant
 into the struct constructor. The constructor still has the same fallible result
 type and `handle` requirement.
 
+An unchanged refined value also retains its invariant when bound to a local or
+copied from a field. Promotion from an established ancestor checks only the
+remaining descendant constraints, in base-first order. Explicit `coarsen`
+removes the discarded proof; another refinement with the same underlying
+representation supplies no proof. Validation uses the checked source type,
+including the success payload type when a result or optional is handled.
+Runtime labels alone cannot establish an invariant for replaced payloads.
+
+Generic struct fields use the constructor's selected concrete type arguments,
+resolved in the caller. Field declarations then resolve in the struct's own
+namespace. A caller's unrelated generic parameter or namespace alias cannot
+change a field's refinement or the constructor's result type.
+
 **Refinement type constraints must be self-contained.** The `where` clause can only reference `value` (the value being constrained) and call pure functions with literal or constant arguments. Constraints cannot take external parameters — there is no `type Password[min: int64] = string where string.char_count(value) > min`. This keeps `[]` unambiguous: it always means generics, never parameterized constraints.
 
 Constraint names resolve in the refinement's declaration namespace, including

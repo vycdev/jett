@@ -982,6 +982,20 @@ returns. Predicate `value` has the fully coarsened base type with the outer
 secret wrapper removed, matching the checker and native predicate parameter.
 Inherited interface refinements therefore dispatch through that base inside
 their predicates. Both successful and rejected boundaries restore caller context.
+Interpreter local and direct struct-field boundaries capture the original
+checked source type before evaluating the expression or normalizing its value.
+Exact established refinements skip validation; ancestor inputs skip only the
+validated prefix. Result and optional handling supplies the checked success
+payload type only when extracting that payload. Explicit coarsening and sibling
+refinements cannot reuse discarded or unrelated predicates. This proof path
+does not use runtime `Typed` labels; metadata-free calls and property-shrink
+candidates retain their existing validation entry points.
+Direct generic struct construction resolves actual type arguments in caller
+context, maps them to the struct's own parameters, and resolves declared fields
+in declaration context. The selected concrete field types determine fallible
+result wrapping, independently of the caller's generic bindings and imports.
+Function parameter and return boundaries still use forced reference validation;
+their checked-source proof transport remains a separate parity obligation.
 Explicit comptime HIR retains its original source span for evaluated-value lookup,
 independently of an enclosing expression span widened by parentheses.
 Interpolation selects the exact checked `Displayable.display` owner before

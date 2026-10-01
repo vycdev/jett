@@ -557,6 +557,16 @@ snapshots it before validation so both success and handled failure can still
 read the original source. Predicate evaluation failures and secret-backed or
 already-refined inputs still require native parity work.
 
+Direct local and struct-field validation reuses the original checked source
+refinement, skipping its established ancestor prefix while preserving remaining
+predicate order, pending depth, ownership, and the constructor's result shape.
+Reference execution captures that proof before evaluation and normalization;
+raw API inputs and changed property candidates retain their existing validation
+entry points. Generic fields and result wrapping follow the constructor's selected
+type arguments and declaration namespace. This repair adds no runtime ABI
+operation or representation. Checked function parameter and return proof
+transport remains separate from these boundaries and builder finish validation.
+
 ## Result and optional ownership and handlers
 
 Native sums have separate context-associated, move-only handles. Their internal

@@ -54,6 +54,9 @@ mod secret_validating_struct_constructors;
 #[path = "native_conformance/qualified_result_tasks.rs"]
 mod qualified_result_tasks;
 
+#[path = "native_conformance/refinement_reuse.rs"]
+mod refinement_reuse;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

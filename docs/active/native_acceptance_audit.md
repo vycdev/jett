@@ -889,14 +889,53 @@ remains separate from the outer Join handler; its later terminal failure retains
 the first error, effect order and exit 71 cleanup. No runtime leaf signature,
 verifier type rule or fixture denominator changes.
 
-A separate traced-field probe still exposes reference predicate reuse:
-constructing a field from an already established primitive refinement evaluates
-its predicate again in the interpreter, while native code skips it. The design
-already selects reuse of established invariants, including validated ancestors;
-this needs a reference repair, not a new language policy. The original source
-type must survive primitive normalization, and owned aggregate refinements need
-checked source facts rather than primitive-layout equality. Exact, ancestor,
-sibling, effect-order, owned-payload and pending controls remain required.
+The direct local and struct-field predicate reuse repair follows the selected
+design: interpreter validation captures the original checked source type before
+evaluation or primitive normalization. Exact refinements reuse their invariant,
+and ancestor promotion runs only the remaining base-first predicates. Handled
+optional/result success payloads retain their checked proof; whole nominal sum
+refinements remain distinct. Coarsening supplies its selected output proof, and
+a sibling sharing the carrier proves nothing. Forced validation of changed
+property candidates and metadata-free calls remains on its existing path.
+
+The same audit exposed generic constructor type selection: reference execution
+returned a plain struct for `Box[Positive]`, while a caller's unrelated
+`T = Positive` made `Box[bool]` validate `true` as Positive. Constructor arguments
+now resolve in caller context and map to the declaration's own parameters.
+Field resolution, validation flags, normalization, and retained identities use
+the declaration context; caller imports cannot redirect canonical field names.
+The selected concrete fields determine the existing checked result contract,
+including an empty predicate chain. Caller context is restored after success,
+captured predicate failure, or terminal construction failure.
+
+All 350 interpreter tests pass, including eleven new proof, normalization,
+context, and generic-constructor controls. Four linked regressions in
+`native_conformance/refinement_reuse.rs` pass in debug and release after source
+removal. Handwritten stdout and trace expectations pin exact/local/field reuse,
+ancestor suffix order, explicit coarsening, owned string/list copies, one-layer
+pending joins, captured predicate errors, and rejection of pending inputs to new
+predicates. Concrete generic result shapes, closed comptime, compiled verify,
+and 100 property trials also pass. These additions retain the fixed inventory
+denominator and require final-revision workspace and distribution validation.
+The existing native shrink regression for refinement chains and nested
+predicates also passes in both profiles, preserving validation of changed
+candidates and caught predicate errors.
+
+Checked function parameter and return boundaries still force reference
+validation; source-proof transport through those boundaries remains separate
+semantic work. Reflected builder finish retains its documented validation of
+provided base values. Pure success controls do not establish predicate-event
+parity for these remaining boundaries.
+
+The locked Windows workspace run at `52bd4dcb` passed every target and doc-test
+with tracked source frozen throughout. All 284 native conformance tests passed,
+including the six new qualified-result and secret validating-constructor tests.
+The independent gates passed for 182 HIR/MIR fixtures, 182 native objects,
+30 entry cases, 25 runtime contracts, 155 verify fixtures, and three property
+fixtures with 100 trials each. The
+[supported-host run for that revision](https://github.com/vycdev/jett/actions/runs/36898786909)
+is still in progress. This checkpoint does not certify the later refinement
+reuse repair or its final workspace and distribution obligations.
 
 The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).

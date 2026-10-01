@@ -1490,6 +1490,18 @@ impl Interpreter {
     /// Check a value against a refinement type's constraint.
     /// Returns `Ok(())` if valid, or `Err(message)` if the constraint fails.
     fn check_refinement(&mut self, type_name: &str, value: &Value) -> Result<(), String> {
+        self.check_refinement_from_source(type_name, value, None)
+    }
+
+    /// Reuse only an original checked expression's established refinement.
+    /// A runtime `Typed` label is not proof: property shrinking and raw API
+    /// callers can retain that label while replacing the payload.
+    fn check_refinement_from_source(
+        &mut self,
+        type_name: &str,
+        value: &Value,
+        source_type: Option<&str>,
+    ) -> Result<(), String> {
         let type_name = self
             .registry_name(&self.type_aliases, type_name)
             .unwrap_or_else(|| type_name.to_string());
@@ -1498,15 +1510,24 @@ impl Interpreter {
         while let Value::Pending(inner) = resolved {
             resolved = inner;
         }
-        if matches!(value, Value::Pending(_))
+        if source_type.is_none()
+            && matches!(value, Value::Pending(_))
             && matches!(resolved, Value::Typed { type_name: owner, .. } if *owner == type_name)
         {
-            // `run` preserves an already established refinement. Its pending
-            // wrapper is not a new boundary on which to rerun the predicate.
+            // Preserve the metadata-free API's existing pending behavior.
+            // Checked boundaries instead use the original expression type,
+            // including the proof deliberately removed by an explicit coarsen.
             return Ok(());
         }
 
         if !self.type_aliases.contains_key(&type_name) {
+            return Ok(());
+        }
+
+        // Recursion reaches only the destination's actual ancestor chain.
+        // An unrelated refinement with the same carrier never reaches this
+        // equality, and an explicit coarsen contributes its checked output.
+        if source_type == Some(type_name.as_str()) {
             return Ok(());
         }
 
@@ -1529,7 +1550,7 @@ impl Interpreter {
             .and_then(Option::as_ref)
             .is_some_and(|definition| definition.constraint.span().file.is_stdlib());
 
-        let result = self.check_refinement_in_declaration(&type_name, value);
+        let result = self.check_refinement_in_declaration(&type_name, value, source_type);
 
         self.current_function_trusted_stdlib = saved_trusted;
         self.active_checked_scope = saved_scope;
@@ -1546,6 +1567,7 @@ impl Interpreter {
         &mut self,
         type_name: &str,
         value: &Value,
+        source_type: Option<&str>,
     ) -> Result<(), String> {
         // A predicate's `value` has the base type. Rechecking a value that
         // already carries an interface-backed refinement must not dispatch
@@ -1567,7 +1589,7 @@ impl Interpreter {
             });
         if let Some(base_ty) = &constraint_value_ty {
             let base_type_name = type_expr_name(base_ty);
-            self.check_refinement(&base_type_name, value)?;
+            self.check_refinement_from_source(&base_type_name, value, source_type)?;
         }
 
         let def = match self.type_aliases.get(type_name) {
@@ -1618,10 +1640,11 @@ impl Interpreter {
         &mut self,
         type_name: &str,
         value: Value,
+        source_type: Option<&str>,
         bind_name: Option<&Ident>,
         body: &Block,
     ) -> Result<ExprFlow, String> {
-        match self.check_refinement(type_name, &value) {
+        match self.check_refinement_from_source(type_name, &value, source_type) {
             Ok(()) => Ok(ExprFlow::Value(value)),
             Err(message) => {
                 self.exec_handle_block(bind_name, Some(Value::String(message)), body, None)
@@ -2170,6 +2193,19 @@ impl Interpreter {
                     .as_ref()
                     .and_then(|types| types.get(&span))
             })
+    }
+
+    fn checked_sum_success_type(source_type: Option<&str>, span: Span) -> Option<String> {
+        let TypeExpr::Generic(owner, arguments, _) =
+            Self::simple_type_expr_from_name(source_type?, span)?
+        else {
+            return None;
+        };
+        match (owner.name.as_str(), arguments.as_slice()) {
+            ("optional", [success]) | ("result", [success, _]) => Some(type_expr_display(success)),
+            // Secret and nominal refinements are not transparent sum owners.
+            _ => None,
+        }
     }
 
     fn join_preserves_result(&self, expression: &Expr) -> Option<bool> {
@@ -3340,6 +3376,19 @@ impl Interpreter {
         );
         let type_args = inferred_type_args.as_deref().unwrap_or(type_args);
 
+        // Struct parameters belong to the selected declaration. Resolve their
+        // actual arguments in the caller before evaluating nested expressions.
+        let constructor_type_args: Vec<_> = type_args
+            .iter()
+            .map(|ty| self.substitute_type_expr(ty))
+            .collect();
+        // Capture caller facts before evaluating any argument or entering a
+        // nested generic/reflected body. Only struct field boundaries consume
+        // these witnesses; ordinary calls retain their forced validation.
+        let argument_source_types: Vec<_> = args
+            .iter()
+            .map(|arg| self.checked_expression_type(arg.value.span()).cloned())
+            .collect();
         let mut arg_values = Vec::with_capacity(args.len());
         for arg in args {
             arg_values.push(value_or_signal!(self, &arg.value));
@@ -3354,9 +3403,13 @@ impl Interpreter {
         match callee {
             Expr::Ident(ident) => {
                 if let Some(name) = self.registry_name(&self.structs, &ident.name) {
-                    return Ok(ExprFlow::Value(
-                        self.construct_struct(&name, type_args, args, arg_values)?,
-                    ));
+                    return Ok(ExprFlow::Value(self.construct_struct(
+                        &name,
+                        &constructor_type_args,
+                        args,
+                        arg_values,
+                        &argument_source_types,
+                    )?));
                 }
                 if let Some(name) = self.registry_name(&self.bitfields, &ident.name) {
                     return Ok(ExprFlow::Value(
@@ -3389,9 +3442,10 @@ impl Interpreter {
                     if let Some(struct_name) = self.registry_name(&self.structs, name) {
                         return Ok(ExprFlow::Value(self.construct_struct(
                             &struct_name,
-                            type_args,
+                            &constructor_type_args,
                             args,
                             arg_values,
+                            &argument_source_types,
                         )?));
                     }
                     if let Some(bitfield_name) = self.registry_name(&self.bitfields, name) {
@@ -3724,6 +3778,12 @@ impl Interpreter {
                 let val = if self.type_aliases.contains_key(&type_name) {
                     match &decl.value {
                         Expr::Handle(target, bind_name, body, _) => {
+                            let source_type = self.checked_expression_type(target.span()).cloned();
+                            let success_source_type = Self::checked_sum_success_type(
+                                source_type.as_deref(),
+                                target.span(),
+                            );
+                            let target_type = self.debug_expression_type(target);
                             let target_value = match self.eval_expr_flow(target)? {
                                 ExprFlow::Value(value) => value,
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
@@ -3735,7 +3795,6 @@ impl Interpreter {
                                     | Value::OptionalSome(_)
                                     | Value::OptionalNone
                             );
-                            let target_type = self.debug_expression_type(target);
                             let refines_whole_sum = self.type_name_has_refinement(&type_name)
                                 && target_type.as_ref().is_some_and(|ty| {
                                     self.concrete_type_display(
@@ -3752,6 +3811,7 @@ impl Interpreter {
                                 self.finish_refinement_boundary(
                                     &type_name,
                                     target_value,
+                                    source_type.as_deref(),
                                     bind_name.as_ref(),
                                     body,
                                 )?
@@ -3761,6 +3821,7 @@ impl Interpreter {
                                         .finish_refinement_boundary(
                                             &type_name,
                                             *value,
+                                            success_source_type.as_deref(),
                                             bind_name.as_ref(),
                                             body,
                                         )?,
@@ -3776,6 +3837,7 @@ impl Interpreter {
                                     value => self.finish_refinement_boundary(
                                         &type_name,
                                         value,
+                                        source_type.as_deref(),
                                         bind_name.as_ref(),
                                         body,
                                     )?,
@@ -3787,11 +3849,17 @@ impl Interpreter {
                             }
                         }
                         _ => {
+                            let source_type =
+                                self.checked_expression_type(decl.value.span()).cloned();
                             let val = match self.eval_expr_flow(&decl.value)? {
                                 ExprFlow::Value(value) => value,
                                 ExprFlow::Signal(signal) => return Ok(Some(signal)),
                             };
-                            self.check_refinement(&type_name, &val)?;
+                            self.check_refinement_from_source(
+                                &type_name,
+                                &val,
+                                source_type.as_deref(),
+                            )?;
                             val
                         }
                     }
@@ -11819,22 +11887,117 @@ impl Interpreter {
         }
     }
 
+    fn struct_field_type(
+        &self,
+        ty: &TypeExpr,
+        arguments: &HashMap<String, TypeExpr>,
+        namespace: Option<&str>,
+    ) -> TypeExpr {
+        match ty {
+            TypeExpr::Named(name) => arguments
+                .get(&name.name)
+                // Actual arguments were fully resolved in the caller. They
+                // are values, not templates to substitute through this map.
+                .cloned()
+                .unwrap_or_else(|| TypeExpr::Named(self.expand_type_ident(name, namespace))),
+            TypeExpr::Generic(name, children, span) => TypeExpr::Generic(
+                self.expand_type_ident(name, namespace),
+                children
+                    .iter()
+                    .map(|child| self.struct_field_type(child, arguments, namespace))
+                    .collect(),
+                *span,
+            ),
+            TypeExpr::View(inner, span) => TypeExpr::View(
+                Box::new(self.struct_field_type(inner, arguments, namespace)),
+                *span,
+            ),
+            TypeExpr::StateQualified(inner, state, span) => TypeExpr::StateQualified(
+                Box::new(self.struct_field_type(inner, arguments, namespace)),
+                state.clone(),
+                *span,
+            ),
+            TypeExpr::Function(params, result, span) => TypeExpr::Function(
+                params
+                    .iter()
+                    .map(|param| self.struct_field_type(param, arguments, namespace))
+                    .collect(),
+                Box::new(self.struct_field_type(result, arguments, namespace)),
+                *span,
+            ),
+        }
+    }
+
     fn construct_struct(
         &mut self,
         struct_name: &str,
         type_args: &[TypeExpr],
         args: &[CallArg],
         arg_values: Vec<Value>,
+        source_types: &[Option<String>],
     ) -> Result<Value, String> {
         let strukt = self
             .structs
             .get(struct_name)
             .ok_or_else(|| format!("undefined struct '{struct_name}'"))?
             .clone();
-        let validates_refinements = strukt
+        // Stored field spellings belong to the declaration. Caller imports
+        // must not rewrite even a canonical owner during normalization,
+        // predicate lookup, or retained field identity. Keep the alias stack's
+        // shape so predicates can still establish their own lexical imports.
+        let declaration_aliases = vec![HashMap::new(); self.namespace_alias_scopes.len()];
+        let caller_aliases =
+            std::mem::replace(&mut self.namespace_alias_scopes, declaration_aliases);
+        let caller_type_scopes = std::mem::take(&mut self.type_arg_scopes);
+        let caller_namespace = std::mem::replace(
+            &mut self.current_namespace,
+            Self::type_name_namespace(struct_name).map(str::to_owned),
+        );
+        let result = self.construct_struct_in_declaration(
+            &strukt,
+            type_args,
+            args,
+            arg_values,
+            source_types,
+        );
+        self.current_namespace = caller_namespace;
+        self.type_arg_scopes = caller_type_scopes;
+        self.namespace_alias_scopes = caller_aliases;
+        result
+    }
+
+    fn construct_struct_in_declaration(
+        &mut self,
+        strukt: &StructDef,
+        type_args: &[TypeExpr],
+        args: &[CallArg],
+        arg_values: Vec<Value>,
+        source_types: &[Option<String>],
+    ) -> Result<Value, String> {
+        let struct_name = &strukt.name.name;
+        let substitutions: HashMap<_, _> = strukt
+            .type_params
+            .iter()
+            .zip(type_args)
+            .map(|(parameter, argument)| (parameter.name.clone(), argument.clone()))
+            .collect();
+        // Arguments above are already resolved in the caller. Field spelling
+        // now belongs solely to the struct's declaration and its own map, not
+        // an unrelated caller parameter with the same name.
+        let field_types: Vec<_> = strukt
             .fields
             .iter()
-            .any(|field| self.type_name_has_refinement(&type_expr_name(&field.ty)));
+            .map(|field| {
+                self.struct_field_type(
+                    &field.ty,
+                    &substitutions,
+                    Self::type_name_namespace(struct_name),
+                )
+            })
+            .collect();
+        let validates_refinements = field_types
+            .iter()
+            .any(|ty| self.type_name_has_refinement(&type_expr_name(ty)));
 
         if args.len() > strukt.fields.len() {
             return Err(format!(
@@ -11846,7 +12009,7 @@ impl Interpreter {
         }
 
         let mut fields: Vec<Option<Value>> = vec![None; strukt.fields.len()];
-        for (arg, value) in args.iter().zip(arg_values) {
+        for (source_index, (arg, value)) in args.iter().zip(arg_values).enumerate() {
             let field_index = if let Some(name) = &arg.name {
                 strukt
                     .fields
@@ -11872,10 +12035,13 @@ impl Interpreter {
                 ));
             }
 
-            let field_ty = self.substitute_type_expr(&strukt.fields[field_index].ty);
-            let type_name = type_expr_name(&field_ty);
+            let type_name = type_expr_name(&field_types[field_index]);
             let value = self.normalize_value_for_type_name(&type_name, value)?;
-            if let Err(message) = self.check_refinement(&type_name, &value) {
+            if let Err(message) = self.check_refinement_from_source(
+                &type_name,
+                &value,
+                source_types.get(source_index).and_then(Option::as_deref),
+            ) {
                 if validates_refinements {
                     return Ok(Value::ResultFail(Box::new(Value::String(message))));
                 }
@@ -12951,6 +13117,763 @@ mod tests {
     use jett_parser::ast::*;
 
     use super::*;
+
+    fn reuse_source(name: &str, offset: u32) -> Expr {
+        Expr::Ident(Ident {
+            name: name.into(),
+            span: Span::new(FileId::new(0), offset, offset + 1),
+        })
+    }
+
+    fn reuse_facts(interpreter: &mut Interpreter, facts: &[(Span, &str)]) {
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: facts
+                .iter()
+                .map(|(span, name)| (*span, (*name).to_owned()))
+                .collect(),
+            ..Default::default()
+        }));
+    }
+
+    fn reuse_interpreter() -> Interpreter {
+        let mut interpreter = Interpreter::new();
+        for (owner, base, marker, minimum) in [
+            ("Positive", "int64", "positive", 0),
+            ("Large", "Positive", "large", 5),
+            ("Sibling", "int64", "sibling", 0),
+        ] {
+            let mut predicate = func_def(
+                marker,
+                vec![(marker, "int64")],
+                block(vec![
+                    Stmt::Trace(TraceStmt {
+                        name: ident(marker),
+                        span: sp(),
+                    }),
+                    return_stmt(binary(var(marker), BinOp::Gt, int(minimum))),
+                ]),
+            );
+            predicate.return_type = Some(type_named("bool"));
+            interpreter.register_function_in_namespace(Some("models"), &predicate);
+            interpreter.register_type_alias_in_namespace(
+                Some("models"),
+                &type_alias(owner, base, Some(call(marker, vec![var("value")]))),
+            );
+        }
+        interpreter
+    }
+
+    fn reuse_markers(interpreter: &mut Interpreter) -> Vec<String> {
+        interpreter
+            .take_debug_output()
+            .into_iter()
+            .map(|line| line.split(':').next().unwrap().to_owned())
+            .collect()
+    }
+
+    fn reuse_handle(target: Expr, fallback: Expr, offset: u32) -> Expr {
+        Expr::Handle(
+            Box::new(target),
+            None,
+            block(vec![Stmt::Expr(ExprStmt {
+                expr: Expr::Default(Box::new(fallback), sp()),
+                span: sp(),
+            })]),
+            Span::new(FileId::new(0), offset, offset + 1),
+        )
+    }
+
+    #[test]
+    fn refinement_reuse_does_not_trust_typed_values_at_forced_boundaries() {
+        let mut interpreter = reuse_interpreter();
+        let stale = Value::Typed {
+            type_name: "models.Positive".into(),
+            value: Box::new(Value::Int64(-1)),
+        };
+        let error = "refinement type constraint failed for 'models.Positive'";
+        assert_eq!(
+            interpreter.check_refinement_type("models.Positive", &stale),
+            Err(error.into())
+        );
+        interpreter.set_variable("stale", stale.clone());
+        assert_eq!(
+            interpreter.exec_stmt(&typed_var_decl("models.Positive", "copy", var("stale"))),
+            Err(error.into())
+        );
+        let mut accept = func_def(
+            "accept",
+            vec![("input", "models.Positive")],
+            block(vec![return_stmt(var("input"))]),
+        );
+        accept.return_type = Some(type_named("int64"));
+        interpreter.register_function(&accept);
+        assert_eq!(
+            interpreter.call_function("accept", vec![stale]),
+            Err(error.into())
+        );
+        let mut produce = func_def("produce", vec![], block(vec![return_stmt(var("stale"))]));
+        produce.return_type = Some(type_named("models.Positive"));
+        interpreter.register_function(&produce);
+        assert_eq!(
+            interpreter.call_function("produce", vec![]),
+            Err(error.into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), vec!["trace positive"; 4]);
+    }
+
+    #[test]
+    fn refinement_reuse_locals_skip_only_the_checked_ancestor_prefix() {
+        let mut interpreter = reuse_interpreter();
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Positive", "source", int(7)))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        let source = reuse_source("source", 10);
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        interpreter
+            .exec_stmt(&typed_var_decl(
+                "models.Large",
+                "large_value",
+                reuse_handle(source, int(9), 11),
+            ))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+        let exact = Expr::Clone(
+            Box::new(reuse_source("large_value", 12)),
+            Span::new(FileId::new(0), 13, 14),
+        );
+        reuse_facts(&mut interpreter, &[(exact.span(), "models.Large")]);
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "copied", exact))
+            .unwrap();
+        assert!(reuse_markers(&mut interpreter).is_empty());
+
+        let coarsened = Expr::Coarsen(
+            Box::new(reuse_source("large_value", 15)),
+            Span::new(FileId::new(0), 16, 17),
+        );
+        reuse_facts(&mut interpreter, &[(coarsened.span(), "models.Positive")]);
+        interpreter
+            .exec_stmt(&typed_var_decl(
+                "models.Large",
+                "rechecked",
+                reuse_handle(coarsened, int(9), 18),
+            ))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Sibling", "sibling_value", int(7)))
+            .unwrap();
+        reuse_markers(&mut interpreter);
+        let sibling = reuse_source("sibling_value", 19);
+        reuse_facts(&mut interpreter, &[(sibling.span(), "models.Sibling")]);
+        // This low-level boundary control proves carrier identity is not proof.
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "unrelated", sibling))
+            .unwrap();
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace large"]
+        );
+    }
+
+    #[test]
+    fn refinement_reuse_handles_use_target_or_exact_success_payload_facts() {
+        for (source_type, input, expected_markers) in [
+            (
+                "result[models.Positive, string]",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                vec!["trace large"],
+            ),
+            (
+                "optional[models.Large]",
+                Value::OptionalSome(Box::new(Value::Int64(7))),
+                vec![],
+            ),
+            (
+                "result[int64, string]",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                vec!["trace positive", "trace large"],
+            ),
+            (
+                "result[models.Large, string]",
+                Value::ResultFail(Box::new(Value::String("no".into()))),
+                vec![],
+            ),
+            ("optional[models.Large]", Value::OptionalNone, vec![]),
+            ("int64", Value::Int64(-1), vec!["trace positive"]),
+        ] {
+            let mut interpreter = reuse_interpreter();
+            let source = reuse_source("source", 20);
+            let initializer = reuse_handle(source.clone(), int(9), 21);
+            // The handle's contextual output is Large even when its target
+            // still needs every predicate. It must never supply the proof.
+            reuse_facts(
+                &mut interpreter,
+                &[
+                    (source.span(), source_type),
+                    (initializer.span(), "models.Large"),
+                ],
+            );
+            interpreter.set_variable("source", input);
+            interpreter
+                .exec_stmt(&typed_var_decl("models.Large", "selected", initializer))
+                .unwrap();
+            assert_eq!(
+                reuse_markers(&mut interpreter),
+                expected_markers,
+                "{source_type}"
+            );
+        }
+        for source in ["secret[result[models.Large, string]]", "models.Large"] {
+            assert_eq!(
+                Interpreter::checked_sum_success_type(Some(source), sp()),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn refinement_reuse_selected_generic_and_reflected_facts_restore_after_failure() {
+        let mut interpreter = reuse_interpreter();
+        let source = reuse_source("source", 30);
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(source.span(), "int64")]);
+        let generic = Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["models.Positive".into()],
+            expressions: Arc::new(HashMap::from([(source.span(), "models.Positive".into())])),
+            ..Default::default()
+        });
+        let reflected = Arc::new(CheckedScopedTypes {
+            bound_type: "models.Large".into(),
+            expressions: HashMap::from([(source.span(), "models.Large".into())]),
+            ..Default::default()
+        });
+        interpreter.active_checked_function = Some(generic.clone());
+        interpreter.active_checked_scope = Some(reflected.clone());
+        interpreter.current_namespace = Some("app".into());
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "reflected", source.clone()))
+            .unwrap();
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        interpreter.active_checked_scope = None;
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "generic", source.clone()))
+            .unwrap();
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_function.as_ref().unwrap(),
+            &generic
+        ));
+
+        interpreter.set_variable("source", Value::Int64(2));
+        assert_eq!(
+            interpreter.exec_stmt(&typed_var_decl("models.Large", "invalid", source.clone())),
+            Err("refinement type constraint failed for 'models.Large'".into())
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+        assert!(Arc::ptr_eq(
+            interpreter.active_checked_function.as_ref().unwrap(),
+            &generic
+        ));
+        interpreter.active_checked_function = None;
+        interpreter.set_variable("source", Value::Int64(7));
+        interpreter
+            .exec_stmt(&typed_var_decl("models.Large", "root", source))
+            .unwrap();
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            ["trace positive", "trace large"]
+        );
+    }
+
+    #[test]
+    fn refinement_reuse_pending_exact_depth_is_preserved_but_suffix_still_checks() {
+        for depth in [1, 2] {
+            let mut interpreter = reuse_interpreter();
+            let mut value = Value::Typed {
+                type_name: "models.Large".into(),
+                value: Box::new(Value::Int64(7)),
+            };
+            for _ in 0..depth {
+                value = Value::Pending(Box::new(value));
+            }
+            let source = reuse_source("source", 40);
+            interpreter.set_variable("source", value.clone());
+            reuse_facts(&mut interpreter, &[(source.span(), "models.Large")]);
+            interpreter
+                .exec_stmt(&typed_var_decl("models.Large", "copy", source.clone()))
+                .unwrap();
+            assert_eq!(interpreter.get_variable("copy"), Some(&value));
+            assert_eq!(interpreter.get_variable("source"), Some(&value));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+            // Coarsening a pending value to Positive does not preserve the
+            // discarded Large proof, even if a raw label still says Large.
+            reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+            assert!(
+                interpreter
+                    .exec_stmt(&typed_var_decl("models.Large", "invalid", source))
+                    .is_err()
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+        }
+    }
+
+    #[test]
+    fn refinement_reuse_owned_string_and_list_proofs_survive_normalization() {
+        for (owner, base, input) in [
+            ("Text", type_named("string"), string("ready")),
+            (
+                "Items",
+                TypeExpr::Generic(ident("list"), vec![type_named("int64")], sp()),
+                Expr::ListConstruct(vec![int(7)], sp()),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            let mut predicate = func_def(
+                "valid",
+                vec![("observed", "int64")],
+                block(vec![
+                    Stmt::Trace(TraceStmt {
+                        name: ident("observed"),
+                        span: sp(),
+                    }),
+                    return_stmt(bool_expr(true)),
+                ]),
+            );
+            predicate.params[0].ty = base.clone();
+            predicate.params[0].view = true;
+            predicate.return_type = Some(type_named("bool"));
+            interpreter.register_function_in_namespace(Some("models"), &predicate);
+            let mut alias = type_alias(owner, "int64", Some(call("valid", vec![var("value")])));
+            alias.base_type = base;
+            interpreter.register_type_alias_in_namespace(Some("models"), &alias);
+            let canonical = format!("models.{owner}");
+            interpreter
+                .exec_stmt(&typed_var_decl(&canonical, "source", input))
+                .unwrap();
+            assert_eq!(reuse_markers(&mut interpreter), ["trace observed"]);
+            let source = Expr::Clone(
+                Box::new(reuse_source("source", 45)),
+                Span::new(FileId::new(0), 46, 47),
+            );
+            reuse_facts(&mut interpreter, &[(source.span(), &canonical)]);
+            let original = interpreter.get_variable("source").cloned().unwrap();
+            interpreter
+                .exec_stmt(&typed_var_decl(&canonical, "copy", source))
+                .unwrap();
+            assert_eq!(interpreter.get_variable("source"), Some(&original));
+            assert_eq!(interpreter.get_variable("copy"), Some(&original));
+            assert!(reuse_markers(&mut interpreter).is_empty());
+        }
+    }
+
+    #[test]
+    fn refinement_reuse_struct_fields_keep_namespace_result_flags_and_argument_order() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_struct_in_namespace(
+            Some("models"),
+            &struct_def("Pair", vec![("left", "Large"), ("right", "Large")], vec![]),
+        );
+        // A caller-local spelling must not redefine a declaration's fields.
+        interpreter.register_type_alias_in_namespace(
+            Some("app"),
+            &type_alias("Large", "int64", Some(bool_expr(false))),
+        );
+        interpreter.current_namespace = Some("app".into());
+        for marker in ["first", "second"] {
+            let mut function = func_def(
+                marker,
+                vec![],
+                block(vec![
+                    var_decl(marker, int(7)),
+                    Stmt::Trace(TraceStmt {
+                        name: ident(marker),
+                        span: sp(),
+                    }),
+                    return_stmt(var(marker)),
+                ]),
+            );
+            function.return_type = Some(type_named("int64"));
+            interpreter.register_function(&function);
+        }
+        let first = Expr::Call(
+            Box::new(var("first")),
+            vec![],
+            Span::new(FileId::new(0), 50, 51),
+        );
+        let second = Expr::Call(
+            Box::new(var("second")),
+            vec![],
+            Span::new(FileId::new(0), 52, 53),
+        );
+        reuse_facts(
+            &mut interpreter,
+            &[(first.span(), "int64"), (second.span(), "int64")],
+        );
+        let constructor = Expr::Call(
+            Box::new(var("models.Pair")),
+            vec![named_arg("right", first), named_arg("left", second)],
+            sp(),
+        );
+        let value = interpreter.eval_expr(&constructor).unwrap();
+        assert!(matches!(value, Value::ResultOk(_)), "{value:?}");
+        assert_eq!(
+            reuse_markers(&mut interpreter),
+            [
+                "trace first",
+                "trace second",
+                "trace positive",
+                "trace large",
+                "trace positive",
+                "trace large"
+            ]
+        );
+        let Value::ResultOk(value) = value else {
+            unreachable!()
+        };
+        let Value::Struct {
+            type_name, fields, ..
+        } = *value
+        else {
+            unreachable!()
+        };
+        assert_eq!(type_name, "models.Pair");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["left", "right"]
+        );
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+
+        let ready = reuse_source("ready", 54);
+        interpreter.set_variable("ready", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(ready.span(), "models.Large")]);
+        let exact = Expr::Call(
+            Box::new(var("models.Pair")),
+            vec![named_arg("left", ready.clone()), named_arg("right", ready)],
+            sp(),
+        );
+        assert!(matches!(
+            interpreter.eval_expr(&exact),
+            Ok(Value::ResultOk(_))
+        ));
+        assert!(
+            reuse_markers(&mut interpreter).is_empty(),
+            "empty predicate chains still return result"
+        );
+
+        interpreter.set_variable("ready", Value::Int64(2));
+        reuse_facts(
+            &mut interpreter,
+            &[(Span::new(FileId::new(0), 54, 55), "models.Positive")],
+        );
+        assert_eq!(
+            interpreter.eval_expr(&exact),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'models.Large'".into(),
+            ))))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace large"]);
+    }
+
+    #[test]
+    fn refinement_reuse_generic_struct_flags_follow_explicit_concrete_fields() {
+        let mut interpreter = reuse_interpreter();
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        // The caller's T deliberately disagrees with the constructor's T.
+        interpreter
+            .type_arg_scopes
+            .push(HashMap::from([("T".into(), type_named("bool"))]));
+        let source = reuse_source("source", 60);
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        let constructor = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("models.Positive")],
+            vec![named_arg("value", source.clone())],
+            sp(),
+        );
+        let Value::ResultOk(value) = interpreter.eval_expr(&constructor).unwrap() else {
+            panic!(
+                "a concretely refined field always returns result, even with no predicates left"
+            );
+        };
+        let Value::Struct {
+            concrete_type,
+            fields,
+            ..
+        } = *value
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            concrete_type.as_deref(),
+            Some("models.Box[models.Positive]")
+        );
+        assert_eq!(fields[0].1.payload(), &Value::Int64(7));
+        assert!(reuse_markers(&mut interpreter).is_empty());
+        assert_eq!(
+            type_expr_display(&interpreter.current_type_binding("T").unwrap()),
+            "bool"
+        );
+
+        interpreter.set_variable("source", Value::Int64(-1));
+        reuse_facts(&mut interpreter, &[(source.span(), "int64")]);
+        assert_eq!(
+            interpreter.eval_expr(&constructor),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'models.Positive'".into(),
+            ))))
+        );
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+
+        interpreter
+            .type_arg_scopes
+            .last_mut()
+            .unwrap()
+            .insert("T".into(), type_named("models.Positive"));
+        interpreter.set_variable("source", Value::Int64(7));
+        reuse_facts(&mut interpreter, &[(source.span(), "models.Positive")]);
+        let forwarded = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("T")],
+            vec![named_arg("value", source)],
+            sp(),
+        );
+        assert!(matches!(
+            interpreter.eval_expr(&forwarded),
+            Ok(Value::ResultOk(_))
+        ));
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn refinement_reuse_generic_caller_cannot_change_box_bool_fields() {
+        let mut interpreter = reuse_interpreter();
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        let constructor = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("bool")],
+            vec![named_arg("value", bool_expr(true))],
+            sp(),
+        );
+        let mut make = func_def(
+            "make",
+            vec![("ignored", "T")],
+            block(vec![return_stmt(constructor)]),
+        );
+        make.type_params = vec![ident("T")];
+        make.params[0].view = true;
+        make.return_type = Some(TypeExpr::Generic(
+            ident("models.Box"),
+            vec![type_named("bool")],
+            sp(),
+        ));
+        interpreter.register_function(&make);
+        let Value::Struct {
+            concrete_type,
+            fields,
+            ..
+        } = interpreter
+            .call_function_with_type_args(
+                "make",
+                &[type_named("models.Positive")],
+                vec![Value::Int64(7)],
+            )
+            .unwrap()
+        else {
+            panic!("Box[bool] is not a validating constructor");
+        };
+        assert_eq!(concrete_type.as_deref(), Some("models.Box[bool]"));
+        assert_eq!(fields, vec![("value".into(), Value::Bool(true))]);
+        // Only the unchanged raw-call parameter boundary validates Positive.
+        assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        assert!(interpreter.type_arg_scopes.is_empty());
+    }
+
+    #[test]
+    fn refinement_reuse_struct_type_arguments_resolve_in_caller_namespace() {
+        let mut interpreter = Interpreter::new();
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        interpreter.register_type_alias_in_namespace(
+            Some("models"),
+            &type_alias("Input", "int64", Some(bool_expr(false))),
+        );
+        interpreter.register_type_alias_in_namespace(
+            Some("app"),
+            &type_alias(
+                "Input",
+                "int64",
+                Some(binary(var("value"), BinOp::Gt, int(0))),
+            ),
+        );
+        interpreter.current_namespace = Some("app".into());
+        let constructor = Expr::GenericCall(
+            Box::new(var("models.Box")),
+            vec![type_named("Input")],
+            vec![named_arg("value", int(7))],
+            sp(),
+        );
+        let Value::ResultOk(value) = interpreter.eval_expr(&constructor).unwrap() else {
+            panic!("caller Input must be validated, not declaration-neighbor models.Input");
+        };
+        let Value::Struct {
+            concrete_type,
+            fields,
+            ..
+        } = *value
+        else {
+            unreachable!()
+        };
+        assert_eq!(concrete_type.as_deref(), Some("models.Box[app.Input]"));
+        assert_eq!(fields[0].1.payload(), &Value::Int64(7));
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+
+        // Unresolved raw-API arguments are not recursively reinterpreted as
+        // struct-parameter templates (which could create T -> T cycles).
+        let raw_map = HashMap::from([("T".into(), type_named("T"))]);
+        assert_eq!(
+            type_expr_display(&interpreter.struct_field_type(
+                &type_named("T"),
+                &raw_map,
+                Some("models")
+            )),
+            "T"
+        );
+    }
+
+    #[test]
+    fn refinement_reuse_struct_fields_isolate_caller_aliases_and_restore_every_exit() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias_in_namespace(
+            Some("shadow"),
+            &type_alias("Positive", "int64", Some(bool_expr(false))),
+        );
+        interpreter.register_struct_in_namespace(
+            Some("models"),
+            &struct_def("Holder", vec![("value", "models.Positive")], vec![]),
+        );
+        assert_eq!(
+            type_expr_name(&interpreter.structs["models.Holder"].fields[0].ty),
+            "models.Positive"
+        );
+
+        // Predicates still need working local imports after the caller's
+        // aliases are hidden. More than one caller scope pins stack alignment.
+        let mut rule = func_def(
+            "check",
+            vec![("value", "int64")],
+            block(vec![return_stmt(binary(var("value"), BinOp::Gt, int(0)))]),
+        );
+        rule.return_type = Some(type_named("bool"));
+        interpreter.register_function_in_namespace(Some("rules"), &rule);
+        let mut predicate = func_def(
+            "positive",
+            vec![("positive", "int64")],
+            block(vec![
+                Stmt::Use(UseDecl {
+                    path: ident("rules"),
+                    alias: Some(ident("selected")),
+                    span: sp(),
+                }),
+                Stmt::Trace(TraceStmt {
+                    name: ident("positive"),
+                    span: sp(),
+                }),
+                return_stmt(call("selected.check", vec![var("positive")])),
+            ]),
+        );
+        predicate.return_type = Some(type_named("bool"));
+        interpreter.register_function_in_namespace(Some("models"), &predicate);
+        interpreter.push_scope();
+        interpreter.push_scope();
+        interpreter.set_namespace_alias("original".into(), "models".into());
+        interpreter.set_namespace_alias("models".into(), "shadow".into());
+        interpreter.set_namespace_alias("selected".into(), "shadow".into());
+        interpreter
+            .type_arg_scopes
+            .push(HashMap::from([("T".into(), type_named("bool"))]));
+        interpreter.current_namespace = Some("app".into());
+        let aliases = interpreter.namespace_alias_scopes.clone();
+        let source = reuse_source("source", 70);
+        reuse_facts(&mut interpreter, &[(source.span(), "int64")]);
+        let constructor = Expr::Call(
+            Box::new(var("original.Holder")),
+            vec![named_arg("value", source.clone())],
+            sp(),
+        );
+        for (input, succeeds) in [(7, true), (-1, false)] {
+            interpreter.set_variable("source", Value::Int64(input));
+            let outcome = interpreter.eval_expr(&constructor).unwrap();
+            if succeeds {
+                let Value::ResultOk(value) = outcome else {
+                    panic!("{outcome:?}")
+                };
+                let Value::Struct { fields, .. } = *value else {
+                    unreachable!()
+                };
+                assert!(
+                    matches!(&fields[0].1, Value::Typed { type_name, .. } if type_name == "models.Positive")
+                );
+            } else {
+                assert_eq!(
+                    outcome,
+                    Value::ResultFail(Box::new(Value::String(
+                        "refinement type constraint failed for 'models.Positive'".into(),
+                    )))
+                );
+            }
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+            assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+            assert_eq!(interpreter.namespace_alias_scopes, aliases);
+            assert_eq!(
+                type_expr_display(&interpreter.current_type_binding("T").unwrap()),
+                "bool"
+            );
+            assert_eq!(interpreter.scopes.len(), 3);
+        }
+        let missing = Expr::Call(Box::new(var("original.Holder")), vec![], sp());
+        assert_eq!(
+            interpreter.eval_expr(&missing),
+            Err("struct 'models.Holder' is missing required field 'value'".into())
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+        assert_eq!(interpreter.current_namespace.as_deref(), Some("app"));
+        assert_eq!(
+            type_expr_display(&interpreter.current_type_binding("T").unwrap()),
+            "bool"
+        );
+
+        let mut boxed = struct_def("Box", vec![("value", "T")], vec![]);
+        boxed.type_params = vec![ident("T")];
+        interpreter.register_struct_in_namespace(Some("models"), &boxed);
+        let caller_argument = Expr::GenericCall(
+            Box::new(var("original.Box")),
+            vec![type_named("models.Positive")],
+            vec![named_arg("value", int(7))],
+            sp(),
+        );
+        assert_eq!(
+            interpreter.eval_expr(&caller_argument),
+            Ok(Value::ResultFail(Box::new(Value::String(
+                "refinement type constraint failed for 'shadow.Positive'".into(),
+            )))),
+            "explicit actual arguments must still resolve through caller imports"
+        );
+        assert_eq!(interpreter.namespace_alias_scopes, aliases);
+    }
 
     #[test]
     fn grapheme_split_handles_large_near_matches() {
