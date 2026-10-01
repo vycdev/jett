@@ -69,6 +69,11 @@ The following semantic and implementation gaps prevent a full parity claim:
   including transparent aliases, without startup initialization. Move-only and
   nominal constant types still require a read, lifetime, and authority contract;
   conservative E9001 rejection does not close that broader design obligation.
+- [List summation types](../open_design/list_sum_type_contract.md): numeric
+  primitives and transparent aliases work in both paths, but the unconstrained
+  source signature still admits refinements, secret wrappers, and nonnumeric
+  elements. Native admission rejects them, and some reference empty sums have
+  the wrong value shape. The domain and invariant contract remain unresolved.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.

@@ -565,7 +565,11 @@ New/length/append/insert/remove/get and primitive sort are typed native leaves.
 Sort reorders the uniquely owned list in place, comparing signed and unsigned widths,
 floating-point values, bools, and owned strings with interpreter semantics.
 First/last/is_empty/reverse/repeat and math.sum run their actual compiled Jett
-bodies. list.sum[int64] is a typed wrapping numeric leaf. Contextual conversion
+bodies. list.sum uses a typed leaf for all numeric primitives, including their
+transparent aliases: integers wrap at the checked width, floating addition
+rounds at that width after each step, and empty lists return typed numeric zero.
+The remaining summation type boundary is recorded in
+[the open contract](../open_design/list_sum_type_contract.md). Contextual conversion
 of an empty `list[never]` to an owned element layout remains guarded. No
 name-dispatch or loop interpreter is introduced.
 

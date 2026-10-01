@@ -2885,6 +2885,9 @@ binary32. Empty lists return zero of the declared numeric type. The list remains
 borrowed, and outer pending lists or pending elements retain their terminal
 failure checks. This kernel does not introduce summation for nominal refinements
 or nonnumeric element types.
+The unconstrained frontend signature still admits these other types; their
+remaining value-shape, invariant, and secrecy obligations are recorded in the
+[summation contract](open_design/list_sum_type_contract.md).
 
 Native aggregate consumers check the owner's outer pending depth before public
 field reads, machine state tests/transitions, enum matches, and each ancestor in

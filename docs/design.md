@@ -7789,6 +7789,9 @@ addition at each step. An empty list returns numeric zero of its declared type.
 The operation borrows the list and preserves existing errors for pending lists
 or elements. This implementation does not add a summation contract for nominal
 refinements or nonnumeric types.
+The [open summation contract](open_design/list_sum_type_contract.md) records the
+still-admitted specializations whose domain, invariant, and result shape need
+to be selected before full native parity.
 
 The native sequential task path rejects field reads, machine state tests and
 transitions, and enum matches while the aggregate owner remains pending. A
