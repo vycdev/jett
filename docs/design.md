@@ -6913,6 +6913,12 @@ Note: `else if condition:` is the construct for chaining conditionals. It is not
 
 ### Loops
 
+An inferred empty list or map can retain an uninhabited `never` element, key,
+or value type. Iterating it evaluates the collection expression once and runs
+no body. The body still undergoes ordinary source checking, and an outer pending
+collection still reports the normal iteration failure until it is joined.
+This does not create a value of `never` or make it a source-declared type.
+
 ```
 function process_items(view stdout: Stdout, items: list[string]) returns nothing:
     for item in items:

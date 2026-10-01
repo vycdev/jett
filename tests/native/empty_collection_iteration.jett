@@ -1,0 +1,154 @@
+namespace app
+function identity[T](value: T) returns T:
+    return value
+function pass[T](values: list[T]) returns list[T]:
+    return values
+function count[T](values: list[T]) returns int64:
+    mutable int64 total = 0
+    for value in values:
+        total = total + 1
+    return total
+function dead_references() returns int64:
+    for value in list():
+        int64 copied = identity(value)
+        function() returns int64 callback = function() returns int64: return value
+        int64 captured = callback()
+        trace value
+        trace copied
+        trace captured
+        breakpoint
+        return copied + captured
+    for value in comptime list():
+        trace value
+        breakpoint
+    return 7
+function direct_empty_lists(view stdout: Stdout) returns nothing:
+    for value in list():
+        Stdout.write(view stdout, "unexpected direct body\n")
+    for value in view list():
+        Stdout.write(view stdout, "unexpected borrowed body\n")
+    for value in clone list():
+        Stdout.write(view stdout, "unexpected cloned body\n")
+    for value in pass(list()):
+        Stdout.write(view stdout, "unexpected generic body\n")
+    Stdout.write(view stdout, "direct:done\n")
+function source[T](values: list[T], view stdout: Stdout) returns list[T]:
+    Stdout.write(view stdout, "source\n")
+    return values
+function argument(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "argument\n")
+    return 0
+function effectful_empty_lists(view stdout: Stdout) returns nothing:
+    for value in source(list(), view stdout):
+        Stdout.write(view stdout, "unexpected source body\n")
+    for value in list.take(list(), argument(view stdout)):
+        Stdout.write(view stdout, "unexpected take body\n")
+    Stdout.write(view stdout, "effects:done\n")
+function nested_counts() returns string:
+    mutable int64 outer = 0
+    mutable int64 inner_count = 0
+    for inner in list(list(), list()):
+        outer = outer + 1
+        for value in inner:
+            inner_count = inner_count + 1
+    return "{outer}:{inner_count}"
+function borrowed_nested_counts() returns string:
+    mutable int64 outer = 0
+    mutable int64 inner_count = 0
+    for inner in view list(list(), list()):
+        outer = outer + 1
+        for value in view inner:
+            inner_count = inner_count + 1
+    return "{outer}:{inner_count}"
+function inferred_map_count() returns int64:
+    mutable int64 total = 0
+    for key, value in map():
+        trace key
+        trace value
+        total = total + 1
+    for key, value in view map():
+        trace key
+        trace value
+        total = total + 1
+    return total
+function contextual_counts() returns string:
+    list[int64] values = list()
+    map[string, int64] entries = map()
+    mutable int64 total = 0
+    for value in view values:
+        total = total + 1
+    for key, value in view entries:
+        total = total + 1
+    int64 list_size = list.length[int64](view values)
+    int64 map_size = map.length[string, int64](view entries)
+    int64 copied_count = count[int64](clone values)
+    int64 owned_count = count[int64](values)
+    for key, value in entries:
+        total = total + 1
+    return "{total}:{list_size}:{map_size}:{copied_count}:{owned_count}"
+function nothing_callback(value: int64) returns nothing:
+    trace value
+    return nothing
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "number"
+function named_callback(value: int64) returns Named:
+    trace value
+    return value
+function mapped_empty_count() returns int64:
+    mutable int64 total = 0
+    for value in list.map(list(), nothing_callback):
+        trace value
+        total = total + 1
+    for value in list.map(list(), named_callback):
+        string label = Named.name(view value)
+        trace label
+        total = total + 1
+    return total
+function join_list[T](values: list[T]) returns list[T]:
+    list[T] once = join values handle error: return list()
+    list[T] ready = join once handle error: return list()
+    return ready
+function joined_empty_count() returns int64:
+    mutable int64 total = 0
+    for value in join_list(run run list()):
+        trace value
+        total = total + 1
+    map[string, int64] entries = run run map()
+    map[string, int64] once = join entries handle error: return -1
+    map[string, int64] ready = join once handle error: return -2
+    for key, value in ready:
+        trace key
+        trace value
+        total = total + 1
+    return total
+function main(stdout: Stdout) returns nothing:
+    direct_empty_lists(view stdout)
+    effectful_empty_lists(view stdout)
+    int64 baked = comptime count(list())
+    int64 baked_references = comptime dead_references()
+    Stdout.write(view stdout, "generic:{count(list())}:{baked}:live:{count(list(10, 20, 30))}\n")
+    Stdout.write(view stdout, "dead:{dead_references()}:{baked_references}\n")
+    Stdout.write(view stdout, "nested:{nested_counts()}:borrowed:{borrowed_nested_counts()}\n")
+    Stdout.write(view stdout, "maps:{inferred_map_count()}:context:{contextual_counts()}\n")
+    Stdout.write(view stdout, "mapped:{mapped_empty_count()}:joined:{joined_empty_count()}\n")
+verify empty_iteration:
+    assert count(list()) == 0
+    assert count(list(10, 20, 30)) == 3
+    int64 baked = comptime count(list())
+    assert baked == 0
+    assert dead_references() == 7
+    assert nested_counts() == "2:0"
+    assert borrowed_nested_counts() == "2:0"
+    assert inferred_map_count() == 0
+    assert contextual_counts() == "0:0:0:0:0"
+    assert mapped_empty_count() == 0
+    assert joined_empty_count() == 0
+property empty_iteration_trials:
+    given seed: int64
+    assert seed + count(list()) == seed
+    assert dead_references() == 7
+    assert nested_counts() == "2:0"
+    assert inferred_map_count() == 0

@@ -2511,6 +2511,18 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         }
     }
 
+    fn consume_omitted_body_facts(&mut self, body_span: Span) {
+        let in_body = |span: &Span| {
+            span.file == body_span.file
+                && span.start >= body_span.start
+                && span.end <= body_span.end
+        };
+        self.consumed_static_selections
+            .extend(self.static_selections.keys().copied().filter(in_body));
+        self.consumed_comptime_type_bindings
+            .extend(self.comptime_type_bindings.keys().copied().filter(in_body));
+    }
+
     fn allocate_local(
         &mut self,
         definition: DefId,
@@ -2702,7 +2714,25 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     Some(binding) => Some(self.allocate_declared_local(binding, false)?),
                     None => None,
                 };
-                let body = self.lower_block(&loop_stmt.body);
+                let body = if matches!(
+                    self.parent.check.interner.resolve(iterable.ty),
+                    Type::List(element) if *element == TypeInterner::NEVER
+                ) || matches!(
+                    self.parent.check.interner.resolve(iterable.ty),
+                    Type::Map(key, value)
+                        if *key == TypeInterner::NEVER || *value == TypeInterner::NEVER
+                ) {
+                    // The frontend still checks this body. An uninhabited
+                    // element type proves that no iteration can enter it;
+                    // retain the iterable so MIR validates pending values.
+                    self.consume_omitted_body_facts(loop_stmt.body.span);
+                    Block {
+                        statements: Vec::new(),
+                        span: loop_stmt.body.span,
+                    }
+                } else {
+                    self.lower_block(&loop_stmt.body)
+                };
                 self.visible_bindings.pop();
                 (
                     StatementKind::For {
@@ -6743,6 +6773,125 @@ function render(view values: list[int64]) returns string:
             panic!("expected interpolation assignment");
         };
         assert!(matches!(value.kind, ExpressionKind::StringInterpolation(_)));
+    }
+
+    #[test]
+    fn omits_uninhabited_loop_bodies_without_extracting_inline_functions() {
+        let program = lower_source(
+            r#"namespace app
+function main() returns nothing:
+    for item in run list():
+        function(int64) returns int64 callback = function(value: int64) returns int64:
+            return value
+        int64 copied = callback(item)
+        trace copied
+    for key, value in run map():
+        trace key
+        trace value
+    return nothing
+"#,
+        );
+        assert_eq!(program.functions.len(), 1);
+        let function = &program.functions[0];
+        assert_eq!(function.locals.len(), 3);
+        for statement in &function.body.statements[..2] {
+            let StatementKind::For {
+                key,
+                value,
+                iterable,
+                body,
+                ..
+            } = &statement.kind
+            else {
+                panic!("expected a retained typed loop");
+            };
+            assert_eq!(
+                function.locals[key.index() as usize].ty,
+                TypeInterner::NEVER
+            );
+            if let Some(value) = value {
+                assert_eq!(
+                    function.locals[value.index() as usize].ty,
+                    TypeInterner::NEVER
+                );
+            }
+            assert!(matches!(iterable.kind, ExpressionKind::Run(_)));
+            assert!(body.statements.is_empty());
+        }
+    }
+
+    #[test]
+    fn uninhabited_generic_loops_consume_dead_body_facts_and_keep_reserved_identities() {
+        let program = lower_source(
+            r#"namespace app
+function identity[T](value: T) returns T:
+    return value
+function count[T](view values: list[T]) returns int64:
+    mutable int64 total = 0
+    for value in view values:
+        T copied = identity(value)
+        if type.kind_tag[T]() == TypeKind.primitive_type:
+            trace copied
+        else:
+            trace value
+        total = total + 1
+    return total
+function main() returns int64:
+    return count(list())
+"#,
+        );
+        let count = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "count")
+            .unwrap();
+        assert_eq!(count.identity.type_arguments, [TypeInterner::NEVER]);
+        assert!(!count.locals.iter().any(|local| local.name == "copied"));
+        let StatementKind::For { by_view, body, .. } = &count.body.statements[1].kind else {
+            panic!("expected an empty generic iteration body");
+        };
+        assert!(*by_view);
+        assert!(body.statements.is_empty());
+        // Checked generic identities remain eagerly reserved. Native
+        // reachability, rather than HIR body lowering, excludes dead targets.
+        let identity = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "identity")
+            .unwrap();
+        assert_eq!(identity.identity.type_arguments, [TypeInterner::NEVER]);
+        assert_eq!(identity.params[0].ty, TypeInterner::NEVER);
+        assert_eq!(identity.return_type, TypeInterner::NEVER);
+    }
+
+    #[test]
+    fn retains_bodies_for_empty_collections_with_inhabited_element_types() {
+        let program = lower_source(
+            r#"namespace app
+function main() returns nothing:
+    list[int64] numbers = list()
+    for number in view numbers:
+        trace number
+    map[int64, string] names = map()
+    for key, value in view names:
+        trace key
+        trace value
+    return nothing
+"#,
+        );
+        let function = &program.functions[0];
+        for (statement_index, expected_statements) in [(1, 1), (3, 2)] {
+            let StatementKind::For { body, .. } = &function.body.statements[statement_index].kind
+            else {
+                panic!("expected an inhabited collection loop");
+            };
+            assert_eq!(body.statements.len(), expected_statements);
+            assert!(
+                body.statements
+                    .iter()
+                    .all(|statement| matches!(statement.kind, StatementKind::Trace(_)))
+            );
+        }
     }
 
     #[test]

@@ -737,6 +737,156 @@ fn native_math_aggregate_primitives_reject_empty_and_pending_in_both_profiles() 
 }
 
 #[test]
+fn native_empty_collection_iteration_matches_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/empty_collection_iteration.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("empty_collection_iteration.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).expect("empty iteration oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "direct:done\nsource\nargument\neffects:done\n",
+            "generic:0:0:live:3\ndead:7:7\n",
+            "nested:2:0:borrowed:2:0\n",
+            "maps:0:context:0:0:0:0:0\nmapped:0:joined:0\n",
+        )
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("empty_iteration_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native empty collection iteration program");
+        binaries.push(binary);
+    }
+    let verify_binary = directory.path().join("empty_iteration_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native empty collection iteration verify suite");
+    let property_binary = directory.path().join("empty_iteration_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native empty collection iteration property suite");
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+    for suite in [verify_binary, property_binary] {
+        let actual = run_bounded(&suite, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
+fn native_empty_collection_iteration_rejects_pending_in_both_profiles() {
+    for (collection, binding) in [("list()", "value"), ("map()", "key, value")] {
+        for comptime in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("pending_empty_iteration.jett");
+            let initializer = if comptime {
+                format!("comptime run run {collection}")
+            } else {
+                format!("run run {collection}")
+            };
+            fs::write(
+                &source,
+                format!(
+                    "namespace app\nfunction main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"before\\n\")\n    for {binding} in {initializer}:\n        trace value\n        Stdout.write(view stdout, \"unexpected body\\n\")\n    Stdout.write(view stdout, \"after\\n\")\n"
+                ),
+            )
+            .unwrap();
+            let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+            assert_eq!(expected.output.stdout, "before\n");
+            assert!(expected.output.debug_output.is_empty());
+            assert_eq!(
+                expected.message,
+                "runtime error: for loop requires a list, string, map, or set value"
+            );
+            let mut binaries = Vec::new();
+            for release in [false, true] {
+                let binary = directory
+                    .path()
+                    .join(format!("pending_empty_{release}.exe"));
+                jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    launcher(),
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{collection}, comptime={comptime}, release={release}: {error}")
+                });
+                binaries.push(binary);
+            }
+            fs::remove_file(&source).unwrap();
+            for binary in binaries {
+                let actual = run_bounded(&binary, directory.path());
+                assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+                assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+                assert_eq!(
+                    actual.stderr,
+                    format!("{}\n", expected.message).as_bytes(),
+                    "{actual:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_collection_iteration_still_rejects_invalid_dead_bodies() {
+    for (body, code, message) in [
+        (
+            "int64 copied = value + 1",
+            301,
+            "cannot apply `+` to `<never>` and `int64`",
+        ),
+        (
+            "string rendered = \"{value}\"",
+            332,
+            "type `<never>` does not implement interface `Displayable`",
+        ),
+        (
+            "missing_function(value)",
+            200,
+            "undefined name: `missing_function`",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("invalid_dead_body.jett");
+        let text = format!(
+            "namespace app\nfunction main() returns nothing:\n    for value in list():\n        {body}\n    return nothing\n"
+        );
+        fs::write(&source, &text).unwrap();
+        for checked in [
+            jett_driver::build_source(&text, "invalid_dead_body.jett"),
+            jett_driver::build_file(&source),
+        ] {
+            let errors = checked
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].code.code(), code);
+            assert_eq!(errors[0].message, message);
+        }
+    }
+}
+
+#[test]
 fn native_generic_lexical_type_scope_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_lexical_type_scope.jett");

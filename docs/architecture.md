@@ -956,6 +956,16 @@ scrutinees before selecting an arm.
 Handlers in `for` iterables are extracted before the loop header. Sequence lowering
 then materializes the iterable once on the resulting preheader path, so a loop
 backedge never re-evaluates the source expression.
+For a checked list with an uninhabited element or map with an uninhabited key
+or value, HIR omits lowering the body after source checking. Native sequence
+preparation retains iterable materialization and the ordinary length/pending
+check, ends any iteration loan, and routes directly to the exit without reading
+an element. It compacts unreachable blocks and unused locals only in functions
+changed by this lowering, preserving dense IDs and retained debug metadata.
+Eager concrete generic specializations with a bare `never` parameter or result
+are not implicit native project roots; retained calls and function references
+still reach them and require ordinary verification. Inhabited containers and
+absent sum arms containing `never` retain their normal representations.
 Assertion and breakpoint conditions also extract handlers before their MIR
 statements execute. Assertion messages remain on the failure-only path.
 Handled machine transitions snapshot their source and payloads in lexical

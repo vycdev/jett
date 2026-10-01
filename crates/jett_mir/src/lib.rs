@@ -845,9 +845,34 @@ impl FunctionValidator<'_, '_> {
                 }
             }
             hir::ExpressionKind::StateIs { value, .. } => self.expression(value),
-            hir::ExpressionKind::InlineFunction { params, body, .. } => {
+            hir::ExpressionKind::InlineFunction {
+                params,
+                view_params,
+                local_floor,
+                body,
+                ..
+            } => {
+                if *local_floor as usize > self.function.locals.len() {
+                    self.error(
+                        expression.span,
+                        "inline function local floor is out of range",
+                    );
+                }
                 for param in params {
                     self.check_local(*param, expression.span, "inline function parameter");
+                }
+                for view_param in view_params {
+                    self.check_local(
+                        *view_param,
+                        expression.span,
+                        "inline function view parameter",
+                    );
+                    if !params.contains(view_param) {
+                        self.error(
+                            expression.span,
+                            "inline function view parameter is not a parameter",
+                        );
+                    }
                 }
                 self.hir_block(body);
             }

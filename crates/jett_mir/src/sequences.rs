@@ -4,6 +4,9 @@
 use super::*;
 use jett_hir::{BinaryOp, ExpressionKind};
 use jett_types::{Type, TypeInterner};
+mod prune;
+#[cfg(test)]
+mod tests;
 fn local(id: LocalId, ty: TypeId, span: Span) -> Expression {
     Expression {
         kind: ExpressionKind::Local(id),
@@ -61,7 +64,13 @@ fn projected_source(
     }
 }
 pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
+    // This pass must not make malformed, unreachable input disappear before
+    // the caller reports its original validation errors.
+    if validate(program).is_err() {
+        return;
+    }
     for function in &mut program.functions {
+        let mut removed_uninhabited_body = false;
         let count = function.blocks.len();
         for index in 0..count {
             let header = function.blocks[index].id;
@@ -92,6 +101,13 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
             {
                 continue;
             }
+            let uninhabited = match types.resolve(iterable.ty) {
+                Type::List(element) => *element == TypeInterner::NEVER,
+                Type::Map(key, value) => {
+                    *key == TypeInterner::NEVER || *value == TypeInterner::NEVER
+                }
+                _ => false,
+            };
             // A preheader is the unique predecessor reachable from entry
             // without crossing this header. Backedges are dominated by the
             // header; disconnected blocks and numeric block order are irrelevant.
@@ -191,6 +207,24 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                 span,
             });
             function.blocks[preheader].statements.extend(init);
+            if uninhabited {
+                // Keep evaluation and SequenceLength: it validates pending
+                // containers and projected ancestors even when no item exists.
+                // No runtime value can be extracted for the checked binder.
+                if by_view {
+                    function.blocks[index].statements.push(Statement {
+                        kind: StatementKind::IterationBorrow {
+                            source,
+                            token: cursor,
+                            start: false,
+                        },
+                        span,
+                    });
+                }
+                function.blocks[index].terminator.kind = TerminatorKind::Goto(exit);
+                removed_uninhabited_body = true;
+                continue;
+            }
             function.blocks[index].terminator.kind = TerminatorKind::Branch {
                 condition: Expression {
                     kind: ExpressionKind::Binary {
@@ -305,6 +339,9 @@ pub fn prepare_native_sequences(program: &mut Program, types: &TypeInterner) {
                     }
                 }
             }
+        }
+        if removed_uninhabited_body {
+            prune::unreachable(function);
         }
     }
 }

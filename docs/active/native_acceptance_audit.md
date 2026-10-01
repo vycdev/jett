@@ -367,3 +367,28 @@ All 68 codegen tests, 126 runtime unit tests and its integration suites pass,
 alongside the existing linked pending-math and extreme-value regressions.
 These supplemental regressions do not change the inventory denominator or
 settle the separate summation and other open policy gates.
+
+The uninhabited-iteration audit found accepted loops over inferred empty lists
+and maps failing native admission on their `never` bindings. HIR now omits
+lowering these checked bodies while retaining iterable expressions and reserved
+generic identities. Native sequence preparation preserves one-time evaluation,
+pending and projected-ancestor checks, and loan cleanup, then bypasses extraction.
+Only changed functions have unreachable blocks and unused locals compacted;
+retained spans, debug types, parameters, captures, and function identities remain
+intact. Dead concrete generic specializations with bare `never` signatures are
+excluded only from implicit project roots. Retained references still reach them
+and cannot acquire a fabricated runtime carrier.
+
+`native_empty_collection_iteration_matches_interpreter_in_both_profiles` pins
+ordinary generic calls, dead named/inline callbacks and debug events, borrowed
+and consuming loops, once-only argument effects, nested collections, contextual
+concrete empty values, joined inputs, and explicit-comptime results. Debug/release
+programs and native verify/property suites execute after source removal. Four
+runtime/comptime pending-list/map cases retain exact output and errors with exit
+71; a public-driver companion rejects invalid arithmetic, interpolation, and
+unresolved calls in dead bodies before lowering. Malformed MIR controls preserve
+invalid IDs and inline metadata for validation rather than hiding them in pruning.
+All 69 HIR tests, 32 MIR unit tests and its integration test, 71 codegen tests,
+and eight backend-lowering regressions covering all 182 run-pass cases pass.
+These checks retain the inventory denominator and do not establish full native
+acceptance or settle the remaining open policies.

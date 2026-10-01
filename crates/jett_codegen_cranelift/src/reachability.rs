@@ -40,6 +40,7 @@ fn reachable_functions(
     for function in &program.functions {
         if matches!(function.identity.declaration.origin, SourceOrigin::Project)
             && function.identity.declaration.kind != hir::DeclarationKind::RefinementPredicate
+            && !uninhabited_specialization(function)
         {
             mark_reachable(
                 program,
@@ -79,6 +80,20 @@ fn reachable_functions(
         .enumerate()
         .filter_map(|(index, function)| reachable[index].then_some(function.id))
         .collect())
+}
+
+// Checking an unreachable empty-collection body can instantiate a project
+// generic with a bare `never` parameter or result. Such an eager instantiation
+// is not an independent callable root: no value can inhabit that signature.
+// A retained call or function reference still reaches it and must pass the
+// ordinary verifier. Containers and absent sum arms around `never` are inhabited.
+fn uninhabited_specialization(function: &Function) -> bool {
+    !function.identity.type_arguments.is_empty()
+        && (function.return_type == jett_types::TypeInterner::NEVER
+            || function
+                .params
+                .iter()
+                .any(|param| param.ty == jett_types::TypeInterner::NEVER))
 }
 
 fn mark_reachable(
@@ -430,6 +445,10 @@ mod tests {
     use super::*;
 
     fn lower_source(source: &str) -> Program {
+        lower_source_with_types(source).0
+    }
+
+    fn lower_source_with_types(source: &str) -> (Program, jett_types::TypeInterner) {
         let file = FileId::new(0);
         let parsed = jett_parser::parse(source, file);
         assert!(
@@ -454,7 +473,8 @@ mod tests {
             &HashMap::from([(file, SourceOrigin::Project)]),
         )
         .expect("HIR lowering");
-        jett_mir::lower(&hir, &checked.interner).expect("MIR lowering")
+        let mir = jett_mir::lower(&hir, &checked.interner).expect("MIR lowering");
+        (mir, checked.interner)
     }
 
     fn set_origin(program: &mut Program, name: &str, origin: SourceOrigin) {
@@ -551,5 +571,100 @@ function root() returns function(bool) returns int64:
         assert_eq!(&names[..2], ["stdlib_leaf", "root"]);
         assert_eq!(names.len(), 3);
         assert!(names[2].starts_with("root$inline"));
+    }
+
+    #[test]
+    fn empty_loop_only_uninhabited_specializations_are_not_implicit_roots() {
+        let program = lower_source(
+            r#"namespace app
+function pass[T](value: T) returns T:
+    return value
+function identity[T](value: T) returns T:
+    return pass[T](value)
+function main() returns nothing:
+    for value in list():
+        println(identity(value))
+"#,
+        );
+        let dead = program
+            .functions
+            .iter()
+            .filter(|function| uninhabited_specialization(function))
+            .collect::<Vec<_>>();
+        assert_eq!(dead.len(), 2, "eager checked specializations remain in MIR");
+        for function in dead {
+            assert_eq!(
+                function.identity.type_arguments,
+                [jett_types::TypeInterner::NEVER]
+            );
+        }
+        assert_eq!(reachable_names(&program), ["main"]);
+    }
+
+    #[test]
+    fn retained_calls_and_references_still_reach_uninhabited_specializations() {
+        for source in [
+            r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function root() returns int64:
+    return identity(1)
+"#,
+            r#"namespace app
+function identity(value: int64) returns int64:
+    return value
+function root() returns function(int64) returns int64:
+    return identity
+"#,
+        ] {
+            let (mut program, types) = lower_source_with_types(source);
+            let callee = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "identity")
+                .unwrap();
+            callee.identity.type_arguments = vec![jett_types::TypeInterner::NEVER];
+            callee.params[0].ty = jett_types::TypeInterner::NEVER;
+            let parameter = callee.params[0].local.index() as usize;
+            callee.locals[parameter].ty = jett_types::TypeInterner::NEVER;
+            callee.locals[parameter].debug_ty = jett_types::TypeInterner::NEVER;
+            assert!(uninhabited_specialization(callee));
+            assert_eq!(reachable_names(&program), ["identity", "root"]);
+            // A fabricated surviving use must fail ordinary verification;
+            // suppressing implicit roots must never supply a `never` carrier.
+            assert!(matches!(
+                crate::emit_host_object(&program, &types),
+                Err(CodegenError::UnsupportedType { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn never_container_specializations_remain_inhabited_project_roots() {
+        let program = lower_source(
+            r#"namespace app
+function pass[T](values: list[T]) returns list[T]:
+    return values
+function main() returns nothing:
+    for value in pass(list()):
+        println(value)
+"#,
+        );
+        let callee = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "pass")
+            .unwrap();
+        assert_eq!(
+            callee.identity.type_arguments,
+            [jett_types::TypeInterner::NEVER]
+        );
+        assert!(!uninhabited_specialization(callee));
+        assert_eq!(reachable_names(&program), ["main", "pass"]);
+        let mut plain = callee.clone();
+        plain.identity.type_arguments.clear();
+        plain.params[0].ty = jett_types::TypeInterner::NEVER;
+        plain.return_type = jett_types::TypeInterner::NEVER;
+        assert!(!uninhabited_specialization(&plain));
     }
 }
