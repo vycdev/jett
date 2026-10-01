@@ -1813,6 +1813,151 @@ fn qualified_struct_constructors_keep_strict_nominal_contracts() {
 }
 
 #[test]
+fn qualified_bitfield_and_machine_constructors_keep_exact_contracts() {
+    use jett_hir::{Expression, ExpressionKind, StateId};
+    let (baseline, mut types) = lower_source(
+        r#"namespace app
+bitfield Header:
+    value: 4 bits
+bitfield Other:
+    value: 4 bits
+machine Session:
+    states:
+        active(label: string, count: int8)
+        closed
+    transitions:
+        active to closed
+machine Another:
+    states:
+        active(label: string, count: int8)
+        closed
+    transitions:
+        active to closed
+function plain() returns secret[Header]:
+    return Header(value: 7)
+function checked(value: int64) returns secret[result[Header, string]]:
+    return Header(value: value)
+function state() returns secret[Session at active]:
+    return Session(active, "value", 7)
+function another() returns Another at active:
+    return Another(active, "value", 7)
+"#,
+    );
+    emit_host_object(&baseline, &types).expect("exact qualified bitfield and machine constructors");
+    let header = types
+        .type_ids()
+        .find(|ty| {
+            matches!(types.resolve(*ty), Type::Bitfield(id)
+            if types.resolve_bitfield(*id).name == "app.Header")
+        })
+        .unwrap();
+    let other = types
+        .type_ids()
+        .find(|ty| {
+            matches!(types.resolve(*ty), Type::Bitfield(id)
+            if types.resolve_bitfield(*id).name == "app.Other")
+        })
+        .unwrap();
+    let another_state = types
+        .type_ids()
+        .find(|ty| {
+            matches!(types.resolve(*ty), Type::MachineState { machine, .. }
+            if types.resolve_machine(*machine).name == "app.Another")
+        })
+        .unwrap();
+    let bad_error = types.intern(Type::Result(header, TypeInterner::BOOL));
+    let bad_success = types.intern(Type::Result(other, TypeInterner::STRING));
+    let qualified_header = types.intern(Type::Secret(header));
+    for (name, corruption) in [
+        ("plain", "raw qualified constructor"),
+        ("plain", "qualified inner"),
+        ("plain", "different bitfield"),
+        ("plain", "flipped validation"),
+        ("plain", "wrong field type"),
+        ("checked", "raw qualified constructor"),
+        ("checked", "qualified inner"),
+        ("checked", "different bitfield"),
+        ("checked", "flipped validation"),
+        ("checked", "wrong result error"),
+        ("checked", "wrong result success"),
+        ("checked", "erased result"),
+        ("checked", "qualified bitfield target"),
+        ("state", "raw qualified constructor"),
+        ("state", "qualified inner"),
+        ("state", "different state owner"),
+        ("state", "wrong state index"),
+        ("state", "missing payload"),
+        ("state", "swapped payloads"),
+    ] {
+        let mut program = baseline.clone();
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == name)
+            .unwrap();
+        let TerminatorKind::Return(Some(value)) = &mut function.blocks
+            [function.entry.index() as usize]
+            .terminator
+            .kind
+        else {
+            panic!("constructor return");
+        };
+        let ExpressionKind::InterfaceCoerce { value: inner, .. } = &mut value.kind else {
+            panic!("separate qualification coercion");
+        };
+        if corruption == "raw qualified constructor" {
+            value.kind = inner.kind.clone();
+        } else if corruption == "qualified inner" {
+            inner.ty = value.ty;
+        } else {
+            match &mut inner.kind {
+                ExpressionKind::BitfieldConstruct {
+                    bitfield_type,
+                    fields,
+                    validates_widths,
+                    ..
+                } => match corruption {
+                    "different bitfield" => *bitfield_type = other,
+                    "flipped validation" => *validates_widths = !*validates_widths,
+                    "wrong field type" => {
+                        fields[0] = Expression {
+                            kind: ExpressionKind::Bool(true),
+                            ty: TypeInterner::BOOL,
+                            span: fields[0].span,
+                        };
+                    }
+                    "wrong result error" => inner.ty = bad_error,
+                    "wrong result success" => inner.ty = bad_success,
+                    "erased result" => inner.ty = header,
+                    "qualified bitfield target" => *bitfield_type = qualified_header,
+                    _ => unreachable!(),
+                },
+                ExpressionKind::MachineConstruct {
+                    state_type,
+                    state,
+                    payloads,
+                } => match corruption {
+                    "different state owner" => *state_type = another_state,
+                    "wrong state index" => *state = StateId::new(state.index() + 1),
+                    "missing payload" => {
+                        payloads.pop();
+                    }
+                    "swapped payloads" => payloads.swap(0, 1),
+                    _ => unreachable!(),
+                },
+                _ => panic!("exact inner constructor"),
+            }
+        }
+        let error = emit_host_object(&program, &types).expect_err("invalid constructor metadata");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("bitfield") || message.contains("machine")),
+            "{name}/{corruption}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn struct_layout_and_projection_contracts_are_validated_before_emission() {
     use jett_hir::ExpressionKind;
     let (baseline, types) = lower_source(

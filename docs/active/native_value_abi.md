@@ -8,6 +8,14 @@ plain struct constructors qualify; validating result constructors retain their
 predicate and result contract. Field conversions, source evaluation order,
 pending depth, and ownership are preserved without a runtime ABI change.
 
+Secret qualification around checked bitfield and machine constructors uses the
+existing coercion and value ABI. Inner construction retains the exact bitfield
+or machine-state identity; validating bitfields retain the exact
+`result[Bitfield, string]` output and existing width-validation cleanup. The
+qualification coercion transfers that owned value without changing its result
+tag, pending depth, field evaluation order, or ownership. Strict constructor
+verification remains unchanged.
+
 Direct-secret aggregate field reads use the exact unqualified nominal layout
 and the checker's qualified result TypeId. Ready scalar and owned field paths,
 pending-child depth, and machine-state indexing reuse the existing runtime ABI.

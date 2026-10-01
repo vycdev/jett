@@ -45,6 +45,9 @@ mod secret_struct_constructors;
 #[path = "native_conformance/secret_fields.rs"]
 mod secret_fields;
 
+#[path = "native_conformance/secret_bitfield_machine_constructors.rs"]
+mod secret_bitfield_machine_constructors;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

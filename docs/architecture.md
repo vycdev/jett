@@ -934,6 +934,15 @@ the peeled checked TypeId exactly matches its nominal `struct_type`. Field
 conversions and lexical evaluation order remain inside that constructor. Calls
 to ordinary producers, reflected builders, mismatched nominal types, and
 refinement-validating result constructors retain their existing metadata.
+Resolved bitfield and machine declaration calls use the same qualification
+boundary. HIR removes only leading `Secret` wrappers to identify an exact
+bitfield value or `result[Bitfield, string]`, retaining `validates_widths` and
+the declaration's nominal TypeId. Machine construction retains the exact
+`MachineState`, validates its machine and source-selected state identity, and
+preserves its payload order. The outer checked type and span are restored by
+`InterfaceCoerce` after the unchanged constructor. Ordinary producer calls,
+nominal refinements, reflected builders, and machine transitions do not acquire
+constructor metadata through this path.
 HIR local allocation also retains the checked declaration TypeId when it has
 outer `Secret` qualification, including repeated wrappers. A less-qualified
 initializer keeps its checked producer type; the existing `Let` coercion adds

@@ -3570,6 +3570,15 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             }
         };
         let lowered = Expression { kind, ty, span };
+        let checked_constructor_call = match expression {
+            Expr::Call(callee, ..) | Expr::GenericCall(callee, ..) => {
+                let callee = Self::unparenthesized(callee);
+                self.struct_constructions.contains_key(&span)
+                    || self.is_declaration_reference(callee, DefKind::Bitfield)
+                    || self.is_declaration_reference(callee, DefKind::Machine)
+            }
+            _ => false,
+        };
         Some(
             if matches!(
                 expression,
@@ -3579,8 +3588,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     | Expr::None(..)
                     | Expr::Ok(..)
                     | Expr::Fail(..)
-            ) || (matches!(expression, Expr::Call(..) | Expr::GenericCall(..))
-                && self.struct_constructions.contains_key(&span))
+            ) || checked_constructor_call
             {
                 normalize_secret_constructor(lowered, &self.parent.check.interner)
             } else {
@@ -3873,7 +3881,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return self.lower_enum_construct(ty, variant, args, call_span);
         }
         if self.is_declaration_reference(callee, DefKind::Bitfield) {
-            return self.lower_bitfield_construct(args, call_span);
+            return self.lower_bitfield_construct(callee, args, call_span);
         }
         if let Expr::FieldAccess(base, member, _) = callee
             && member.name == "transition"
@@ -3883,7 +3891,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return self.lower_machine_transition(args, call_span);
         }
         if self.is_declaration_reference(callee, DefKind::Machine) {
-            return self.lower_machine_construct(args, call_span);
+            return self.lower_machine_construct(callee, args, call_span);
         }
         if let Some(construction) = self.struct_constructions.get(&call_span).cloned() {
             let (fields, evaluation_order) =
@@ -5861,15 +5869,19 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn lower_bitfield_construct(
         &mut self,
+        callee: &Expr,
         args: &[ast::CallArg],
         span: Span,
     ) -> Option<ExpressionKind> {
         let checked_type = self.expression_types.get(&span).copied()?;
+        let output_type =
+            constructor_type_without_secret(&self.parent.check.interner, checked_type);
         let (bitfield_type, validates_widths) =
-            match self.parent.check.interner.resolve(checked_type) {
-                Type::Bitfield(_) => (checked_type, false),
-                Type::Result(ok, _)
-                    if matches!(self.parent.check.interner.resolve(*ok), Type::Bitfield(_)) =>
+            match self.parent.check.interner.resolve(output_type) {
+                Type::Bitfield(_) => (output_type, false),
+                Type::Result(ok, error)
+                    if *error == TypeInterner::STRING
+                        && matches!(self.parent.check.interner.resolve(*ok), Type::Bitfield(_)) =>
                 {
                     (*ok, true)
                 }
@@ -5879,6 +5891,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     return None;
                 }
             };
+        let declared_type = self
+            .resolved_definition(callee)
+            .and_then(|definition| self.parent.check.definition_types.get(&definition).copied());
+        if declared_type != Some(bitfield_type) {
+            self.parent.error(
+                span,
+                "checked bitfield construction target differs from its declaration",
+            );
+            return None;
+        }
         let Type::Bitfield(bitfield_id) = *self.parent.check.interner.resolve(bitfield_type) else {
             unreachable!()
         };
@@ -5919,16 +5941,45 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
 
     fn lower_machine_construct(
         &mut self,
+        callee: &Expr,
         args: &[ast::CallArg],
         span: Span,
     ) -> Option<ExpressionKind> {
-        let state_type = self.expression_types.get(&span).copied()?;
-        let Type::MachineState { state, .. } = self.parent.check.interner.resolve(state_type)
+        let checked_type = self.expression_types.get(&span).copied()?;
+        let state_type = constructor_type_without_secret(&self.parent.check.interner, checked_type);
+        let Type::MachineState { machine, state } = *self.parent.check.interner.resolve(state_type)
         else {
             self.parent
                 .error(span, "machine construction lacks a checked state type");
             return None;
         };
+        let declared_type = self
+            .resolved_definition(callee)
+            .and_then(|definition| self.parent.check.definition_types.get(&definition).copied());
+        if !matches!(declared_type.map(|ty| self.parent.check.interner.resolve(ty)), Some(Type::Machine(selected)) if *selected == machine)
+        {
+            self.parent.error(
+                span,
+                "checked machine construction target differs from its declaration",
+            );
+            return None;
+        }
+        let source_state = args.first().and_then(|arg| match &arg.value {
+            Expr::Ident(name) if arg.name.is_none() => self
+                .parent
+                .check
+                .interner
+                .resolve_machine(machine)
+                .state_id(&name.name),
+            _ => None,
+        });
+        if source_state != Some(state) {
+            self.parent.error(
+                span,
+                "checked machine construction state differs from its source target",
+            );
+            return None;
+        }
         let payloads = args[1..]
             .iter()
             .map(|arg| self.lower_expression(&arg.value))
@@ -6445,12 +6496,16 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     }
 }
 
+fn constructor_type_without_secret(types: &TypeInterner, mut ty: TypeId) -> TypeId {
+    while let Type::Secret(inner) = types.resolve(ty) {
+        ty = *inner;
+    }
+    ty
+}
+
 fn normalize_secret_constructor(mut expression: Expression, types: &TypeInterner) -> Expression {
     let checked_type = expression.ty;
-    let mut constructor_type = checked_type;
-    while let Type::Secret(inner) = types.resolve(constructor_type) {
-        constructor_type = *inner;
-    }
+    let constructor_type = constructor_type_without_secret(types, checked_type);
     let exact_constructor = match (&expression.kind, types.resolve(constructor_type)) {
         (ExpressionKind::ListConstruct { .. }, Type::List(_))
         | (ExpressionKind::MapConstruct { .. }, Type::Map(..))
@@ -6464,6 +6519,34 @@ fn normalize_secret_constructor(mut expression: Expression, types: &TypeInterner
             },
             Type::Struct(_),
         ) => *struct_type == constructor_type,
+        (
+            ExpressionKind::BitfieldConstruct {
+                bitfield_type,
+                validates_widths: false,
+                ..
+            },
+            Type::Bitfield(_),
+        ) => *bitfield_type == constructor_type,
+        (
+            ExpressionKind::BitfieldConstruct {
+                bitfield_type,
+                validates_widths: true,
+                ..
+            },
+            Type::Result(ok, error),
+        ) => {
+            *ok == *bitfield_type
+                && *error == TypeInterner::STRING
+                && matches!(types.resolve(*bitfield_type), Type::Bitfield(_))
+        }
+        (
+            ExpressionKind::MachineConstruct {
+                state_type, state, ..
+            },
+            Type::MachineState {
+                state: expected, ..
+            },
+        ) => *state_type == constructor_type && state.index() == expected.index(),
         _ => false,
     };
     if constructor_type == checked_type || !exact_constructor {
@@ -9222,6 +9305,442 @@ function guest() returns Session at guest:
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn secret_bitfield_constructors_preserve_plain_and_validating_outputs() {
+        let (program, checked) = lower_source_with_check(
+            r#"bitfield network Header:
+    first: 4 bits
+    last: 4 bits
+    payload: list[uint8]
+type HeaderAlias = Header
+function fixed(payload: list[uint8]) returns secret[HeaderAlias]:
+    return ((Header))(payload: payload, last: 15, first: 0)
+function dynamic(width: int64, payload: list[uint8]) returns secret[result[Header, string]]:
+    return Header(payload: payload, last: width, first: 0)
+function nested(width: int64, payload: list[uint8]) returns secret[secret[result[Header, string]]]:
+    return (Header(first: 0, last: width, payload: payload))
+function nested_plain(payload: list[uint8]) returns secret[secret[Header]]:
+    return (Header(first: 0, last: 1, payload: payload))
+function pending(payload: list[uint8]) returns secret[Header]:
+    return run (Header(first: 1, last: 2, payload: payload))
+function parenthesized_number(payload: list[uint8]) returns secret[result[Header, string]]:
+    return Header(first: 0, last: (7), payload: payload)
+function handled(maybe: optional[list[uint8]]) returns secret[Header]:
+    return Header(first: 1, last: 2, payload: maybe handle:
+        default list()
+    )
+function generic[T](unused: T, payload: list[uint8]) returns secret[Header]:
+    return Header(first: 1, last: 2, payload: payload)
+function ordinary(width: int64, payload: list[uint8]) returns result[Header, string]:
+    return Header(first: 0, last: width, payload: payload)
+function producer(payload: list[uint8]) returns secret[Header]:
+    return fixed(payload)
+function main() returns nothing:
+    secret[Header] local = Header(first: 1, last: 2, payload: list())
+    secret[result[Header, string]] validation = Header(first: 1, last: (2), payload: list())
+    secret[Header] specialized = generic[int64](3, list())
+    return nothing
+"#,
+            false,
+        );
+        for (name, validating, depth, order) in [
+            ("fixed", false, 1, vec![2, 1, 0]),
+            ("dynamic", true, 1, vec![2, 1, 0]),
+            ("nested", true, 2, vec![0, 1, 2]),
+            ("nested_plain", false, 2, vec![0, 1, 2]),
+            ("pending", false, 1, vec![0, 1, 2]),
+            ("parenthesized_number", true, 1, vec![0, 1, 2]),
+            ("handled", false, 1, vec![0, 1, 2]),
+            ("generic", false, 1, vec![0, 1, 2]),
+        ] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .unwrap();
+            let StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
+                panic!("{name}: expected returned constructor");
+            };
+            assert_eq!(value.ty, function.return_type, "{name}");
+            let value = if name == "pending" {
+                let ExpressionKind::Run(inner) = &value.kind else {
+                    panic!("pending construction must retain run");
+                };
+                assert_eq!(inner.ty, value.ty);
+                inner.as_ref()
+            } else {
+                value
+            };
+            let mut expected = value.ty;
+            for _ in 0..depth {
+                let Type::Secret(inner) = checked.interner.resolve(expected) else {
+                    panic!("{name}: missing checked secret layer");
+                };
+                expected = *inner;
+            }
+            let ExpressionKind::InterfaceCoerce {
+                value: constructor,
+                adapters,
+            } = &value.kind
+            else {
+                panic!("{name}: expected qualification boundary");
+            };
+            assert!(adapters.is_empty());
+            assert_eq!(constructor.ty, expected, "{name}");
+            let ExpressionKind::BitfieldConstruct {
+                bitfield_type,
+                fields,
+                evaluation_order,
+                validates_widths,
+            } = &constructor.kind
+            else {
+                panic!("{name}: expected bitfield constructor");
+            };
+            assert_eq!(*validates_widths, validating, "{name}");
+            assert_eq!(evaluation_order, &order, "{name}");
+            let Type::Bitfield(id) = checked.interner.resolve(*bitfield_type) else {
+                panic!("exact nominal bitfield");
+            };
+            let definition = checked.interner.resolve_bitfield(*id);
+            assert!(definition.network_order);
+            assert!(
+                fields
+                    .iter()
+                    .zip(&definition.fields)
+                    .all(|(value, field)| value.ty == field.ty)
+            );
+            if validating {
+                assert_eq!(
+                    checked.interner.resolve(constructor.ty),
+                    &Type::Result(*bitfield_type, TypeInterner::STRING),
+                    "{name}"
+                );
+            } else {
+                assert_eq!(constructor.ty, *bitfield_type, "{name}");
+            }
+            if name == "handled" {
+                assert!(matches!(fields[2].kind, ExpressionKind::Handle { .. }));
+            }
+        }
+        for name in ["ordinary", "producer"] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .unwrap();
+            let StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
+                panic!("control return");
+            };
+            if name == "ordinary" {
+                assert!(matches!(
+                    value.kind,
+                    ExpressionKind::BitfieldConstruct {
+                        validates_widths: true,
+                        ..
+                    }
+                ));
+            } else {
+                assert!(matches!(value.kind, ExpressionKind::Call { .. }));
+            }
+            assert_eq!(value.ty, checked.type_map[&value.span]);
+        }
+        let main = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .unwrap();
+        for (statement, validating) in main.body.statements[..2].iter().zip([false, true]) {
+            let StatementKind::Let { local, value } = &statement.kind else {
+                panic!("constructor local");
+            };
+            assert_eq!(value.ty, main.locals[local.index() as usize].ty);
+            let ExpressionKind::InterfaceCoerce { value: inner, .. } = &value.kind else {
+                panic!("local qualification");
+            };
+            assert_eq!(inner.span, value.span);
+            assert!(
+                matches!(inner.kind, ExpressionKind::BitfieldConstruct { validates_widths, .. } if validates_widths == validating)
+            );
+        }
+    }
+
+    #[test]
+    fn secret_machine_constructors_preserve_state_payload_conversions_and_wrappers() {
+        let (program, checked) = lower_source_with_check(
+            r#"namespace models
+export interface Named:
+    function name(view self: Named) returns string
+export struct Item:
+    label: string
+implement Named for Item:
+    function name(view self: Item) returns string:
+        return self.label
+export type Callback = function(int64) returns secret[int64]
+export machine Session:
+    states:
+        active(label: string, owner: Named, callback: Callback, count: int64)
+        idle
+    transitions:
+        active to idle
+export bitfield Header:
+    value: 4 bits
+namespace app
+function classified(value: secret[int64]) returns secret[int64]:
+    return value
+function active(item: models.Item, maybe: optional[int64]) returns secret[models.Session at active]:
+    use models
+    use models as m
+    return (m.Session)(active, "Ada", item, classified, maybe handle:
+        default 7
+    )
+function nested() returns secret[secret[models.Session at idle]]:
+    use models
+    use models as m
+    return (m.Session(idle))
+function pending() returns secret[models.Session at idle]:
+    use models
+    use models as m
+    return run (m.Session(idle))
+function generic[T](unused: T) returns secret[models.Session at idle]:
+    use models
+    use models as m
+    return m.Session(idle)
+function header() returns secret[models.Header]:
+    use models
+    use models as m
+    return (m.Header)(value: 7)
+function main() returns nothing:
+    use models as m
+    use models
+    secret[models.Session at idle] local = m.Session(idle)
+    secret[models.Session at idle] specialized = generic[int64](3)
+    return nothing
+"#,
+            false,
+        );
+        for (name, depth) in [("active", 1), ("nested", 2), ("pending", 1), ("generic", 1)] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .unwrap();
+            let StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
+                panic!("{name}: state constructor return");
+            };
+            assert_eq!(value.ty, function.return_type);
+            let value = if name == "pending" {
+                let ExpressionKind::Run(inner) = &value.kind else {
+                    panic!("preserved run");
+                };
+                assert_eq!(inner.ty, value.ty);
+                inner.as_ref()
+            } else {
+                value
+            };
+            let mut state_type = value.ty;
+            for _ in 0..depth {
+                let Type::Secret(inner) = checked.interner.resolve(state_type) else {
+                    panic!("retained secret layer");
+                };
+                state_type = *inner;
+            }
+            let ExpressionKind::InterfaceCoerce {
+                value: constructor,
+                adapters,
+            } = &value.kind
+            else {
+                panic!("{name}: state qualification");
+            };
+            assert!(adapters.is_empty());
+            assert_eq!(constructor.ty, state_type);
+            let ExpressionKind::MachineConstruct {
+                state_type: actual,
+                state,
+                payloads,
+            } = &constructor.kind
+            else {
+                panic!("{name}: exact machine constructor");
+            };
+            assert_eq!(*actual, state_type);
+            let Type::MachineState {
+                machine,
+                state: expected,
+            } = checked.interner.resolve(state_type)
+            else {
+                panic!("exact nominal state");
+            };
+            assert_eq!(state.index(), expected.index());
+            let definition = checked
+                .interner
+                .resolve_machine(*machine)
+                .state(*expected)
+                .unwrap();
+            assert_eq!(payloads.len(), definition.fields.len());
+            assert!(
+                payloads
+                    .iter()
+                    .zip(&definition.fields)
+                    .all(|(value, (_, ty))| value.ty == *ty)
+            );
+            if name == "active" {
+                assert_eq!(definition.name, "active");
+                assert!(
+                    matches!(payloads[0].kind, ExpressionKind::String(ref label) if label == "Ada")
+                );
+                assert!(matches!(
+                    payloads[1].kind,
+                    ExpressionKind::InterfaceCoerce { .. }
+                ));
+                assert!(matches!(
+                    payloads[2].kind,
+                    ExpressionKind::FunctionAdapter { .. }
+                ));
+                assert!(matches!(payloads[3].kind, ExpressionKind::Handle { .. }));
+            } else {
+                assert_eq!(definition.name, "idle");
+                assert!(payloads.is_empty());
+            }
+        }
+        let main = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "main")
+            .unwrap();
+        let StatementKind::Let { local, value } = &main.body.statements[0].kind else {
+            panic!("qualified local state");
+        };
+        assert_eq!(value.ty, main.locals[local.index() as usize].ty);
+        let ExpressionKind::InterfaceCoerce {
+            value: constructor, ..
+        } = &value.kind
+        else {
+            panic!("local state qualification");
+        };
+        assert!(matches!(
+            constructor.kind,
+            ExpressionKind::MachineConstruct { .. }
+        ));
+        let header = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "header")
+            .unwrap();
+        assert!(
+            matches!(&header.body.statements[0].kind, StatementKind::Return(Some(Expression { kind: ExpressionKind::InterfaceCoerce { value, .. }, .. })) if matches!(value.kind, ExpressionKind::BitfieldConstruct { validates_widths: false, .. }))
+        );
+    }
+
+    #[test]
+    fn secret_bitfield_and_machine_normalization_requires_exact_targets() {
+        let mut types = TypeInterner::new();
+        let first_id = types.add_bitfield(jett_types::BitfieldDef {
+            name: "First".into(),
+            network_order: false,
+            fields: vec![],
+        });
+        let first = types.intern(Type::Bitfield(first_id));
+        let other_id = types.add_bitfield(jett_types::BitfieldDef {
+            name: "Other".into(),
+            network_order: false,
+            fields: vec![],
+        });
+        let other = types.intern(Type::Bitfield(other_id));
+        let result = types.intern(Type::Result(first, TypeInterner::STRING));
+        let wrong_ok = types.intern(Type::Result(other, TypeInterner::STRING));
+        let wrong_error = types.intern(Type::Result(first, TypeInterner::INT64));
+        let refined = types.intern(Type::Refinement {
+            name: "Selected".into(),
+            base: first,
+        });
+        let machine_id = types.add_machine(jett_types::MachineDef {
+            name: "Session".into(),
+            states: vec![
+                jett_types::MachineStateDef {
+                    name: "active".into(),
+                    fields: vec![],
+                },
+                jett_types::MachineStateDef {
+                    name: "idle".into(),
+                    fields: vec![],
+                },
+            ],
+            transitions: vec![],
+        });
+        let machine = types.intern(Type::Machine(machine_id));
+        let active = types.intern(Type::MachineState {
+            machine: machine_id,
+            state: jett_types::MachineStateId::new(0),
+        });
+        let idle = types.intern(Type::MachineState {
+            machine: machine_id,
+            state: jett_types::MachineStateId::new(1),
+        });
+        let span = Span::new(FileId::new(0), 3, 9);
+        let bitfield = |validates_widths| ExpressionKind::BitfieldConstruct {
+            bitfield_type: first,
+            fields: vec![],
+            evaluation_order: vec![],
+            validates_widths,
+        };
+        let state = |state_type, index| ExpressionKind::MachineConstruct {
+            state_type,
+            state: StateId(index),
+            payloads: vec![],
+        };
+        for (output, kind, accepted) in [
+            (first, bitfield(false), true),
+            (result, bitfield(true), true),
+            (first, bitfield(true), false),
+            (result, bitfield(false), false),
+            (other, bitfield(false), false),
+            (wrong_ok, bitfield(true), false),
+            (wrong_error, bitfield(true), false),
+            (refined, bitfield(false), false),
+            (active, state(active, 0), true),
+            (active, state(active, 1), false),
+            (active, state(idle, 0), false),
+            (machine, state(active, 0), false),
+            (
+                active,
+                ExpressionKind::Call {
+                    function: FunctionId::new(0),
+                    args: vec![],
+                    evaluation_order: vec![],
+                },
+                false,
+            ),
+        ] {
+            let secret = types.intern(Type::Secret(output));
+            let twice = types.intern(Type::Secret(secret));
+            for qualified in [secret, twice] {
+                let original = Expression {
+                    kind: kind.clone(),
+                    ty: qualified,
+                    span,
+                };
+                let normalized = normalize_secret_constructor(original.clone(), &types);
+                if accepted {
+                    assert_eq!(normalized.ty, qualified);
+                    assert_eq!(normalized.span, span);
+                    let ExpressionKind::InterfaceCoerce { value, adapters } = &normalized.kind
+                    else {
+                        panic!("exact qualified constructor");
+                    };
+                    assert_eq!(value.ty, output);
+                    assert_eq!(value.span, span);
+                    assert_eq!(value.kind, original.kind);
+                    assert!(adapters.is_empty());
+                    assert_eq!(
+                        normalize_secret_constructor(normalized.clone(), &types),
+                        normalized
+                    );
+                } else {
+                    assert_eq!(normalized, original);
+                }
+            }
+        }
     }
 
     #[test]

@@ -3117,6 +3117,13 @@ The constructor retains its exact nominal struct type before qualification,
 including generic arguments and field conversions. Constructors that validate
 refinement fields keep their existing `result[Struct, string]` contract.
 
+Checked bitfield and machine constructors also retain their exact inner type
+before outer secret qualification. A literal bitfield constructor produces its
+nominal bitfield value; one requiring width validation still produces
+`result[Bitfield, string]`, including when that result is secret. Qualification
+does not skip width checks or consume the result. A machine constructor retains
+its exact machine and selected state, with payloads evaluated in source order.
+
 Field reads from a directly secret-qualified struct, bitfield, or state-qualified
 machine preserve the exact nominal field type and add outer secrecy. `nothing`
 remains `nothing`; an already-secret field, including a nominal refinement over

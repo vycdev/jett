@@ -823,3 +823,36 @@ and secret-field regressions. The independent inventory gates also passed:
 155 verify fixtures, and three property fixtures with 100 trials each.
 This checkpoint does not certify a later revision or Linux-only execution;
 the supported-host distribution run for this revision remains in progress.
+
+The contextual secret bitfield and exact-state machine constructor gap is now
+resolved. HIR peels only leading secret wrappers while selecting an already
+resolved declaration, retaining the exact nominal bitfield or machine/state
+identity. Plain bitfields retain their value output; validating bitfields retain
+`result[Bitfield, string]` and their width-validation flag. The existing coercion
+restores the original checked secret type after construction. Field conversions,
+lexical evaluation order, pending depth, result tags, and ownership remain intact;
+native verification and the runtime ABI are unchanged.
+
+All 99 HIR, 66 MIR, 85 codegen, and 598 frontend fixture tests pass. Three new
+linked regressions cover literal and dynamic bitfields, successful and failed
+width validation, exact machine states, nested qualification, parentheses,
+generic bodies, namespace and destination aliases, returns, inline callbacks,
+full joins, closed comptime, unchanged public producers, owned payload copies,
+machine interface/callback payloads, compiled verify, and 100 property trials.
+Seven handwritten output lines pin the successful entry behavior. Debug and
+release binaries execute after source removal. Reversed named arguments and
+handled machine payloads preserve source order; terminal field failures suppress
+later effects and result handlers, retain the exact first error, and exit 71 with
+successful cleanup. The object test rejects 19 malformed nominal, result,
+validation-flag, state-index, payload, and qualification contracts. Three adjacent
+bitfield regressions, machine-transition and baked-machine regressions, and both
+contextual collection/sum constructor regressions also pass.
+
+A separate admitted validating struct constructor still exposes a qualification
+gap: `secret[result[Item, string]] hidden = Item(value: input)` with a refined
+field runs successfully in the reference backend, but MIR's generated sums keep
+the outer secret result type and native validation rejects it. The required
+repair must preserve the exact struct/result identity, predicates and their
+failure data, including already-refined fields without predicates. Supplemental
+cases do not change the inventory denominator; full workspace and supported-host
+distribution validation remain obligations for the final revision.
