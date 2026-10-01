@@ -3104,6 +3104,18 @@ struct User:
 
 The `secret[string]` type is not just a label — it is a distinct type that the compiler enforces differently from `string`. A `secret[string]` **cannot** be used anywhere a `string` is expected.
 
+An expected outer `secret` type can also qualify contextual `list(...)`,
+`map(...)`, `some(...)`, `none`, `ok(...)`, and `fail(...)` literals. The
+constructor keeps its exact inner container and payload types before receiving
+the checked outer qualification. Nested secrets, nominal refinements, and
+producer identities remain intact; interface, function, and inferred `never`
+payload conversions keep their existing rules. This lowering correction adds
+no language policy and does not relax native constructor shape checks.
+
+Local bindings retain their declared outer secret qualification when an
+initializer has fewer secret layers. Each `declassify` removes one outer layer;
+the initializer keeps its checked type and existing contextual inference.
+
 **What the compiler rejects:**
 
 ```

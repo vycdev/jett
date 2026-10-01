@@ -2581,24 +2581,29 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         .error(decl.name.span, "local has no resolved definition");
                     return None;
                 };
-                let Some(ty) = self
-                    .expression_types
-                    .get(&decl.name.span)
-                    .copied()
-                    .filter(|ty| {
-                        interface_values::contains_erased_boundary(&self.parent.check.interner, *ty)
-                            || self
-                                .expression_types
-                                .get(&decl.value.span())
-                                .is_some_and(|actual| {
-                                    interface_values::contains_erased_boundary(
-                                        &self.parent.check.interner,
-                                        *actual,
-                                    )
-                                })
-                    })
-                    .or_else(|| self.expression_types.get(&decl.value.span()).copied())
-                    .or_else(|| self.parent.check.definition_types.get(&definition).copied())
+                let Some(ty) =
+                    self.expression_types
+                        .get(&decl.name.span)
+                        .copied()
+                        .filter(|ty| {
+                            // A qualified binding can receive a less-qualified
+                            // producer; the later coercion preserves both types.
+                            matches!(self.parent.check.interner.resolve(*ty), Type::Secret(_))
+                                || interface_values::contains_erased_boundary(
+                                    &self.parent.check.interner,
+                                    *ty,
+                                )
+                                || self.expression_types.get(&decl.value.span()).is_some_and(
+                                    |actual| {
+                                        interface_values::contains_erased_boundary(
+                                            &self.parent.check.interner,
+                                            *actual,
+                                        )
+                                    },
+                                )
+                        })
+                        .or_else(|| self.expression_types.get(&decl.value.span()).copied())
+                        .or_else(|| self.parent.check.definition_types.get(&definition).copied())
                 else {
                     self.parent
                         .error(decl.name.span, "local has no checked type");
@@ -3468,7 +3473,22 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 return None;
             }
         };
-        Some(Expression { kind, ty, span })
+        let lowered = Expression { kind, ty, span };
+        Some(
+            if matches!(
+                expression,
+                Expr::ListConstruct(..)
+                    | Expr::MapConstruct(..)
+                    | Expr::Some(..)
+                    | Expr::None(..)
+                    | Expr::Ok(..)
+                    | Expr::Fail(..)
+            ) {
+                normalize_secret_constructor(lowered, &self.parent.check.interner)
+            } else {
+                lowered
+            },
+        )
     }
 
     fn lower_actor_spawn(&mut self, inner: &Expr, ty: TypeId) -> Option<ExpressionKind> {
@@ -6327,6 +6347,43 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
     }
 }
 
+fn normalize_secret_constructor(mut expression: Expression, types: &TypeInterner) -> Expression {
+    let checked_type = expression.ty;
+    let mut constructor_type = checked_type;
+    while let Type::Secret(inner) = types.resolve(constructor_type) {
+        constructor_type = *inner;
+    }
+    if constructor_type == checked_type
+        || !matches!(
+            (&expression.kind, types.resolve(constructor_type)),
+            (ExpressionKind::ListConstruct { .. }, Type::List(_))
+                | (ExpressionKind::MapConstruct { .. }, Type::Map(..))
+                | (
+                    ExpressionKind::OptionalSome(_) | ExpressionKind::OptionalNone,
+                    Type::Optional(_)
+                )
+                | (
+                    ExpressionKind::ResultOk(_) | ExpressionKind::ResultFail(_),
+                    Type::Result(..)
+                )
+        )
+    {
+        return expression;
+    }
+
+    // Contextual checking keeps the secret qualification on the literal. Its
+    // constructor still needs the exact container shape so payload conversions
+    // run before qualification. Never peel a nominal refinement or change a
+    // producer's checked type to make its representation fit a constructor.
+    let span = expression.span;
+    expression.ty = constructor_type;
+    Expression {
+        kind: ExpressionKind::interface_coerce(Box::new(expression)),
+        ty: checked_type,
+        span,
+    }
+}
+
 fn lower_binary_op(op: ast::BinOp) -> BinaryOp {
     match op {
         ast::BinOp::Add => BinaryOp::Add,
@@ -6374,6 +6431,13 @@ mod tests {
     }
 
     fn lower_source_mode(source: &str, include_test_bodies: bool) -> Program {
+        lower_source_with_check(source, include_test_bodies).0
+    }
+
+    fn lower_source_with_check(
+        source: &str,
+        include_test_bodies: bool,
+    ) -> (Program, jett_typecheck::CheckResult) {
         let file = FileId::new(0);
         let parsed = jett_parser::parse(source, file);
         assert!(
@@ -6400,12 +6464,13 @@ mod tests {
             checked.diagnostics
         );
         let origins = HashMap::from([(file, SourceOrigin::Project)]);
-        if include_test_bodies {
+        let program = if include_test_bodies {
             lower_with_test_bodies(&parsed.module, &resolved, &checked, &origins)
                 .expect("test HIR lowering failed")
         } else {
             lower(&parsed.module, &resolved, &checked, &origins).expect("HIR lowering failed")
-        }
+        };
+        (program, checked)
     }
 
     #[test]
@@ -7820,6 +7885,346 @@ function main() returns map[string, list[int64]]:
         };
         assert!(matches!(elements[0].kind, ExpressionKind::Int(1)));
         assert!(matches!(elements[1].kind, ExpressionKind::Int(3)));
+    }
+
+    #[test]
+    fn lowers_contextual_secret_collection_and_sum_constructors() {
+        let (program, checked) = lower_source_with_check(
+            r#"function main() returns nothing:
+    secret[list[int64]] numbers = list(5, 7)
+    secret[map[string, int64]] lookup = map("answer": 7)
+    secret[optional[int64]] present = some(7)
+    secret[optional[int64]] absent = none
+    secret[result[int64, string]] success = ok(7)
+    secret[result[int64, string]] failure = fail("reason")
+    secret[list[string]] empty_list = list()
+    secret[map[string, list[string]]] empty_map = map()
+    return nothing
+"#,
+            false,
+        );
+        let main = &program.functions[0];
+        for (index, statement) in main.body.statements[..8].iter().enumerate() {
+            let StatementKind::Let { local, value } = &statement.kind else {
+                panic!("expected constructor local");
+            };
+            assert_eq!(value.ty, main.locals[local.index() as usize].ty);
+            assert_eq!(checked.type_map[&value.span], value.ty);
+            let Type::Secret(inner_type) = checked.interner.resolve(value.ty) else {
+                panic!("expected retained checked secret type");
+            };
+            let ExpressionKind::InterfaceCoerce {
+                value: constructor,
+                adapters,
+            } = &value.kind
+            else {
+                panic!("expected explicit secret qualification");
+            };
+            assert!(adapters.is_empty());
+            assert_eq!(constructor.ty, *inner_type);
+            assert_eq!(constructor.span, value.span);
+            match (&constructor.kind, checked.interner.resolve(*inner_type)) {
+                (ExpressionKind::ListConstruct { elements }, Type::List(element_type)) => {
+                    assert!(elements.iter().all(|element| element.ty == *element_type));
+                    if index == 0 {
+                        assert!(matches!(elements[0].kind, ExpressionKind::Int(5)));
+                        assert!(matches!(elements[1].kind, ExpressionKind::Int(7)));
+                    } else {
+                        assert!(elements.is_empty());
+                        assert_eq!(*element_type, TypeInterner::STRING);
+                    }
+                }
+                (ExpressionKind::MapConstruct { entries }, Type::Map(key, value)) => {
+                    assert!(entries.iter().all(|entry| entry.key.ty == *key));
+                    assert!(entries.iter().all(|entry| entry.value.ty == *value));
+                    if index == 7 {
+                        assert!(entries.is_empty());
+                        assert!(matches!(checked.interner.resolve(*value), Type::List(_)));
+                    }
+                }
+                (ExpressionKind::OptionalSome(payload), Type::Optional(expected))
+                | (ExpressionKind::ResultOk(payload), Type::Result(expected, _))
+                | (ExpressionKind::ResultFail(payload), Type::Result(_, expected)) => {
+                    assert_eq!(payload.ty, *expected);
+                }
+                (ExpressionKind::OptionalNone, Type::Optional(expected)) => {
+                    assert_eq!(*expected, TypeInterner::INT64);
+                }
+                _ => panic!("constructor did not retain its exact container shape"),
+            }
+        }
+    }
+
+    #[test]
+    fn secret_local_metadata_preserves_declared_qualification_and_producer_signatures() {
+        let (program, checked) = lower_source_with_check(
+            r#"function make(value: int8) returns list[int8]:
+    return list(value)
+function read(view values: list[int8]) returns int64:
+    return 0
+function main() returns int64:
+    int8 seed = 7
+    secret[secret[list[int8]]] twice = list(seed)
+    secret[list[int8]] once = declassify clone twice
+    list[int8] public = declassify clone once
+    secret[list[int8]] from_call = make(seed)
+    secret[secret[list[int8]]] twice_from_call = make(seed)
+    return read(view public)
+"#,
+            false,
+        );
+        let make = &program.functions[0];
+        assert!(matches!(
+            checked.interner.resolve(make.return_type),
+            Type::List(element) if *element == TypeInterner::INT8
+        ));
+        let main = &program.functions[2];
+        let binding = |name: &str| {
+            main.body
+                .statements
+                .iter()
+                .find_map(|statement| match &statement.kind {
+                    StatementKind::Let { local, value }
+                        if main.locals[local.index() as usize].name == name =>
+                    {
+                        Some((&main.locals[local.index() as usize], value))
+                    }
+                    _ => None,
+                })
+                .expect("source binding")
+        };
+        let (twice, constructed) = binding("twice");
+        let (once, declassified) = binding("once");
+        let (public, _) = binding("public");
+        assert_eq!(checked.interner.resolve(twice.ty), &Type::Secret(once.ty));
+        assert_eq!(checked.interner.resolve(once.ty), &Type::Secret(public.ty));
+        assert_eq!(public.ty, make.return_type);
+        let ExpressionKind::InterfaceCoerce { value: literal, .. } = &constructed.kind else {
+            panic!("expected qualification of the exact checked literal");
+        };
+        assert_eq!(constructed.ty, twice.ty);
+        assert_eq!(literal.ty, make.return_type);
+        assert_eq!(checked.type_map[&literal.span], literal.ty);
+        assert!(matches!(literal.kind, ExpressionKind::ListConstruct { .. }));
+
+        let ExpressionKind::Declassify(cloned) = &declassified.kind else {
+            panic!("expected one-layer declassification");
+        };
+        let ExpressionKind::Clone(source) = &cloned.kind else {
+            panic!("expected explicit clone of the qualified local");
+        };
+        assert_eq!(source.kind, ExpressionKind::Local(twice.id));
+        assert_eq!(source.ty, twice.ty);
+        assert_eq!(declassified.ty, once.ty);
+
+        for name in ["from_call", "twice_from_call"] {
+            let (local, initializer) = binding(name);
+            assert_eq!(local.ty, initializer.ty);
+            let producer = match &initializer.kind {
+                ExpressionKind::InterfaceCoerce { value, .. } => value.as_ref(),
+                _ => initializer,
+            };
+            let ExpressionKind::Call { function, .. } = producer.kind else {
+                panic!("expected original checked public producer");
+            };
+            assert_eq!(function, make.id);
+            assert_eq!(checked.type_map[&producer.span], producer.ty);
+            if name == "twice_from_call" {
+                assert_eq!(local.ty, twice.ty);
+                assert_eq!(producer.ty, make.return_type);
+            } else {
+                assert_eq!(local.ty, once.ty);
+            }
+        }
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Call { function, .. },
+            ty,
+            ..
+        })) = &main.body.statements.last().expect("return").kind
+        else {
+            panic!("expected ordinary public reader call");
+        };
+        assert_eq!(*function, program.functions[1].id);
+        assert_eq!(*ty, TypeInterner::INT64);
+    }
+
+    #[test]
+    fn secret_constructor_payloads_keep_nested_qualification_and_nominal_types() {
+        let (program, checked) = lower_source_with_check(
+            r#"type Count = int64 where true
+function nested(value: Count) returns secret[list[secret[optional[Count]]]]:
+    return list(some(value))
+function pending() returns secret[list[int64]]:
+    return run (list(7))
+function fixed() returns secret[list[int64]]:
+    return comptime (list(9))
+"#,
+            false,
+        );
+        let nested = &program.functions[0];
+        let StatementKind::Return(Some(outer)) = &nested.body.statements[0].kind else {
+            panic!("expected nested constructor return");
+        };
+        let ExpressionKind::InterfaceCoerce { value: list, .. } = &outer.kind else {
+            panic!("expected secret list qualification");
+        };
+        let ExpressionKind::ListConstruct { elements } = &list.kind else {
+            panic!("expected list constructor");
+        };
+        let ExpressionKind::InterfaceCoerce {
+            value: optional, ..
+        } = &elements[0].kind
+        else {
+            panic!("expected independently qualified optional payload");
+        };
+        let ExpressionKind::OptionalSome(payload) = &optional.kind else {
+            panic!("expected optional constructor");
+        };
+        assert_eq!(payload.ty, nested.params[0].ty);
+        assert!(matches!(
+            checked.interner.resolve(payload.ty),
+            Type::Refinement { .. }
+        ));
+        assert!(matches!(payload.kind, ExpressionKind::Local(_)));
+
+        for function in &program.functions[1..3] {
+            let StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
+                panic!("expected wrapped constructor return");
+            };
+            let constructor = match &value.kind {
+                ExpressionKind::Run(inner) | ExpressionKind::Comptime { value: inner, .. } => inner,
+                _ => panic!("normalization must retain the source execution wrapper"),
+            };
+            assert_eq!(constructor.ty, value.ty);
+            let ExpressionKind::InterfaceCoerce { value: inner, .. } = &constructor.kind else {
+                panic!("expected normalized parenthesized literal");
+            };
+            assert!(matches!(inner.kind, ExpressionKind::ListConstruct { .. }));
+            assert_eq!(value.ty, function.return_type);
+        }
+    }
+
+    #[test]
+    fn secret_constructor_normalization_enables_existing_payload_conversions() {
+        let (program, checked) = lower_source_with_check(
+            r#"interface Named:
+    function name(view self: Named) returns string
+struct Item:
+    label: string
+implement Named for Item:
+    function name(view self: Item) returns string:
+        return self.label
+type Callback = function(int64) returns secret[int64]
+function classified(value: secret[int64]) returns secret[int64]:
+    return value
+function names(item: Item) returns secret[list[Named]]:
+    return list(item)
+function callbacks() returns secret[list[Callback]]:
+    return list(classified)
+"#,
+            false,
+        );
+        for name in ["names", "callbacks"] {
+            let function = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == name)
+                .expect("source function");
+            let StatementKind::Return(Some(Expression {
+                kind: ExpressionKind::InterfaceCoerce { value: list, .. },
+                ..
+            })) = &function.body.statements[0].kind
+            else {
+                panic!("expected secret qualification");
+            };
+            let ExpressionKind::ListConstruct { elements } = &list.kind else {
+                panic!("expected list constructor");
+            };
+            let Type::List(expected_element) = checked.interner.resolve(list.ty) else {
+                panic!("expected exact inner list type");
+            };
+            assert_eq!(elements[0].ty, *expected_element);
+            if name == "names" {
+                let ExpressionKind::InterfaceCoerce { value: source, .. } = &elements[0].kind
+                else {
+                    panic!("expected nominal-to-interface payload conversion");
+                };
+                assert_eq!(source.ty, function.params[0].ty);
+                assert!(matches!(source.kind, ExpressionKind::Local(_)));
+            } else {
+                let ExpressionKind::FunctionAdapter {
+                    value: source,
+                    function: adapter,
+                } = &elements[0].kind
+                else {
+                    panic!("expected existing checked function adapter");
+                };
+                assert!(matches!(source.kind, ExpressionKind::FunctionRef(_)));
+                assert_ne!(source.ty, elements[0].ty);
+                assert_eq!(program.functions[adapter.index() as usize].capture_count, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn secret_constructor_normalization_is_exact_and_does_not_peel_refinements() {
+        let mut types = TypeInterner::new();
+        let list = types.intern(Type::List(TypeInterner::INT64));
+        let optional = types.intern(Type::Optional(TypeInterner::INT64));
+        let refined = types.intern(Type::Refinement {
+            name: "Numbers".into(),
+            base: list,
+        });
+        let secret_list = types.intern(Type::Secret(list));
+        let twice_secret = types.intern(Type::Secret(secret_list));
+        let secret_optional = types.intern(Type::Secret(optional));
+        let secret_refined = types.intern(Type::Secret(refined));
+        let span = Span::new(FileId::new(0), 3, 9);
+        for ty in [list, secret_optional, secret_refined] {
+            let original = Expression {
+                kind: ExpressionKind::ListConstruct { elements: vec![] },
+                ty,
+                span,
+            };
+            assert_eq!(
+                normalize_secret_constructor(original.clone(), &types),
+                original
+            );
+        }
+        for kind in [
+            ExpressionKind::Local(LocalId::new(0)),
+            ExpressionKind::Call {
+                function: FunctionId::new(0),
+                args: vec![],
+                evaluation_order: vec![],
+            },
+        ] {
+            let original = Expression {
+                kind,
+                ty: secret_list,
+                span,
+            };
+            assert_eq!(
+                normalize_secret_constructor(original.clone(), &types),
+                original
+            );
+        }
+        let original = Expression {
+            kind: ExpressionKind::ListConstruct { elements: vec![] },
+            ty: twice_secret,
+            span,
+        };
+        let normalized = normalize_secret_constructor(original, &types);
+        assert_eq!(normalized.ty, twice_secret);
+        let ExpressionKind::InterfaceCoerce { value, .. } = &normalized.kind else {
+            panic!("expected outer qualification");
+        };
+        assert_eq!(value.ty, list);
+        assert_eq!(value.span, span);
+        assert_eq!(
+            normalize_secret_constructor(normalized.clone(), &types),
+            normalized
+        );
     }
 
     #[test]

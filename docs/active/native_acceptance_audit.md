@@ -535,11 +535,32 @@ release after source removal and compiled verify/property suites.
 
 These supplemental regressions do not change the inventory denominator or
 establish full view support. Native local view-alias lowering remains
-unsupported; the frontend checks add no lifetime or projection policy. Direct
-contextual secret-list literals, such as
-`secret[list[int64]] hidden = list(5, 7)`, remain a separate native gap: list
-construction can violate the checked MIR type contract and report
-`InvalidMirContract`. The success fixture first binds an owned public list,
-then assigns it to the secret binding; it does not establish contextual secret
-collection construction support. Complete backend, workspace, inventory, and
-host distribution gates remain independent obligations for the final revision.
+unsupported; the frontend checks add no lifetime or projection policy.
+
+The direct contextual secret-constructor gap is resolved for source
+`list(...)`, `map(...)`, `some(...)`, `none`, `ok(...)`, and `fail(...)` with
+checked outer `Secret` qualification. HIR builds the exact inner container,
+then restores the original checked TypeId and span with the existing
+`InterfaceCoerce`. Payload interface, function, and inferred `never`
+conversions remain unchanged; nominal refinements and arbitrary producers are
+untouched. This correction adds no policy and keeps strict native constructor
+shape checks.
+Declared outer-secret local types are also retained, including repeated
+wrappers, while less-qualified initializers keep their checked producer types
+and use the existing initialization coercion. This closes the local/read
+metadata mismatch without extending contextual inference or changing the
+one-layer `declassify` rule.
+
+Focused constructor-normalization HIR validation has passed.
+`native_contextual_secret_constructor_failures_preserve_order_and_cleanup`
+passes five payload-failure cases in debug and release after source removal,
+preserving lexical effects, the terminal failure, and cleanup.
+`native_contextual_secret_constructors_match_interpreter_in_both_profiles` is
+the success regression for `contextual_secret_constructors.jett`. It passes
+in debug and release after source removal with all nine stdout lines matching
+the interpreter, root-secret debug redaction, and release trace omission. The
+compiled verify suite and 100 property trials also pass. All 82 HIR, 47 MIR,
+332 reference/comptime, and 78 codegen tests pass with the declared-local
+correction. All eight backend-lowering tests also pass, including the 182-file
+run-pass obligation. Complete workspace, inventory, and host distribution gates
+remain independent obligations for the final revision.

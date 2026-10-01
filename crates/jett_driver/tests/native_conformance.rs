@@ -7621,3 +7621,153 @@ fn native_borrowed_return_clone_controls_match_interpreter_in_both_profiles() {
         assert!(actual.stderr.is_empty(), "{actual:?}");
     }
 }
+
+#[test]
+fn native_contextual_secret_constructor_failures_preserve_order_and_cleanup() {
+    let declarations = r#"namespace app
+function first(view stdout: Stdout) returns list[string]:
+    Stdout.write(view stdout, "first\n")
+    return list("owned")
+function failing(view stdout: Stdout) returns list[string]:
+    Stdout.write(view stdout, "failure\n")
+    return list.remove_at[string](list("other", "owner"), -1)
+"#;
+    for (name, ty, constructor, output) in [
+        (
+            "list",
+            "secret[list[list[string]]]",
+            "list(first(view stdout), failing(view stdout))",
+            "before\nfirst\nfailure\n",
+        ),
+        (
+            "map",
+            "secret[map[string, list[string]]]",
+            "map(\"first\": first(view stdout), \"second\": failing(view stdout))",
+            "before\nfirst\nfailure\n",
+        ),
+        (
+            "some",
+            "secret[optional[list[string]]]",
+            "some(failing(view stdout))",
+            "before\nfailure\n",
+        ),
+        (
+            "ok",
+            "secret[result[list[string], string]]",
+            "ok(failing(view stdout))",
+            "before\nfailure\n",
+        ),
+        (
+            "fail",
+            "secret[result[int64, list[string]]]",
+            "fail(failing(view stdout))",
+            "before\nfailure\n",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            format!(
+                "{declarations}function main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"before\\n\")\n    {ty} hidden = {constructor}\n    Stdout.write(view stdout, \"must not run\")\n"
+            ),
+        )
+        .unwrap();
+        let expected = jett_driver::run_file_capture_outcome(&source)
+            .expect_err("payload fails before the secret constructor completes");
+        assert_eq!(expected.output.stdout, output, "{name}: {expected:?}");
+        assert!(expected.output.debug_output.is_empty());
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory
+                .path()
+                .join(format!("secret_{name}_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .expect("native contextual secret constructor with terminal payload failure");
+            binaries.push(binary);
+        }
+        fs::remove_file(&source).unwrap();
+        for binary in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert_eq!(actual.status.code(), Some(71), "{name}: {actual:?}");
+            assert_eq!(actual.stdout, output.as_bytes(), "{name}: {actual:?}");
+            assert_eq!(
+                actual.stderr,
+                format!("{}\n", expected.message).as_bytes(),
+                "{name}: {actual:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_contextual_secret_constructors_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/contextual_secret_constructors.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("main.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source)
+        .expect("contextual secret constructor reference oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "lists:list=3:-128:127:-1;empty=0\n",
+            "maps:map=2:127:-8;empty=0\n",
+            "sums:some:-128:none:ok:127:fail:-128\n",
+            "nested:twice=2:7:-8;children=7,-8,\n",
+            "owners:selected:small:7;record:8;|some:selected:small:9|ok:record:10|fail:selected:small:11|selected:small:12:record:13\n",
+            "children:refined=7,-8,;callbacks=-128:7\n",
+            "contexts:list=2:-8:7;empty=0;some:-128;fail:-8;map=-8;inline=some:127\n",
+            "baked:list=2:-128:127;some:-8;owners=selected:small:7;record:8;\n",
+            "observed:2:7:-8\n",
+        )
+    );
+    assert_eq!(
+        expected.debug_output,
+        ["trace observed: secret[list[int8]] = [redacted]"]
+    );
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("secret_values_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native contextual secret constructors");
+        binaries.push((binary, release));
+    }
+    let verify_binary = directory.path().join("secret_values_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("compiled secret constructor verify suite");
+    let property_binary = directory.path().join("secret_values_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("compiled secret constructor property suite");
+    fs::remove_file(&source).unwrap();
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        let debug = if release {
+            String::new()
+        } else {
+            format!("{}\n", expected.debug_output.join("\n"))
+        };
+        assert_eq!(actual.stderr, debug.as_bytes());
+    }
+    for binary in [verify_binary, property_binary] {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}

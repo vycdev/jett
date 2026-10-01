@@ -895,6 +895,23 @@ Native argument emission follows that same mode through transparent wrappers,
 including local and field projections, rather than loading an owned argument
 from a view-only binding. Direct and indirect calls retain ordinary cleanup
 when a later argument fails.
+
+For source `list(...)`, `map(...)`, `some(...)`, `none`, `ok(...)`, and
+`fail(...)` literals whose checked type has outer `Secret` wrappers, HIR builds
+the constructor at the exact inner container type, then uses the existing
+`InterfaceCoerce` to restore the original checked TypeId and source span. It
+peels only leading secret qualifiers and requires the matching constructor
+shape; nominal refinements and arbitrary producer types remain untouched.
+Payload interface boxing, function adapters, and inferred `never` conversions
+still run against that exact inner type. Native constructor validation remains
+strict, and the outer qualification preserves the existing representation,
+evaluation order, pending metadata, and ownership.
+HIR local allocation also retains the checked declaration TypeId when it has
+outer `Secret` qualification, including repeated wrappers. A less-qualified
+initializer keeps its checked producer type; the existing `Let` coercion adds
+the declared qualification. This does not extend contextual literal inference,
+and `declassify` continues to remove one outer secret layer at a time.
+
 For refinement boundaries, HIR lowers each checked predicate to a
 compiler-owned pure function. MIR calls unvalidated ancestor predicates in
 base-first order and branches to the source `handle error` block on a false
