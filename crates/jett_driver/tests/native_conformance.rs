@@ -27,6 +27,9 @@ mod inventory_execution;
 #[path = "native_conformance/local_view_aliases.rs"]
 mod local_view_aliases;
 
+#[path = "native_conformance/pending_graphics.rs"]
+mod pending_graphics;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

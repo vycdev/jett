@@ -7740,13 +7740,22 @@ Native macOS windows and their synchronous callbacks execute on the process main
 thread. Embedding callers must invoke native graphics there; an off-main-thread
 window request returns a host failure without entering AppKit.
 
-The interpreter supports `graphics.run[State]` for a synchronous native window
-session. `main` requests a `Graphics` capability, and the public source-owned
-wrapper borrows it with `view`. Pure update and render functions receive only
+The interpreter and native executables support `graphics.run[State]` for a
+synchronous native window session. `main` requests a `Graphics` capability, and
+the public source-owned wrapper borrows it with `view`. Pure update and render
+functions receive only
 ordinary state and keyboard values; rendering returns a `graphics.Scene` of RGB
 rectangles and bitmap text. The runtime owns the window inside the call and
 closes it on normal return, host failure, or callback failure. No source-visible
 window handle or resource is exposed.
+
+Configuration and scene decoding requires ready values. A pending record, field,
+list, or list element is a terminal runtime shape error; decoding never joins it
+implicitly. Fields are decoded in declaration order, with rectangles before text,
+before checking domain bounds or opening/presenting a window. Invalid ready
+dimensions, colors, and geometry instead return a handled `fail(string)`.
+Pending callback state remains valid data and retains its depth until explicitly
+joined; rendering must produce a ready scene.
 
 The initial callback boundary accepts directly named functions (including
 qualified namespace references) or inline functions. Update owns its two

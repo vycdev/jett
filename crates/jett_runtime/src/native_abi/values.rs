@@ -18,6 +18,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 mod debug_equal;
 mod debug_format;
+mod graphics_decode;
 pub mod interface_conversion;
 
 pub type NativeHandle = u64;
@@ -3222,67 +3223,6 @@ impl NativeValues {
             self.drop_value(id)?;
         }
         Ok(())
-    }
-
-    fn graphics_config(&self, value: u64) -> LeafResult<graphics::Config> {
-        let title = self.struct_field(value, 0)?.bits;
-        Ok(graphics::Config {
-            title: self.text(title)?.to_owned(),
-            width: self.struct_field(value, 1)?.bits as i64,
-            height: self.struct_field(value, 2)?.bits as i64,
-        })
-    }
-
-    fn graphics_color(&self, value: u64) -> LeafResult<graphics::Color> {
-        Ok(graphics::Color {
-            red: self.struct_field(value, 0)?.bits as i64,
-            green: self.struct_field(value, 1)?.bits as i64,
-            blue: self.struct_field(value, 2)?.bits as i64,
-        })
-    }
-
-    fn graphics_rect(&self, value: u64) -> LeafResult<graphics::Rect> {
-        Ok(graphics::Rect {
-            x: self.struct_field(value, 0)?.bits as i64,
-            y: self.struct_field(value, 1)?.bits as i64,
-            width: self.struct_field(value, 2)?.bits as i64,
-            height: self.struct_field(value, 3)?.bits as i64,
-            color: self.graphics_color(self.struct_field(value, 4)?.bits)?,
-        })
-    }
-
-    fn graphics_text(&self, value: u64) -> LeafResult<graphics::Text> {
-        let text = self.struct_field(value, 2)?.bits;
-        Ok(graphics::Text {
-            x: self.struct_field(value, 0)?.bits as i64,
-            y: self.struct_field(value, 1)?.bits as i64,
-            text: self.text(text)?.to_owned(),
-            scale: self.struct_field(value, 3)?.bits as i64,
-            color: self.graphics_color(self.struct_field(value, 4)?.bits)?,
-        })
-    }
-
-    fn graphics_scene(&self, value: u64) -> LeafResult<graphics::Scene> {
-        let rectangles = self.struct_field(value, 1)?.bits;
-        let texts = self.struct_field(value, 2)?.bits;
-        let rectangles = self.lists.get(&rectangles).ok_or(INVALID_LIST)?;
-        let texts = self.lists.get(&texts).ok_or(INVALID_LIST)?;
-        if !rectangles.owned || !texts.owned {
-            return Err(INVALID_LIST);
-        }
-        Ok(graphics::Scene {
-            background: self.graphics_color(self.struct_field(value, 0)?.bits)?,
-            rectangles: rectangles
-                .elements
-                .iter()
-                .map(|value| self.graphics_rect(value.ok_or(INVALID_LIST)?))
-                .collect::<LeafResult<Vec<_>>>()?,
-            texts: texts
-                .elements
-                .iter()
-                .map(|value| self.graphics_text(value.ok_or(INVALID_LIST)?))
-                .collect::<LeafResult<Vec<_>>>()?,
-        })
     }
 
     fn graphics_validate_scene(&mut self, width: i64, height: i64, value: u64) -> LeafResult<u64> {

@@ -598,3 +598,30 @@ the 182-file run-pass obligation. Thirteen adjacent function-value tests, nine
 handler tests, and three pending-string tests also pass. These supplemental
 fixtures do not change the inventory denominator or establish full workspace,
 inventory execution, or supported-host distribution parity for this revision.
+
+Strict native graphics decoding now preserves the reference distinction between
+terminal shape errors and handled domain failures. The reproduced `width: run 0`
+case previously read zero as a ready dimension and returned a handled failure;
+it now reports the exact terminal Config width error before rendering or provider
+use. The decoder checks pending record owners, field metadata, strings, list
+containers, and record elements before payload access, in reference field order.
+Complete decoding precedes domain bounds, and window dimensions are read only
+after successful Config validation. Existing ABI leaves and callback state
+metadata remain unchanged.
+
+Four linked regressions in `native_conformance/pending_graphics.rs` pass in debug
+and release after source removal. Their 53-case matrix covers Config, Scene,
+Color, Rect, and Text roots and fields; Scene list containers/elements; nested
+pending depth, partial joins, closed comptime values, competing errors, and ready
+domain failures. Initial and later render failures preserve lexical stdout and
+the exact terminal error with exit 71, including unused scripted input. The fully
+joined session control retains pending State across callbacks, pins three debug
+traces and release omission, and passes compiled verify and 100 property trials.
+
+Seven focused runtime regressions additionally check all 38 pending metadata
+sites at depths one and two, malformed payload guards, source preservation,
+one-layer joins, provider ordering, and unfinished-session cleanup. All 145
+runtime tests, 78 codegen tests, nine linked graphics tests, and fourteen graphics
+frontend/reference integration tests pass. These supplemental cases leave the
+inventory denominator unchanged; full workspace, inventory execution, and
+supported-host distribution gates remain independent final-revision obligations.

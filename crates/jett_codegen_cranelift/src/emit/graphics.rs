@@ -229,14 +229,6 @@ impl Translator<'_, '_> {
         let update_descriptor = self.scalar(*update, update_arg.span)?;
         let render_descriptor = self.scalar(*render, render_arg.span)?;
         let zero = self.builder.ins().iconst(ir::types::I64, 0);
-        let width_index = self.builder.ins().iconst(ir::types::I64, 1);
-        let height_index = self.builder.ins().iconst(ir::types::I64, 2);
-        let width = self.leaf(NativeLeaf::StructField, &[config_handle, width_index], true)?;
-        let height = self.leaf(
-            NativeLeaf::StructField,
-            &[config_handle, height_index],
-            true,
-        )?;
 
         let result_slot = *self
             .temporary_slots
@@ -286,6 +278,18 @@ impl Translator<'_, '_> {
         if let LoweredValue::Owned(_, slot) = validated_config {
             self.drop_slot(slot)?;
         }
+
+        // Decode the complete config before observing dimensions. Pending
+        // owners and fields must fail in reference field order, before domain
+        // validation or any render/provider operation.
+        let width_index = self.builder.ins().iconst(ir::types::I64, 1);
+        let height_index = self.builder.ins().iconst(ir::types::I64, 2);
+        let width = self.leaf(NativeLeaf::StructField, &[config_handle, width_index], true)?;
+        let height = self.leaf(
+            NativeLeaf::StructField,
+            &[config_handle, height_index],
+            true,
+        )?;
 
         let current_state = state_var.map(|variable| {
             let bits = self.builder.use_var(variable);

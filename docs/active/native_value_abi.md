@@ -320,6 +320,15 @@ MIR lowering, preserving their borrow mode.
 Primitive Graphics state retains pending depth across the initial callback,
 update returns, and subsequent callbacks. Scripted differential fixtures
 cover nested pending integer, boolean, and floating-point state.
+Graphics decoding rejects pending record owners and fields before payload
+access, including pending strings, Scene list containers, and record elements.
+It follows reference order: Config title/width/height; Scene background, all
+rectangles, then all text. Complete shape decoding precedes domain validation,
+so a later pending field still fails before an earlier ready out-of-range value.
+These are terminal runtime failures, not result failures or implicit joins.
+The emitter reads dimensions only after configuration validation succeeds.
+Existing leaf signatures, callback state metadata, and session cleanup remain
+unchanged.
 For deterministic parity runs, the launcher configures a context-local Graphics
 event queue from `JETT_NATIVE_TEST_GRAPHICS_SCRIPT_V1` before entry. The runtime
 and interpreter share the JSON event grammar (key, close, host error); no

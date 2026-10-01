@@ -1781,6 +1781,15 @@ focus flag in the exactly pinned minifb 0.28.0 backend before reconciling held k
 the adapter must be rechecked when that dependency changes. Focus/repeat unit tests
 exercise both backend conventions without requiring a native window.
 
+Native graphics uses the existing typed validation and session leaves. Its
+configuration and scene decoders reject pending owners, fields, strings, list
+containers, and list elements before reading their payloads. Decoding follows
+the interpreter's field order and precedes domain validation; terminal shape
+errors remain distinct from handled domain failures. The emitter reads window
+dimensions only after complete configuration validation. Callback state keeps
+its pending metadata. Context destruction closes an unfinished native session
+before checking value ownership, including after a terminal decoding failure.
+
 Native macOS graphics keeps interpretation on the driver's caller thread, which
 must be the process main thread for AppKit. A worker-thread window request from
 a library caller returns a host failure before entering AppKit. The CLI therefore
@@ -1805,7 +1814,7 @@ that compatibility case does not suppress errors from evaluated expressions.
 
 The driver injects authority only when runtime `main` requests `Graphics`.
 Comptime, verify/property, untrusted private-kernel calls, and nested sessions
-cannot open a window. Native compilation, textures, audio, animation timing, and
+cannot open a window. Textures, audio, animation timing, and
 source-visible window ownership remain separate work. See the
 [graphics contract](active/graphics_game_contract.md).
 
