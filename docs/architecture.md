@@ -3523,3 +3523,15 @@ release gate. The exhaustive checkpoint is recorded in the active parity plan.
 
 Generic task joins preserve the instantiated error type in handler observations,
 including when one source body is called with both secret and public errors.
+The checked outer operand type selects whether a join preserves an exact result
+or creates an outer `result[Operand, string]`. Secret and nominal refinement
+boundaries remain intact; transparent aliases retain their canonical result
+type. Reference evaluation and Join type reconstruction use the active checked
+generic/reflected facts before declared-type fallback. Native sum joins clone
+the owner while removing one outer pending layer, then transfer that clone into
+the additional result when the checked output differs from the operand type.
+Payload pending depth and inner failure data remain unchanged.
+The native move planner borrows only explicitly viewed Join operands for that
+copy operation and ends the temporary loan before returning the owning result.
+Ordinary Join operands retain their consumption checks, including view-parameter
+rejection without an explicit `view`.

@@ -666,10 +666,20 @@ impl Flow<'_> {
                 )?;
             }
             ExpressionKind::RefinementValidated(value) => self.expr(value, borrowed)?,
+            ExpressionKind::Join(value) => {
+                if matches!(value.kind, ExpressionKind::View(_)) {
+                    // The join leaf clones the viewed owner. Its transient
+                    // read loan ends before a later owning argument is used.
+                    let saved = self.loans.clone();
+                    self.expr(value, true)?;
+                    self.loans = saved;
+                } else {
+                    self.expr(value, false)?;
+                }
+            }
             ExpressionKind::Run(value)
             | ExpressionKind::DisplayResult(value)
             | ExpressionKind::EquatableResult(value)
-            | ExpressionKind::Join(value)
             | ExpressionKind::Cancel(value)
             | ExpressionKind::Unary { value, .. }
             | ExpressionKind::ResultOk(value)
@@ -871,6 +881,145 @@ mod tests {
                 block.terminator.kind = TerminatorKind::Return(Some(value.clone()));
             }
         }
+    }
+
+    #[test]
+    fn explicit_view_join_keeps_exact_and_qualified_result_origins_available() {
+        for (source_type, result_type) in [
+            ("result[int8, int64]", "result[int8, int64]"),
+            (
+                "secret[result[int8, int64]]",
+                "result[secret[result[int8, int64]], string]",
+            ),
+        ] {
+            for view in [false, true] {
+                let mode = if view { "view " } else { "" };
+                let source = format!(
+                    "function inspect({mode}source: {source_type}) returns {result_type}:\n    {result_type} joined = join view source\n    trace source\n    return joined\n"
+                );
+                let (program, types) = lower_source(&source);
+                let function = &program.functions[inspected(&program)];
+                let origin = local_named(function, "source").index() as usize;
+                let joined = local_named(function, "joined").index() as usize;
+                let plan = MoveValuePlan::analyze(&program, function, &types).unwrap();
+                assert_eq!(plan.owned_locals.contains(&origin), !view);
+                assert!(plan.owned_locals.contains(&joined));
+                let (block, statement) = function
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find_map(|(block, body)| {
+                        body.statements
+                            .iter()
+                            .position(|statement| {
+                                matches!(statement.kind, StatementKind::Trace(local)
+                                    if local.index() as usize == origin)
+                            })
+                            .map(|statement| (block, statement))
+                    })
+                    .unwrap();
+                let previous = statement.checked_sub(1).expect("join precedes its trace");
+                assert!(matches!(function.blocks[block].statements[previous].kind,
+                    StatementKind::Let { local, .. } if local.index() as usize == joined));
+                assert!(plan.live_after_statement[block][previous].contains(&origin));
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_view_join_does_not_admit_bare_view_consumption_or_raw_view_escape() {
+        for (source_type, result_type) in [
+            ("result[int8, int64]", "result[int8, int64]"),
+            (
+                "secret[result[int8, int64]]",
+                "result[secret[result[int8, int64]], string]",
+            ),
+        ] {
+            let source = format!(
+                "function inspect(view source: {source_type}) returns {result_type}:\n    return join view source\n"
+            );
+            for kind in [
+                DeclarationKind::Function,
+                DeclarationKind::Verify,
+                DeclarationKind::Property,
+            ] {
+                let (mut program, types) = lower_source(&source);
+                let index = inspected(&program);
+                MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap();
+                let origin = local_named(&program.functions[index], "source");
+                let local = local_expression(&program.functions[index], origin);
+                let result_type = program.functions[index].return_type;
+                let function = &mut program.functions[index];
+                function.identity.declaration.kind = kind;
+                replace_return(
+                    function,
+                    Expression {
+                        kind: ExpressionKind::Join(Box::new(local.clone())),
+                        ty: result_type,
+                        span: local.span,
+                    },
+                );
+                let error = MoveValuePlan::analyze(&program, &program.functions[index], &types)
+                    .unwrap_err();
+                assert!(
+                    error.contains("cannot move borrowed native place"),
+                    "{kind:?}: {error}"
+                );
+                replace_return(
+                    &mut program.functions[index],
+                    Expression {
+                        kind: ExpressionKind::View(Box::new(local.clone())),
+                        ..local
+                    },
+                );
+                let error = MoveValuePlan::analyze(&program, &program.functions[index], &types)
+                    .unwrap_err();
+                assert!(
+                    error.contains("native view cannot escape into an owning value"),
+                    "{kind:?}: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_view_join_finishes_its_loan_before_later_owned_call_arguments() {
+        let source = r#"function consume(first: result[int8, int64], second: result[int8, int64]) returns nothing:
+    return nothing
+function inspect(source: result[int8, int64]) returns nothing:
+    consume(join view source, source)
+"#;
+        let (mut program, types) = lower_source(source);
+        let index = inspected(&program);
+        MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap();
+        let function = &mut program.functions[index];
+        let first = function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| block.statements.iter_mut())
+            .find_map(|statement| {
+                let StatementKind::Evaluate(Expression {
+                    kind: ExpressionKind::Call { args, .. },
+                    ..
+                }) = &mut statement.kind
+                else {
+                    return None;
+                };
+                Some(&mut args[0])
+            })
+            .unwrap();
+        let ExpressionKind::Join(view) = &mut first.kind else {
+            panic!("first argument joins an explicit view");
+        };
+        let ExpressionKind::View(local) = &view.kind else {
+            panic!("explicit borrowed operand");
+        };
+        // Ordinary joins still consume their operand. A second use in the
+        // following owned argument must retain the normal availability error.
+        *view = Box::new(local.as_ref().clone());
+        let error =
+            MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap_err();
+        assert!(error.contains("moved or uninitialized"), "{error}");
     }
 
     #[test]

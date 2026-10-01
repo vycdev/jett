@@ -2,6 +2,16 @@
 
 This is an implementation contract, not a full-parity claim.
 
+Sum task joins retain the checked outer type boundary. An exact result remains
+the result of the join; a secret-qualified or nominally refined result becomes
+the payload of an outer result. `SumTaskJoin` clones the sum and removes one
+outer pending layer without changing its inner tag, error type or payload depth.
+The existing `SumNew` operation takes ownership of that joined clone only after
+successful construction of the additional result. No ABI signature or ownership
+slot policy changes.
+An explicit-view Join borrows the input for the clone operation. Its owned
+result can escape the call while the original owner's depth remains unchanged.
+
 Contextually secret struct construction uses an exact nominal inner
 `StructConstruct` followed by the existing qualification coercion. Only checked
 plain struct constructors qualify; validating result constructors retain their

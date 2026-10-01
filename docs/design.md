@@ -2326,6 +2326,14 @@ function fetch_all_data(view net: Network) returns result[DashboardData, HttpErr
 - Every `run` must have a matching `join` or `cancel` before the enclosing function returns. If the LLM forgets one, the compiler rejects the code.
 - No orphaned tasks. No background processes silently running after the function ends.
 
+The checked outer type selects the result of `join`. An exact `result[T, E]`
+retains that result type, including through a transparent alias. Other operand
+types produce `result[Operand, string]`; this includes secret-qualified results
+and nominal refinements of results. Their inner result remains payload data for
+its own handler. Each join removes one outer pending layer and preserves pending
+depth inside the payload. `join view value` produces an independent joined
+value while preserving the original owner's pending depth and availability.
+
 **Cancellation through capabilities:**
 
 `cancel` requires a still-pending task variable; a value that has already been joined on any live branch cannot be cancelled. Unlike cancellation, `join` also accepts resolved values. `cancel` sets a cancellation flag on a task. The task is not killed immediately — instead, its next capability checkpoint terminates the pending task with a `CancelledError` before the operation takes effect. This task-control failure is surfaced by `join`; it is separate from the interrupted function's declared `result[T, E]` error type. No cancellation tokens or manual flag checking are needed — the capability system provides natural cancellation checkpoints:

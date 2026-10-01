@@ -2172,6 +2172,59 @@ impl Interpreter {
             })
     }
 
+    fn join_preserves_result(&self, expression: &Expr) -> Option<bool> {
+        if let Some(name) = self.checked_expression_type(expression.span()) {
+            // Checked names are canonical and already select the concrete
+            // generic/reflected body. Secret and nominal refinement wrappers
+            // must not be erased when selecting the outer join result.
+            return Some(matches!(
+                Self::simple_type_expr_from_name(name, expression.span()),
+                Some(TypeExpr::Generic(owner, args, _))
+                    if owner.name == "result" && args.len() == 2
+            ));
+        }
+        if let Some(ty) = self.call_argument_type(expression) {
+            return Some(self.declared_join_type_is_result(&ty));
+        }
+        match expression {
+            Expr::Run(inner, _)
+            | Expr::Clone(inner, _)
+            | Expr::Paren(inner, _)
+            | Expr::View(inner, _) => self.join_preserves_result(inner),
+            _ => None,
+        }
+    }
+
+    fn declared_join_type_is_result(&self, ty: &TypeExpr) -> bool {
+        let mut ty = self.substitute_type_expr(ty);
+        let mut aliases = HashSet::new();
+        loop {
+            match ty {
+                TypeExpr::Generic(owner, args, _) => {
+                    return owner.name == "result" && args.len() == 2;
+                }
+                TypeExpr::View(inner, _) => ty = *inner,
+                TypeExpr::Named(ref name) => {
+                    let Some(alias) = self.registry_name(&self.type_alias_bases, &name.name) else {
+                        return false;
+                    };
+                    if !matches!(self.type_aliases.get(&alias), Some(None))
+                        || !aliases.insert(alias.clone())
+                    {
+                        return false;
+                    }
+                    let Some(base) = self.type_alias_bases.get(&alias) else {
+                        return false;
+                    };
+                    let namespace =
+                        Self::type_name_namespace(&alias).or(self.current_namespace.as_deref());
+                    ty = self.substitute_type_expr_in_namespace(base, namespace);
+                }
+                TypeExpr::StateQualified(..) | TypeExpr::Function(..) => return false,
+            }
+        }
+    }
+
     fn checked_scoped_types(
         &self,
         span: Span,
@@ -2682,16 +2735,34 @@ impl Interpreter {
             // `join pending` unwraps the Pending, returning result[T, error]
             // so that a `handle error:` block can handle failures.
             Expr::Join(inner, _) => {
+                let preserves_result = self.join_preserves_result(inner);
                 let val = value_or_signal!(self, inner);
+                let was_pending = matches!(&val, Value::Pending(_));
                 let result = match val {
-                    Value::Pending(inner_val) => match inner_val.payload() {
-                        Value::ResultOk(_) | Value::ResultFail(_) => *inner_val,
-                        _ => Value::ResultOk(inner_val),
-                    },
                     Value::Nothing => {
                         Value::ResultFail(Box::new(Value::String("task was cancelled".to_string())))
                     }
-                    other => Value::ResultOk(Box::new(other)),
+                    other => {
+                        let joined = match other {
+                            Value::Pending(value) => *value,
+                            value => value,
+                        };
+                        // Raw interpreter callers may provide neither checked
+                        // nor declared types. Preserve their historical fallback;
+                        // checked source never selects behavior from its payload.
+                        let preserves_result = preserves_result.unwrap_or_else(|| {
+                            was_pending
+                                && matches!(
+                                    joined.payload(),
+                                    Value::ResultOk(_) | Value::ResultFail(_)
+                                )
+                        });
+                        if preserves_result {
+                            joined
+                        } else {
+                            Value::ResultOk(Box::new(joined))
+                        }
+                    }
                 };
                 Ok(ExprFlow::Value(result))
             }
@@ -12941,6 +13012,340 @@ mod tests {
     /// Helper: create a float literal expression.
     fn float(n: f64) -> Expr {
         Expr::FloatLiteral(n, sp())
+    }
+
+    #[test]
+    fn checked_join_preserves_exact_result_shape_and_one_pending_level() {
+        let operand_span = Span::new(FileId::new(0), 1, 2);
+        let operand = Expr::Ident(Ident {
+            name: "task".into(),
+            span: operand_span,
+        });
+        let expression = Expr::Join(Box::new(operand.clone()), Span::new(FileId::new(0), 3, 4));
+        for (type_name, preserves_result) in [
+            ("result[int64, string]", true),
+            ("secret[result[int64, string]]", false),
+            ("secret[secret[result[int64, string]]]", false),
+        ] {
+            for ready in [
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                Value::ResultFail(Box::new(Value::String("failed".into()))),
+            ] {
+                for depth in 0..=2 {
+                    let mut input = ready.clone();
+                    for _ in 0..depth {
+                        input = Value::Pending(Box::new(input));
+                    }
+                    let mut expected = ready.clone();
+                    for _ in 1..depth {
+                        expected = Value::Pending(Box::new(expected));
+                    }
+                    if !preserves_result {
+                        expected = Value::ResultOk(Box::new(expected));
+                    }
+                    let mut interpreter = Interpreter::new();
+                    interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+                        expressions: HashMap::from([(operand_span, type_name.into())]),
+                        ..Default::default()
+                    }));
+                    interpreter.set_variable("task", input.clone());
+                    assert_eq!(
+                        interpreter.join_preserves_result(&operand),
+                        Some(preserves_result)
+                    );
+                    assert_eq!(
+                        interpreter.eval_expr(&expression),
+                        Ok(expected),
+                        "{type_name}, depth {depth}, {ready:?}"
+                    );
+                    assert_eq!(interpreter.get_variable("task"), Some(&input));
+                }
+            }
+        }
+        // The cancellation sentinel is only the resolved bare unit value.
+        for (input, expected) in [
+            (
+                Value::Nothing,
+                Value::ResultFail(Box::new(Value::String("task was cancelled".into()))),
+            ),
+            (
+                Value::Pending(Box::new(Value::Nothing)),
+                Value::ResultOk(Box::new(Value::Nothing)),
+            ),
+            (
+                Value::Pending(Box::new(Value::Pending(Box::new(Value::Nothing)))),
+                Value::ResultOk(Box::new(Value::Pending(Box::new(Value::Nothing)))),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+                expressions: HashMap::from([(operand_span, "nothing".into())]),
+                ..Default::default()
+            }));
+            interpreter.set_variable("task", input);
+            assert_eq!(interpreter.eval_expr(&expression), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn checked_join_uses_active_generic_and_reflected_facts_before_declared_types() {
+        let operand_span = Span::new(FileId::new(0), 1, 2);
+        let operand = Expr::Ident(Ident {
+            name: "task".into(),
+            span: operand_span,
+        });
+        let expression = Expr::Join(Box::new(operand.clone()), Span::new(FileId::new(0), 3, 4));
+        let ready = Value::ResultOk(Box::new(Value::Int64(7)));
+        let mut interpreter = Interpreter::new();
+        let declared =
+            Interpreter::simple_type_expr_from_name("secret[result[int64, string]]", operand_span)
+                .unwrap();
+        interpreter.set_variable_with_type("task", ready.clone(), declared);
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(operand_span, "result[int64, string]".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(interpreter.eval_expr(&expression), Ok(ready.clone()));
+        interpreter.active_checked_function = Some(Arc::new(CheckedFunctionTypes {
+            type_arguments: vec!["secret[result[int64, string]]".into()],
+            expressions: Arc::new(HashMap::from([(
+                operand_span,
+                "secret[result[int64, string]]".into(),
+            )])),
+            ..Default::default()
+        }));
+        assert_eq!(
+            interpreter.eval_expr(&expression),
+            Ok(Value::ResultOk(Box::new(ready.clone())))
+        );
+        interpreter.active_checked_scope = Some(Arc::new(CheckedScopedTypes {
+            bound_type: "result[int64, string]".into(),
+            expressions: HashMap::from([(operand_span, "result[int64, string]".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(interpreter.eval_expr(&expression), Ok(ready.clone()));
+        interpreter.active_checked_scope = None;
+        assert_eq!(
+            interpreter.eval_expr(&expression),
+            Ok(Value::ResultOk(Box::new(ready.clone())))
+        );
+        interpreter.active_checked_function = None;
+        assert_eq!(interpreter.eval_expr(&expression), Ok(ready));
+
+        // A nominal checked owner is not a result even when its payload is.
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(operand_span, "models.Validated".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(interpreter.join_preserves_result(&operand), Some(false));
+    }
+
+    #[test]
+    fn join_declared_alias_fallback_stops_at_secret_and_refinement_owners() {
+        let parsed = jett_parser::parse(
+            r#"namespace models
+type Public = result[int64, string]
+type Forwarded = Public
+type Hidden = secret[Public]
+type Nested = secret[Hidden]
+type Validated = Public where true
+type ValidatedAlias = Validated
+"#,
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        interpreter.current_namespace = Some("unrelated".into());
+        for (name, expected) in [
+            ("models.Public", true),
+            ("models.Forwarded", true),
+            ("models.Hidden", false),
+            ("models.Nested", false),
+            ("models.Validated", false),
+            ("models.ValidatedAlias", false),
+        ] {
+            interpreter.set_variable_with_type(
+                "task",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                type_named(name),
+            );
+            for expression in [
+                var("task"),
+                Expr::Run(Box::new(var("task")), sp()),
+                Expr::Clone(Box::new(Expr::Paren(Box::new(var("task")), sp())), sp()),
+            ] {
+                assert_eq!(
+                    interpreter.join_preserves_result(&expression),
+                    Some(expected),
+                    "{name}"
+                );
+            }
+        }
+        interpreter.type_arg_scopes.push(HashMap::from([(
+            "T".into(),
+            type_named("models.Forwarded"),
+        )]));
+        interpreter.set_variable_with_type(
+            "task",
+            Value::ResultOk(Box::new(Value::Int64(7))),
+            type_named("T"),
+        );
+        assert_eq!(interpreter.join_preserves_result(&var("task")), Some(true));
+        interpreter
+            .type_arg_scopes
+            .last_mut()
+            .unwrap()
+            .insert("T".into(), type_named("models.Hidden"));
+        assert_eq!(interpreter.join_preserves_result(&var("task")), Some(false));
+    }
+
+    #[test]
+    fn join_without_checked_or_declared_metadata_keeps_raw_api_behavior() {
+        let ready = Value::ResultOk(Box::new(Value::Int64(7)));
+        for (input, expected) in [
+            (ready.clone(), Value::ResultOk(Box::new(ready.clone()))),
+            (Value::Pending(Box::new(ready.clone())), ready.clone()),
+            (
+                Value::Pending(Box::new(Value::Pending(Box::new(ready.clone())))),
+                Value::ResultOk(Box::new(Value::Pending(Box::new(ready)))),
+            ),
+        ] {
+            let mut interpreter = Interpreter::new();
+            interpreter.set_variable("task", input);
+            assert_eq!(interpreter.join_preserves_result(&var("task")), None);
+            assert_eq!(
+                interpreter.eval_expr(&Expr::Join(Box::new(var("task")), sp())),
+                Ok(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn join_debug_types_keep_exact_outer_shapes_and_declared_alias_labels() {
+        let parsed = jett_parser::parse(
+            r#"namespace models
+type Public = result[int64, string]
+type Forwarded = Public
+type Hidden = secret[Public]
+type Validated = Public where true
+type ValidatedAlias = Validated
+"#,
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        for (declared, expected) in [
+            ("result[int64, string]", "result[int64, string]"),
+            ("models.Public", "models.Public"),
+            ("models.Forwarded", "models.Forwarded"),
+            ("models.Hidden", "result[models.Hidden, string]"),
+            ("models.Validated", "result[models.Validated, string]"),
+            (
+                "models.ValidatedAlias",
+                "result[models.ValidatedAlias, string]",
+            ),
+            (
+                "secret[result[int64, string]]",
+                "result[secret[result[int64, string]], string]",
+            ),
+        ] {
+            let ty = Interpreter::simple_type_expr_from_name(declared, sp()).unwrap();
+            interpreter.set_variable_with_type(
+                "task",
+                Value::ResultOk(Box::new(Value::Int64(7))),
+                ty,
+            );
+            let expression = Expr::Join(Box::new(var("task")), sp());
+            let actual = interpreter.debug_expression_type(&expression).unwrap();
+            assert_eq!(type_expr_display(&actual), expected, "{declared}");
+        }
+    }
+
+    #[test]
+    fn join_debug_types_prefer_checked_target_facts_in_active_context_order() {
+        let operand_span = Span::new(FileId::new(0), 1, 2);
+        let target_span = Span::new(FileId::new(0), 3, 4);
+        let operand = Expr::Ident(Ident {
+            name: "task".into(),
+            span: operand_span,
+        });
+        let expression = Expr::Join(Box::new(operand), target_span);
+        let mut interpreter = Interpreter::new();
+        interpreter.set_variable_with_type(
+            "task",
+            Value::ResultOk(Box::new(Value::Int64(7))),
+            type_named("T"),
+        );
+        interpreter.set_checked_expression_types(Arc::new(CheckedExpressionTypes {
+            expressions: HashMap::from([(target_span, "result[models.Validated, string]".into())]),
+            ..Default::default()
+        }));
+        let debug_name = |interpreter: &Interpreter| {
+            type_expr_display(&interpreter.debug_expression_type(&expression).unwrap())
+        };
+        assert_eq!(debug_name(&interpreter), "result[models.Validated, string]");
+        interpreter.active_checked_function = Some(Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(
+                target_span,
+                "result[secret[result[int64, string]], string]".into(),
+            )])),
+            ..Default::default()
+        }));
+        assert_eq!(
+            debug_name(&interpreter),
+            "result[secret[result[int64, string]], string]"
+        );
+        interpreter.active_checked_scope = Some(Arc::new(CheckedScopedTypes {
+            expressions: HashMap::from([(target_span, "result[int64, string]".into())]),
+            ..Default::default()
+        }));
+        assert_eq!(debug_name(&interpreter), "result[int64, string]");
+        interpreter.active_checked_scope = None;
+        assert_eq!(
+            debug_name(&interpreter),
+            "result[secret[result[int64, string]], string]"
+        );
+        interpreter.active_checked_function = None;
+        assert_eq!(debug_name(&interpreter), "result[models.Validated, string]");
+    }
+
+    #[test]
+    fn refined_join_handles_extract_outer_results_before_refinement_validation() {
+        let parsed = jett_parser::parse(
+            r#"namespace app
+type RefinedOutcome = result[int64, string] where true
+function joined(candidate: result[int64, string]) returns int64:
+    RefinedOutcome checked = candidate handle error:
+        return -1
+    RefinedOutcome pending = run run checked
+    RefinedOutcome once = join pending handle error:
+        return -3
+    RefinedOutcome ready = join once handle error:
+        return -4
+    result[int64, string] base = coarsen ready
+    int64 answer = base handle error:
+        return -2
+    return answer
+"#,
+            FileId::new(0),
+        );
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interpreter = Interpreter::new();
+        interpreter.register_module(&parsed.module);
+        for (candidate, expected) in [
+            (Value::ResultOk(Box::new(Value::Int64(7))), 7),
+            (
+                Value::ResultFail(Box::new(Value::String("inner failure".into()))),
+                -2,
+            ),
+        ] {
+            assert_eq!(
+                interpreter.call_function("app.joined", vec![candidate]),
+                Ok(Value::Int64(expected))
+            );
+        }
     }
 
     #[test]

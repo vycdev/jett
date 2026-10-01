@@ -2398,7 +2398,12 @@ impl Translator<'_, '_> {
                 } else if matches!(self.types.resolve(representation), Type::Result(..)) {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::SumTaskJoin, &[source], true)?;
-                    self.own_linear(joined)
+                    let joined = self.own_linear(joined)?;
+                    if value.ty == expression.ty {
+                        Ok(joined)
+                    } else {
+                        self.construct_sum_value(true, joined, expression.span)
+                    }
                 } else if matches!(self.types.resolve(representation), Type::Optional(_)) {
                     let source = self.scalar(result, value.span)?;
                     let joined = self.leaf(NativeLeaf::SumTaskJoin, &[source], true)?;

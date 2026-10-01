@@ -26,8 +26,16 @@ impl Interpreter {
             | Expr::Paren(inner, _)
             | Expr::Run(inner, _) => self.debug_expression_type(inner),
             Expr::Join(inner, span) => {
+                if let Some(ty) = self
+                    .checked_expression_type(*span)
+                    .and_then(|name| Self::simple_type_expr_from_name(name, *span))
+                {
+                    return Some(ty);
+                }
                 let ty = self.debug_expression_type(inner)?;
-                if matches!(self.inference_base_type(&ty), TypeExpr::Generic(name, _, _) if name.name == "result")
+                if self
+                    .join_preserves_result(inner)
+                    .unwrap_or_else(|| self.declared_join_type_is_result(&ty))
                 {
                     Some(ty)
                 } else {
