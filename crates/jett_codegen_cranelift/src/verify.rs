@@ -2490,6 +2490,14 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
+            ExpressionKind::DisplayResult(value) => {
+                self.expression(function, value)?;
+                if expression.ty == TypeInterner::STRING && value.ty == TypeInterner::STRING {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "display result"))
+                }
+            }
             ExpressionKind::Declassify(value) => {
                 self.expression(function, value)?;
                 if matches!(self.types.resolve(value.ty), Type::Secret(inner) if *inner == expression.ty)

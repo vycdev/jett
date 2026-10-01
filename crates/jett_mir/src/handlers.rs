@@ -14,6 +14,7 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         ExpressionKind::Run(value) | ExpressionKind::Join(value) => has_extractable_handle(value),
         ExpressionKind::Coarsen(value) | ExpressionKind::Declassify(value)
         | ExpressionKind::RefinementValidated(value)
+        | ExpressionKind::DisplayResult(value)
         | ExpressionKind::InterfaceCoerce { value, .. } | ExpressionKind::InterfaceType(value) => {
             has_extractable_handle(value)
         }
@@ -371,6 +372,11 @@ impl Builder<'_> {
         if let ExpressionKind::RefinementValidated(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::RefinementValidated(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::DisplayResult(value) = &expression.kind {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::DisplayResult(Box::new(self.lower_value(value)));
             return lowered;
         }
         if let ExpressionKind::View(value) = &expression.kind {
@@ -2004,6 +2010,145 @@ mod tests {
             .iter()
             .find(|function| function.identity.declaration.name == "inspect")
             .unwrap()
+    }
+
+    #[test]
+    fn display_result_is_checked_before_later_interpolation_handlers() {
+        let (program, types) = lower_handler_source(
+            r#"interface Displayable:
+    function display(view self: Displayable) returns string
+namespace app
+struct Item:
+    value: int64
+implement Displayable for Item:
+    function display(view self: Item) returns string:
+        return run "shown"
+function inspect(view item: Item) returns string:
+    optional[string] later = none
+    return "{item}:{later handle: default "later"}"
+"#,
+        );
+        validate(&program).expect("interpolation handler CFG");
+        let function = inspected_handler_function(&program);
+        let entry = &function.blocks[function.entry.index() as usize];
+        let guards = entry
+            .statements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, statement)| match &statement.kind {
+                StatementKind::Let { local, value }
+                    if matches!(value.kind, ExpressionKind::DisplayResult(_)) =>
+                {
+                    Some((index, *local, value))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(guards.len(), 1);
+        let (guard_index, guard_local, guard) = guards[0];
+        let ExpressionKind::DisplayResult(call) = &guard.kind else {
+            unreachable!();
+        };
+        assert!(matches!(call.kind, ExpressionKind::Call { .. }));
+        let handler_index = entry
+            .statements
+            .iter()
+            .position(|statement| matches!(statement.kind, StatementKind::SumTag { .. }))
+            .expect("later optional handler");
+        assert!(guard_index < handler_index);
+        assert!(function.blocks.iter().any(|block| {
+            matches!(&block.terminator.kind,
+                TerminatorKind::Return(Some(Expression {
+                    kind: ExpressionKind::StringInterpolation(segments), ..
+                })) if segments.iter().any(|segment|
+                    matches!(segment, hir::StringSegment::Value(value)
+                        if matches!(value.kind, ExpressionKind::Local(local) if local == guard_local))))
+        }));
+
+        let checked_plan =
+            crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        assert!(
+            checked_plan
+                .owned_locals
+                .contains(&(guard_local.index() as usize))
+        );
+        let mut unchecked = program.clone();
+        let unchecked_function = unchecked
+            .functions
+            .iter_mut()
+            .find(|candidate| candidate.id == function.id)
+            .unwrap();
+        let StatementKind::Let { value, .. } =
+            &mut unchecked_function.blocks[function.entry.index() as usize].statements[guard_index]
+                .kind
+        else {
+            unreachable!();
+        };
+        *value = call.as_ref().clone();
+        let unchecked_plan = crate::move_values::MoveValuePlan::analyze(
+            &unchecked,
+            inspected_handler_function(&unchecked),
+            &types,
+        )
+        .unwrap();
+        assert_eq!(checked_plan.temporary_slots, unchecked_plan.temporary_slots);
+        assert_eq!(checked_plan.owned_locals, unchecked_plan.owned_locals);
+        assert_eq!(
+            checked_plan.live_after_statement,
+            unchecked_plan.live_after_statement
+        );
+    }
+
+    #[test]
+    fn display_result_keeps_receiver_handlers_inside_the_checked_call() {
+        let (program, types) = lower_handler_source(
+            r#"interface Displayable:
+    function display(view self: Displayable) returns string
+namespace app
+struct Item:
+    value: int64
+implement Displayable for Item:
+    function display(view self: Item) returns string:
+        return "shown"
+function inspect(view item: optional[Item]) returns string:
+    return "{item handle: default Item(value: 7)}"
+"#,
+        );
+        validate(&program).expect("display receiver handler CFG");
+        let function = inspected_handler_function(&program);
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        assert!(
+            function.blocks[function.entry.index() as usize]
+                .statements
+                .iter()
+                .any(|statement| matches!(statement.kind, StatementKind::SumTag { .. }))
+        );
+        let guards = function
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .statements
+                    .iter()
+                    .map(move |statement| (block.id, statement))
+            })
+            .filter_map(|(block, statement)| match &statement.kind {
+                StatementKind::Let { value, .. }
+                    if matches!(value.kind, ExpressionKind::DisplayResult(_)) =>
+                {
+                    Some((block, value))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(guards.len(), 1);
+        let (block, guard) = guards[0];
+        assert_ne!(block, function.entry);
+        let ExpressionKind::DisplayResult(call) = &guard.kind else {
+            unreachable!();
+        };
+        assert!(matches!(call.kind, ExpressionKind::Call { .. }));
+        assert!(!has_extractable_handle(guard));
     }
 
     #[test]

@@ -636,6 +636,7 @@ fn visit(
             visit(value, reads, temporaries, types, program, borrowed)?
         }
         ExpressionKind::FunctionAdapter { value, .. }
+        | ExpressionKind::DisplayResult(value)
         | ExpressionKind::InterfaceCoerce { value, .. }
         | ExpressionKind::InterfaceType(value)
         | ExpressionKind::Run(value)

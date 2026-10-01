@@ -206,6 +206,10 @@ const PENDING_FUNCTION_CALL: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"expected function value",
 );
+const INVALID_DISPLAY_RESULT: Failure = (
+    JettRuntimeStatusV1::INVALID_ARGUMENT,
+    b"Displayable.display did not return a ready string",
+);
 const PENDING_ACTOR_MESSAGE: Failure = (
     JettRuntimeStatusV1::INVALID_ARGUMENT,
     b"send/ask: expected actor value",
@@ -1132,6 +1136,16 @@ impl NativeValues {
     fn format_string(&self, id: u64) -> LeafResult<String> {
         let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
         format_pending_value(&value.text, value.pending_depth)
+    }
+    fn check_display_result(&mut self, id: u64) -> LeafResult<u32> {
+        let value = self.strings.get(&id).ok_or(INVALID_HANDLE)?;
+        if value.pending_depth == 0 {
+            return Ok(0);
+        }
+        let value = self.format_string(id)?;
+        self.dynamic_failure_message =
+            Some(format!("Displayable.display returned {value} instead of string").into_bytes());
+        Err(INVALID_DISPLAY_RESULT)
     }
     fn display_string(&mut self, id: u64) -> LeafResult<u64> {
         let depth = self.strings.get(&id).ok_or(INVALID_HANDLE)?.pending_depth;
@@ -5353,6 +5367,8 @@ leaves! {
             if length > isize::MAX as usize { return Err(INVALID_PENDING_HANDLE_CHECK); }
             let message = unsafe { std::slice::from_raw_parts(message_pointer as *const u8, length) };
             s.reject_pending_handle(handle, kind, message) };
+    DisplayResultCheck, jett_rt_v1_display_result_check, false, (value: u64 => I64), u32 => I32,
+        |s| s.check_display_result(value);
     ListElementTake, jett_rt_v1_list_element_take, false, (value: u64 => I64, index: i64 => I64), u64 => I64,
         |s| { let list = s.lists.get_mut(&value).ok_or(INVALID_LIST)?;
             let index = usize::try_from(index).map_err(|_| INVALID_LIST)?;
@@ -7446,6 +7462,272 @@ mod tests {
             values.release(handle).unwrap();
         }
         assert!(values.is_empty());
+    }
+
+    fn display_result_string_snapshot(
+        values: &NativeValues,
+    ) -> std::collections::BTreeMap<u64, (String, u64, u64)> {
+        values
+            .strings
+            .iter()
+            .map(|(id, value)| {
+                (
+                    *id,
+                    (value.text.clone(), value.references, value.pending_depth),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn display_result_check_preserves_strings_and_requires_every_pending_layer_to_join() {
+        for text in ["", "shown", "é🦀", "pending(shown)"] {
+            let mut values = NativeValues::default();
+            let ready = values.insert(text.into()).unwrap();
+            let alias = values.retain(ready).unwrap();
+            let pending = values.run_string(ready).unwrap();
+            let nested = values.run_string(pending).unwrap();
+            let partial = values.join_string(nested).unwrap();
+            let joined = values.join_string(partial).unwrap();
+            let snapshot = display_result_string_snapshot(&values);
+            for (handle, expected) in [
+                (ready, None),
+                (alias, None),
+                (
+                    pending,
+                    Some(format!(
+                        "Displayable.display returned pending({text}) instead of string"
+                    )),
+                ),
+                (
+                    nested,
+                    Some(format!(
+                        "Displayable.display returned pending(pending({text})) instead of string"
+                    )),
+                ),
+                (
+                    partial,
+                    Some(format!(
+                        "Displayable.display returned pending({text}) instead of string"
+                    )),
+                ),
+                (joined, None),
+            ] {
+                values.dynamic_failure_message = None;
+                assert_eq!(
+                    values.check_display_result(handle),
+                    if expected.is_some() {
+                        Err(INVALID_DISPLAY_RESULT)
+                    } else {
+                        Ok(0)
+                    }
+                );
+                assert_eq!(
+                    values.dynamic_failure_message.as_deref(),
+                    expected.as_ref().map(|message| message.as_bytes())
+                );
+                assert_eq!(display_result_string_snapshot(&values), snapshot);
+            }
+            for handle in [ready, alias, pending, nested, partial, joined] {
+                values.release(handle).unwrap();
+            }
+            assert!(values.is_empty());
+        }
+    }
+
+    #[test]
+    fn display_result_check_rejects_invalid_string_handles_without_observing_other_values() {
+        let mut values = NativeValues::default();
+        let ready = values.insert("kept".into()).unwrap();
+        let stale = values.insert("stale".into()).unwrap();
+        values.release(stale).unwrap();
+        let bytes = values.insert_bytes(vec![65]).unwrap();
+        let mut foreign_values = NativeValues::default();
+        let foreign = foreign_values.insert("foreign".into()).unwrap();
+        let snapshot = display_result_string_snapshot(&values);
+        for handle in [0, u64::MAX, stale, bytes, foreign] {
+            assert_eq!(values.check_display_result(handle), Err(INVALID_HANDLE));
+            assert!(values.dynamic_failure_message.is_none());
+            assert_eq!(display_result_string_snapshot(&values), snapshot);
+            assert_eq!(values.bytes(bytes), Ok([65].as_slice()));
+        }
+        values.release(ready).unwrap();
+        values.drop_value(bytes).unwrap();
+        foreign_values.release(foreign).unwrap();
+        assert!(values.is_empty());
+        assert!(foreign_values.is_empty());
+    }
+
+    #[test]
+    fn display_result_check_leaf_has_the_borrowed_status_abi() {
+        assert_eq!(
+            NativeLeaf::DisplayResultCheck.symbol(),
+            "jett_rt_v1_display_result_check"
+        );
+        assert_eq!(
+            NativeLeaf::DisplayResultCheck.parameters(),
+            &[AbiScalar::Pointer, AbiScalar::I64]
+        );
+        assert_eq!(NativeLeaf::DisplayResultCheck.result(), AbiScalar::I32);
+    }
+
+    #[test]
+    fn display_result_check_leaf_preserves_ownership_status_and_first_failure() {
+        for text in ["", "shown", "é🦀"] {
+            for (selected, rendered) in [
+                (0, None),
+                (1, Some(format!("pending({text})"))),
+                (2, Some(format!("pending(pending({text}))"))),
+                (3, Some(format!("pending({text})"))),
+                (4, None),
+            ] {
+                let context = Context::new();
+                unsafe {
+                    let ready = context.text(text);
+                    let pending = jett_rt_v1_string_run(context.pointer(), ready);
+                    let nested = jett_rt_v1_string_run(context.pointer(), pending);
+                    let partial = jett_rt_v1_string_task_join(context.pointer(), nested);
+                    let joined = jett_rt_v1_string_task_join(context.pointer(), partial);
+                    let handles = [ready, pending, nested, partial, joined];
+                    let selected = handles[selected];
+                    let alias = jett_rt_v1_string_retain(context.pointer(), selected);
+                    assert_eq!(alias, selected);
+                    let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                    let snapshot = {
+                        let state = lock_unpoisoned(&lease.entry.state);
+                        display_result_string_snapshot(&state.as_ref().unwrap().values)
+                    };
+                    let expected = rendered.map(|rendered| {
+                        format!("Displayable.display returned {rendered} instead of string")
+                    });
+                    assert_eq!(
+                        jett_rt_v1_display_result_check(context.pointer(), selected),
+                        if expected.is_some() {
+                            u32::failure_default()
+                        } else {
+                            0
+                        }
+                    );
+                    assert_eq!(
+                        jett_rt_v1_value_status(context.pointer()),
+                        if expected.is_some() {
+                            JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                        } else {
+                            0
+                        }
+                    );
+                    {
+                        let state = lock_unpoisoned(&lease.entry.state);
+                        let values = &state.as_ref().unwrap().values;
+                        assert_eq!(display_result_string_snapshot(values), snapshot);
+                        assert_eq!(
+                            values.dynamic_failure_message.as_deref(),
+                            expected.as_ref().map(|message| message.as_bytes())
+                        );
+                        assert!(!values.cleanup_failed);
+                    }
+                    if let Some(expected) = expected {
+                        // Normal leaves cannot replace an existing terminal error.
+                        assert_eq!(
+                            jett_rt_v1_display_result_check(context.pointer(), 0),
+                            u32::failure_default()
+                        );
+                        assert_eq!(
+                            jett_rt_v1_assert_fail(context.pointer()),
+                            u32::failure_default()
+                        );
+                        let mut result = MaybeUninit::uninit();
+                        let mut length = 0;
+                        assert_eq!(
+                            jett_rt_v1_value_failure_copy(
+                                context.pointer(),
+                                ptr::null_mut(),
+                                0,
+                                &mut length,
+                                result.as_mut_ptr()
+                            ),
+                            JettRuntimeStatusV1::OK
+                        );
+                        let mut message = vec![0; usize::try_from(length).unwrap()];
+                        assert_eq!(
+                            jett_rt_v1_value_failure_copy(
+                                context.pointer(),
+                                message.as_mut_ptr(),
+                                length,
+                                &mut length,
+                                result.as_mut_ptr()
+                            ),
+                            JettRuntimeStatusV1::OK
+                        );
+                        assert_eq!(message, expected.as_bytes());
+                    }
+                    for handle in handles.into_iter().chain([alias]) {
+                        assert_eq!(jett_rt_v1_string_release(context.pointer(), handle), 0);
+                    }
+                    {
+                        let state = lock_unpoisoned(&lease.entry.state);
+                        let values = &state.as_ref().unwrap().values;
+                        assert!(values.is_empty());
+                        assert!(!values.cleanup_failed);
+                    }
+                    drop(lease);
+                }
+                context.destroy(JettRuntimeStatusV1::OK);
+            }
+        }
+    }
+
+    #[test]
+    fn display_result_check_leaf_rejects_foreign_stale_and_invalid_handles() {
+        let foreign_context = Context::new();
+        let foreign = foreign_context.text("foreign");
+        for invalid in [0, u64::MAX, foreign] {
+            let context = Context::new();
+            let ready = context.text("kept");
+            unsafe {
+                assert_eq!(
+                    jett_rt_v1_display_result_check(context.pointer(), invalid),
+                    u32::failure_default()
+                );
+                assert_eq!(
+                    jett_rt_v1_value_status(context.pointer()),
+                    JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+                );
+                let lease = acquire_context(context_key(context.pointer()).unwrap()).unwrap();
+                {
+                    let state = lock_unpoisoned(&lease.entry.state);
+                    let values = &state.as_ref().unwrap().values;
+                    assert_eq!(values.failure, Some(INVALID_HANDLE));
+                    assert!(values.dynamic_failure_message.is_none());
+                    assert_eq!(values.text(ready), Ok("kept"));
+                    assert_eq!(values.strings[&ready].references, 1);
+                }
+                assert_eq!(jett_rt_v1_string_release(context.pointer(), ready), 0);
+            }
+            context.destroy(JettRuntimeStatusV1::OK);
+        }
+        let context = Context::new();
+        let stale = context.text("stale");
+        unsafe {
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), stale), 0);
+            assert_eq!(
+                jett_rt_v1_display_result_check(context.pointer(), stale),
+                u32::failure_default()
+            );
+            assert_eq!(
+                jett_rt_v1_value_status(context.pointer()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT.code()
+            );
+            assert_eq!(
+                jett_rt_v1_string_release(foreign_context.pointer(), foreign),
+                0
+            );
+            assert_eq!(
+                jett_rt_v1_display_result_check(ptr::null(), 0),
+                u32::failure_default()
+            );
+        }
+        context.destroy(JettRuntimeStatusV1::OK);
     }
 
     #[test]

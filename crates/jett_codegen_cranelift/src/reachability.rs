@@ -316,6 +316,7 @@ fn collect_expression_references(expression: &Expression, references: &mut Refer
         | ExpressionKind::ResultFail(value)
         | ExpressionKind::OptionalSome(value)
         | ExpressionKind::Comptime { value, .. }
+        | ExpressionKind::DisplayResult(value)
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)

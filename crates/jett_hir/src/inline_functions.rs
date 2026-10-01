@@ -235,6 +235,7 @@ impl Extractor<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::DisplayResult(value)
             | ExpressionKind::FunctionAdapter { value, .. }
             | ExpressionKind::InterfaceCoerce { value, .. }
             | ExpressionKind::InterfaceType(value)
@@ -401,6 +402,7 @@ fn expression_uses_local(expression: &Expression, target: u32) -> bool {
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)
+        | ExpressionKind::DisplayResult(value)
         | ExpressionKind::FunctionAdapter { value, .. }
         | ExpressionKind::InterfaceCoerce { value, .. }
         | ExpressionKind::InterfaceType(value)

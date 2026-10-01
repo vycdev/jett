@@ -421,6 +421,9 @@ pub enum ExpressionKind {
         evaluation_order: Vec<usize>,
     },
     StringInterpolation(Vec<StringSegment>),
+    /// Require the string returned by an implicitly selected display method to
+    /// be ready before interpolation evaluates its next segment.
+    DisplayResult(Box<Expression>),
     Comptime {
         value: Box<Expression>,
         bindings: Vec<ScopedTypeBinding>,
@@ -827,6 +830,7 @@ impl Validator<'_> {
             | ExpressionKind::Declassify(value)
             | ExpressionKind::Coarsen(value)
             | ExpressionKind::RefinementValidated(value)
+            | ExpressionKind::DisplayResult(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
@@ -3278,11 +3282,15 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return None;
         };
         Some(Expression {
-            kind: ExpressionKind::Call {
-                function,
-                args: vec![value],
-                evaluation_order: vec![0],
-            },
+            kind: ExpressionKind::DisplayResult(Box::new(Expression {
+                kind: ExpressionKind::Call {
+                    function,
+                    args: vec![value],
+                    evaluation_order: vec![0],
+                },
+                ty: TypeInterner::STRING,
+                span: expression.span(),
+            })),
             ty: TypeInterner::STRING,
             span: expression.span(),
         })
@@ -6924,6 +6932,66 @@ function render(view values: list[int64]) returns string:
             panic!("expected interpolation assignment");
         };
         assert!(matches!(value.kind, ExpressionKind::StringInterpolation(_)));
+    }
+
+    #[test]
+    fn interpolation_checks_only_implicitly_selected_display_results() {
+        let program = lower_source(
+            r#"interface Displayable:
+    function display(view self: Displayable) returns string
+namespace app
+struct Item:
+    value: int64
+implement Displayable for Item:
+    function display(view self: Item) returns string:
+        return run "shown"
+function inspect(view item: Item) returns string:
+    string direct = Item.display(view item)
+    string pending = run "plain"
+    return "{item}:{direct}:{pending}:{7}"
+"#,
+        );
+        let function = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        let StatementKind::Let { value: direct, .. } = &function.body.statements[0].kind else {
+            panic!("expected direct method call binding");
+        };
+        let ExpressionKind::Call {
+            function: target, ..
+        } = &direct.kind
+        else {
+            panic!("direct method call must remain unwrapped");
+        };
+        let StatementKind::Return(Some(interpolation)) = &function.body.statements[2].kind else {
+            panic!("expected interpolation return");
+        };
+        let ExpressionKind::StringInterpolation(segments) = &interpolation.kind else {
+            panic!("expected interpolation");
+        };
+        let values = segments
+            .iter()
+            .filter_map(|segment| match segment {
+                StringSegment::Value(value) => Some(value),
+                StringSegment::Text(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 4);
+        let ExpressionKind::DisplayResult(selected) = &values[0].kind else {
+            panic!("implicit display call must retain its result check");
+        };
+        assert_eq!(values[0].ty, TypeInterner::STRING);
+        assert_eq!(selected.ty, TypeInterner::STRING);
+        assert_eq!(selected.span, values[0].span);
+        assert!(
+            matches!(selected.kind, ExpressionKind::Call { function, .. }
+            if function == *target)
+        );
+        assert!(matches!(values[1].kind, ExpressionKind::Local(_)));
+        assert!(matches!(values[2].kind, ExpressionKind::Local(_)));
+        assert!(matches!(values[3].kind, ExpressionKind::Int(7)));
     }
 
     #[test]

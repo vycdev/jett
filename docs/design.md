@@ -7140,6 +7140,10 @@ An implementation for an interface receives its erased value; the concrete
 payload's implementation does not replace that contract. An explicit display
 implementation takes precedence over built-in primitive formatting. Each
 interpolated expression is evaluated once, and display borrows its value.
+An implicitly selected `display` call must return a ready string. A pending
+string result fails at that interpolation segment before later segments are
+evaluated; it is not implicitly joined. This result check belongs to
+interpolation. An explicit method call retains ordinary string task behavior.
 Failed dispatch through a pending interface value reports the registered
 interface method's name, including its declaration namespace.
 

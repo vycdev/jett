@@ -29,3 +29,13 @@ interpolation segment before a temporary pending interface receiver containing
 a secret-bearing record. Both paths preserve the earlier output, omit the
 secret, and terminate with the same error; native cleanup must release all
 partially evaluated owners.
+
+Implicit display results have a separate exact-string readiness boundary.
+The reference interpreter rejects a pending string returned by the selected
+method with `Displayable.display returned pending(...) instead of string`.
+HIR retains this distinction with `DisplayResult` around only the implicit
+call; direct method calls and ordinary pending-string interpolation are
+unaffected. MIR keeps the check in each staged segment initializer, before
+later handlers or effects. Native checking borrows the returned handle without
+joining or consuming it, leaving its existing owning slot available for use
+or terminal cleanup.

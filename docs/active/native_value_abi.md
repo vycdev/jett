@@ -193,9 +193,9 @@ interpreter's current error.
 Owned native strings also carry a pending depth in the runtime registry.
 `StringRun` and `StringTaskJoin` create independent handles, so wrapping a
 cloned string does not change its aliases. Trace, aggregate debug output,
-`print`/`println`, and interpolation render nested `pending(...)` wrappers;
-direct string equality and inequality report the interpreter's runtime error
-while aggregate equality compares both text and pending depth. Owned bytes
+`print`/`println`, and ordinary string interpolation render nested `pending(...)`
+wrappers; direct string equality and inequality report the interpreter's runtime
+error while aggregate equality compares both text and pending depth. Owned bytes
 handles keep the same depth in a sparse runtime registry: `BytesRun` and
 `BytesTaskJoin` create independent byte handles, cloning preserves depth, and
 trace and aggregate equality observe the wrapper. Lists, sets, and maps carry
@@ -204,6 +204,12 @@ preserve nested owned values, and change one depth level; debug output and
 aggregate equality observe the depth. Other runtime operations on pending
 values, along with other value kinds, still need the general pending-task
 representation.
+
+Implicitly selected display methods have an additional `DisplayResultCheck`
+boundary. This borrowed I64-handle-to-I32-status leaf rejects pending results
+with their exact formatted diagnostic and adds no handle or cleanup obligation.
+The returned string keeps its existing owner, and direct method calls retain
+ordinary pending-string behavior.
 
 Native record handles preserve pending depth for structs, enums, bitfields,
 and machines. `RecordRun` and `RecordTaskJoin` deep-clone fields before changing

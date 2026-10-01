@@ -260,6 +260,15 @@ impl BackendTypeValidator<'_> {
                 self.expression(left, function_name);
                 self.expression(right, function_name);
             }
+            ExpressionKind::DisplayResult(value) => {
+                self.expression(value, function_name);
+                if expression.ty != TypeInterner::STRING || value.ty != TypeInterner::STRING {
+                    self.error(
+                        expression.span,
+                        "display result boundary requires exact string input and output",
+                    );
+                }
+            }
             ExpressionKind::Unary { value, .. }
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
@@ -794,6 +803,47 @@ mod tests {
                 body: Block { statements, span },
                 span,
             }],
+        }
+    }
+
+    #[test]
+    fn display_result_requires_exact_string_input_and_output() {
+        let mut interner = TypeInterner::new();
+        let secret = interner.intern(Type::Secret(TypeInterner::STRING));
+        for (input, output, valid) in [
+            (TypeInterner::STRING, TypeInterner::STRING, true),
+            (TypeInterner::INT64, TypeInterner::STRING, false),
+            (TypeInterner::STRING, TypeInterner::INT64, false),
+            (secret, secret, false),
+        ] {
+            let expression = Expression {
+                kind: ExpressionKind::DisplayResult(Box::new(Expression {
+                    kind: if input == TypeInterner::INT64 {
+                        ExpressionKind::Int(1)
+                    } else {
+                        ExpressionKind::String("shown".into())
+                    },
+                    ty: input,
+                    span: test_span(),
+                })),
+                ty: output,
+                span: test_span(),
+            };
+            let program = program_with(
+                output,
+                vec![Statement {
+                    kind: StatementKind::Return(Some(expression)),
+                    span: test_span(),
+                }],
+            );
+            let result = validate_backend_types(&program, &interner);
+            if valid {
+                result.expect("exact string boundary");
+            } else {
+                let errors = result.expect_err("invalid display boundary types");
+                assert!(errors.iter().any(|error| error.message
+                    == "display result boundary requires exact string input and output"));
+            }
         }
     }
 

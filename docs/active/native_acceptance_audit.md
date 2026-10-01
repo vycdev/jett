@@ -672,3 +672,30 @@ expectation is updated but requires Linux validation. This repair does not
 change the inventory denominator or extend native view origins; full workspace
 and supported-host distribution results must still be established for the
 final revision.
+
+The implicit display-result gap is resolved at its interpolation boundary.
+The reproduced method returning `run "shown"` previously printed
+`value:pending(shown)` natively while the reference interpreter stopped after
+`before` with `Displayable.display returned pending(shown) instead of string`.
+HIR now carries `DisplayResult` around only the implicitly selected call.
+MIR preserves it inside staged segment initializers, and codegen checks its
+already owned string through a borrowed runtime leaf before later segments.
+Exact-string validation, reachability, ownership planning, pruning, and native
+constant baking retain the marker without adding an owning slot.
+
+Three linked regressions in `native_conformance/display_results.rs` cover the
+minimal failure, six terminal cases, and successful controls in both profiles
+after source removal. Terminal cases pin nested depth, Unicode and empty text,
+partial joins, primitive and erased-interface owners, method-failure precedence,
+once-only debug output, suppressed later handlers, exact stdout/stderr, and
+exit 71 with cleanup. Success controls pin ordinary pending-string formatting
+from explicit calls, fully joined implicit and generic display, namespaced
+implementations, receiver reuse, closed comptime, compiled verify, and 100
+property trials.
+
+All 91 HIR, 64 MIR, 80 codegen, 151 runtime, and 332 reference/comptime tests
+pass. Five focused runtime tests and the independent C ABI regression preserve
+string handles and reference counts, pending layers, exact dynamic failures,
+first-error status, and terminal cleanup. Supplemental cases leave the
+inventory denominator unchanged; complete workspace and supported-host
+distribution validation remain final-revision obligations.

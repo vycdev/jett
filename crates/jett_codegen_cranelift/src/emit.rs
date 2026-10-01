@@ -2262,6 +2262,12 @@ impl Translator<'_, '_> {
             ExpressionKind::StringInterpolation(segments) => {
                 self.interpolate(segments, expression.span)
             }
+            ExpressionKind::DisplayResult(value) => {
+                let lowered = self.expression(value)?;
+                let handle = self.scalar(lowered, value.span)?;
+                self.leaf(NativeLeaf::DisplayResultCheck, &[handle], true)?;
+                Ok(lowered)
+            }
             ExpressionKind::Declassify(value) => self.expression(value),
             ExpressionKind::Coarsen(value) => self.expression(value),
             ExpressionKind::RefinementValidated(value) => self.expression(value),

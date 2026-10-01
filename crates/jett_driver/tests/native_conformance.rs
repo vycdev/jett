@@ -33,6 +33,9 @@ mod pending_graphics;
 #[path = "native_conformance/graphics_authority.rs"]
 mod graphics_authority;
 
+#[path = "native_conformance/display_results.rs"]
+mod display_results;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

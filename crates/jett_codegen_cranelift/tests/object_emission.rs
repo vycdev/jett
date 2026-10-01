@@ -52,6 +52,120 @@ fn lower_source_with_equatable(source: &str, include_equatable: bool) -> (Progra
 }
 
 #[test]
+fn display_result_checks_retain_the_selected_method_and_borrowed_runtime_leaf() {
+    let (mut program, types) = lower_source(
+        r#"interface Displayable:
+    function display(view self: Displayable) returns string
+namespace app
+struct Item:
+    value: int64
+implement Displayable for Item:
+    function display(view self: Item) returns string:
+        return run "shown:{self.value}"
+function main() returns string:
+    Item item = Item(value: 7)
+    return "value:{item}"
+"#,
+    );
+    let main = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "main")
+        .unwrap();
+    let TerminatorKind::Return(Some(value)) =
+        &main.blocks[main.entry.index() as usize].terminator.kind
+    else {
+        panic!("expected interpolation return");
+    };
+    let jett_hir::ExpressionKind::StringInterpolation(segments) = &value.kind else {
+        panic!("expected interpolation");
+    };
+    let selected = segments
+        .iter()
+        .find_map(|segment| match segment {
+            jett_hir::StringSegment::Value(jett_hir::Expression {
+                kind: jett_hir::ExpressionKind::DisplayResult(value),
+                ..
+            }) => match value.kind {
+                jett_hir::ExpressionKind::Call { function, .. } => Some(function),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("selected display call has a result check");
+    for function in &mut program.functions {
+        if function.identity.declaration.name != "main" {
+            function.identity.declaration.origin = SourceOrigin::Stdlib;
+        }
+    }
+    let selected_symbol = symbol_name(
+        &program.functions[selected.index() as usize].identity,
+        &types,
+    )
+    .unwrap();
+    let artifact = emit_host_object(&program, &types).expect("checked display object");
+    assert!(artifact.symbols.contains(&selected_symbol));
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    let check = jett_runtime::native_abi::values::NativeLeaf::DisplayResultCheck;
+    assert!(
+        object
+            .symbols()
+            .any(|symbol| symbol.is_undefined() && symbol.name().ok() == Some(check.symbol()))
+    );
+    assert_eq!(
+        check.parameters(),
+        &[
+            jett_runtime::native_abi::values::AbiScalar::Pointer,
+            jett_runtime::native_abi::values::AbiScalar::I64,
+        ]
+    );
+    assert_eq!(
+        check.result(),
+        jett_runtime::native_abi::values::AbiScalar::I32
+    );
+}
+
+#[test]
+fn rejects_malformed_display_result_types_before_emission() {
+    for (child_type, result_type) in [
+        (TypeInterner::INT64, TypeInterner::STRING),
+        (TypeInterner::STRING, TypeInterner::INT64),
+    ] {
+        let (mut program, types) =
+            lower_source("function main() returns nothing:\n    return nothing\n");
+        let function = &mut program.functions[0];
+        let child = jett_hir::Expression {
+            kind: if child_type == TypeInterner::STRING {
+                jett_hir::ExpressionKind::String("ready".into())
+            } else {
+                jett_hir::ExpressionKind::Int(7)
+            },
+            ty: child_type,
+            span: function.span,
+        };
+        function.blocks[function.entry.index() as usize]
+            .statements
+            .insert(
+                0,
+                jett_mir::Statement {
+                    kind: jett_mir::StatementKind::Evaluate(jett_hir::Expression {
+                        kind: jett_hir::ExpressionKind::DisplayResult(Box::new(child)),
+                        ty: result_type,
+                        span: function.span,
+                    }),
+                    span: function.span,
+                },
+            );
+        let error = emit_host_object(&program, &types).expect_err("invalid display result");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+                if message.contains("display result")),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn rejects_malformed_property_case_metadata_before_emission() {
     for (name, trial, ty) in [
         ("", 1, TypeInterner::NOTHING),

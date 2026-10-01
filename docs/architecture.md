@@ -956,6 +956,12 @@ using built-in primitive formatting. Interpreter selection uses the expression's
 checked type as well, preserving an interface's own display implementation over
 its concrete payload. Implementation registration resolves the interface's
 declaration namespace independently of the implementation's namespace.
+HIR marks implicitly selected display results with an exact string-to-string
+`DisplayResult` boundary. MIR retains that boundary inside staged interpolation
+segment initializers, so a pending result fails before later handlers or
+effects. Native code borrows the returned string for the readiness check and
+retains its existing owning slot for ordinary use or failure cleanup. Explicit
+method calls and ordinary pending string formatting remain unchanged.
 When a pending interface receiver cannot dispatch, the interpreter and generated
 dispatcher both name the registered interface method with its canonical namespace.
 Remaining compiler-owned calls carry a closed `IntrinsicId`, typed arguments, and
