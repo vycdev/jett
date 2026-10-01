@@ -326,3 +326,24 @@ typechecker tests, all 594 frontend fixtures, all 182 run-pass lowering cases,
 four public driver regressions, and five linked projected-value regressions.
 These checks establish the prerequisite handoff, not support for field updates
 or full native parity.
+
+The native list-ordering audit found three additional accepted-domain gaps:
+primitive-backed refinement sorts failed admission, narrow numeric sortedness
+and indexed sorting selected no comparison carrier, and pending strings/rows
+could be ordered by their hidden payload. Sort and comparison carrier selection
+now follows refinement bases at every numeric width while retaining the exact
+checked list type. Summation stays primitive-only. Pending strings, scalar keys,
+and rows compare as equal before payload access; ready floating sortedness uses
+IEEE `<=`, preserving empty/singleton and pending-pair behavior for NaN.
+
+`native_list_sort_refinements_and_ordering_match_interpreter_in_both_profiles`
+executes both ordering fixtures in debug and release and runs their native
+verify/property suites after source removal. It includes local explicit-comptime
+refined numeric/string lists, nominal method dispatch, numeric limits and
+rounding, duplicates, empty/singleton cases, NaN/infinity, indexed payload
+markers, and pending depth through joins. The separate outer-pending regression
+matches the public failure and exit 71 in both profiles. All 66 codegen tests,
+122 runtime unit tests and its integration suites pass, as do the existing
+pending-list and primitive-sum linked regressions. This closes these ordering
+mismatches without changing the inventory denominator or resolving the open
+summation domain.

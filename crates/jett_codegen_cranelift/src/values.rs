@@ -691,6 +691,17 @@ fn set_element_supported(types: &TypeInterner, element: TypeId) -> bool {
     false
 }
 pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
+    let mut current = element;
+    for _ in 0..types.len() {
+        match types.resolve(current) {
+            Type::Refinement { base, .. } => current = *base,
+            _ => return primitive_list_kind(types, current),
+        }
+    }
+    None
+}
+
+fn primitive_list_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
     Some(match types.resolve(element) {
         Type::Int8 => NativeSortKind::Int8,
         Type::Int16 => NativeSortKind::Int16,
@@ -709,7 +720,8 @@ pub(crate) fn list_sort_kind(types: &TypeInterner, element: TypeId) -> Option<Na
 }
 
 pub(crate) fn list_sum_kind(types: &TypeInterner, element: TypeId) -> Option<NativeSortKind> {
-    let kind = list_sort_kind(types, element)?;
+    // Sorting preserves existing refined values; summing can violate their predicates.
+    let kind = primitive_list_kind(types, element)?;
     match kind {
         NativeSortKind::Int8
         | NativeSortKind::Int16
@@ -725,20 +737,13 @@ pub(crate) fn list_sum_kind(types: &TypeInterner, element: TypeId) -> Option<Nat
     }
 }
 
-// The interpreter only orders these five row-key/value shapes. Other types
-// compare equal in sort_by_index and are considered sorted by is_sorted.
+// Narrow numeric values use the interpreter's wider value variants but retain
+// their checked carrier width here. Unsupported shapes compare equal/sorted.
 pub(crate) fn list_comparison_kind(
     types: &TypeInterner,
     element: TypeId,
 ) -> Option<NativeSortKind> {
-    match types.resolve(jett_mir::move_values::representation_type(types, element)) {
-        Type::Int64 => Some(NativeSortKind::Int64),
-        Type::Uint64 => Some(NativeSortKind::Uint64),
-        Type::Float64 => Some(NativeSortKind::Float64),
-        Type::Bool => Some(NativeSortKind::Bool),
-        Type::String => Some(NativeSortKind::String),
-        _ => None,
-    }
+    list_sort_kind(types, element)
 }
 
 pub(crate) fn math_aggregate_kind(types: &TypeInterner, list: TypeId) -> Option<NativeSortKind> {
@@ -775,6 +780,163 @@ mod tests {
     use super::*;
     use jett_common::{FileId, Span};
     use jett_hir::ExpressionKind;
+
+    #[test]
+    fn list_sort_preserves_primitive_carriers_through_refinements() {
+        let mut types = TypeInterner::new();
+        for (base, expected) in [
+            (TypeInterner::INT8, NativeSortKind::Int8),
+            (TypeInterner::INT16, NativeSortKind::Int16),
+            (TypeInterner::INT32, NativeSortKind::Int32),
+            (TypeInterner::INT64, NativeSortKind::Int64),
+            (TypeInterner::UINT8, NativeSortKind::Uint8),
+            (TypeInterner::UINT16, NativeSortKind::Uint16),
+            (TypeInterner::UINT32, NativeSortKind::Uint32),
+            (TypeInterner::UINT64, NativeSortKind::Uint64),
+            (TypeInterner::FLOAT32, NativeSortKind::Float32),
+            (TypeInterner::FLOAT64, NativeSortKind::Float64),
+            (TypeInterner::BOOL, NativeSortKind::Bool),
+            (TypeInterner::STRING, NativeSortKind::String),
+        ] {
+            let refined = types.intern(Type::Refinement {
+                name: "Refined".into(),
+                base,
+            });
+            let nested = types.intern(Type::Refinement {
+                name: "Nested".into(),
+                base: refined,
+            });
+            for element in [base, refined, nested] {
+                let arg = Expression {
+                    kind: ExpressionKind::Nothing,
+                    ty: types.intern(Type::List(element)),
+                    span: Span::new(FileId::new(0), 0, 1),
+                };
+                assert_eq!(list_sort_kind(&types, element), Some(expected));
+                assert_eq!(list_comparison_kind(&types, element), Some(expected));
+                assert_eq!(
+                    verify_intrinsic(
+                        IntrinsicId::ListSort,
+                        std::slice::from_ref(&arg),
+                        arg.ty,
+                        &types
+                    ),
+                    Ok(())
+                );
+                assert_eq!(
+                    verify_intrinsic(
+                        IntrinsicId::ListIsSorted,
+                        std::slice::from_ref(&arg),
+                        TypeInterner::BOOL,
+                        &types,
+                    ),
+                    Ok(())
+                );
+                let rows = Expression {
+                    kind: ExpressionKind::Nothing,
+                    ty: types.intern(Type::List(arg.ty)),
+                    span: arg.span,
+                };
+                let index = Expression {
+                    kind: ExpressionKind::Nothing,
+                    ty: TypeInterner::INT64,
+                    span: arg.span,
+                };
+                let result = rows.ty;
+                assert_eq!(
+                    verify_intrinsic(IntrinsicId::ListSortByIndex, &[rows, index], result, &types),
+                    Ok(())
+                );
+                if element != base {
+                    assert_eq!(list_sum_kind(&types, element), None);
+                    assert!(
+                        verify_intrinsic(
+                            IntrinsicId::ListSum,
+                            std::slice::from_ref(&arg),
+                            element,
+                            &types,
+                        )
+                        .is_err()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn list_sort_requires_the_identical_nominal_list_result() {
+        let mut types = TypeInterner::new();
+        let positive = types.intern(Type::Refinement {
+            name: "Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let nonnegative = types.intern(Type::Refinement {
+            name: "Nonnegative".into(),
+            base: TypeInterner::INT64,
+        });
+        let nested = types.intern(Type::Refinement {
+            name: "SmallPositive".into(),
+            base: positive,
+        });
+        for element in [TypeInterner::INT64, positive, nonnegative, nested] {
+            let arg = Expression {
+                kind: ExpressionKind::Nothing,
+                ty: types.intern(Type::List(element)),
+                span: Span::new(FileId::new(0), 0, 1),
+            };
+            for result_element in [TypeInterner::INT64, positive, nonnegative, nested] {
+                let result = types.intern(Type::List(result_element));
+                assert_eq!(
+                    verify_intrinsic(
+                        IntrinsicId::ListSort,
+                        std::slice::from_ref(&arg),
+                        result,
+                        &types
+                    )
+                    .is_ok(),
+                    element == result_element
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn list_sort_rejects_secret_and_aggregate_carriers_through_refinements() {
+        let mut types = TypeInterner::new();
+        let secret = types.intern(Type::Secret(TypeInterner::INT64));
+        let list = types.intern(Type::List(TypeInterner::INT64));
+        let optional = types.intern(Type::Optional(TypeInterner::STRING));
+        for base in [
+            TypeInterner::NOTHING,
+            TypeInterner::BYTES,
+            secret,
+            list,
+            optional,
+        ] {
+            let refined = types.intern(Type::Refinement {
+                name: "Unsupported".into(),
+                base,
+            });
+            for element in [base, refined] {
+                let arg = Expression {
+                    kind: ExpressionKind::Nothing,
+                    ty: types.intern(Type::List(element)),
+                    span: Span::new(FileId::new(0), 0, 1),
+                };
+                assert_eq!(list_sort_kind(&types, element), None);
+                assert_eq!(list_comparison_kind(&types, element), None);
+                assert!(
+                    verify_intrinsic(
+                        IntrinsicId::ListSort,
+                        std::slice::from_ref(&arg),
+                        arg.ty,
+                        &types,
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
 
     #[test]
     fn list_sum_admits_only_matching_primitive_numeric_results() {

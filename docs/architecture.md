@@ -2899,6 +2899,20 @@ The unconstrained frontend signature still admits these other types; their
 remaining value-shape, invariant, and secrecy obligations are recorded in the
 [summation contract](open_design/list_sum_type_contract.md).
 
+`list.sort[T]` selects its runtime carrier through refinement layers over
+numeric primitives, `string`, or `bool`, including nested refinements and
+transparent aliases. Admission still requires the identical checked `list[T]`
+input and result. The existing runtime reorder preserves payload bits, pending
+metadata, and owned string handles; it neither coarsens the public element type
+nor synthesizes values requiring predicate evaluation. Secret and aggregate
+carriers remain ineligible. Sort and sum use separate carrier admission, so
+sorting a refined list does not enable its unresolved summation contract.
+Indexed sorting and sortedness checks use the same numeric width selection.
+They retain pending strings, selected pending keys, and pending rows as equal
+comparison cases without reading their payloads. Sortedness uses IEEE `<=` for
+ready floating pairs, so NaN makes an adjacent comparison false; sorting retains
+its stable equal-comparison fallback for unordered floating values.
+
 Native aggregate consumers check the owner's outer pending depth before public
 field reads, machine state tests/transitions, enum matches, and each ancestor in
 a projected sequence path. `StructPendingAccessCheck` leaves ready owners and

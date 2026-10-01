@@ -1393,6 +1393,16 @@ heterogeneous wildcard-list results. `list.flatten[T]` accepts
 `list[list[T]]`, and `list.sort_by_index[T]` accepts and returns
 `list[list[T]]`, so their source signatures state their actual shapes.
 
+`list.sort[T]` accepts numeric, `string`, and `bool` elements, including
+transparent aliases and refinements over those primitives. It consumes and
+returns the same `list[T]` type: sorting reorders existing values without
+coarsening their public type or creating new values that require refinement
+validation. Native carrier selection follows refinement bases while retaining
+the checked list identity. This does not extend summation to refinements.
+`list.is_sorted[T]` and `list.sort_by_index[T]` compare numeric keys at their
+checked width. Floating sortedness follows IEEE `<=`, so an adjacent NaN is not
+ordered; sorting preserves the interpreter's equal-comparison behavior for NaN.
+
 The complete public byte-buffer surface is compiler-shipped source in
 `stdlib/bytes.jett`. A `bytes` value is move-only and has no implicit aliasing:
 read-only operations (`length`, `get`, `slice`, `to_string`, and `to_hex`)

@@ -564,6 +564,10 @@ invalid index still omits the numeric index included by the interpreter.
 New/length/append/insert/remove/get and primitive sort are typed native leaves.
 Sort reorders the uniquely owned list in place, comparing signed and unsigned widths,
 floating-point values, bools, and owned strings with interpreter semantics.
+Sort carrier selection follows nested refinements over these primitives while
+retaining the identical checked `list[T]` input and result; it preserves existing
+element payloads and ownership. Secret and aggregate element carriers remain
+rejected. Summation retains its separate primitive-only admission rule.
 First/last/is_empty/reverse/repeat and math.sum run their actual compiled Jett
 bodies. list.sum uses a typed leaf for all numeric primitives, including their
 transparent aliases: integers wrap at the checked width, floating addition
@@ -909,11 +913,14 @@ larger-list performance remains a follow-up.
 
 Indexed-row list sorting uses a stable runtime sort over borrowed row keys and
 keeps the owning outer list intact until validation succeeds. Sortedness checks
-borrow the list. Both match the interpreter's current ordering cases:
-`int64`, `uint64`, `float64`, `bool`, and `string`; the checker also accepts
-other numeric types, for which the interpreter currently treats comparisons
-as equal. `list.group_by` now invokes its named key callback in `.jett` and
-builds the map through trusted collection intrinsics. Its current map lookup
+borrow the list. Both select the checked carrier for every numeric width,
+`bool`, and `string`, including primitive-backed refinements. Pending strings,
+scalar keys, and rows compare as equal without observing their payloads, while
+their owning handles and pending depths remain intact. Floating sortedness uses
+IEEE `<=`: an adjacent ready NaN makes the check false; ordinary sorting retains
+the interpreter's equal-comparison fallback for NaN. `list.group_by` now invokes
+its named key callback in `.jett` and builds the map through trusted collection
+intrinsics. Its current map lookup
 clones accumulated groups, so larger-input performance remains a follow-up.
 
 Borrowed sequence tokens now end on each CFG edge leaving the loop region,

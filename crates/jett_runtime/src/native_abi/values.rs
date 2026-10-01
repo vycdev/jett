@@ -352,15 +352,7 @@ impl NativeSortKind {
         if value == u32::MAX {
             return Ok(None);
         }
-        let kind = Self::from_raw(value)?;
-        if matches!(
-            kind,
-            Self::Int64 | Self::Uint64 | Self::Float64 | Self::Bool | Self::String
-        ) {
-            Ok(Some(kind))
-        } else {
-            Err(INVALID_LIST)
-        }
+        Self::from_raw(value).map(Some)
     }
     fn compare(self, left: u64, right: u64) -> CompareOrdering {
         match self {
@@ -2548,7 +2540,13 @@ impl NativeValues {
             if *left_depth != 0 || *right_depth != 0 {
                 CompareOrdering::Equal
             } else if kind == NativeSortKind::String {
-                self.strings[left].text.cmp(&self.strings[right].text)
+                let left = &self.strings[left];
+                let right = &self.strings[right];
+                if left.pending_depth != 0 || right.pending_depth != 0 {
+                    CompareOrdering::Equal
+                } else {
+                    left.text.cmp(&right.text)
+                }
             } else {
                 kind.compare(*left, *right)
             }
@@ -2586,14 +2584,22 @@ impl NativeValues {
                 .copied()
                 .unwrap_or(0);
             if let Some((left, left_depth)) = previous {
-                let ordering = if depth != 0 || left_depth != 0 {
-                    CompareOrdering::Equal
+                let ordered = if depth != 0 || left_depth != 0 {
+                    true
                 } else if kind == NativeSortKind::String {
-                    self.strings[&left].text.cmp(&self.strings[&bits].text)
+                    let left = &self.strings[&left];
+                    let right = &self.strings[&bits];
+                    left.pending_depth != 0 || right.pending_depth != 0 || left.text <= right.text
                 } else {
-                    kind.compare(left, bits)
+                    match kind {
+                        NativeSortKind::Float32 => {
+                            f32::from_bits(left as u32) <= f32::from_bits(bits as u32)
+                        }
+                        NativeSortKind::Float64 => f64::from_bits(left) <= f64::from_bits(bits),
+                        _ => kind.compare(left, bits) != CompareOrdering::Greater,
+                    }
                 };
-                if ordering == CompareOrdering::Greater {
+                if !ordered {
                     return Ok(false);
                 }
             }
@@ -2621,6 +2627,14 @@ impl NativeValues {
             {
                 return Err(INVALID_LIST);
             }
+            if row.pending_depth != 0
+                || index
+                    .and_then(|index| row.element_pending_depths.get(&index))
+                    .is_some_and(|depth| *depth != 0)
+            {
+                keyed.push((row_id, None));
+                continue;
+            }
             let key = index.and_then(|index| row.elements.get(index)).copied();
             let key = match key {
                 Some(Some(bits)) => {
@@ -2636,6 +2650,9 @@ impl NativeValues {
                 Some(None) => return Err(INVALID_LIST),
                 None => None,
             };
+            let pending = kind == Some(NativeSortKind::String)
+                && key.is_some_and(|bits| self.strings[&bits].pending_depth != 0);
+            let key = if pending { None } else { key };
             keyed.push((row_id, key));
         }
         if let Some(kind) = kind {
@@ -9400,6 +9417,35 @@ mod tests {
         }
     }
     #[test]
+    fn list_comparison_decodes_every_primitive_carrier_and_the_unsupported_sentinel() {
+        for kind in [
+            NativeSortKind::Int8,
+            NativeSortKind::Int16,
+            NativeSortKind::Int32,
+            NativeSortKind::Int64,
+            NativeSortKind::Uint8,
+            NativeSortKind::Uint16,
+            NativeSortKind::Uint32,
+            NativeSortKind::Uint64,
+            NativeSortKind::Float32,
+            NativeSortKind::Float64,
+            NativeSortKind::Bool,
+            NativeSortKind::String,
+        ] {
+            assert_eq!(
+                NativeSortKind::from_comparison_raw(kind as u32),
+                Ok(Some(kind))
+            );
+        }
+        assert_eq!(NativeSortKind::from_comparison_raw(u32::MAX), Ok(None));
+        for invalid in [12, 255, u32::MAX - 1] {
+            assert_eq!(
+                NativeSortKind::from_comparison_raw(invalid),
+                Err(INVALID_LIST)
+            );
+        }
+    }
+    #[test]
     fn list_sort_orders_all_primitive_widths_and_preserves_string_owners() {
         let cases = [
             (NativeSortKind::Int8, [255, 2, 253], [253, 255, 2]),
@@ -9438,8 +9484,35 @@ mod tests {
             let mut values = NativeValues::default();
             let list = values.new_list(false).unwrap();
             values.lists.get_mut(&list).unwrap().elements = input.map(Some).to_vec();
+            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(false));
             assert_eq!(values.sort_list(list, kind as u32), Ok(list));
             assert_eq!(values.lists[&list].elements, expected.map(Some));
+            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(true));
+
+            let outer = values.new_list(true).unwrap();
+            for bits in input {
+                let row = values.new_list(false).unwrap();
+                values
+                    .lists
+                    .get_mut(&row)
+                    .unwrap()
+                    .elements
+                    .push(Some(bits));
+                values
+                    .lists
+                    .get_mut(&outer)
+                    .unwrap()
+                    .elements
+                    .push(Some(row));
+            }
+            assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+            let ordered_keys = values.lists[&outer]
+                .elements
+                .iter()
+                .map(|row| values.lists[&row.unwrap()].elements[0].unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(ordered_keys, expected);
+            values.drop_value(outer).unwrap();
             values.drop_value(list).unwrap();
             assert!(values.is_empty());
         }
@@ -9452,6 +9525,10 @@ mod tests {
         values.lists.get_mut(&list).unwrap().elements =
             vec![Some(zebra), Some(eclair), Some(apple)];
         assert_eq!(
+            values.list_is_sorted(list, NativeSortKind::String as u32),
+            Ok(false)
+        );
+        assert_eq!(
             values.sort_list(list, NativeSortKind::String as u32),
             Ok(list)
         );
@@ -9459,8 +9536,320 @@ mod tests {
             values.lists[&list].elements,
             [Some(apple), Some(zebra), Some(eclair)]
         );
+        assert_eq!(
+            values.list_is_sorted(list, NativeSortKind::String as u32),
+            Ok(true)
+        );
         values.drop_value(list).unwrap();
         assert!(values.is_empty());
+    }
+    #[test]
+    fn float_list_sortedness_uses_ieee_comparisons_and_skips_pending_pairs() {
+        let cases: &[(&[f64], bool)] = &[
+            (&[], true),
+            (&[f64::NAN], true),
+            (&[1.0], true),
+            (&[f64::NAN, 1.0], false),
+            (&[1.0, f64::NAN], false),
+            (&[f64::NAN, f64::NAN], false),
+            (&[1.0, 2.0], true),
+            (&[2.0, 1.0], false),
+            (&[-0.0, 0.0], true),
+            (&[0.0, -0.0], true),
+            (&[f64::NEG_INFINITY, 1.0], true),
+            (&[1.0, f64::INFINITY], true),
+            (&[f64::INFINITY, 1.0], false),
+            (&[1.0, f64::NEG_INFINITY], false),
+            (&[f64::INFINITY, f64::INFINITY], true),
+        ];
+        for kind in [NativeSortKind::Float32, NativeSortKind::Float64] {
+            for &(input, expected) in cases {
+                let mut values = NativeValues::default();
+                let bits = input
+                    .iter()
+                    .map(|value| {
+                        if kind == NativeSortKind::Float32 {
+                            u64::from((*value as f32).to_bits())
+                        } else {
+                            value.to_bits()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let list = values.new_list(false).unwrap();
+                values.lists.get_mut(&list).unwrap().elements =
+                    bits.iter().copied().map(Some).collect();
+                assert_eq!(values.list_is_sorted(list, kind as u32), Ok(expected));
+                if input.len() == 2 {
+                    for index in 0..2 {
+                        for depth in [1, 2] {
+                            values
+                                .lists
+                                .get_mut(&list)
+                                .unwrap()
+                                .element_pending_depths
+                                .insert(index, depth);
+                            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(true));
+                            values
+                                .lists
+                                .get_mut(&list)
+                                .unwrap()
+                                .element_pending_depths
+                                .clear();
+                            assert_eq!(values.list_is_sorted(list, kind as u32), Ok(expected));
+                        }
+                    }
+                    if input.iter().any(|value| value.is_nan()) {
+                        assert_eq!(values.sort_list(list, kind as u32), Ok(list));
+                        assert_eq!(
+                            values.lists[&list].elements,
+                            bits.iter().copied().map(Some).collect::<Vec<_>>()
+                        );
+                        let outer = values.new_list(true).unwrap();
+                        let mut rows = Vec::new();
+                        for bits in &bits {
+                            let row = values.new_list(false).unwrap();
+                            values
+                                .lists
+                                .get_mut(&row)
+                                .unwrap()
+                                .elements
+                                .push(Some(*bits));
+                            values
+                                .lists
+                                .get_mut(&outer)
+                                .unwrap()
+                                .elements
+                                .push(Some(row));
+                            rows.push(Some(row));
+                        }
+                        assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                        assert_eq!(values.lists[&outer].elements, rows);
+                        values.drop_value(outer).unwrap();
+                    }
+                }
+                values.drop_value(list).unwrap();
+                assert!(values.is_empty());
+            }
+        }
+    }
+    #[test]
+    fn list_sort_preserves_pending_string_order_and_owners_until_joined() {
+        for (left_depth, right_depth) in [(1, 0), (2, 0), (0, 1), (0, 2), (1, 2), (2, 1)] {
+            let mut values = NativeValues::default();
+            let left = values.insert_pending("b".into(), left_depth).unwrap();
+            let right = values.insert_pending("a".into(), right_depth).unwrap();
+            let list = values.new_list(true).unwrap();
+            values.lists.get_mut(&list).unwrap().elements = vec![Some(left), Some(right)];
+
+            assert_eq!(
+                values.list_is_sorted(list, NativeSortKind::String as u32),
+                Ok(true)
+            );
+            assert_eq!(
+                values.sort_list(list, NativeSortKind::String as u32),
+                Ok(list)
+            );
+            assert_eq!(values.lists[&list].elements, [Some(left), Some(right)]);
+            assert_eq!(values.strings.len(), 2);
+            for (handle, depth, text) in [(left, left_depth, "b"), (right, right_depth, "a")] {
+                let string = &values.strings[&handle];
+                assert_eq!(string.pending_depth, depth);
+                assert_eq!(string.references, 1);
+                assert_eq!(string.text, text);
+            }
+
+            let mut ready = [left, right];
+            for (index, depth) in [left_depth, right_depth].into_iter().enumerate() {
+                for remaining in (0..depth).rev() {
+                    let old = ready[index];
+                    let joined = values.join_string(old).unwrap();
+                    values.lists.get_mut(&list).unwrap().elements[index] = Some(joined);
+                    values.release(old).unwrap();
+                    ready[index] = joined;
+                    assert_eq!(values.strings[&joined].pending_depth, remaining);
+                    assert_eq!(values.strings[&joined].references, 1);
+                    assert_eq!(values.strings.len(), 2);
+                }
+            }
+            assert_eq!(
+                values.list_is_sorted(list, NativeSortKind::String as u32),
+                Ok(false)
+            );
+            assert_eq!(
+                values.sort_list(list, NativeSortKind::String as u32),
+                Ok(list)
+            );
+            assert_eq!(
+                values.lists[&list].elements,
+                [Some(ready[1]), Some(ready[0])]
+            );
+            assert_eq!(
+                values.list_is_sorted(list, NativeSortKind::String as u32),
+                Ok(true)
+            );
+            assert_eq!(values.strings.len(), 2);
+            for (handle, text) in [(ready[0], "b"), (ready[1], "a")] {
+                let string = &values.strings[&handle];
+                assert_eq!(string.pending_depth, 0);
+                assert_eq!(string.references, 1);
+                assert_eq!(string.text, text);
+            }
+            values.drop_value(list).unwrap();
+            assert_eq!((values.lists_created, values.lists_destroyed), (1, 1));
+            assert!(values.is_empty());
+        }
+    }
+    #[test]
+    fn indexed_list_sort_preserves_pending_rows_and_keys_until_joined() {
+        for kind in [NativeSortKind::Int64, NativeSortKind::String] {
+            for pending_rows in [false, true] {
+                for depths in [[1, 0], [2, 0], [0, 1], [0, 2], [1, 2], [2, 1]] {
+                    let mut values = NativeValues::default();
+                    let outer = values.new_list(true).unwrap();
+                    let mut rows = [0; 2];
+                    let mut keys = [0; 2];
+                    for (index, depth) in depths.into_iter().enumerate() {
+                        let key_depth = if pending_rows { 0 } else { depth };
+                        let bits = if kind == NativeSortKind::String {
+                            let text = if index == 0 { "b" } else { "a" };
+                            values.insert_pending(text.into(), key_depth).unwrap()
+                        } else if index == 0 {
+                            2
+                        } else {
+                            1
+                        };
+                        let row = values.new_list(kind == NativeSortKind::String).unwrap();
+                        let record = values.lists.get_mut(&row).unwrap();
+                        record.elements.push(Some(bits));
+                        if pending_rows {
+                            record.pending_depth = depth;
+                        } else if kind != NativeSortKind::String && key_depth != 0 {
+                            record.element_pending_depths.insert(0, key_depth);
+                        }
+                        rows[index] = row;
+                        keys[index] = bits;
+                        values
+                            .lists
+                            .get_mut(&outer)
+                            .unwrap()
+                            .elements
+                            .push(Some(row));
+                    }
+                    let live_strings = values.strings.len();
+                    assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                    assert_eq!(values.lists[&outer].elements, rows.map(Some));
+                    assert_eq!(values.lists.len(), 3);
+                    assert_eq!(values.strings.len(), live_strings);
+                    for (index, row) in rows.into_iter().enumerate() {
+                        let record = &values.lists[&row];
+                        assert_eq!(record.elements, [Some(keys[index])]);
+                        assert_eq!(
+                            record.pending_depth,
+                            if pending_rows { depths[index] } else { 0 }
+                        );
+                        if kind == NativeSortKind::String {
+                            let key = &values.strings[&keys[index]];
+                            assert_eq!(
+                                key.pending_depth,
+                                if pending_rows { 0 } else { depths[index] }
+                            );
+                            assert_eq!(key.references, 1);
+                        } else {
+                            assert_eq!(
+                                record.element_pending_depths.get(&0).copied().unwrap_or(0),
+                                if pending_rows { 0 } else { depths[index] }
+                            );
+                        }
+                    }
+                    for (index, depth) in depths.into_iter().enumerate() {
+                        for remaining in (0..depth).rev() {
+                            if pending_rows {
+                                let old = rows[index];
+                                let joined = values.join_list(old).unwrap();
+                                values.lists.get_mut(&outer).unwrap().elements[index] =
+                                    Some(joined);
+                                values.drop_value(old).unwrap();
+                                rows[index] = joined;
+                                assert_eq!(values.lists[&joined].pending_depth, remaining);
+                            } else if kind == NativeSortKind::String {
+                                let old = keys[index];
+                                let joined = values.join_string(old).unwrap();
+                                values.lists.get_mut(&rows[index]).unwrap().elements[0] =
+                                    Some(joined);
+                                values.release(old).unwrap();
+                                keys[index] = joined;
+                                assert_eq!(values.strings[&joined].pending_depth, remaining);
+                            } else {
+                                // Scalar join computes the remaining depth in generated code.
+                                let row = values.lists.get_mut(&rows[index]).unwrap();
+                                if remaining == 0 {
+                                    row.element_pending_depths.remove(&0);
+                                } else {
+                                    row.element_pending_depths.insert(0, remaining);
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                    assert_eq!(
+                        values.lists[&outer].elements,
+                        [Some(rows[1]), Some(rows[0])]
+                    );
+                    assert_eq!(values.lists.len(), 3);
+                    assert_eq!(values.strings.len(), live_strings);
+                    values.drop_value(outer).unwrap();
+                    assert!(values.is_empty());
+                }
+            }
+        }
+    }
+    #[test]
+    fn indexed_list_sort_skips_uninitialized_pending_payloads_but_rejects_ready_ones() {
+        for (kind, pending_row) in [
+            (NativeSortKind::Int64, true),
+            (NativeSortKind::String, true),
+            (NativeSortKind::Int64, false),
+        ] {
+            for depth in [1, 2] {
+                let mut values = NativeValues::default();
+                let pending = values.new_list(kind == NativeSortKind::String).unwrap();
+                let row = values.lists.get_mut(&pending).unwrap();
+                row.elements.push(None);
+                if pending_row {
+                    row.pending_depth = depth;
+                } else {
+                    row.element_pending_depths.insert(0, depth);
+                }
+                let ready = values.new_list(kind == NativeSortKind::String).unwrap();
+                let bits = if kind == NativeSortKind::String {
+                    values.insert("a".into()).unwrap()
+                } else {
+                    1
+                };
+                values
+                    .lists
+                    .get_mut(&ready)
+                    .unwrap()
+                    .elements
+                    .push(Some(bits));
+                let outer = values.new_list(true).unwrap();
+                values.lists.get_mut(&outer).unwrap().elements = vec![Some(pending), Some(ready)];
+                assert_eq!(values.sort_list_by_index(outer, 0, kind as u32), Ok(outer));
+                assert_eq!(values.lists[&outer].elements, [Some(pending), Some(ready)]);
+                assert_eq!(values.lists[&pending].elements, [None]);
+
+                let row = values.lists.get_mut(&pending).unwrap();
+                row.pending_depth = 0;
+                row.element_pending_depths.clear();
+                assert_eq!(
+                    values.sort_list_by_index(outer, 0, kind as u32),
+                    Err(INVALID_LIST)
+                );
+                assert_eq!(values.lists[&outer].elements, [Some(pending), Some(ready)]);
+                values.drop_value(outer).unwrap();
+                assert!(values.is_empty());
+            }
+        }
     }
     #[test]
     fn indexed_list_sort_preserves_rows_and_missing_keys() {

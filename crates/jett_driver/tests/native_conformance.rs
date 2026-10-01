@@ -411,6 +411,150 @@ fn native_primitive_list_sums_reject_pending_in_both_profiles() {
 }
 
 #[test]
+fn native_list_sort_refinements_and_ordering_match_interpreter_in_both_profiles() {
+    let refined_stdout = concat!(
+        "narrow:-128,-128,0,127,|narrow:-128\n",
+        "unsigned:2,9223372036854775808,18446744073709551615,18446744073709551615,\n",
+        "decimal:-2.25,0,16777216,16777216,\n",
+        "integer:-9223372036854775808,-9223372036854775808,2,9223372036854775807,\n",
+        "word:apple,apple,eclair,zebra,|source:4\n",
+        "flag:false,false,true,true,\n",
+        "nested:-3,-3,2,|nested:-3\n",
+        "alias:-2,3,3,\n",
+        "empty:0:0;single:5:solo\n",
+        "refined:false:true\n",
+        "baked:narrow:-128:127:apple:zebra:false\n",
+        "pending:zebra:apple\nready:apple:zebra\n",
+        "plain-pending:zebra:apple\nplain-ready:apple:zebra;sorted:true:false:true\n",
+    );
+    let ordering_stdout = concat!(
+        "int8:false:2,1,\nuint8:false:2,1,\nfloat32:false:2,1,\nuint64:false:2,1,\n",
+        "f32:nan:false:false:true:true;infinity:true:false;sort:true:true\n",
+        "f64:nan:false:false:true:true;infinity:true:false;sort:true:true\n",
+        "index-string:first:second:zebra\nindex-scalar:11:22:2\nindex-row:first:second:zebra\n",
+    );
+    let refined_debug = [
+        "trace head: app.Word = pending(pending(zebra))",
+        "trace once: app.Word = pending(zebra)",
+        "trace joined: app.Word = zebra",
+        "trace head: string = pending(zebra)",
+        "trace joined: string = zebra",
+    ];
+    let ordering_debug = [
+        "trace ordered: list[list[string]] = list(list(pending(pending(zebra)), first), list(apple, second))",
+        "trace ordered: list[list[int64]] = list(list(pending(2), 11), list(1, 22))",
+        "trace ordered: list[list[string]] = list(pending(pending(list(zebra, first))), list(apple, second))",
+    ];
+    for (name, stdout, debug) in [
+        (
+            "list_sort_refinements",
+            refined_stdout,
+            refined_debug.as_slice(),
+        ),
+        (
+            "list_ordering_controls",
+            ordering_stdout,
+            ordering_debug.as_slice(),
+        ),
+    ] {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/native/{name}.jett"));
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::copy(&fixture, &source).unwrap();
+        let expected = jett_driver::run_file_capture_output(&source).expect("list ordering oracle");
+        assert_eq!(expected.stdout, stdout, "{name}");
+        assert_eq!(expected.debug_output, debug, "{name}");
+        let mut binaries = Vec::new();
+        for release in [false, true] {
+            let binary = directory.path().join(format!("ordering_{release}.exe"));
+            jett_driver::native::build_host_executable_with_options(
+                &source,
+                launcher(),
+                &binary,
+                jett_driver::BuildOptions { release },
+            )
+            .unwrap_or_else(|error| panic!("{name}, release={release}: {error}"));
+            binaries.push((binary, release));
+        }
+        let verify_binary = directory.path().join("ordering_verify.exe");
+        build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+            .expect("native list ordering verify suite");
+        let property_binary = directory.path().join("ordering_property.exe");
+        build_host_property_suite_executable(&source, launcher(), &property_binary)
+            .expect("native list ordering property suite");
+        fs::remove_file(&source).unwrap();
+        for (binary, release) in binaries {
+            let actual = run_bounded(&binary, directory.path());
+            assert!(
+                actual.status.success(),
+                "{name}, release={release}: {actual:?}"
+            );
+            assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
+            let debug = if release {
+                String::new()
+            } else {
+                format!("{}\n", expected.debug_output.join("\n"))
+            };
+            assert_eq!(actual.stderr, debug.as_bytes(), "{name}: {actual:?}");
+        }
+        for suite in [verify_binary, property_binary] {
+            let actual = run_bounded(&suite, directory.path());
+            assert!(actual.status.success(), "{name}: {actual:?}");
+            assert!(actual.stdout.is_empty(), "{name}: {actual:?}");
+            assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+        }
+    }
+}
+
+#[test]
+fn native_pending_refined_list_sort_rejects_outer_pending_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/list_sort_refinements.jett");
+    let template = fs::read_to_string(fixture).unwrap();
+    let (declarations, _) = template.rsplit_once("function main(").unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("pending_list_sort.jett");
+    fs::write(
+        &source,
+        format!(
+            "{declarations}function main(stdout: Stdout) returns nothing:\n    pending_outer_failure(view stdout)\n"
+        ),
+    )
+    .unwrap();
+    let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+    assert_eq!(expected.output.stdout, "before\n");
+    assert!(expected.output.debug_output.is_empty());
+    assert_eq!(
+        expected.message,
+        "runtime error: list.__sort expects a list argument"
+    );
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("pending_sort_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native pending refined list sort");
+        binaries.push(binary);
+    }
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert_eq!(actual.status.code(), Some(71), "{actual:?}");
+        assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
+        assert_eq!(
+            actual.stderr,
+            format!("{}\n", expected.message).as_bytes(),
+            "{actual:?}"
+        );
+    }
+}
+
+#[test]
 fn native_generic_lexical_type_scope_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_lexical_type_scope.jett");
