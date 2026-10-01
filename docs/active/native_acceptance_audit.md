@@ -62,8 +62,9 @@ The following semantic and implementation gaps prevent a full parity claim:
 - [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
 - [Projected field assignment](../open_design/projected_field_assignment.md):
   implement safe updates to owned mutable locals versus reject projected writes
-  and use construction/rebinding. The checker currently also accepts unsafe
-  immutable/view roots, while neither execution backend implements the update.
+  and use construction/rebinding. The checker now rejects immutable, temporary,
+  and known view roots before either execution backend; owned mutable roots
+  remain admitted without an implemented update contract.
 - [Global constant execution](../open_design/global_constant_execution.md):
   both backends now receive shared immutable compile-time primitive values,
   including transparent aliases, without startup initialization. Move-only and
@@ -307,3 +308,21 @@ through successive joins. Both profiles run after source removal. Runtime
 checks also preserve nested pending children and typed
 redaction. Hidden-secret diagnostic observation remains open; missing debug
 layouts use conservative redaction rather than proving public output parity.
+
+The projected-assignment prerequisite handoff rejects immutable, temporary, and
+known view roots before execution in functions, inline bodies, actor handlers,
+comptime requests, and verify/property bodies. It also rejects rebinding an
+owned mutable local from a move-only view, including parenthesized targets,
+without changing declaration facts across branches. Owned mutable field updates
+still need the open execution contract above. Calls, returned values, and named
+view-type aliases remain separate ownership audit work.
+
+`projected_assignment.rs` pins frontend diagnostics, rejection before evaluation,
+and preservation of existing native outputs for both profiles and test suites.
+`native_projected_reads_and_reconstructed_owners_match_interpreter_in_both_profiles`
+executes reads, owned copies, and construction/rebinding after source removal,
+including verify and property suites. Local validation passes all 179
+typechecker tests, all 594 frontend fixtures, all 182 run-pass lowering cases,
+four public driver regressions, and five linked projected-value regressions.
+These checks establish the prerequisite handoff, not support for field updates
+or full native parity.

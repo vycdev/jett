@@ -414,6 +414,12 @@ enum MachineStateTruth {
     IsNot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssignmentBinding {
+    OwnedMutable,
+    View,
+}
+
 #[derive(Debug, Default)]
 struct ClosureCaptureScope {
     /// Definitions declared inside this closure rather than captured by it.
@@ -515,6 +521,9 @@ struct TypeChecker<'a> {
     /// Name of the function currently being type-checked (None outside functions).
     current_function_name: Option<String>,
     constant_declarations: HashSet<Span>,
+    /// Declaration identity preserves assignment policy across scopes and
+    /// generic rechecks. Other bindings are immutable by default.
+    assignment_bindings: HashMap<Span, AssignmentBinding>,
     /// Whether the function currently being type-checked is pure.
     current_function_pure: bool,
     /// Whether we are inside a verify block.
@@ -669,6 +678,7 @@ impl<'a> TypeChecker<'a> {
             trusted_stdlib_function_signatures: HashMap::new(),
             current_function_name: None,
             constant_declarations: HashSet::new(),
+            assignment_bindings: HashMap::new(),
             current_function_pure: false,
             in_verify_block: false,
             in_property_block: false,
@@ -5430,6 +5440,11 @@ impl<'a> TypeChecker<'a> {
                 self.record_debug_type_name(&param_ast.name, &param_ast.ty);
                 self.type_env.insert(def_id, *param_ty);
             }
+            self.record_assignment_binding(
+                &param_ast.name,
+                param_ast.mutable,
+                param_ast.view || Self::type_is_view(&param_ast.ty),
+            );
         }
 
         // Type-check state field initializers.
@@ -5437,6 +5452,11 @@ impl<'a> TypeChecker<'a> {
             self.record_debug_type_name(&field.name, &field.ty);
             let declared_ty = self.resolve_type_expr(&field.ty);
             let init_ty = self.check_expr_for_expected(&field.value, declared_ty, true);
+            self.record_assignment_binding(
+                &field.name,
+                field.mutable,
+                Self::type_is_view(&field.ty) || self.initializer_is_view(&field.value),
+            );
             if init_ty != TypeInterner::ERROR
                 && declared_ty != TypeInterner::ERROR
                 && !self.types_compatible(declared_ty, init_ty)
@@ -5474,6 +5494,11 @@ impl<'a> TypeChecker<'a> {
                     self.record_debug_type_name(&param_ast.name, &param_ast.ty);
                     self.type_env.insert(def_id, *param_ty);
                 }
+                self.record_assignment_binding(
+                    &param_ast.name,
+                    param_ast.mutable,
+                    param_ast.view || Self::type_is_view(&param_ast.ty),
+                );
             }
 
             // Register local_env vars into type_env using resolve declarations.
@@ -7405,6 +7430,11 @@ impl<'a> TypeChecker<'a> {
             if let Some(def_id) = self.declaration_def_id(param.name.span) {
                 self.type_env.insert(def_id, param_type);
             }
+            self.record_assignment_binding(
+                &param.name,
+                param.mutable,
+                param.view || Self::type_is_view(&param.ty),
+            );
         }
 
         self.check_block(&func.body);
@@ -8483,6 +8513,11 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        self.record_assignment_binding(
+            &decl.name,
+            decl.mutable,
+            Self::type_is_view(&decl.ty) || self.initializer_is_view(&decl.value),
+        );
 
         // Check that the initializer type matches the declared type (skip if Error).
         if !self.types_compatible(declared_type, init_type) {
@@ -8530,6 +8565,8 @@ impl<'a> TypeChecker<'a> {
             self.sink.emit(crate::ownership::cannot_rebind_immutable(
                 &root.name, root.span,
             ));
+        } else if !matches!(&assign.target, Expr::Ident(_)) {
+            self.check_projected_assignment_target(&assign.target);
         }
         if let Expr::Ident(ident) = &assign.target {
             if let Some(def_id) = self.ident_def_id(ident) {
@@ -8542,6 +8579,7 @@ impl<'a> TypeChecker<'a> {
 
         let target_type = self.check_expr(&assign.target);
         let value_type = self.check_expr_for_expected(&assign.value, target_type, false);
+        self.check_view_rebinding(assign, target_type, value_type);
 
         if !self.types_compatible(target_type, value_type) {
             self.sink.emit(errors::assign_type_mismatch(
@@ -8557,6 +8595,120 @@ impl<'a> TypeChecker<'a> {
             Expr::Ident(ident) => Some(ident),
             Expr::FieldAccess(base, _, _) | Expr::Paren(base, _) => Self::assignment_root(base),
             _ => None,
+        }
+    }
+
+    fn check_view_rebinding(
+        &mut self,
+        assign: &ast::AssignStmt,
+        target_type: TypeId,
+        value_type: TypeId,
+    ) {
+        if target_type == TypeInterner::ERROR || value_type == TypeInterner::ERROR {
+            return;
+        }
+        let mut target = &assign.target;
+        while let Expr::Paren(inner, _) = target {
+            target = inner;
+        }
+        let Expr::Ident(target) = target else {
+            return;
+        };
+        let Some(definition) = self.ident_def_id(target) else {
+            return;
+        };
+        let span = self.resolve.scope_table.def(definition).span;
+        if self.assignment_bindings.get(&span) == Some(&AssignmentBinding::OwnedMutable)
+            && !self.constant_declarations.contains(&span)
+            && !crate::ownership::is_implicitly_copyable(&self.interner, value_type)
+            && self.initializer_is_view(&assign.value)
+        {
+            self.sink.emit(crate::ownership::cannot_rebind_from_view(
+                assign.value.span(),
+            ));
+        }
+    }
+
+    fn record_assignment_binding(&mut self, name: &ast::Ident, mutable: bool, view: bool) {
+        let Some(definition) = self.declaration_def_id(name.span) else {
+            return;
+        };
+        let span = self.resolve.scope_table.def(definition).span;
+        let mode = if view {
+            Some(AssignmentBinding::View)
+        } else if mutable {
+            Some(AssignmentBinding::OwnedMutable)
+        } else {
+            None
+        };
+        if let Some(mode) = mode {
+            self.assignment_bindings.insert(span, mode);
+        } else {
+            self.assignment_bindings.remove(&span);
+        }
+    }
+
+    fn type_is_view(ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::View(_, _) => true,
+            TypeExpr::StateQualified(inner, _, _) => Self::type_is_view(inner),
+            _ => false,
+        }
+    }
+
+    fn initializer_is_view(&self, value: &Expr) -> bool {
+        match value {
+            Expr::View(_, _) => true,
+            Expr::Ident(ident) => self.ident_def_id(ident).is_some_and(|definition| {
+                let span = self.resolve.scope_table.def(definition).span;
+                self.assignment_bindings.get(&span) == Some(&AssignmentBinding::View)
+                    && self.type_env.get(&definition).is_some_and(|ty| {
+                        !crate::ownership::is_implicitly_copyable(&self.interner, *ty)
+                    })
+            }),
+            Expr::Paren(inner, _) | Expr::Coarsen(inner, _) | Expr::Declassify(inner, _) => {
+                self.initializer_is_view(inner)
+            }
+            // A plain field initializer copies the field into ownership, even
+            // when its parent is borrowed. Clone also deliberately owns a copy.
+            _ => false,
+        }
+    }
+
+    fn assignment_place_is_view(&self, target: &Expr) -> bool {
+        match target {
+            Expr::View(_, _) => true,
+            Expr::Ident(ident) => self.ident_def_id(ident).is_some_and(|definition| {
+                let span = self.resolve.scope_table.def(definition).span;
+                self.assignment_bindings.get(&span) == Some(&AssignmentBinding::View)
+            }),
+            Expr::FieldAccess(inner, _, _)
+            | Expr::Paren(inner, _)
+            | Expr::Coarsen(inner, _)
+            | Expr::Declassify(inner, _) => self.assignment_place_is_view(inner),
+            _ => false,
+        }
+    }
+
+    fn check_projected_assignment_target(&mut self, target: &Expr) {
+        if self.assignment_place_is_view(target) {
+            self.sink
+                .emit(crate::ownership::cannot_assign_through_view(target.span()));
+            return;
+        }
+        let Some(root) = Self::assignment_root(target) else {
+            self.sink
+                .emit(crate::ownership::cannot_assign_to_temporary(target.span()));
+            return;
+        };
+        let Some(definition) = self.ident_def_id(root) else {
+            return;
+        };
+        let span = self.resolve.scope_table.def(definition).span;
+        if self.assignment_bindings.get(&span) != Some(&AssignmentBinding::OwnedMutable) {
+            self.sink.emit(crate::ownership::cannot_rebind_immutable(
+                &root.name, root.span,
+            ));
         }
     }
 
@@ -8984,6 +9136,7 @@ impl<'a> TypeChecker<'a> {
             self.record_expression_type(for_stmt.variable.span, elem_type);
             self.record_closure_local(def_id);
         }
+        self.record_assignment_binding(&for_stmt.variable, false, for_stmt.view);
 
         // Bind the optional value variable (only for map iteration).
         if let Some(ref val_var) = for_stmt.value_variable {
@@ -8997,6 +9150,7 @@ impl<'a> TypeChecker<'a> {
                 self.record_expression_type(val_var.span, val_type);
                 self.record_closure_local(def_id);
             }
+            self.record_assignment_binding(val_var, false, for_stmt.view);
         }
 
         let pushed_variant_scope =
@@ -9480,6 +9634,11 @@ impl<'a> TypeChecker<'a> {
                         self.type_env.insert(def_id, param_type);
                         self.record_closure_local(def_id);
                     }
+                    self.record_assignment_binding(
+                        &param.name,
+                        param.mutable,
+                        param.view || Self::type_is_view(&param.ty),
+                    );
                 }
 
                 self.check_block(body);
@@ -20016,6 +20175,300 @@ function local() returns nothing:
 "#,
         );
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn projected_assignment_rejects_immutable_and_view_bindings() {
+        let errors = check_source_errors(
+            r#"struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function immutable(item: Record) returns nothing:
+    item.child.value = 2
+function borrowed(view mutable item: Record) returns nothing:
+    item.child.value = 2
+function annotated(mutable item: view Record) returns nothing:
+    item.child.value = 2
+function local(view item: Record) returns nothing:
+    Record fixed = clone view item
+    fixed.child.value = 2
+    mutable Record viewed_local = (view item)
+    viewed_local.child.value = 2
+    mutable view Record typed_local = clone view item
+    typed_local.child.value = 2
+"#,
+        );
+        let codes = errors
+            .iter()
+            .map(|diagnostic| diagnostic.code.code())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, [404, 401, 401, 404, 401, 401], "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .filter(|diagnostic| diagnostic.code.code() == 401)
+                .all(|diagnostic| diagnostic.message.contains("views are read-only"))
+        );
+    }
+
+    #[test]
+    fn projected_assignment_rejects_temporary_and_transformed_places() {
+        let errors = check_source_errors(
+            r#"struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+type Wrapped = Record where true
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function temporary(view item: Record) returns nothing:
+    make().child.value = 2
+    Record(child: Inner(value: 1)).child.value = 2
+    (clone view item).child.value = 2
+    (view item).child.value = 2
+function transformed(mutable item: Wrapped) returns nothing:
+    (coarsen item).child.value = 2
+function transformed_view(view mutable item: Wrapped) returns nothing:
+    (coarsen item).child.value = 2
+function borrowed_initializer(view item: Wrapped) returns nothing:
+    mutable Record borrowed = coarsen (view item)
+    borrowed.child.value = 2
+"#,
+        );
+        let codes = errors
+            .iter()
+            .map(|diagnostic| diagnostic.code.code())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, [404, 404, 404, 401, 404, 401, 401], "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .filter(|diagnostic| diagnostic.code.code() == 404)
+                .all(|diagnostic| diagnostic.message.contains("owned mutable binding"))
+        );
+    }
+
+    #[test]
+    fn projected_assignment_preserves_owned_roots_and_field_copies() {
+        // These bodies pin only the selected assignment-root prerequisites.
+        // Execution of projected updates remains an unresolved language rule.
+        let errors = check_source_errors(
+            r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function owned(mutable item: Record) returns nothing:
+    item.child.value = 2
+    (item.child).value = 3
+function copied(view item: Record) returns int64:
+    mutable Inner first = item.child
+    first.value = 2
+    mutable Inner second = (view item).child
+    second.value = 3
+    mutable Inner third = clone view item.child
+    third.value = 4
+    mutable Record fourth = clone view item
+    fourth.child.value = 5
+    int64 read = make().child.value
+    return read + item.child.value
+function callback() returns function(Record) returns nothing:
+    return function(mutable item: Record) returns nothing:
+        item.child.value = 2
+actor Store:
+    mutable app.Record item = app.Record(child: app.Inner(value: 1))
+    receive replace(mutable supplied: app.Record):
+        item.child.value = 2
+        supplied.child.value = 3
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn projected_assignment_uses_lexical_declaration_identity() {
+        let source = r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function example() returns nothing:
+    if true:
+        mutable Record item = Record(child: Inner(value: 1))
+        item.child.value = 2
+    Record item = Record(child: Inner(value: 1))
+    item.child.value = 3
+function owned(mutable item: Record) returns nothing:
+    item.child.value = 4
+function readonly(view item: Record) returns nothing:
+    item.child.value = 5
+namespace other
+struct Record:
+    value: int64
+function example(mutable item: Record) returns nothing:
+    item.value = 6
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 404, "{errors:?}");
+        assert_eq!(errors[1].code.code(), 401, "{errors:?}");
+        assert_eq!(
+            &source[errors[0].span.start as usize..errors[0].span.end as usize],
+            "item"
+        );
+    }
+
+    #[test]
+    fn projected_assignment_preserves_view_facts_in_actor_aliases() {
+        let errors = check_source_errors(
+            r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+actor Store:
+    receive borrowed(view item: app.Record):
+        mutable app.Record alias = item
+        alias.child.value = 2
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+        assert!(errors[0].message.contains("views are read-only"));
+    }
+
+    #[test]
+    fn owned_rebinding_rejects_move_only_views_without_changing_root_facts() {
+        let source = r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function direct(view source: Record) returns nothing:
+    mutable Record alias = make()
+    alias = view source
+    alias.child.value = 9
+function conditional(view source: Record) returns nothing:
+    mutable Record alias = make()
+    if true:
+        alias = view source
+    alias.child.value = 9
+function known_alias(view source: Record) returns nothing:
+    Record borrowed = source
+    mutable Record alias = make()
+    alias = borrowed
+    alias.child.value = 9
+actor Store:
+    mutable app.Record saved = make()
+    receive explicit(view source: app.Record):
+        saved = view source
+        saved.child.value = 9
+    receive bare(view source: app.Record):
+        saved = source
+        saved.child.value = 9
+"#;
+        let errors = check_source_errors(source);
+        assert_eq!(errors.len(), 5, "{errors:?}");
+        for diagnostic in &errors {
+            assert_eq!(diagnostic.code.code(), 401, "{diagnostic:?}");
+            assert_eq!(
+                diagnostic.message,
+                "cannot rebind an owned value from a view; clone the value instead"
+            );
+        }
+        let values = errors
+            .iter()
+            .map(|diagnostic| &source[diagnostic.span.start as usize..diagnostic.span.end as usize])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            [
+                "view source",
+                "view source",
+                "borrowed",
+                "view source",
+                "source"
+            ]
+        );
+    }
+
+    #[test]
+    fn owned_rebinding_preserves_clones_scalars_and_field_copies() {
+        let errors = check_source_errors(
+            r#"namespace app
+struct Inner:
+    value: int64
+struct Record:
+    child: Inner
+function make() returns Record:
+    return Record(child: Inner(value: 1))
+function copies(view source: Record, view number: int64) returns nothing:
+    mutable Record alias = make()
+    alias = clone view source
+    alias.child.value = 2
+    mutable Inner copied = make().child
+    copied = source.child
+    copied = (view source).child
+    copied = clone view source.child
+    copied.value = 3
+    mutable int64 scalar = 0
+    scalar = view number
+    scalar = number
+actor Store:
+    mutable app.Record saved = make()
+    receive replace(view source: app.Record):
+        saved = clone view source
+        saved.child.value = 4
+"#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn owned_rebinding_rejects_views_with_parenthesized_identifier_targets() {
+        let errors = check_source_errors(
+            r#"struct Record:
+    value: int64
+function replace(view source: Record) returns nothing:
+    mutable Record alias = Record(value: 1)
+    (alias) = view source
+    ((alias)) = view source
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        for diagnostic in &errors {
+            assert_eq!(diagnostic.code.code(), 401, "{diagnostic:?}");
+            assert_eq!(
+                diagnostic.message,
+                "cannot rebind an owned value from a view; clone the value instead"
+            );
+        }
+    }
+
+    #[test]
+    fn owned_rebinding_preserves_immutable_target_diagnostics() {
+        let errors = check_source_errors(
+            r#"namespace app
+struct Record:
+    value: int64
+Record constant = comptime Record(value: 1)
+function local(view source: Record) returns nothing:
+    Record fixed = Record(value: 1)
+    fixed = view source
+    constant = view source
+"#,
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|diagnostic| diagnostic.code.code() == 404)
+        );
     }
 
     #[test]

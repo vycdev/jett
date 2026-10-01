@@ -66,6 +66,24 @@ fn cannot_consume_view(name: &str, span: Span) -> Diagnostic {
     )
 }
 
+/// E0401: Views are read-only, including when the binding is mutable.
+pub(crate) fn cannot_assign_through_view(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        401,
+        "cannot assign through a view because views are read-only",
+        span,
+    )
+}
+
+/// E0401: Rebinding an owner requires ownership of the replacement value.
+pub(crate) fn cannot_rebind_from_view(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        401,
+        "cannot rebind an owned value from a view; clone the value instead",
+        span,
+    )
+}
+
 /// E0403: `cancel` requires a pending variable produced by `run`.
 fn task_control_requires_pending(operation: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
@@ -80,6 +98,15 @@ pub(crate) fn cannot_rebind_immutable(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         404,
         format!("cannot reassign `{name}` because it is not mutable"),
+        span,
+    )
+}
+
+/// E0404: A temporary value cannot provide an owned mutable assignment root.
+pub(crate) fn cannot_assign_to_temporary(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        404,
+        "projected assignment requires an owned mutable binding",
         span,
     )
 }

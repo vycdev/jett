@@ -1214,6 +1214,10 @@ compile_fail_fixture!(
     "immutable_reassignment.jett"
 );
 compile_fail_fixture!(
+    compile_fail_projected_readonly_roots,
+    "projected_readonly_roots.jett"
+);
+compile_fail_fixture!(
     compile_fail_ownership_for_zero_iteration_rebind,
     "ownership_for_zero_iteration_rebind.jett"
 );

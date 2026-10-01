@@ -652,12 +652,22 @@ This sub-phase tracks the ownership state of every variable through the control 
 - **View propagation:** Views propagate through field access and collection element access. `view list[T]` element access yields `view T`, not an owned copy. `clone` is required to get an owned value from a view.
 - **Closure capture analysis:** Anonymous functions may capture only implicitly copyable values from the enclosing scope. Each capture is copied into the closure. Capturing a move-only value is a compile error; it must be passed explicitly as a parameter.
 
-Projected field assignment does not yet have an execution contract. The
-ownership pass checks mutability only for identifier rebinding, so checked
-field targets can currently include immutable locals or views. The interpreter
-and native place planners reject execution of these writes. The
+Projected field assignment does not yet have an execution contract. The checker
+rejects immutable and temporary roots with E0404 and known view roots with
+E0401, including mutable view parameters. It records assignment mode by resolved
+declaration span for function and inline parameters, local bindings, loop
+bindings, and actor state and handler parameters. Actor state facts are recorded
+after checking their initializer. Explicit view initializers and aliases of
+known move-only views retain read-only status; ordinary field copies and clones
+are owned. These checks apply even where the function ownership pass does not
+run, including verify/property bodies and actor handlers. They do not implement
+general borrow provenance. Direct rebinding of an owned mutable local from a
+known move-only view also reports E0401, preventing assignment from erasing that
+restriction; copyable values and explicit clones remain allowed. Owned mutable
+roots remain checker-admitted while the interpreter and native place planners
+reject execution. The
 [open contract](open_design/projected_field_assignment.md) must settle safe
-updates or explicit frontend rejection before extending this handoff.
+updates or rejection of all projected writes before extending this handoff.
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 
@@ -2819,7 +2829,7 @@ call, type, and handle diagnostics instead of getting a parallel error family.
 | E0000 | Driver and file/project discovery errors |
 | E0200–E0212 | Name resolution errors and warnings (undefined, duplicate, namespace visibility, `export root`, type naming) |
 | E0300–E0378 | Type and language policy errors: calls, generic arity and function values, handles, interfaces, refinements, bitfields, JSON policy, state machines, reflection metadata, pipeline boundaries, collection hashing and equality, sequence policy, arithmetic safety, graphics policy, release debug-print policy, mutable global rejection, and required explicit constant evaluation |
-| E0400–E0404 | Ownership errors (use-after-move, consuming a view, move-only closure captures, pending task control, and immutable rebinding) |
+| E0400–E0404 | Ownership errors (use-after-move, consuming or writing through a view, move-only closure captures, pending task control, immutable rebinding, and temporary assignment roots) |
 | E0500–E0503 | Capability and purity errors (impure calls and capability-parameter ownership) |
 | E0600–E0603 | Secret errors (secret exposure, invalid declassification/helper use, secret-containing output) |
 | E0700 | Actor response errors (`respond` outside a handler with `responds`) |

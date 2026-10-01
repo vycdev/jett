@@ -1300,6 +1300,54 @@ fn native_ready_and_joined_aggregate_access_preserves_owners_in_both_profiles() 
 }
 
 #[test]
+fn native_projected_reads_and_reconstructed_owners_match_interpreter_in_both_profiles() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/native/projected_read_controls.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("projected_read_controls.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).expect("projected read oracle");
+    assert_eq!(
+        expected.stdout,
+        "original:1\ncopied:2\noriginal:1\nloop:3\nmatch:2:2\ntemporary:1\nfields:7:1\n"
+    );
+    assert!(expected.debug_output.is_empty());
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("projected_read_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native projected read control");
+        binaries.push(binary);
+    }
+    let verify_binary = directory.path().join("projected_read_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native projected read verify suite");
+    let property_binary = directory.path().join("projected_read_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native projected read property suite");
+    fs::remove_file(&source).unwrap();
+    for binary in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+    for suite in [verify_binary, property_binary] {
+        let actual = run_bounded(&suite, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}
+
+#[test]
 fn native_interface_refined_sums_match_interpreter_in_both_profiles() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/interface_refined_sums.jett");

@@ -1,0 +1,82 @@
+# ERROR: E0404 x14
+# ERROR: E0401 x9
+namespace app
+struct Inner:
+    value: int64
+struct Record:
+    inner: Inner
+    label: string
+enum Choice:
+    wrapped(record: Record)
+function make() returns Record:
+    return Record(inner: Inner(value: 1), label: "before")
+function immutable_local() returns nothing:
+    Record record = make()
+    record.label = "after"
+    (record).inner.value = 9
+function owned_parameter(record: Record) returns nothing:
+    record.inner.value = 9
+function view_parameter(view record: Record) returns nothing:
+    record.inner.value = 9
+function mutable_view_parameter(view mutable record: Record) returns nothing:
+    record.inner.value = 9
+function owned_rebind_from_view(view source: Record) returns nothing:
+    mutable Record alias = make()
+    alias = view source
+function parenthesized_owned_rebind_from_view(view source: Record) returns nothing:
+    mutable Record alias = make()
+    ((alias)) = view source
+function temporary_roots() returns nothing:
+    Record(inner: Inner(value: 1), label: "before").inner.value = 9
+    make().inner.value = 9
+    Record record = make()
+    (clone record).inner.value = 9
+function explicit_view() returns nothing:
+    mutable Record record = make()
+    (view record).inner.value = 9
+function owned_loop() returns nothing:
+    list[Record] records = list(make())
+    for record in records:
+        record.inner.value = 9
+function borrowed_loop() returns nothing:
+    mutable list[Record] records = list(make())
+    for record in view records:
+        record.inner.value = 9
+function owned_match(choice: Choice) returns nothing:
+    match choice:
+        wrapped(record):
+            record.inner.value = 9
+function borrowed_match(view choice: Choice) returns nothing:
+    match choice:
+        wrapped(record):
+            record.inner.value = 9
+function expired_binding() returns nothing:
+    if false:
+        mutable Record record = make()
+        trace record
+    Record record = make()
+    record.inner.value = 9
+function inline_view() returns nothing:
+    function(view Record) returns nothing callback = function(view record: Record) returns nothing:
+        record.inner.value = 9
+    Record source = make()
+    callback(view source)
+actor Store:
+    app.Record record = make()
+    receive replace:
+        record.inner.value = 9
+    receive owned(replacement: Record):
+        replacement.inner.value = 9
+    receive borrowed(view mutable replacement: Record):
+        replacement.inner.value = 9
+    receive rebind(view source: Record):
+        mutable Record alias = make()
+        alias = view source
+verify readonly_local:
+    Record record = make()
+    record.inner.value = 9
+    assert true
+property readonly_given:
+    given record: Record
+    record.inner.value = 9
+    assert true

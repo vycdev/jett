@@ -5419,8 +5419,9 @@ A `list[uint8]` field captures everything after the fixed-size fields as a raw b
 
 Direct field assignment in this table is a design proposal whose execution and
 ownership contract remains [unresolved](open_design/projected_field_assignment.md).
-The checker currently accepts projected writes, including unsafe immutable/view
-roots, but neither the interpreter nor native lowering implements those updates.
+The checker rejects projected writes through immutable or temporary roots with
+E0404 and through known views with E0401. Owned mutable roots remain admitted,
+but neither the interpreter nor native lowering implements those updates.
 
 No hex literals, no binary literals, no shift operators, no mask operators. The LLM works entirely in base-10 integers and field names.
 
@@ -5594,6 +5595,15 @@ function bad_consume(view data: list[int64]) returns list[int64]:
 ```
 
 A view is a borrow — the caller still owns the data. Any operation that would consume (move) the value is a compile error. The function can read the view and pass it as `view` to other functions, but cannot take ownership.
+
+Views also forbid projected writes: a field assignment through a known view
+reports E0401, even when its binding is marked `mutable`. An immutable binding
+or temporary assignment root reports E0404. These existing restrictions do not
+select an execution contract for field updates through an owned mutable root;
+that contract remains [open](open_design/projected_field_assignment.md).
+Rebinding an owned mutable value from a known move-only view reports E0401;
+use an explicit clone to acquire ownership. Copyable values retain implicit
+copying.
 
 **Rule 2: A view cannot be sent to another thread.**
 
