@@ -887,6 +887,343 @@ fn empty_collection_iteration_still_rejects_invalid_dead_bodies() {
 }
 
 #[test]
+fn native_uninhabited_sum_arms_match_interpreter_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/uninhabited_sum_arms.jett");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("uninhabited_sum_arms.jett");
+    fs::copy(&fixture, &source).unwrap();
+    let expected = jett_driver::run_file_capture_output(&source).expect("uninhabited sum oracle");
+    assert_eq!(
+        expected.stdout,
+        concat!(
+            "handlers:0:0:0\nreuse:0:0:2:0:default:0:0\n",
+            "transforms:0:0:0:0:0\noptional source\neffect optional:0\n",
+            "result source\neffect failure:0\ncontext:0:0:0:callbacks:0:0:0\n",
+            "baked:0:0:0:0:0:2:0:0:0:0:0:0\npayloads:1:1\n",
+            "surviving:37:49\n",
+            "mixed-sums:7,:7,:8,:8,\n",
+            "mixed-nested:9,:9,:10,:10,\n",
+            "mixed-callbacks:7,:7,\n",
+            "mixed-rows:added:1:0;added:3:2;|added:3:2;added:1:0;\n",
+            "mixed-row-callbacks:added:1:0;added:3:2;|added:3:2;added:1:0;\n",
+            "boundary:local=7:0;view=7:0;call=7:0;nested=added:1:1:0|added:1:1:0;second=7,:|added:3:2;|added:1:0;|added:3:2;|added:1:0;\n",
+            "reflection:outer=list[int64]:list[int64];literal=list[int64]:list[int64];payload=app.Count;root=int64;aliases=app.Count:app.OtherCount:app.Count:app.OtherCount\n",
+        )
+    );
+    assert_eq!(
+        expected.debug_output,
+        [
+            "trace error: string = bad",
+            "trace item: int64 = 8",
+            "trace error: string = reuse",
+            "trace error: string = reuse",
+            "trace item: int64 = 8",
+            "trace item: int64 = 8",
+            "trace item: int64 = 8",
+            "trace item: int64 = 8",
+            "trace error: string = default",
+            "trace error: string = absent",
+            "trace error: string = concrete",
+            "trace item: app.Count = 8",
+            "trace item: app.Named = 8",
+            "trace item: function() returns int64 = function(app.callback)",
+            "trace item: int64 = pending(pending(6))",
+            "trace once: int64 = pending(6)",
+            "trace ready: int64 = 6",
+            "trace item: int64 = pending(pending(8))",
+            "trace once: int64 = pending(8)",
+            "trace ready: int64 = 8",
+        ]
+    );
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("uninhabited_sum_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native uninhabited sum program");
+        binaries.push((binary, release));
+    }
+    let verify_binary = directory.path().join("uninhabited_sum_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify_binary)
+        .expect("native uninhabited sum verify suite");
+    let property_binary = directory.path().join("uninhabited_sum_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property_binary)
+        .expect("native uninhabited sum property suite");
+    fs::remove_file(&source).unwrap();
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout.as_bytes());
+        let debug = if release {
+            String::new()
+        } else {
+            format!("{}\n", expected.debug_output.join("\n"))
+        };
+        assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
+    }
+    let suite_debug = "trace error: string = bad\ntrace item: int64 = 8\n";
+    for (suite, repetitions) in [(verify_binary, 1), (property_binary, 100)] {
+        let actual = run_bounded(&suite, directory.path());
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert_eq!(actual.stderr, suite_debug.repeat(repetitions).as_bytes());
+    }
+}
+
+#[test]
+fn native_uninhabited_sum_arms_and_reverse_reject_pending_in_both_profiles() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/uninhabited_sum_arms.jett");
+    let template = fs::read_to_string(&fixture).unwrap();
+    let declarations = template.split("function main(").next().unwrap();
+    for (name, operation, value, message) in [
+        (
+            "optional",
+            "unwrap_optional",
+            "none",
+            "handle block requires a result or optional value, got pending(pending(none))",
+        ),
+        (
+            "failure",
+            "unwrap_result",
+            "fail(\"bad\")",
+            "handle block requires a result or optional value, got pending(pending(fail(bad)))",
+        ),
+        (
+            "success",
+            "collect_errors",
+            "ok(8)",
+            "handle block requires a result or optional value, got pending(pending(ok(8)))",
+        ),
+        (
+            "reverse",
+            "list.reverse",
+            "list()",
+            "list.__length expects a list argument",
+        ),
+    ] {
+        for comptime in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("pending_uninhabited_sum.jett");
+            let initializer = if comptime {
+                format!("comptime run run {value}")
+            } else {
+                format!("run run {value}")
+            };
+            fs::write(
+                &source,
+                format!(
+                    "{declarations}function main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"before\\n\")\n    int64 size = list.length(view {operation}({initializer}))\n    Stdout.write(view stdout, \"after:{{size}}\\n\")\n"
+                ),
+            )
+            .unwrap();
+            let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
+            assert_eq!(expected.output.stdout, "before\n", "{name}");
+            assert!(expected.output.debug_output.is_empty(), "{name}");
+            assert_eq!(
+                expected.message,
+                format!("runtime error: {message}"),
+                "{name}"
+            );
+            let mut binaries = Vec::new();
+            for release in [false, true] {
+                let binary = directory.path().join(format!("pending_sum_{release}.exe"));
+                jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    launcher(),
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{name}, comptime={comptime}, release={release}: {error}")
+                });
+                binaries.push(binary);
+            }
+            fs::remove_file(&source).unwrap();
+            for binary in binaries {
+                let actual = run_bounded(&binary, directory.path());
+                assert_eq!(actual.status.code(), Some(71), "{name}: {actual:?}");
+                assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
+                assert_eq!(
+                    actual.stderr,
+                    format!("{}\n", expected.message).as_bytes(),
+                    "{name}: {actual:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn uninhabited_sum_handlers_still_reject_invalid_arms() {
+    for (declaration, argument) in [
+        (
+            "function invalid[T](candidate: optional[T]) returns list[T]:\n    T item = candidate handle: return list()\n    int64 copied = item + 1\n    return list(item)\n",
+            "none",
+        ),
+        (
+            "function invalid[T, E](candidate: result[T, E]) returns list[E]:\n    T item = candidate handle error:\n        int64 copied = error + 1\n        return list(error)\n    return list()\n",
+            "ok(8)",
+        ),
+    ] {
+        let text = format!(
+            "namespace app\n{declaration}function main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"{{list.length(view invalid({argument}))}}\")\n"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("invalid_uninhabited_arm.jett");
+        fs::write(&source, &text).unwrap();
+        for checked in [
+            jett_driver::build_source(&text, "invalid_uninhabited_arm.jett"),
+            jett_driver::build_file(&source),
+        ] {
+            let errors = checked
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].code.code(), 301);
+            assert_eq!(
+                errors[0].message,
+                "cannot apply `+` to `<never>` and `int64`"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_builds_reject_manufactured_never_values_before_publication() {
+    let default_forge = "function forge[T](values: list[T]) returns list[T]:\n    T item = none handle: default 7\n    return list(item)\n";
+    for (name, declaration, namespace_value, invocation, code) in [
+        (
+            "default",
+            default_forge,
+            "",
+            "int64 size = list.length(view forge(list()))",
+            300,
+        ),
+        (
+            "local",
+            "function forge[T](values: list[T]) returns list[T]:\n    T item = 7\n    return list(item)\n",
+            "",
+            "int64 size = list.length(view forge(list()))",
+            311,
+        ),
+        (
+            "return",
+            "function forge[T](values: list[T]) returns T:\n    return 7\nfunction invoke[T](values: list[T]) returns list[T]:\n    T item = forge[T](values)\n    return list(item)\n",
+            "",
+            "int64 size = list.length(view invoke(list()))",
+            305,
+        ),
+        (
+            "append",
+            "function forge[T](values: list[T]) returns list[T]:\n    return list.append[T](values, 7)\n",
+            "",
+            "int64 size = list.length(view forge(list()))",
+            300,
+        ),
+        (
+            "list_return",
+            "function forge[T](values: list[T]) returns list[T]:\n    return list(7)\n",
+            "",
+            "int64 size = list.length(view forge(list()))",
+            300,
+        ),
+        (
+            "namespace_comptime",
+            default_forge,
+            "int64 forged = comptime list.length(view forge(list()))\n",
+            "trace forged",
+            300,
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("manufactured_never.jett");
+        let function_name = format!("manufacture_{name}");
+        let declaration = declaration.replace("forge[", &format!("{function_name}["));
+        let namespace_value = namespace_value.replace("forge(", &format!("{function_name}("));
+        let invocation = invocation.replace("forge(", &format!("{function_name}("));
+        let text = format!(
+            "namespace app\n{declaration}{namespace_value}function main(stdout: Stdout) returns nothing:\n    {invocation}\n    Stdout.write(view stdout, \"must not execute\\n\")\nverify valid_check:\n    assert true\nproperty valid_trials:\n    given value: int64\n    assert value == value\n"
+        );
+        fs::write(&source, &text).unwrap();
+        let check_diagnostics = |checked: jett_driver::BuildResult| {
+            let errors = checked
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(checked.has_errors, "{name}");
+            assert_eq!(errors.len(), 1, "{name}: {errors:?}");
+            assert_eq!(errors[0].code.code(), code, "{name}: {errors:?}");
+            assert!(errors[0].message.contains("<never>"), "{name}: {errors:?}");
+            assert!(errors[0].message.contains("int64"), "{name}: {errors:?}");
+        };
+        check_diagnostics(jett_driver::build_source(&text, "manufactured_never.jett"));
+        check_diagnostics(jett_driver::build_file(&source));
+        let expected = jett_driver::run_file_capture_outcome(&source)
+            .expect_err("invalid Never values must prevent reference execution");
+        assert!(expected.output.stdout.is_empty(), "{name}");
+        assert!(expected.output.debug_output.is_empty(), "{name}");
+        assert!(
+            expected.message.contains(&format!("E{code:04}")),
+            "{name}: {}",
+            expected.message
+        );
+
+        let binary = directory.path().join("preserved.exe");
+        let sentinel = b"existing native output";
+        fs::write(&binary, sentinel).unwrap();
+        // A checked source error must precede opening the launcher archive.
+        let unused_launcher = if cfg!(windows) {
+            NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("unused.lib"))
+        } else {
+            NativeLauncherBundle::linux_gnu_v1(directory.path().join("unused.a"))
+        };
+        let check_native = |error: jett_driver::native::NativeBuildError| {
+            let jett_driver::native::NativeBuildError::Lowering {
+                source: lowering, ..
+            } = error
+            else {
+                panic!("{name}: expected frontend rejection, got {error}");
+            };
+            let jett_driver::BackendLoweringError::Build(checked) = *lowering else {
+                panic!("{name}: expected preserved diagnostics before HIR");
+            };
+            check_diagnostics(checked);
+            assert_eq!(fs::read(&binary).unwrap(), sentinel, "{name}");
+        };
+        for release in [false, true] {
+            check_native(
+                jett_driver::native::build_host_executable_with_options(
+                    &source,
+                    &unused_launcher,
+                    &binary,
+                    jett_driver::BuildOptions { release },
+                )
+                .expect_err("invalid Never values must prevent native program publication"),
+            );
+        }
+        check_native(
+            build_host_verify_suite_executable(&source, &unused_launcher, &binary)
+                .expect_err("invalid Never values must prevent native verify publication"),
+        );
+        check_native(
+            build_host_property_suite_executable(&source, &unused_launcher, &binary)
+                .expect_err("invalid Never values must prevent native property publication"),
+        );
+    }
+}
+
+#[test]
 fn native_generic_lexical_type_scope_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_lexical_type_scope.jett");

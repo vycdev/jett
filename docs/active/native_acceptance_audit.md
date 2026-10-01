@@ -392,3 +392,53 @@ All 69 HIR tests, 32 MIR unit tests and its integration test, 71 codegen tests,
 and eight backend-lowering regressions covering all 182 run-pass cases pass.
 These checks retain the inventory denominator and do not establish full native
 acceptance or settle the remaining open policies.
+
+The uninhabited-handler audit found optional/result handlers attempting to
+extract impossible payloads, and generated callbacks retaining unused parent
+locals whose types have no native carrier. Native preparation selects the sole
+inhabited arm only for an exact checked `SumTag` branch. It retains source
+evaluation, snapshots, and pending validation, then compacts changed graphs.
+Explicitly generated inline functions also compact unused parent locals and
+become reachable through retained calls and descriptors. Original structural
+validation protects pruned graphs; global debug labels remain validated even
+for omitted functions.
+
+The proof depends on directional frontend compatibility: concrete values cannot
+populate `never` through defaults, declarations, calls, constructors, returns,
+or required comptime evaluation. Mixed collections and repeated generic
+arguments fill compatible absent slots in either order without promoting
+numeric widths, erasing nominal types, or weakening callable variance and view
+modes. Contextual handlers preserve producer signatures and convert inhabited
+nested payloads explicitly; empty owned containers receive their target
+ownership flags. Cloneable local sums snapshot their underlying source before
+conversion, preserving owned and borrowed reuse.
+
+Generic reflection now retains declared nested alias witnesses through
+identifiers, explicit views, parentheses, and concrete named/inline callback
+signatures. Root transparent aliases still peel, and repeated concrete witnesses
+follow declaration parameter order, including named arguments. The reference
+evaluator fills nested `never` slots using the same variance and source-witness
+rules. Field, returned-call, and clone-expression witness recovery remains a
+separate metadata audit; this handoff does not claim those expression forms.
+
+`native_uninhabited_sum_arms_match_interpreter_in_both_profiles` covers absent
+handlers, empty reverse, dead and surviving callbacks, once-only effects,
+contextual interfaces and function values, owned/view source reuse, nested
+pending joins, mixed collection inference, alias reflection, and required
+comptime values. Debug/release programs and native verify/property suites run
+after source removal. Its pending companion covers eight runtime/comptime
+sum/reverse failures with exact output and exit 71 in both profiles. Public
+driver controls reject invalid dead arms and manufactured `never` values before
+execution or native publication, retaining existing output files. These
+supplemental cases do not change the 207-obligation inventory denominator.
+
+Local validation passes all 195 checker tests, 325 reference/comptime tests,
+74 HIR tests, 46 MIR unit tests and its integration test, and 73 codegen tests.
+All 594 frontend fixtures and eight backend-lowering regressions covering all
+182 run-pass files pass. All 182 inventory object obligations emit nonempty
+native objects, with deterministic repeat-emission controls passing. The four
+new native regressions and eleven adjacent native tests pass, including both
+profiles and native verify/property execution after source removal. Formatting
+and whitespace checks pass. Complete workspace, inventory execution, and
+platform distribution results for the final revision remain independent gates;
+this handoff does not establish full native parity.

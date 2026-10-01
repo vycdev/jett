@@ -9068,4 +9068,130 @@ function main() returns int64:
             Some(true)
         ));
     }
+
+    #[test]
+    fn contextual_absent_handle_preserves_the_local_producer_signature() {
+        let program = lower_source(
+            r#"function defaulted[T](value: optional[T]) returns int64:
+    return value handle: default 7
+function main() returns int64:
+    return defaulted(none)
+"#,
+        );
+        let defaulted = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "defaulted")
+            .unwrap();
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Handle { target, .. },
+            ty,
+            ..
+        })) = &defaulted.body.statements[0].kind
+        else {
+            panic!("expected contextual handle");
+        };
+        assert_eq!(*ty, TypeInterner::INT64);
+        assert_eq!(target.ty, defaulted.params[0].ty);
+        assert!(matches!(target.kind, ExpressionKind::Local(_)));
+        assert_eq!(defaulted.identity.type_arguments, [TypeInterner::NEVER]);
+    }
+
+    #[test]
+    fn contextual_inhabited_handle_converts_the_sum_before_payload_extraction() {
+        let program = lower_source(
+            r#"function defaulted[T](value: optional[list[T]]) returns list[string]:
+    return value handle: default list("fallback")
+function main() returns nothing:
+    list[string] values = defaulted(some(list()))
+    trace values
+    return nothing
+"#,
+        );
+        let defaulted = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "defaulted")
+            .unwrap();
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::Handle { target, .. },
+            ..
+        })) = &defaulted.body.statements[0].kind
+        else {
+            panic!("expected contextual handle");
+        };
+        let ExpressionKind::InterfaceCoerce { value, adapters } = &target.kind else {
+            panic!("expected explicit contextual sum conversion");
+        };
+        assert_eq!(value.ty, defaulted.params[0].ty);
+        assert!(matches!(value.kind, ExpressionKind::Local(_)));
+        assert_ne!(target.ty, value.ty);
+        assert!(adapters.is_empty());
+        assert_eq!(defaulted.identity.type_arguments, [TypeInterner::NEVER]);
+    }
+
+    #[test]
+    fn mixed_empty_literals_rebuild_the_first_nested_list_ownership_shape() {
+        let program = lower_source(
+            r#"function main() returns nothing:
+    for values in list(list(), list("ready")):
+        trace values
+    return nothing
+"#,
+        );
+        let StatementKind::For { iterable, .. } = &program.functions[0].body.statements[0].kind
+        else {
+            panic!("expected inferred iteration");
+        };
+        let ExpressionKind::ListConstruct { elements } = &iterable.kind else {
+            panic!("expected mixed literal");
+        };
+        let ExpressionKind::InterfaceCoerce { value, .. } = &elements[0].kind else {
+            panic!("expected empty list conversion");
+        };
+        assert_ne!(value.ty, elements[0].ty);
+        assert_eq!(elements[0].ty, elements[1].ty);
+        assert!(
+            matches!(&value.kind, ExpressionKind::ListConstruct { elements } if elements.is_empty())
+        );
+    }
+
+    #[test]
+    fn mixed_callable_empty_returns_keep_source_signature_and_convert_adapter_return() {
+        let program = lower_source(
+            r#"function make_empty[T](view items: list[T]) returns function() returns list[T]:
+    return function() returns list[T]: return list()
+function ready() returns list[string]:
+    return list("ready")
+function main() returns nothing:
+    for callback in list(make_empty(list()), ready):
+        list[string] values = callback()
+        trace values
+    return nothing
+"#,
+        );
+        let adapter = program
+            .functions
+            .iter()
+            .find(|function| {
+                function
+                    .identity
+                    .declaration
+                    .name
+                    .starts_with("$interface.adapter.")
+            })
+            .expect("source signature adapter");
+        let StatementKind::Return(Some(Expression {
+            kind: ExpressionKind::InterfaceCoerce { value, adapters },
+            ty,
+            ..
+        })) = &adapter.body.statements[0].kind
+        else {
+            panic!("expected converted adapter return");
+        };
+        assert!(matches!(value.kind, ExpressionKind::IndirectCall { .. }));
+        assert_eq!(*ty, adapter.return_type);
+        assert_ne!(*ty, value.ty);
+        assert!(adapters.is_empty());
+    }
 }

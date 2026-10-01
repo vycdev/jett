@@ -245,6 +245,29 @@ fn is_secret(types: &TypeInterner, mut ty: TypeId) -> bool {
     }
 }
 
+/// A contextual empty/absent value can fill only bottom slots. Rebuilding the
+/// container is required even without interfaces: its element ownership flags
+/// may change, and a nested callable still needs its checked adapter.
+fn never_slots_compatible(types: &TypeInterner, source: TypeId, target: TypeId) -> bool {
+    if source == target || source == TypeInterner::NEVER {
+        return true;
+    }
+    match (types.resolve(source), types.resolve(target)) {
+        (Type::List(source), Type::List(target))
+        | (Type::Optional(source), Type::Optional(target))
+        | (Type::Secret(source), Type::Secret(target)) => {
+            never_slots_compatible(types, *source, *target)
+        }
+        (Type::Map(source_key, source_value), Type::Map(target_key, target_value))
+        | (Type::Result(source_key, source_value), Type::Result(target_key, target_value)) => {
+            never_slots_compatible(types, *source_key, *target_key)
+                && never_slots_compatible(types, *source_value, *target_value)
+        }
+        (_, Type::Secret(target)) => never_slots_compatible(types, source, *target),
+        _ => false,
+    }
+}
+
 fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
     if value.ty == expected
         || value.ty == TypeInterner::NEVER
@@ -253,6 +276,7 @@ fn coerce(value: &mut Expression, expected: TypeId, types: &TypeInterner) {
             && !matches!(types.resolve(expected), Type::Interface(_)))
         || !(contains_erased_boundary(types, expected)
             || contains_erased_boundary(types, value.ty)
+            || never_slots_compatible(types, value.ty, expected)
             || representation_type(types, expected) == representation_type(types, value.ty))
     {
         return;
@@ -726,9 +750,38 @@ impl Coercions<'_> {
                 }
             }
             ExpressionKind::Handle {
-                target, failure, ..
+                target,
+                kind,
+                failure,
+                ..
             } => {
-                self.expression(target, handled);
+                // The checker contextualizes the success shape, while the
+                // original Local/Call keeps its exact producer signature.
+                // Bare bottom success has no payload and stays visible to MIR;
+                // inhabited containers need an explicit checked conversion.
+                let contextual = match (kind, self.types.resolve(target.ty)) {
+                    (HandleKind::Optional, Type::Optional(success))
+                        if *success != ty && *success != TypeInterner::NEVER =>
+                    {
+                        Some(Type::Optional(ty))
+                    }
+                    (HandleKind::Result, Type::Result(success, error))
+                        if *success != ty && *success != TypeInterner::NEVER =>
+                    {
+                        Some(Type::Result(ty, *error))
+                    }
+                    _ => None,
+                }
+                .and_then(|contextual| {
+                    self.types
+                        .type_ids()
+                        .find(|ty| self.types.resolve(*ty) == &contextual)
+                });
+                if let Some(contextual) = contextual {
+                    self.expected(target, contextual, handled);
+                } else {
+                    self.expression(target, handled);
+                }
                 self.block(failure, Some(ty));
             }
             ExpressionKind::Binary { left, right, .. } => {
@@ -815,5 +868,41 @@ impl Coercions<'_> {
             _ => {}
         }
         self.adapt(expression);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn never_container_conversion_is_directional_and_preserves_known_leaves() {
+        let mut types = TypeInterner::new();
+        let empty = types.intern(Type::List(TypeInterner::NEVER));
+        let strings = types.intern(Type::List(TypeInterner::STRING));
+        let optional_empty = types.intern(Type::Optional(empty));
+        let optional_strings = types.intern(Type::Optional(strings));
+        assert!(never_slots_compatible(&types, empty, strings));
+        assert!(never_slots_compatible(
+            &types,
+            optional_empty,
+            optional_strings
+        ));
+        assert!(!never_slots_compatible(&types, strings, empty));
+        assert!(!never_slots_compatible(
+            &types,
+            TypeInterner::INT8,
+            TypeInterner::INT64
+        ));
+        let empty_map = types.intern(Type::Map(TypeInterner::NEVER, TypeInterner::NEVER));
+        let string_map = types.intern(Type::Map(TypeInterner::STRING, TypeInterner::STRING));
+        assert!(never_slots_compatible(&types, empty_map, string_map));
+        assert!(!never_slots_compatible(&types, string_map, empty_map));
+        let secret_strings = types.intern(Type::Secret(strings));
+        assert!(never_slots_compatible(&types, empty, secret_strings));
+        assert!(!never_slots_compatible(&types, secret_strings, empty));
+        let set_empty = types.intern(Type::Set(TypeInterner::NEVER));
+        let set_strings = types.intern(Type::Set(TypeInterner::STRING));
+        assert!(!never_slots_compatible(&types, set_empty, set_strings));
     }
 }

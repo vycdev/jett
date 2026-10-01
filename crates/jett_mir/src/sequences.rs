@@ -4,7 +4,7 @@
 use super::*;
 use jett_hir::{BinaryOp, ExpressionKind};
 use jett_types::{Type, TypeInterner};
-mod prune;
+pub(crate) mod prune;
 #[cfg(test)]
 mod tests;
 fn local(id: LocalId, ty: TypeId, span: Span) -> Expression {

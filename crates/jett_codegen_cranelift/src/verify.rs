@@ -205,6 +205,18 @@ pub(crate) fn verify_program(
 ) -> Result<VerifiedProgram, CodegenError> {
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
 
+    // Reachability may omit lifted bodies, but malformed source metadata must
+    // not disappear with an unused descriptor.
+    for function in &program.functions {
+        super::emit::debug::function_label(function).map_err(|message| {
+            CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: message.into(),
+            }
+        })?;
+    }
+
     for (&owner, &method) in &program.equality_methods {
         let (_, target) = function_by_id(program, method)?;
         if owner.index() as usize >= types.len()
@@ -513,8 +525,6 @@ struct Verifier<'a> {
 impl Verifier<'_> {
     fn function(&self, function: &Function) -> Result<(), CodegenError> {
         self.reject_entry_predecessors(function)?;
-        super::emit::debug::function_label(function)
-            .map_err(|message| self.contract_error(function, function.span, message))?;
 
         let name = self.function_name(function);
         for param in &function.params {

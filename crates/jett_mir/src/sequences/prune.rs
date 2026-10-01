@@ -1,9 +1,9 @@
-//! Compact only a function whose uninhabited iteration body was removed.
-//! The input program is validated before sequence preparation; all references
+//! Compact functions selected by bounded native preparation passes.
+//! The input program is validated before each preparation; all references
 //! below therefore name dense local/block tables, including unreachable input.
 use super::*;
 
-pub(super) fn unreachable(function: &mut Function) {
+pub(crate) fn unreachable(function: &mut Function) {
     let Ok(cfg) = ControlFlowGraph::analyze(function) else {
         return;
     };

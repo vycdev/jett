@@ -100,13 +100,25 @@ fn can_snapshot_view(types: &TypeInterner, ty: TypeId) -> bool {
             | Type::Nothing
             | Type::TypeConstruction
             | Type::Function { .. } => true,
-            Type::List(inner)
-            | Type::Set(inner)
-            | Type::Optional(inner)
-            | Type::Secret(inner)
-            | Type::Refinement { base: inner, .. } => supported(types, *inner, seen),
-            Type::Map(key, value) | Type::Result(key, value) => {
-                supported(types, *key, seen) && supported(types, *value, seen)
+            Type::List(inner) => *inner == TypeInterner::NEVER || supported(types, *inner, seen),
+            Type::Set(inner) | Type::Secret(inner) | Type::Refinement { base: inner, .. } => {
+                supported(types, *inner, seen)
+            }
+            Type::Optional(inner) => {
+                *inner == TypeInterner::NEVER || supported(types, *inner, seen)
+            }
+            Type::Result(ok, error) => {
+                match (*ok == TypeInterner::NEVER, *error == TypeInterner::NEVER) {
+                    (true, true) => false,
+                    (true, false) => supported(types, *error, seen),
+                    (false, true) => supported(types, *ok, seen),
+                    (false, false) => supported(types, *ok, seen) && supported(types, *error, seen),
+                }
+            }
+            Type::Map(key, value) => {
+                *key == TypeInterner::NEVER
+                    || *value == TypeInterner::NEVER
+                    || (supported(types, *key, seen) && supported(types, *value, seen))
             }
             Type::Struct(id) => types
                 .resolve_struct(*id)
@@ -180,12 +192,29 @@ fn stable_deferred_view(locals: &[Local], expression: &Expression) -> bool {
 }
 
 fn snapshotable_local(types: &TypeInterner, expression: &Expression) -> bool {
+    if let ExpressionKind::InterfaceCoerce { value, .. } = &expression.kind {
+        return snapshotable_local(types, value);
+    }
     matches!(expression.kind, ExpressionKind::Local(_))
         && crate::move_values::is_linear(types, expression.ty)
         && can_snapshot_view(types, expression.ty)
 }
 
 fn snapshot_local(expression: &Expression, lowered: Expression) -> Expression {
+    if let (
+        ExpressionKind::InterfaceCoerce { value: source, .. },
+        ExpressionKind::InterfaceCoerce { value, adapters },
+    ) = (&expression.kind, &lowered.kind)
+    {
+        return Expression {
+            kind: ExpressionKind::InterfaceCoerce {
+                value: Box::new(snapshot_local(source, value.as_ref().clone())),
+                adapters: adapters.clone(),
+            },
+            ty: lowered.ty,
+            span: lowered.span,
+        };
+    }
     Expression {
         kind: ExpressionKind::Clone(Box::new(lowered)),
         ty: expression.ty,
@@ -1891,5 +1920,74 @@ mod tests {
         assert!(!can_snapshot_view(&types, resource));
         assert!(!can_snapshot_view(&types, list_of_resources));
         assert!(can_snapshot_view(&types, list_of_integers));
+    }
+
+    #[test]
+    fn sum_snapshot_ignores_only_absent_never_payloads() {
+        let mut types = TypeInterner::new();
+        let resource = types.intern(Type::Resource("Socket".to_string()));
+        let secret_never = types.intern(Type::Secret(TypeInterner::NEVER));
+        let absent = types.intern(Type::Optional(TypeInterner::NEVER));
+        let no_success = types.intern(Type::Result(TypeInterner::NEVER, TypeInterner::STRING));
+        let no_error = types.intern(Type::Result(TypeInterner::STRING, TypeInterner::NEVER));
+        let impossible = types.intern(Type::Result(TypeInterner::NEVER, TypeInterner::NEVER));
+        let resource_success = types.intern(Type::Result(resource, TypeInterner::NEVER));
+        let resource_failure = types.intern(Type::Result(TypeInterner::NEVER, resource));
+        let secret_payload = types.intern(Type::Optional(secret_never));
+        let empty_list = types.intern(Type::List(TypeInterner::NEVER));
+
+        assert!(can_snapshot_view(&types, absent));
+        assert!(can_snapshot_view(&types, no_success));
+        assert!(can_snapshot_view(&types, no_error));
+        assert!(can_snapshot_view(&types, empty_list));
+        for rejected in [
+            TypeInterner::NEVER,
+            impossible,
+            resource_success,
+            resource_failure,
+            secret_never,
+            secret_payload,
+        ] {
+            assert!(!can_snapshot_view(&types, rejected), "{rejected:?}");
+        }
+    }
+
+    #[test]
+    fn contextual_sum_snapshot_clones_the_original_local_before_conversion() {
+        let mut types = TypeInterner::new();
+        let empty = types.intern(Type::List(TypeInterner::NEVER));
+        let strings = types.intern(Type::List(TypeInterner::STRING));
+        let original = types.intern(Type::Optional(empty));
+        let contextual = types.intern(Type::Optional(strings));
+        let span = Span::new(jett_common::FileId::new(0), 0, 1);
+        let local = Expression {
+            kind: ExpressionKind::Local(LocalId::new(0)),
+            ty: original,
+            span,
+        };
+        let conversion = Expression {
+            kind: ExpressionKind::interface_coerce(Box::new(local.clone())),
+            ty: contextual,
+            span,
+        };
+        assert!(snapshotable_local(&types, &conversion));
+        let snapshot = snapshot_local(&conversion, conversion.clone());
+        let ExpressionKind::InterfaceCoerce { value, .. } = snapshot.kind else {
+            panic!("expected retained contextual conversion");
+        };
+        let ExpressionKind::Clone(value) = value.kind else {
+            panic!("expected source clone before conversion");
+        };
+        assert_eq!(*value, local);
+        assert_eq!(snapshot.ty, contextual);
+
+        let empty_map = types.intern(Type::Map(TypeInterner::STRING, TypeInterner::NEVER));
+        let optional_map = types.intern(Type::Optional(empty_map));
+        assert!(can_snapshot_view(&types, optional_map));
+        let resource = types.intern(Type::Resource("Socket".into()));
+        let resource_list = types.intern(Type::List(resource));
+        let optional_resource = types.intern(Type::Optional(resource_list));
+        assert!(!can_snapshot_view(&types, optional_resource));
+        assert!(!can_snapshot_view(&types, TypeInterner::NEVER));
     }
 }

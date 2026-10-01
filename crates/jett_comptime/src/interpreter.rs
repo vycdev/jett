@@ -42,6 +42,7 @@ use jett_types::{
 use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeContext, Value};
 
 mod debug;
+mod generic_inference;
 mod graphics;
 mod nominal_types;
 
@@ -2934,7 +2935,7 @@ impl Interpreter {
         let mut inferred = HashMap::new();
         for (param, actual) in function.params.iter().zip(actual_types) {
             let actual = self.inference_base_type(actual);
-            Self::infer_type_arguments(&param.ty, &actual, &function.type_params, &mut inferred);
+            self.infer_type_arguments(&param.ty, &actual, &function.type_params, &mut inferred);
         }
         function
             .type_params
@@ -2985,12 +2986,16 @@ impl Interpreter {
     }
 
     fn call_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
-        match expression {
+        let source = Self::type_witness_source(expression);
+        match source {
             Expr::Ident(argument) if self.get_variable_type(&argument.name).is_some() => {
                 self.get_variable_type(&argument.name).cloned()
             }
             Expr::InlineFn(params, return_type, _, span) => Some(TypeExpr::Function(
-                params.iter().map(|param| param.ty.clone()).collect(),
+                params
+                    .iter()
+                    .map(|param| Self::type_witness_parameter(param, param.ty.clone()))
+                    .collect(),
                 Box::new(return_type.clone().unwrap_or_else(|| {
                     TypeExpr::Named(Ident {
                         name: "nothing".to_string(),
@@ -2999,7 +3004,7 @@ impl Interpreter {
                 })),
                 *span,
             )),
-            _ => self.named_function_argument_type(expression).or_else(|| {
+            _ => self.named_function_argument_type(source).or_else(|| {
                 self.checked_expression_type(expression.span())
                     .and_then(|type_name| {
                         Self::simple_type_expr_from_name(type_name, expression.span())
@@ -3009,7 +3014,7 @@ impl Interpreter {
     }
 
     fn named_function_argument_type(&self, expression: &Expr) -> Option<TypeExpr> {
-        let expression = Self::unparenthesized(expression);
+        let expression = Self::type_witness_source(expression);
         if self.is_value_call_target(expression) {
             // Captures can omit runtime type metadata and shadow a namespaced
             // function. Their checked expression type remains authoritative.
@@ -3026,7 +3031,12 @@ impl Interpreter {
         let params = function
             .params
             .iter()
-            .map(|param| self.substitute_type_expr_in_namespace(&param.ty, namespace))
+            .map(|param| {
+                Self::type_witness_parameter(
+                    param,
+                    self.substitute_type_expr_in_namespace(&param.ty, namespace),
+                )
+            })
             .collect();
         let return_type = function
             .return_type
@@ -3046,6 +3056,7 @@ impl Interpreter {
     }
 
     fn infer_type_arguments(
+        &self,
         expected: &TypeExpr,
         actual: &TypeExpr,
         type_params: &[Ident],
@@ -3055,32 +3066,42 @@ impl Interpreter {
             (TypeExpr::Named(expected), actual)
                 if type_params.iter().any(|param| param.name == expected.name) =>
             {
-                inferred
-                    .entry(expected.name.clone())
-                    .or_insert_with(|| actual.clone());
+                match inferred.get(&expected.name) {
+                    Some(previous) => {
+                        if let Some(merged) = self.merge_inferred_never(previous, actual, false) {
+                            inferred.insert(expected.name.clone(), merged);
+                        }
+                    }
+                    None => {
+                        inferred.insert(expected.name.clone(), actual.clone());
+                    }
+                }
             }
             (
                 TypeExpr::Generic(expected_owner, expected_args, _),
                 TypeExpr::Generic(actual_owner, actual_args, _),
             ) if expected_owner.name == actual_owner.name => {
                 for (expected, actual) in expected_args.iter().zip(actual_args) {
-                    Self::infer_type_arguments(expected, actual, type_params, inferred);
+                    self.infer_type_arguments(expected, actual, type_params, inferred);
                 }
             }
+            (TypeExpr::View(expected, _), TypeExpr::View(actual, _)) => {
+                self.infer_type_arguments(expected, actual, type_params, inferred);
+            }
             (TypeExpr::View(expected, _), actual) => {
-                Self::infer_type_arguments(expected, actual, type_params, inferred);
+                self.infer_type_arguments(expected, actual, type_params, inferred);
             }
             (expected, TypeExpr::View(actual, _)) => {
-                Self::infer_type_arguments(expected, actual, type_params, inferred);
+                self.infer_type_arguments(expected, actual, type_params, inferred);
             }
             (
                 TypeExpr::Function(expected_params, expected_return, _),
                 TypeExpr::Function(actual_params, actual_return, _),
             ) => {
                 for (expected, actual) in expected_params.iter().zip(actual_params) {
-                    Self::infer_type_arguments(expected, actual, type_params, inferred);
+                    self.infer_type_arguments(expected, actual, type_params, inferred);
                 }
-                Self::infer_type_arguments(expected_return, actual_return, type_params, inferred);
+                self.infer_type_arguments(expected_return, actual_return, type_params, inferred);
             }
             _ => {}
         }

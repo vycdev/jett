@@ -966,6 +966,35 @@ Eager concrete generic specializations with a bare `never` parameter or result
 are not implicit native project roots; retained calls and function references
 still reach them and require ordinary verification. Inhabited containers and
 absent sum arms containing `never` retain their normal representations.
+Native handler preparation also recognizes an exact final `SumTag` followed
+by a branch on its checked boolean local. An optional with a `never` payload
+can only take absence; a result with exactly one `never` payload can only take
+the other arm. The pass retains sum observation, input evaluation, and pending
+diagnostics, then bypasses the impossible extraction and compacts only changed
+functions. It leaves other graph shapes and results with two uninhabited arms
+unchanged. Snapshot cloneability ignores absent `never` sum children while
+retaining the ordinary policy for inhabited payloads; bare `never` still has
+no runtime carrier or clone operation.
+Generated inline functions are reached through retained descriptors and calls,
+rather than treated as independent source-declaration roots. Native preparation
+compacts their copied local tables even when their own graph contains no erased
+loop or handler arm, preserving capture/parameter order and function identity.
+This removes unused parent bindings without changing named-function admission.
+The frontend's directional compatibility and collection-literal common-type
+inference establish these uninhabited proofs: concrete values cannot populate
+a `never` place, while mixed empty/absent members refine only their compatible
+uninhabited slots. Handler defaults, declarations, calls, constructors, and
+returns retain ordinary assignment checks before any native arm is removed.
+Contextual sum handling keeps the producer's original local or call signature.
+Inhabited nested containers receive an explicit conversion before extraction;
+empty collections are rebuilt with the target ownership flags, and nested
+function values retain their checked adapters. Handler snapshots clone the
+underlying local before conversion so owned and borrowed sources stay readable.
+Inferred generic reflection peels transparent aliases only at each argument's
+root and preserves nested alias witnesses. Repeated compatible witnesses fill
+only missing `never` slots; concrete alias identity follows declaration parameter
+order. The checker and reference evaluator retain the same reflection names and
+kinds, including calls whose empty input comes through another generic local.
 Assertion and breakpoint conditions also extract handlers before their MIR
 statements execute. Assertion messages remain on the failure-only path.
 Handled machine transitions snapshot their source and payloads in lexical

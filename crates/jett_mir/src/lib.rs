@@ -2,9 +2,13 @@
 
 mod analysis;
 pub mod copy_values;
+mod generated_functions;
 mod handlers;
+pub use generated_functions::prepare_native_generated_functions;
 mod sequences;
 pub use sequences::prepare_native_sequences;
+mod uninhabited_sums;
+pub use uninhabited_sums::prepare_native_uninhabited_sums;
 pub mod move_values;
 
 pub use analysis::{AnalysisError, ControlFlowGraph};

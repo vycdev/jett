@@ -40,6 +40,7 @@ fn reachable_functions(
     for function in &program.functions {
         if matches!(function.identity.declaration.origin, SourceOrigin::Project)
             && function.identity.declaration.kind != hir::DeclarationKind::RefinementPredicate
+            && function.debug_kind != hir::FunctionDebugKind::Inline
             && !uninhabited_specialization(function)
         {
             mark_reachable(
@@ -666,5 +667,59 @@ function main() returns nothing:
         plain.params[0].ty = jett_types::TypeInterner::NEVER;
         plain.return_type = jett_types::TypeInterner::NEVER;
         assert!(!uninhabited_specialization(&plain));
+    }
+
+    #[test]
+    fn generated_inline_functions_require_a_retained_descriptor_reference() {
+        let (mut program, types) = lower_source_with_types(
+            r#"namespace app
+function root() returns int64:
+    function() returns int64 callback = function() returns int64: return 1
+    return 7
+"#,
+        );
+        assert_eq!(reachable_names(&program).len(), 2);
+        let root = &mut program.functions[0];
+        assert!(matches!(
+            root.blocks[0].statements[0].kind,
+            StatementKind::Let { .. }
+        ));
+        // Model the descriptor being removed with an impossible handler arm.
+        // The generated function retains its identity and table position.
+        root.blocks[0].statements.remove(0);
+        assert_eq!(program.functions.len(), 2);
+        assert_eq!(
+            program.functions[1].debug_kind,
+            hir::FunctionDebugKind::Inline
+        );
+        assert_eq!(reachable_names(&program), ["root"]);
+        let object = crate::emit_host_object(&program, &types).unwrap();
+        assert_eq!(object.symbols.len(), 1);
+    }
+
+    #[test]
+    fn retained_inline_capture_with_never_metadata_still_fails_verification() {
+        let (mut program, types) = lower_source_with_types(
+            r#"namespace app
+function root(seed: int64) returns function() returns int64:
+    return function() returns int64: return seed
+"#,
+        );
+        let inline = program
+            .functions
+            .iter_mut()
+            .find(|function| function.debug_kind == hir::FunctionDebugKind::Inline)
+            .unwrap();
+        assert_eq!(inline.capture_count, 1);
+        inline.params[0].ty = jett_types::TypeInterner::NEVER;
+        let capture = inline.params[0].local.index() as usize;
+        inline.locals[capture].ty = jett_types::TypeInterner::NEVER;
+        inline.locals[capture].debug_ty = jett_types::TypeInterner::NEVER;
+        assert_eq!(reachable_names(&program).len(), 2);
+        assert!(matches!(
+            crate::emit_host_object(&program, &types),
+            Err(CodegenError::InvalidMirContract { message, .. })
+                if message == "closure capture type does not match target"
+        ));
     }
 }

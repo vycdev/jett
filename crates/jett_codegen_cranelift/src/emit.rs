@@ -218,6 +218,8 @@ fn emit_for_triple(
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
     let mut prepared = program.clone();
     jett_mir::prepare_native_sequences(&mut prepared, types);
+    jett_mir::prepare_native_uninhabited_sums(&mut prepared, types);
+    jett_mir::prepare_native_generated_functions(&mut prepared);
     let program = &prepared;
     let verified = verify_program(program, types)?;
     if let Some(entry) = entry

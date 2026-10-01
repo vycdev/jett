@@ -7380,6 +7380,25 @@ parameter absent from all arguments or replace a type inferred from an actual
 element. For example, `list[list[int64]] chunks = list.chunk(list(), 3)`
 specializes `chunk` for `int64`.
 
+Mixed collection literals and repeated generic arguments fill compatible `never`
+slots from their concrete members in either order. For example,
+`list(none, some(7))` has an optional integer element type, and mixed `ok`/`fail`
+values retain both result payload types. This does not promote numeric widths or
+erase nominal types. Assignment is directional: an uninhabited value can flow
+into a contextual type, but an inhabited value cannot satisfy `never`, including
+through a handler default.
+Generic argument inference unwraps a transparent alias at the root of an
+argument, while aliases nested in containers or callable signatures retain their
+reflection identity through explicit views and parentheses. Equal concrete
+witnesses keep the first alias in declaration parameter order; filling an absent
+`never` slot does not replace concrete siblings.
+
+An inferred absent optional or result arm can also retain `never`. That arm
+has no payload value. Handling still observes the sum and rejects an outer
+pending value before selecting its possible arm; source checking applies to
+both arms. An absent arm contributes no payload to clone, so a cloneable local
+sum retains the ordinary observation and reuse contract.
+
 A bare generic function template is not a concrete function value. To pass one
 as a callback, use a concrete named wrapper or inline function containing an
 ordinary generic call. Contextual specialization of generic function values is

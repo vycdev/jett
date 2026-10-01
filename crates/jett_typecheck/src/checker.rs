@@ -487,6 +487,8 @@ struct TypeChecker<'a> {
     /// Expression span → TypeId (the output type map).
     type_map: HashMap<Span, TypeId>,
     debug_type_names: HashMap<Span, String>,
+    /// Source declarations retain nested aliases when inferring generic witnesses.
+    declared_source_types: HashMap<DefId, TypeExpr>,
     /// The expected return type for the function currently being checked.
     current_return_type: Option<TypeId>,
     /// (interface, concrete type) -> implemented method signatures.
@@ -660,6 +662,7 @@ impl<'a> TypeChecker<'a> {
             resolving_type_aliases: HashSet::new(),
             type_map: HashMap::new(),
             debug_type_names: HashMap::new(),
+            declared_source_types: HashMap::new(),
             current_return_type: None,
             interface_impls: HashMap::new(),
             impl_methods_by_type: HashMap::new(),
@@ -2564,6 +2567,299 @@ impl<'a> TypeChecker<'a> {
             .collect()
     }
 
+    fn inferred_argument_reflection(
+        &mut self,
+        expression: Option<&Expr>,
+        actual: TypeId,
+    ) -> ReflectionTypeInfo {
+        let source = expression.and_then(|expression| {
+            let mut expression = expression;
+            while let Expr::View(inner, _) | Expr::Paren(inner, _) = expression {
+                expression = inner;
+            }
+            if let Expr::Ident(ident) = expression
+                && let Some(definition) = self.ident_def_id(ident)
+                && let Some(ty) = self.declared_source_types.get(&definition)
+            {
+                return Some((
+                    ty.clone(),
+                    self.resolve.scope_table.def(definition).namespace.clone(),
+                ));
+            }
+            if let Expr::InlineFn(params, return_type, _, span) = expression {
+                return Some((
+                    Self::source_callback_type(params, return_type.as_ref(), *span),
+                    self.current_function_name.as_deref().and_then(|name| {
+                        name.rsplit_once('.')
+                            .map(|(namespace, _)| namespace.to_string())
+                    }),
+                ));
+            }
+            let name = self.resolved_expr_name(expression)?;
+            let function = self.graphics_callback_definitions.get(&name)?;
+            if !function.type_params.is_empty() {
+                return None;
+            }
+            Some((
+                Self::source_callback_type(
+                    &function.params,
+                    function.return_type.as_ref(),
+                    function.span,
+                ),
+                name.rsplit_once('.')
+                    .map(|(namespace, _)| namespace.to_string()),
+            ))
+        });
+        let mut info = match source {
+            Some((source, namespace)) => {
+                self.reflection_type_info_for_type_expr(&source, namespace.as_deref(), actual)
+            }
+            None => self.reflection_type_info_for_type(actual),
+        };
+        // The reference inference peels a whole argument's aliases, then keeps
+        // aliases encountered inside its list, sum or callable signature.
+        while info.kind == "alias" && info.args.len() == 1 {
+            info = info.args.remove(0);
+        }
+        info
+    }
+
+    fn source_callback_type(
+        params: &[ast::Param],
+        return_type: Option<&TypeExpr>,
+        span: Span,
+    ) -> TypeExpr {
+        TypeExpr::Function(
+            params
+                .iter()
+                .map(|param| {
+                    if param.view && !matches!(param.ty, TypeExpr::View(_, _)) {
+                        TypeExpr::View(Box::new(param.ty.clone()), param.span)
+                    } else {
+                        param.ty.clone()
+                    }
+                })
+                .collect(),
+            Box::new(return_type.cloned().unwrap_or_else(|| {
+                TypeExpr::Named(ast::Ident {
+                    name: "nothing".into(),
+                    span,
+                })
+            })),
+            span,
+        )
+    }
+
+    fn reflection_arguments_for_inferred_call(
+        &mut self,
+        template: &FunctionDef,
+        concrete_args: &[TypeId],
+        actual_types: &[TypeId],
+        expressions: &[Option<&Expr>],
+    ) -> Vec<ReflectionTypeInfo> {
+        let parameters = template
+            .type_params
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<HashSet<_>>();
+        let mut witnesses = HashMap::new();
+        for ((parameter, &actual), expression) in
+            template.params.iter().zip(actual_types).zip(expressions)
+        {
+            let info = self.inferred_argument_reflection(*expression, actual);
+            self.collect_inferred_reflection(
+                &parameter.ty,
+                actual,
+                info,
+                &parameters,
+                &mut witnesses,
+            );
+        }
+        template
+            .type_params
+            .iter()
+            .zip(concrete_args)
+            .map(|(parameter, &concrete)| {
+                let Some((source, info)) = witnesses.remove(&parameter.name) else {
+                    return self.reflection_type_info_for_type(concrete);
+                };
+                if source == concrete {
+                    info
+                } else if self.merge_inferred_never(source, concrete, false) == Some(concrete) {
+                    let contextual = self.reflection_type_info_for_type(concrete);
+                    self.merge_inferred_reflection(source, concrete, concrete, info, contextual)
+                } else {
+                    self.reflection_type_info_for_type(concrete)
+                }
+            })
+            .collect()
+    }
+
+    fn apply_inferred_reflection_kinds(
+        template: &FunctionDef,
+        reflections: &[ReflectionTypeInfo],
+        kinds: &mut HashMap<String, String>,
+    ) {
+        for (parameter, reflection) in template.type_params.iter().zip(reflections) {
+            kinds.insert(
+                parameter.name.clone(),
+                ReflectionTypeInfo::kind_tag_variant(&reflection.kind).to_string(),
+            );
+        }
+    }
+
+    fn collect_inferred_reflection(
+        &mut self,
+        expected: &TypeExpr,
+        actual: TypeId,
+        info: ReflectionTypeInfo,
+        parameters: &HashSet<&str>,
+        witnesses: &mut HashMap<String, (TypeId, ReflectionTypeInfo)>,
+    ) {
+        match expected {
+            TypeExpr::Named(parameter) if parameters.contains(parameter.name.as_str()) => {
+                match witnesses.remove(&parameter.name) {
+                    Some((first, first_info)) => {
+                        let merged = self
+                            .merge_inferred_never(first, actual, false)
+                            .unwrap_or(first);
+                        let info =
+                            self.merge_inferred_reflection(first, actual, merged, first_info, info);
+                        witnesses.insert(parameter.name.clone(), (merged, info));
+                    }
+                    None => {
+                        witnesses.insert(parameter.name.clone(), (actual, info));
+                    }
+                }
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                self.collect_inferred_reflection(inner, actual, info, parameters, witnesses);
+            }
+            TypeExpr::Generic(owner, args, _)
+                if owner.name == self.reflection_kind_for_type(actual) =>
+            {
+                let actual_args = self.type_info_arg_types_for_type(actual);
+                let infos = self.inferred_child_reflections(actual, &info);
+                for ((expected, actual), info) in args.iter().zip(actual_args).zip(infos) {
+                    self.collect_inferred_reflection(expected, actual, info, parameters, witnesses);
+                }
+            }
+            TypeExpr::Function(params, result, _) => {
+                let Type::Function {
+                    params: actual_params,
+                    return_type,
+                    ..
+                } = self.interner.resolve(actual).clone()
+                else {
+                    return;
+                };
+                let mut infos = self.inferred_child_reflections(actual, &info).into_iter();
+                for (expected, actual) in params.iter().zip(actual_params) {
+                    let info = infos
+                        .next()
+                        .unwrap_or_else(|| self.reflection_type_info_for_type(actual));
+                    self.collect_inferred_reflection(expected, actual, info, parameters, witnesses);
+                }
+                let info = infos
+                    .next()
+                    .unwrap_or_else(|| self.reflection_type_info_for_type(return_type));
+                self.collect_inferred_reflection(result, return_type, info, parameters, witnesses);
+            }
+            _ => {}
+        }
+    }
+
+    fn inferred_child_reflections(
+        &self,
+        ty: TypeId,
+        info: &ReflectionTypeInfo,
+    ) -> Vec<ReflectionTypeInfo> {
+        let children = self.type_info_arg_types_for_type(ty);
+        if info.kind == self.reflection_kind_for_type(ty) && info.args.len() == children.len() {
+            info.args.clone()
+        } else {
+            children
+                .into_iter()
+                .map(|ty| self.reflection_type_info_for_type(ty))
+                .collect()
+        }
+    }
+
+    fn merge_inferred_reflection(
+        &self,
+        first: TypeId,
+        next: TypeId,
+        merged: TypeId,
+        first_info: ReflectionTypeInfo,
+        next_info: ReflectionTypeInfo,
+    ) -> ReflectionTypeInfo {
+        if merged == first {
+            return first_info;
+        }
+        if first == TypeInterner::NEVER && merged == next {
+            return next_info;
+        }
+        let children = self.type_info_arg_types_for_type(merged);
+        let first_children = self.type_info_arg_types_for_type(first);
+        let next_children = self.type_info_arg_types_for_type(next);
+        if children.len() != first_children.len() || children.len() != next_children.len() {
+            return self.reflection_type_info_for_type(merged);
+        }
+        let args = children
+            .into_iter()
+            .zip(first_children.into_iter().zip(next_children))
+            .zip(
+                self.inferred_child_reflections(first, &first_info)
+                    .into_iter()
+                    .zip(self.inferred_child_reflections(next, &next_info)),
+            )
+            .map(|((merged, (first, next)), (first_info, next_info))| {
+                self.merge_inferred_reflection(first, next, merged, first_info, next_info)
+            })
+            .collect::<Vec<_>>();
+        let name = self.inferred_reflection_display(merged, &args);
+        self.reflection_type_info_for_type_named_with_args(merged, name, args)
+    }
+
+    fn inferred_reflection_display(&self, ty: TypeId, args: &[ReflectionTypeInfo]) -> String {
+        let names = args
+            .iter()
+            .map(|argument| argument.type_name.as_str())
+            .collect::<Vec<_>>();
+        match self.interner.resolve(ty) {
+            Type::List(_)
+            | Type::Set(_)
+            | Type::Map(_, _)
+            | Type::Optional(_)
+            | Type::Result(_, _)
+            | Type::Secret(_) => {
+                format!(
+                    "{}[{}]",
+                    self.reflection_kind_for_type(ty),
+                    names.join(", ")
+                )
+            }
+            Type::Function { view_params, .. } => {
+                let Some((result, params)) = names.split_last() else {
+                    return self.type_name(ty);
+                };
+                let params = params
+                    .iter()
+                    .zip(view_params)
+                    .map(|(name, view)| {
+                        if *view {
+                            format!("view {name}")
+                        } else {
+                            (*name).to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                format!("function({}) returns {result}", params.join(", "))
+            }
+            _ => self.type_name(ty),
+        }
+    }
+
     fn reflection_type_name_in_namespace(
         &self,
         ident: &ast::Ident,
@@ -3289,10 +3585,12 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn types_compatible(&self, expected: TypeId, got: TypeId) -> bool {
+        // Bottom flows into a contextual type, but an inhabited value cannot
+        // flow into bottom. Otherwise a default, call or constructor can create
+        // a runtime payload in a checked `never` place.
         if expected == got
             || expected == TypeInterner::ERROR
             || got == TypeInterner::ERROR
-            || expected == TypeInterner::NEVER
             || got == TypeInterner::NEVER
         {
             return true;
@@ -3342,6 +3640,106 @@ impl<'a> TypeChecker<'a> {
             // explicit `at` guard rather than remembered caller provenance.
             (Type::Machine(expected_machine), Type::MachineState { machine, .. }) => {
                 expected_machine == machine
+            }
+            _ => false,
+        }
+    }
+
+    /// Fill only absent inferred slots. Existing concrete widths and nominal
+    /// owners must match; this is not a promotion or refinement coarsening.
+    /// Function parameters reverse the direction because callable substitution
+    /// is contravariant, including when the missing slot is nested in a sum.
+    fn merge_inferred_never(
+        &mut self,
+        first: TypeId,
+        next: TypeId,
+        contravariant: bool,
+    ) -> Option<TypeId> {
+        if first == next {
+            return Some(first);
+        }
+        if first == TypeInterner::NEVER || next == TypeInterner::NEVER {
+            return Some(if contravariant {
+                TypeInterner::NEVER
+            } else if first == TypeInterner::NEVER {
+                next
+            } else {
+                first
+            });
+        }
+        let merged = match (
+            self.interner.resolve(first).clone(),
+            self.interner.resolve(next).clone(),
+        ) {
+            (Type::List(first), Type::List(next)) => {
+                Type::List(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Set(first), Type::Set(next)) => {
+                Type::Set(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Optional(first), Type::Optional(next)) => {
+                Type::Optional(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Secret(first), Type::Secret(next)) => {
+                Type::Secret(self.merge_inferred_never(first, next, contravariant)?)
+            }
+            (Type::Map(first_key, first_value), Type::Map(next_key, next_value)) => Type::Map(
+                self.merge_inferred_never(first_key, next_key, contravariant)?,
+                self.merge_inferred_never(first_value, next_value, contravariant)?,
+            ),
+            (Type::Result(first_ok, first_error), Type::Result(next_ok, next_error)) => {
+                Type::Result(
+                    self.merge_inferred_never(first_ok, next_ok, contravariant)?,
+                    self.merge_inferred_never(first_error, next_error, contravariant)?,
+                )
+            }
+            (
+                Type::Function {
+                    params: first_params,
+                    view_params: first_views,
+                    return_type: first_return,
+                },
+                Type::Function {
+                    params: next_params,
+                    view_params: next_views,
+                    return_type: next_return,
+                },
+            ) if first_params.len() == next_params.len() && first_views == next_views => {
+                Type::Function {
+                    params: first_params
+                        .into_iter()
+                        .zip(next_params)
+                        .map(|(first, next)| self.merge_inferred_never(first, next, !contravariant))
+                        .collect::<Option<_>>()?,
+                    view_params: first_views,
+                    return_type: self.merge_inferred_never(
+                        first_return,
+                        next_return,
+                        contravariant,
+                    )?,
+                }
+            }
+            _ => return None,
+        };
+        Some(self.interner.intern(merged))
+    }
+
+    fn contains_inferred_never(&self, ty: TypeId) -> bool {
+        match self.interner.resolve(ty) {
+            Type::Never => true,
+            Type::List(inner) | Type::Set(inner) | Type::Optional(inner) | Type::Secret(inner) => {
+                self.contains_inferred_never(*inner)
+            }
+            Type::Map(key, value) | Type::Result(key, value) => {
+                self.contains_inferred_never(*key) || self.contains_inferred_never(*value)
+            }
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                params.iter().any(|ty| self.contains_inferred_never(*ty))
+                    || self.contains_inferred_never(*return_type)
             }
             _ => false,
         }
@@ -6567,6 +6965,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn record_debug_type_name(&mut self, name: &ast::Ident, ty: &TypeExpr) {
+        if let Some(definition) = self.declaration_def_id(name.span) {
+            self.declared_source_types.insert(definition, ty.clone());
+        }
         let namespace = self
             .declaration_def_id(name.span)
             .and_then(|id| self.resolve.scope_table.def(id).namespace.as_deref());
@@ -8199,6 +8600,9 @@ impl<'a> TypeChecker<'a> {
         allow_refinement_handle: bool,
     ) -> TypeId {
         let ty = match expr {
+            Expr::Paren(inner, _) => {
+                self.check_expr_for_expected(inner, expected_ty, allow_refinement_handle)
+            }
             Expr::Run(inner, _) => {
                 let saved_in_property_block = self.in_property_block;
                 self.in_property_block = false;
@@ -8356,6 +8760,30 @@ impl<'a> TypeChecker<'a> {
                         *span,
                     )
                 }
+            }
+            Expr::Handle(target, bind_name, body, span) => {
+                let target_ty = self.check_expr(target);
+                let contextual_target = match self.interner.resolve(target_ty).clone() {
+                    Type::Optional(success) => self
+                        .merge_inferred_never(success, expected_ty, false)
+                        .filter(|merged| *merged == expected_ty)
+                        .map(|success| self.interner.intern(Type::Optional(success))),
+                    Type::Result(success, error) => self
+                        .merge_inferred_never(success, expected_ty, false)
+                        .filter(|merged| *merged == expected_ty)
+                        .map(|success| self.interner.intern(Type::Result(success, error))),
+                    _ => None,
+                }
+                .unwrap_or(target_ty);
+                // Check defaults in the output context without changing the
+                // producer's checked signature. HIR inserts a conversion for
+                // inhabited success shapes that contain inferred empty slots.
+                self.check_handle_with_target_type(
+                    contextual_target,
+                    bind_name.as_ref(),
+                    body,
+                    *span,
+                )
             }
             _ => {
                 let actual_ty = match expr {
@@ -10049,7 +10477,8 @@ impl<'a> TypeChecker<'a> {
                 }
             })
             .collect::<Vec<_>>();
-        let Some(inferred) = self.infer_generic_signature(&template, &actual_types, None) else {
+        let Some(mut inferred) = self.infer_generic_signature(&template, &actual_types, None)
+        else {
             self.emit_cannot_infer_generic(function_name, &template, span);
             return Some(TypeInterner::ERROR);
         };
@@ -10092,8 +10521,27 @@ impl<'a> TypeChecker<'a> {
 
         if arguments_match {
             let param_facts = ReflectionParamFacts::default();
-            let type_argument_reflections =
-                self.reflection_arguments_for_inferred_types(&inferred.concrete_args);
+            let expressions = argument_order
+                .iter()
+                .map(|&index| {
+                    if index == 0 {
+                        None
+                    } else {
+                        Some(&extra_args[index - 1].value)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let type_argument_reflections = self.reflection_arguments_for_inferred_call(
+                &template,
+                &inferred.concrete_args,
+                &actual_types,
+                &expressions,
+            );
+            Self::apply_inferred_reflection_kinds(
+                &template,
+                &type_argument_reflections,
+                &mut inferred.kind_subst,
+            );
             self.record_generic_call_for_template(
                 span,
                 &template,
@@ -12697,7 +13145,7 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|&source_index| self.check_expr(&args[source_index].value))
             .collect::<Vec<_>>();
-        let Some(inferred) =
+        let Some(mut inferred) =
             self.infer_generic_signature(&template, &actual_types, expected_return_type)
         else {
             self.emit_cannot_infer_generic(function_name, &template, span);
@@ -12753,8 +13201,21 @@ impl<'a> TypeChecker<'a> {
                 &inferred.param_types,
                 &ordered_args,
             );
-            let type_argument_reflections =
-                self.reflection_arguments_for_inferred_types(&inferred.concrete_args);
+            let expressions = ordered_args
+                .iter()
+                .map(|arg| Some(&arg.value))
+                .collect::<Vec<_>>();
+            let type_argument_reflections = self.reflection_arguments_for_inferred_call(
+                &template,
+                &inferred.concrete_args,
+                &actual_types,
+                &expressions,
+            );
+            Self::apply_inferred_reflection_kinds(
+                &template,
+                &type_argument_reflections,
+                &mut inferred.kind_subst,
+            );
             self.record_generic_call_for_template(
                 span,
                 &template,
@@ -12844,7 +13305,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_type_params_from_type(
-        &self,
+        &mut self,
         expected: &TypeExpr,
         actual: TypeId,
         type_params: &HashSet<&str>,
@@ -12852,13 +13313,15 @@ impl<'a> TypeChecker<'a> {
     ) {
         match expected {
             TypeExpr::Named(ident) if type_params.contains(ident.name.as_str()) => {
-                match subst.get_mut(&ident.name) {
-                    Some(inferred)
-                        if matches!(*inferred, TypeInterner::ERROR | TypeInterner::NEVER) =>
-                    {
-                        *inferred = actual;
+                match subst.get(&ident.name).copied() {
+                    Some(TypeInterner::ERROR) => {
+                        subst.insert(ident.name.clone(), actual);
                     }
-                    Some(_) => {}
+                    Some(inferred) => {
+                        if let Some(merged) = self.merge_inferred_never(inferred, actual, false) {
+                            subst.insert(ident.name.clone(), merged);
+                        }
+                    }
                     None => {
                         subst.insert(ident.name.clone(), actual);
                     }
@@ -12868,20 +13331,20 @@ impl<'a> TypeChecker<'a> {
                 self.infer_type_params_from_type(inner, actual, type_params, subst);
             }
             TypeExpr::Generic(owner, args, _) => {
-                match (owner.name.as_str(), self.interner.resolve(actual)) {
+                match (owner.name.as_str(), self.interner.resolve(actual).clone()) {
                     ("list", Type::List(inner))
                     | ("set", Type::Set(inner))
                     | ("optional", Type::Optional(inner))
                     | ("secret", Type::Secret(inner))
                         if args.len() == 1 =>
                     {
-                        self.infer_type_params_from_type(&args[0], *inner, type_params, subst);
+                        self.infer_type_params_from_type(&args[0], inner, type_params, subst);
                     }
                     ("map", Type::Map(key, value)) | ("result", Type::Result(key, value))
                         if args.len() == 2 =>
                     {
-                        self.infer_type_params_from_type(&args[0], *key, type_params, subst);
-                        self.infer_type_params_from_type(&args[1], *value, type_params, subst);
+                        self.infer_type_params_from_type(&args[0], key, type_params, subst);
+                        self.infer_type_params_from_type(&args[1], value, type_params, subst);
                     }
                     _ => {}
                 }
@@ -12891,14 +13354,14 @@ impl<'a> TypeChecker<'a> {
                     params: actual_params,
                     return_type: actual_return,
                     ..
-                } = self.interner.resolve(actual)
+                } = self.interner.resolve(actual).clone()
                 {
-                    for (expected, &actual) in params.iter().zip(actual_params) {
+                    for (expected, actual) in params.iter().zip(actual_params) {
                         self.infer_type_params_from_type(expected, actual, type_params, subst);
                     }
                     self.infer_type_params_from_type(
                         return_type,
-                        *actual_return,
+                        actual_return,
                         type_params,
                         subst,
                     );
@@ -13885,12 +14348,16 @@ impl<'a> TypeChecker<'a> {
         }
 
         let first_ty = self.check_expr(&elems[0]);
-        let (element_ty, mut tainted) = self.strip_secret_type(first_ty);
+        let (mut element_ty, mut tainted) = self.strip_secret_type(first_ty);
         for elem in &elems[1..] {
             let elem_ty = self.check_expr(elem);
             let (elem_base_ty, elem_secret) = self.strip_secret_type(elem_ty);
-            if !self.types_compatible(element_ty, elem_base_ty)
-                && !self.types_compatible(elem_base_ty, element_ty)
+            if let Some(merged) = self.merge_inferred_never(element_ty, elem_base_ty, false) {
+                element_ty = merged;
+            } else if !self.types_compatible(element_ty, elem_base_ty)
+                && (self.contains_inferred_never(element_ty)
+                    || self.contains_inferred_never(elem_base_ty)
+                    || !self.types_compatible(elem_base_ty, element_ty))
             {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(element_ty),
@@ -13939,14 +14406,18 @@ impl<'a> TypeChecker<'a> {
 
         let first_key_ty = self.check_expr(&entries[0].0);
         let first_value_ty = self.check_expr(&entries[0].1);
-        let (key_ty, mut key_tainted) = self.strip_secret_type(first_key_ty);
-        let (value_ty, mut value_tainted) = self.strip_secret_type(first_value_ty);
+        let (mut key_ty, mut key_tainted) = self.strip_secret_type(first_key_ty);
+        let (mut value_ty, mut value_tainted) = self.strip_secret_type(first_value_ty);
 
         for (key_expr, value_expr) in &entries[1..] {
             let entry_key_ty = self.check_expr(key_expr);
             let (entry_key_base_ty, entry_key_secret) = self.strip_secret_type(entry_key_ty);
-            if !self.types_compatible(key_ty, entry_key_base_ty)
-                && !self.types_compatible(entry_key_base_ty, key_ty)
+            if let Some(merged) = self.merge_inferred_never(key_ty, entry_key_base_ty, false) {
+                key_ty = merged;
+            } else if !self.types_compatible(key_ty, entry_key_base_ty)
+                && (self.contains_inferred_never(key_ty)
+                    || self.contains_inferred_never(entry_key_base_ty)
+                    || !self.types_compatible(entry_key_base_ty, key_ty))
             {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(key_ty),
@@ -13958,8 +14429,12 @@ impl<'a> TypeChecker<'a> {
 
             let entry_value_ty = self.check_expr(value_expr);
             let (entry_value_base_ty, entry_value_secret) = self.strip_secret_type(entry_value_ty);
-            if !self.types_compatible(value_ty, entry_value_base_ty)
-                && !self.types_compatible(entry_value_base_ty, value_ty)
+            if let Some(merged) = self.merge_inferred_never(value_ty, entry_value_base_ty, false) {
+                value_ty = merged;
+            } else if !self.types_compatible(value_ty, entry_value_base_ty)
+                && (self.contains_inferred_never(value_ty)
+                    || self.contains_inferred_never(entry_value_base_ty)
+                    || !self.types_compatible(entry_value_base_ty, value_ty))
             {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(value_ty),
@@ -20495,6 +20970,671 @@ function local(view source: Record) returns nothing:
         assert_eq!(
             result.interner.resolve(default_ty),
             &Type::List(TypeInterner::INT64)
+        );
+    }
+
+    #[test]
+    fn never_assignment_compatibility_is_directional_through_value_shapes() {
+        let resolve = TestEnv::new().into_resolve_result();
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
+        let absent = [
+            Type::Never,
+            Type::List(TypeInterner::NEVER),
+            Type::Set(TypeInterner::NEVER),
+            Type::Optional(TypeInterner::NEVER),
+            Type::Secret(TypeInterner::NEVER),
+            Type::Map(TypeInterner::STRING, TypeInterner::NEVER),
+            Type::Result(TypeInterner::NEVER, TypeInterner::STRING),
+            Type::Result(TypeInterner::STRING, TypeInterner::NEVER),
+        ];
+        let inhabited = [
+            Type::Int64,
+            Type::List(TypeInterner::INT64),
+            Type::Set(TypeInterner::INT64),
+            Type::Optional(TypeInterner::INT64),
+            Type::Secret(TypeInterner::INT64),
+            Type::Map(TypeInterner::STRING, TypeInterner::INT64),
+            Type::Result(TypeInterner::INT64, TypeInterner::STRING),
+            Type::Result(TypeInterner::STRING, TypeInterner::INT64),
+        ];
+        for (absent, inhabited) in absent.into_iter().zip(inhabited) {
+            let absent = checker.interner.intern(absent);
+            let inhabited = checker.interner.intern(inhabited);
+            assert!(!checker.types_compatible(absent, inhabited));
+            assert!(checker.types_compatible(inhabited, absent));
+        }
+        let bottom_input = checker.interner.intern(Type::Function {
+            params: vec![TypeInterner::NEVER],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        let concrete = checker.interner.intern(Type::Function {
+            params: vec![TypeInterner::INT64],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        assert!(checker.types_compatible(bottom_input, concrete));
+        assert!(!checker.types_compatible(concrete, bottom_input));
+        assert_eq!(
+            checker.merge_inferred_never(bottom_input, concrete, false),
+            Some(bottom_input)
+        );
+        assert_eq!(
+            checker.merge_inferred_never(TypeInterner::INT8, TypeInterner::INT64, false),
+            None
+        );
+        let secret = checker.interner.intern(Type::Secret(TypeInterner::NEVER));
+        assert_eq!(
+            checker.merge_inferred_never(secret, TypeInterner::INT64, false),
+            None
+        );
+    }
+
+    #[test]
+    fn generic_never_places_reject_concrete_payloads_at_every_construction_boundary() {
+        let cases = [
+            ("list[T]", "    T item = 7\n    return list(item)", 311),
+            (
+                "list[T]",
+                "    T item = none handle:\n        default 7\n    return list(item)",
+                300,
+            ),
+            (
+                "list[T]",
+                "    mutable T item = none handle: return list()\n    item = 7\n    return list(item)",
+                312,
+            ),
+            ("T", "    return 7", 305),
+            ("list[T]", "    return list(7)", 300),
+            ("list[T]", "    return append[T](list(), 7)", 300),
+            ("optional[T]", "    return some(7)", 300),
+            ("result[T, string]", "    return ok(7)", 300),
+            ("result[string, T]", "    return fail(7)", 300),
+            ("map[string, T]", "    return map(\"key\": 7)", 300),
+            (
+                "nothing",
+                "    for item in items:\n        T forged = 7\n        trace forged\n    return nothing",
+                311,
+            ),
+        ];
+        for (result_type, body, expected_code) in cases {
+            for comptime in ["", "comptime "] {
+                let source = format!(
+                    "function append[T](values: list[T], value: T) returns list[T]:\n    return list(value)\nfunction manufacture[T](view items: list[T]) returns {result_type}:\n{body}\nfunction main() returns nothing:\n    println({comptime}manufacture(list()))\n    return nothing\n"
+                );
+                let errors = check_source_errors(&source);
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.code.code() == expected_code),
+                    "{source}\n{errors:?}"
+                );
+                assert!(
+                    errors.iter().any(|error| error.message.contains("<never>")),
+                    "{source}\n{errors:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inferred_literals_fill_only_never_slots_in_both_element_orders() {
+        let cases = [
+            ("list(none, some(7))", "list[optional[int64]]"),
+            ("list(some(7), none)", "list[optional[int64]]"),
+            ("list(ok(7), fail(\"bad\"))", "list[result[int64, string]]"),
+            ("list(fail(\"bad\"), ok(7))", "list[result[int64, string]]"),
+            ("list(list(), list(7))", "list[list[int64]]"),
+            ("list(list(7), list())", "list[list[int64]]"),
+            (
+                "list(some(list()), some(list(7)))",
+                "list[optional[list[int64]]]",
+            ),
+            (
+                "list(some(list(7)), some(list()))",
+                "list[optional[list[int64]]]",
+            ),
+            (
+                "map(\"a\": none, \"b\": some(7))",
+                "map[string, optional[int64]]",
+            ),
+            (
+                "map(\"a\": some(7), \"b\": none)",
+                "map[string, optional[int64]]",
+            ),
+            ("list(map(), map(\"key\": 7))", "list[map[string, int64]]"),
+            ("list(map(\"key\": 7), map())", "list[map[string, int64]]"),
+            ("list(none, some(small))", "list[optional[int8]]"),
+            ("list(some(small), none)", "list[optional[int8]]"),
+        ];
+        for (literal, expected) in cases {
+            let map_binding = if literal.starts_with("map(") {
+                "key, value"
+            } else {
+                "value"
+            };
+            let source = format!(
+                "type Tiny = int8\nfunction main() returns nothing:\n    Tiny small = 7\n    for {map_binding} in {literal}:\n        trace value\n    return nothing\n"
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let start = source.find(literal).unwrap() as u32;
+            let span = sp(start, start + literal.len() as u32);
+            let ty = result.type_map[&span];
+            assert_eq!(result.interner.type_name(ty), expected, "{literal}");
+        }
+    }
+
+    #[test]
+    fn contextual_absent_defaults_and_generic_returns_keep_concrete_success_types() {
+        let source = r#"function identity[T](values: list[T]) returns list[T]:
+    return values
+function fallback[T](view items: list[T], value: T) returns T:
+    return none handle:
+        default value
+function main() returns nothing:
+    int64 absent = none handle:
+        default 7
+    int64 failure = fail("bad") handle error:
+        trace error
+        default 8
+    list[int64] empty = identity(list())
+    int64 generic = fallback(list(), 9)
+    int64 baked = comptime (none handle: default 10)
+    trace absent
+    trace failure
+    trace empty
+    trace generic
+    trace baked
+    return nothing
+"#;
+        let errors = check_source_errors(source);
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn inferred_callback_return_sums_use_a_concrete_common_signature() {
+        for callbacks in [
+            "list(make_absent(list()), present)",
+            "list(present, make_absent(list()))",
+        ] {
+            let source = format!(
+                r#"function make_absent[T](view items: list[T]) returns function() returns optional[T]:
+    return function() returns optional[T]: return none
+function present() returns optional[int64]:
+    return some(7)
+function main() returns nothing:
+    for callback in {callbacks}:
+        optional[int64] value = callback()
+        trace value
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let start = source.find(callbacks).unwrap() as u32;
+            let ty = result.type_map[&sp(start, start + callbacks.len() as u32)];
+            assert_eq!(
+                result.interner.type_name(ty),
+                "list[function() returns optional[int64]]"
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_callback_inference_uses_joined_absent_and_present_elements() {
+        for values in ["list(none, some(7))", "list(some(7), none)"] {
+            let source = format!(
+                r#"function append[T](values: list[T], value: T) returns list[T]:
+    return list(value)
+function mapped[A, B](values: list[A], callback: function(A) returns B) returns list[B]:
+    mutable list[B] output = list()
+    for value in values:
+        output = append[B](output, callback(value))
+    return output
+function unwrap(value: optional[int64]) returns int64:
+    return value handle: default 0
+function main() returns nothing:
+    for value in mapped({values}, unwrap):
+        trace value
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let call = format!("mapped({values}, unwrap)");
+            let start = source.find(&call).unwrap() as u32;
+            let ty = result.type_map[&sp(start, start + call.len() as u32)];
+            assert_eq!(result.interner.type_name(ty), "list[int64]");
+        }
+    }
+
+    #[test]
+    fn filling_inferred_never_does_not_merge_existing_primitive_widths() {
+        let errors = check_source_errors(
+            r#"type Tiny = int8
+function main() returns nothing:
+    Tiny small = 7
+    for value in list(none, some(small), some(7)):
+        trace value
+    return nothing
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 300);
+        assert!(errors[0].message.contains("optional[int8]"));
+        assert!(errors[0].message.contains("optional[int64]"));
+    }
+
+    #[test]
+    fn reverse_literal_compatibility_cannot_hide_a_never_callable_input() {
+        for callbacks in ["list(broad, narrow(list()))", "list(narrow(list()), broad)"] {
+            let source = format!(
+                r#"function broad(value: optional[int64]) returns int64:
+    return 0
+function narrow[T](view items: list[T]) returns function(optional[T]) returns secret[int64]:
+    return function(value: optional[T]) returns secret[int64]: return 7
+function main() returns nothing:
+    for callback in {callbacks}:
+        trace callback
+    return nothing
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            if callbacks.starts_with("list(broad,") {
+                assert!(
+                    errors.iter().any(|error| error.code.code() == 300),
+                    "{source}\n{errors:?}"
+                );
+            } else {
+                assert!(errors.is_empty(), "{source}\n{errors:?}");
+                let start = source.find(callbacks).unwrap() as u32;
+                let ty = result.type_map[&sp(start, start + callbacks.len() as u32)];
+                assert_eq!(
+                    result.interner.type_name(ty),
+                    "list[function(optional[<never>]) returns secret[int64]]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_generic_arguments_fill_nested_never_slots_in_both_orders() {
+        for (first, second, expected) in [
+            ("none", "some(7)", "optional[int64]"),
+            ("ok(7)", "fail(\"bad\")", "result[int64, string]"),
+            ("list()", "list(\"ready\")", "list[string]"),
+            ("map()", "map(\"key\": 7)", "map[string, int64]"),
+            (
+                "some(list())",
+                "some(list(\"ready\"))",
+                "optional[list[string]]",
+            ),
+        ] {
+            for (first, second) in [(first, second), (second, first)] {
+                let call = format!("second({first}, {second})");
+                let source = format!(
+                    "function second[T](first: T, last: T) returns T:\n    return last\nfunction main() returns nothing:\n    println({call})\n    return nothing\n"
+                );
+                let result = check_source_result(&source);
+                let errors = result
+                    .diagnostics
+                    .iter()
+                    .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                    .collect::<Vec<_>>();
+                assert!(errors.is_empty(), "{source}\n{errors:?}");
+                let start = source.find(&call).unwrap() as u32;
+                let ty = result.type_map[&sp(start, start + call.len() as u32)];
+                assert_eq!(result.interner.type_name(ty), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn generic_return_context_fills_nested_empty_and_absent_slots() {
+        assert!(
+            check_source_errors(
+                r#"function identity[T](value: T) returns T:
+    return value
+function main() returns nothing:
+    list[string] values = identity(list())
+    optional[list[string]] absent = identity(none)
+    result[list[string], string] success = identity(ok(list()))
+    trace values
+    trace absent
+    trace success
+    return nothing
+"#,
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn inferred_generic_witnesses_peel_root_aliases_and_preserve_nested_aliases() {
+        for (parameter, setup, argument, expected_name, expected_kind) in [
+            (
+                "T",
+                "    Count value = 7\n",
+                "value",
+                "int64",
+                "primitive_type",
+            ),
+            (
+                "result[T, string]",
+                "    result[Count, string] value = ok(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "list[T]",
+                "    list[Count] value = list(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "result[T, string]",
+                "    Wrapped value = ok(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "function() returns T",
+                "",
+                "count_callback",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "T",
+                "",
+                "count_callback",
+                "function() returns app.Count",
+                "function_type",
+            ),
+            (
+                "function(view T) returns T",
+                "",
+                "view_callback",
+                "app.Count",
+                "alias_type",
+            ),
+        ] {
+            let source = format!(
+                r#"namespace app
+type Count = int64
+type Wrapped = result[Count, string]
+function count_callback() returns Count:
+    return 7
+function view_callback(view value: Count) returns Count:
+    return value
+function choose[T](input: {parameter}) returns string:
+    return type.name[T]()
+function main() returns string:
+{setup}    return choose({argument})
+"#
+            );
+            let result = check_source_result(&source);
+            let errors = result
+                .diagnostics
+                .iter()
+                .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source}\n{errors:?}");
+            let call = result
+                .generic_calls
+                .values()
+                .next()
+                .expect("inferred choose call");
+            assert_eq!(
+                call.specialization.type_argument_reflections[0].type_name, expected_name,
+                "{source}"
+            );
+            assert_eq!(
+                call.specialization.type_argument_kinds,
+                [expected_kind],
+                "{source}"
+            );
+            assert_eq!(
+                call.concrete_args[0],
+                if parameter == "T" && argument == "count_callback" {
+                    result.generic_function_instantiations[0].parameter_types[0]
+                } else {
+                    TypeInterner::INT64
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn inferred_alias_witnesses_are_unchanged_by_view_and_parentheses() {
+        for (parameter, setup, value, expected_name, expected_kind) in [
+            (
+                "T",
+                "    Count value = 7\n",
+                "value",
+                "int64",
+                "primitive_type",
+            ),
+            (
+                "optional[T]",
+                "    optional[Count] value = some(7)\n",
+                "value",
+                "app.Count",
+                "alias_type",
+            ),
+            (
+                "T",
+                "    list[Count] value = list(7)\n",
+                "value",
+                "list[app.Count]",
+                "list_type",
+            ),
+            (
+                "function() returns T",
+                "",
+                "count_callback",
+                "app.Count",
+                "alias_type",
+            ),
+        ] {
+            for argument in [
+                value.to_string(),
+                format!("({value})"),
+                format!("view {value}"),
+                format!("(view ({value}))"),
+            ] {
+                let source = format!(
+                    r#"namespace app
+type Count = int64
+function count_callback() returns Count:
+    return 7
+function choose[T](view input: {parameter}) returns string:
+    return type.name[T]()
+function main() returns string:
+{setup}    return choose({argument})
+"#
+                );
+                let result = check_source_result(&source);
+                let errors = result
+                    .diagnostics
+                    .iter()
+                    .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+                    .collect::<Vec<_>>();
+                assert!(errors.is_empty(), "{source}\n{errors:?}");
+                let call = result
+                    .generic_calls
+                    .values()
+                    .next()
+                    .expect("inferred choose call");
+                assert_eq!(
+                    call.specialization.type_argument_reflections[0].type_name, expected_name,
+                    "{source}"
+                );
+                assert_eq!(
+                    call.specialization.type_argument_kinds,
+                    [expected_kind],
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deep_inferred_alias_witnesses_have_distinct_checked_specializations() {
+        let source = r#"namespace app
+type Count = int64
+function inspect[T](input: T) returns string:
+    return type.name[T]()
+function main() returns string:
+    optional[Count] counted = some(7)
+    optional[int64] plain = some(7)
+    string first = inspect(counted)
+    string second = inspect(plain)
+    return "{first}:{second}"
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let [counted, plain] = result.generic_function_instantiations.as_slice() else {
+            panic!("expected distinct source-aware instances");
+        };
+        assert_eq!(counted.concrete_args, plain.concrete_args);
+        assert_eq!(
+            counted.specialization.type_argument_kinds,
+            plain.specialization.type_argument_kinds
+        );
+        assert_eq!(
+            counted.specialization.type_argument_reflections[0].type_name,
+            "optional[app.Count]"
+        );
+        assert_eq!(
+            plain.specialization.type_argument_reflections[0].type_name,
+            "optional[int64]"
+        );
+        assert_ne!(counted.specialization, plain.specialization);
+    }
+
+    #[test]
+    fn inferred_alias_witnesses_follow_declaration_argument_order() {
+        let source = r#"namespace app
+type Count = int64
+type Other = int64
+function choose[T](first: list[T], second: list[T]) returns string:
+    return type.name[T]()
+function main() returns string:
+    list[Count] counted = list(7)
+    list[Other] others = list(8)
+    return choose(second: others, first: counted)
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let call = result.generic_calls.values().next().unwrap();
+        assert_eq!(
+            call.specialization.type_argument_reflections[0].type_name,
+            "app.Count"
+        );
+        assert_eq!(call.specialization.type_argument_kinds, ["alias_type"]);
+    }
+
+    #[test]
+    fn inferred_never_witness_merging_preserves_known_alias_siblings() {
+        let source = r#"namespace app
+type Count = int64
+function describe[T](first: T, second: T) returns string:
+    return type.name[T]()
+function outer[E](view empty: list[E]) returns string:
+    result[Count, E] partial = ok(7)
+    result[int64, string] full = fail("bad")
+    return describe(partial, full)
+function main() returns string:
+    return outer(list())
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let instance = result
+            .generic_function_instantiations
+            .iter()
+            .find(|instance| {
+                instance.specialization.type_argument_reflections[0].type_name
+                    == "result[app.Count, string]"
+            })
+            .expect("filled result with preserved Count witness");
+        assert_eq!(instance.specialization.type_argument_kinds, ["result_type"]);
+        let Type::Result(ok, error) = result.interner.resolve(instance.concrete_args[0]) else {
+            panic!("expected result");
+        };
+        assert_eq!((*ok, *error), (TypeInterner::INT64, TypeInterner::STRING));
+    }
+
+    #[test]
+    fn inferred_alias_kind_and_info_select_the_same_reflection_branch() {
+        let source = r#"namespace app
+type Count = int64
+function inspect[T](input: list[T]) returns string:
+    if type.kind_tag[T]() == TypeKind.alias_type:
+        return type.name[T]()
+    else:
+        return "primitive"
+function main() returns string:
+    list[Count] values = list(7)
+    return inspect(values)
+"#;
+        let result = check_source_result(source);
+        let errors = result
+            .diagnostics
+            .iter()
+            .filter(|error| error.severity == jett_diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "{errors:?}");
+        let instance = result.generic_function_instantiations.first().unwrap();
+        assert_eq!(instance.specialization.type_argument_kinds, ["alias_type"]);
+        assert_eq!(
+            instance.specialization.type_argument_reflections[0].type_name,
+            "app.Count"
+        );
+        assert!(
+            instance
+                .static_selections
+                .values()
+                .any(|selection| *selection == CheckedStaticSelection::IfThen)
         );
     }
 }
