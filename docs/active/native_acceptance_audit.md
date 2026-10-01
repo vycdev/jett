@@ -814,3 +814,12 @@ qualification works, as the linked field suite demonstrates. This is an
 implementation gap outside the fixed inventory; width-validating constructors
 and machine construction need their own evidence before extending that repair.
 Final-revision workspace and supported-host distribution gates remain open.
+
+The locked Windows workspace run at `65c6ba68` passed every workspace target
+and doc-test with source frozen throughout. All 275 native conformance tests
+passed, including the eight new linked equality, secret-struct-construction,
+and secret-field regressions. The independent inventory gates also passed:
+182 HIR/MIR fixtures, 182 native objects, 30 entry cases, 25 runtime contracts,
+155 verify fixtures, and three property fixtures with 100 trials each.
+This checkpoint does not certify a later revision or Linux-only execution;
+the supported-host distribution run for this revision remains in progress.

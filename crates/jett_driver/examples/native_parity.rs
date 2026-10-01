@@ -378,7 +378,7 @@ fn main() -> ExitCode {
     let report = json!({"complete":false,"fixture_gates_complete":fixture_gates_complete,
         "target":native::host_target(),"counts":counts,"fixtures":rows,
         "suite_blocks":{"verify":suite_blocks[0],"property":suite_blocks[1]},
-        "pending_release_gates":["unresolved equality and erased-call contracts", "actor handles escaping comptime", "remaining semantic audit including property failure diagnostics", "full workspace and clean Linux GNU/Windows MSVC distribution at the release revision"]});
+        "pending_release_gates":["unresolved equality and erased-call contracts", "actor handles escaping comptime", "remaining semantic and value-composition audit", "full workspace and clean Linux GNU/Windows MSVC distribution at the release revision"]});
     fs::write(&args[1], serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     println!("{counts}");
     // Successful fixture gates do not certify the outstanding release gates.

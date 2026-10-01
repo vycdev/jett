@@ -604,8 +604,8 @@ sum and nested-list elements are supported; named structs/maps/sets are not.
 Insert-at transfers its element into the uniquely owned list after a valid
 index and successful capacity reservation. Remove-at drops the removed owned
 element exactly once and returns the same list handle. Invalid indices leave
-the input list owned by the caller. The native terminal-failure message for an
-invalid index still omits the numeric index included by the interpreter.
+the input list owned by the caller. Terminal failures preserve the signed invalid
+index in the context-owned message, matching the interpreter's error text.
 
 New/length/append/insert/remove/get and primitive sort are typed native leaves.
 Sort reorders the uniquely owned list in place, comparing signed and unsigned widths,

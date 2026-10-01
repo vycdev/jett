@@ -3114,8 +3114,9 @@ collections, sums, machines, and bitfields. Its explicit comparison stack
 preserves left-to-right short-circuit evaluation and rejects malformed cycles
 without imposing a fixed nesting cutoff on finite values. Equal handles do not
 bypass payload comparison: a nested NaN still compares unequal. Comparison
-against a known unit variant checks only the variant tag. User-struct, actor,
-and erased-interface equality policies remain separate open design decisions.
+against a known unit variant checks only the variant tag. User-struct payloads
+invoke their exact explicit `Equatable.equals` implementation. Actor and
+erased-interface equality policies remain separate open design decisions.
 
 Internal native `nothing` parameters, returns, locals, and aggregate payloads
 carry an unowned u64 pending depth. Sequential `run` increments that depth and
