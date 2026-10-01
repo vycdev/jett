@@ -682,8 +682,27 @@ Directly written return-view annotations report E0401 by unique annotation
 span, including unused generic headers, interface/inherent/implementation
 methods, inline functions, and callable result types. This declaration check
 does not expand named aliases or prewalk unused generic bodies. It adds no
-lifetime or projected-place policy. Native lowering of local view aliases and
-general call-produced borrow provenance remain separate gaps.
+lifetime or projected-place policy. General call-produced borrow provenance
+remains a separate gap.
+
+Checked binding facts distinguish owned copies from borrowed local aliases by
+declaration identity in each ordinary, generic, and reflected body. HIR records
+an alias's immediate backing `LocalId`; native admission requires an immutable
+chain to an immutable owner or view parameter and an initializer that preserves
+the same carrier and interface erasure. Generated snapshots and captured copies
+are owned. MIR retains and remaps the backing chain, expands alias reads into
+owner liveness, and excludes aliases from cleanup slots. Borrowed matches clone
+their scrutinee before taking payloads, and callbacks borrow their descriptor
+while it is invoked. Explicit clones still acquire independent ownership.
+Copy-owned alias expressions acquire retained string or cloned descriptor
+temporaries before entering containers; borrowed argument lowering reads their
+existing handles. Plain string view expressions retain ordinary copy behavior.
+
+Native ownership planning conservatively refuses owner consumption or rebinding
+after an alias may have been created on a reachable path. It does not select a
+source lifetime-expiry rule. Mutable alias chains, temporary or projected
+initializers, and allocating conversions remain explicit native limitations;
+see [the bounded implementation](active/native_local_view_aliases.md).
 
 **Implementation strategy:** Abstract interpretation over the control flow graph. At each program point, maintain a mapping from variable → ownership state. At control flow joins (if/else merge points, loop entries), states must be compatible:
 

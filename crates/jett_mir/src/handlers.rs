@@ -186,9 +186,12 @@ fn stable_deferred_view(locals: &[Local], expression: &Expression) -> bool {
     let ExpressionKind::Local(id) = value.kind else {
         return false;
     };
+    let Some(root) = jett_hir::local_view_root(locals, id) else {
+        return false;
+    };
     locals
-        .get(id.index() as usize)
-        .is_some_and(|local| local.id == id && !local.mutable)
+        .get(root.index() as usize)
+        .is_some_and(|local| local.id == root && !local.mutable)
 }
 
 fn snapshotable_local(types: &TypeInterner, expression: &Expression) -> bool {
@@ -220,6 +223,37 @@ fn snapshot_local(expression: &Expression, lowered: Expression) -> Expression {
         ty: expression.ty,
         span: expression.span,
     }
+}
+
+/// Staging preserves a checked call's borrowing modes. Owned arguments keep
+/// their source ownership and must never acquire an implicit alias snapshot.
+fn call_staging_inputs(values: &[Expression], modes: &[ParamMode]) -> Option<Vec<Expression>> {
+    if values.len() != modes.len() {
+        return None;
+    }
+    values
+        .iter()
+        .zip(modes)
+        .map(|(value, mode)| {
+            if *mode == ParamMode::View {
+                Some(if matches!(value.kind, ExpressionKind::View(_)) {
+                    value.clone()
+                } else {
+                    Expression {
+                        kind: ExpressionKind::View(Box::new(value.clone())),
+                        ty: value.ty,
+                        span: value.span,
+                    }
+                })
+            } else if matches!(value.kind, ExpressionKind::View(_)) {
+                // The frontend rejects an explicit view at an owned boundary.
+                // Leave invalid HIR unsupported instead of manufacturing a copy.
+                None
+            } else {
+                Some(value.clone())
+            }
+        })
+        .collect()
 }
 
 impl Builder<'_> {
@@ -266,6 +300,7 @@ impl Builder<'_> {
             debug_ty: ty,
             debug_type_name: None,
             mutable: true,
+            view_source: None,
             span,
         });
         id
@@ -291,7 +326,8 @@ impl Builder<'_> {
             }
             let mut value = self.lower_value(&values[index]);
             if matches!(values[index].kind, ExpressionKind::View(_))
-                && crate::move_values::is_linear(self.types, value.ty)
+                && (crate::move_values::is_linear(self.types, value.ty)
+                    || crate::move_values::is_copy_owned(self.types, value.ty))
             {
                 value = Expression {
                     kind: ExpressionKind::Clone(Box::new(value)),
@@ -882,14 +918,35 @@ impl Builder<'_> {
         } = &expression.kind
             && (has_extractable_handle(callee) || args.iter().any(has_extractable_handle))
             && !matches!(callee.kind, ExpressionKind::View(_))
-            && valid_ordered_owned_values(self.types, &self.locals, args, evaluation_order)
+            && let Type::Function { view_params, .. } = self.types.resolve(
+                crate::move_values::representation_type(self.types, callee.ty),
+            )
+            && let Some(inputs) = call_staging_inputs(
+                args,
+                &view_params
+                    .iter()
+                    .map(|view| {
+                        if *view {
+                            ParamMode::View
+                        } else {
+                            ParamMode::Owned
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            && valid_ordered_owned_values(self.types, &self.locals, &inputs, evaluation_order)
         {
             let args = self
-                .lower_ordered_owned_values(args, evaluation_order)
+                .lower_ordered_owned_values(&inputs, evaluation_order)
                 .expect("validated indirect argument order");
             // Source evaluates call arguments before resolving a function value
             // held in a mutable local. A handler may rebind that local.
-            let callee_value = self.lower_value(callee);
+            let observed_callee = self.lower_value(callee);
+            let callee_value = Expression {
+                kind: ExpressionKind::Clone(Box::new(observed_callee)),
+                ty: callee.ty,
+                span: callee.span,
+            };
             let callee_local = self.temporary(callee.ty, callee.span);
             self.push(
                 StatementKind::Let {
@@ -916,7 +973,9 @@ impl Builder<'_> {
             evaluation_order,
         } = &expression.kind
             && args.iter().any(has_extractable_handle)
-            && let Some(args) = self.lower_ordered_owned_values(args, evaluation_order)
+            && let Some(modes) = self.function_param_modes.get(function)
+            && let Some(inputs) = call_staging_inputs(args, modes)
+            && let Some(args) = self.lower_ordered_owned_values(&inputs, evaluation_order)
         {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Call {
@@ -1909,6 +1968,250 @@ impl Builder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lower_handler_source(source: &str) -> (Program, TypeInterner) {
+        let file = jett_common::FileId::new(0);
+        let parsed = jett_parser::parse(source, file);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checked.diagnostics
+        );
+        let hir = jett_hir::lower(
+            &parsed.module,
+            &resolved,
+            &checked,
+            &std::collections::HashMap::from([(file, jett_common::SourceOrigin::Project)]),
+        )
+        .expect("HIR lowering");
+        (
+            lower(&hir, &checked.interner).expect("MIR lowering"),
+            checked.interner,
+        )
+    }
+
+    fn inspected_handler_function(program: &Program) -> &Function {
+        program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap()
+    }
+
+    #[test]
+    fn handler_call_staging_preserves_bare_local_alias_view_parameters() {
+        let (program, types) = lower_handler_source(
+            r#"namespace app
+function take(view values: list[int64], amount: int64) returns int64:
+    return amount
+function inspect() returns int64:
+    list[int64] source = list(1)
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    int64 answer = take(forwarded, (none handle: default 3))
+    trace source
+    return answer
+"#,
+        );
+        validate(&program).expect("extracted handler CFG");
+        let function = inspected_handler_function(&program);
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        let forwarded = function
+            .locals
+            .iter()
+            .find(|local| local.name == "forwarded")
+            .unwrap()
+            .id;
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(|statement| {
+                    matches!(&statement.kind, StatementKind::Let { value, .. }
+                if matches!(&value.kind, ExpressionKind::Clone(view)
+                    if matches!(&view.kind, ExpressionKind::View(local)
+                        if matches!(local.kind, ExpressionKind::Local(id) if id == forwarded))))
+                })
+        );
+    }
+
+    #[test]
+    fn handler_indirect_staging_snapshots_alias_callee_after_borrowed_arguments() {
+        let (program, types) = lower_handler_source(
+            r#"namespace app
+function take(view values: list[int64], amount: int64) returns int64:
+    return amount
+function inspect() returns int64:
+    list[int64] source = list(1)
+    list[int64] borrowed = view source
+    function(view list[int64], int64) returns int64 callback = take
+    function(view list[int64], int64) returns int64 callable = view callback
+    int64 answer = callable(borrowed, (none handle: default 4))
+    trace source
+    trace callback
+    trace callable
+    return answer
+"#,
+        );
+        validate(&program).expect("extracted indirect handler CFG");
+        let function = inspected_handler_function(&program);
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        let callable = function
+            .locals
+            .iter()
+            .find(|local| local.name == "callable")
+            .unwrap()
+            .id;
+        let stages = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.kind {
+                StatementKind::Let { local, value }
+                    if matches!(&value.kind,
+                    ExpressionKind::Clone(value) if matches!(value.kind,
+                        ExpressionKind::Local(id) if id == callable)) =>
+                {
+                    Some(*local)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stages.len(), 1);
+        let callee_stage = stages[0];
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(|statement| {
+                    matches!(&statement.kind, StatementKind::Let { value, .. }
+                if matches!(&value.kind, ExpressionKind::IndirectCall { callee, .. }
+                    if matches!(callee.kind, ExpressionKind::Local(id) if id == callee_stage)))
+                })
+        );
+        assert!(function.blocks.iter().any(|block| {
+            block.statements.iter().any(|statement| {
+                matches!(&statement.kind,
+                StatementKind::Let { local, .. } if *local == callee_stage)
+            }) && matches!(block.terminator.kind, TerminatorKind::Return(_))
+        }));
+    }
+
+    #[test]
+    fn handler_call_staging_snapshots_copy_owned_view_carriers() {
+        let (program, types) = lower_handler_source(
+            r#"namespace app
+function increment(value: int64) returns int64:
+    return value + 1
+function take(view text: secret[string], view callback: function(int64) returns int64, amount: int64) returns int64:
+    return callback(amount)
+function inspect() returns int64:
+    secret[string] source = "kept"
+    secret[string] borrowed = view source
+    function(int64) returns int64 callback = increment
+    function(int64) returns int64 callable = view callback
+    int64 answer = take(view borrowed, view callable, (none handle: default 4))
+    trace source
+    trace callback
+    return answer
+"#,
+        );
+        validate(&program).expect("copy-owned staged views");
+        let function = inspected_handler_function(&program);
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        for name in ["borrowed", "callable"] {
+            let alias = function
+                .locals
+                .iter()
+                .find(|local| local.name == name)
+                .unwrap()
+                .id;
+            assert!(
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .any(|statement| {
+                        matches!(&statement.kind, StatementKind::Let { value, .. }
+                    if matches!(&value.kind, ExpressionKind::Clone(view)
+                        if matches!(&view.kind, ExpressionKind::View(local)
+                            if matches!(local.kind, ExpressionKind::Local(id) if id == alias))))
+                    }),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn handler_call_staging_keeps_owned_alias_boundaries_rejected() {
+        let file = jett_common::FileId::new(0);
+        let parsed = jett_parser::parse(
+            r#"namespace app
+function take(view values: list[int64], amount: int64) returns int64:
+    return amount
+function inspect() returns int64:
+    list[int64] source = list(1)
+    list[int64] borrowed = view source
+    return take(borrowed, (none handle: default 3))
+"#,
+            file,
+        );
+        let resolved = jett_resolve::resolve(&parsed.module);
+        let checked = jett_typecheck::check(&parsed.module, &resolved);
+        assert!(parsed.errors.is_empty());
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checked.diagnostics
+        );
+        let mut hir = jett_hir::lower(
+            &parsed.module,
+            &resolved,
+            &checked,
+            &std::collections::HashMap::from([(file, jett_common::SourceOrigin::Project)]),
+        )
+        .unwrap();
+        hir.functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "take")
+            .unwrap()
+            .params[0]
+            .mode = ParamMode::Owned;
+        let program = lower(&hir, &checked.interner).unwrap();
+        let error = crate::move_values::MoveValuePlan::analyze(
+            &program,
+            inspected_handler_function(&program),
+            &checked.interner,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("cannot move borrowed native place"),
+            "{error}"
+        );
+
+        let span = Span::new(file, 0, 1);
+        let explicit = Expression {
+            kind: ExpressionKind::View(Box::new(Expression {
+                kind: ExpressionKind::Local(LocalId::new(0)),
+                ty: TypeInterner::STRING,
+                span,
+            })),
+            ty: TypeInterner::STRING,
+            span,
+        };
+        assert!(call_staging_inputs(&[explicit], &[ParamMode::Owned]).is_none());
+    }
 
     #[test]
     fn aggregate_view_snapshot_rejects_nested_resources() {

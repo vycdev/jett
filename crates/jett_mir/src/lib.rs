@@ -59,6 +59,16 @@ impl Function {
     pub fn parameter_for_local(&self, id: LocalId) -> Option<&Param> {
         self.params.iter().find(|param| param.local == id)
     }
+
+    /// Whether a local holds a view parameter or nonowning local alias.
+    pub fn is_view_local(&self, id: LocalId) -> bool {
+        hir::is_borrowed_local(&self.locals, &self.params, id)
+    }
+
+    /// The stable backing local of a direct or forwarded local view.
+    pub fn view_root(&self, id: LocalId) -> Option<LocalId> {
+        hir::local_view_root(&self.locals, id)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -302,6 +312,26 @@ impl FunctionValidator<'_, '_> {
                         local.id.index()
                     ),
                 );
+            }
+            if let Some(source) = local.view_source {
+                self.check_local(source, local.span, "local view source");
+                if source.index() >= local.id.index() || function.view_root(local.id).is_none() {
+                    self.error(local.span, "local view source must precede its binding");
+                }
+                if local.mutable || function.parameter_for_local(local.id).is_some() {
+                    self.error(
+                        local.span,
+                        "local view aliases must be immutable local bindings",
+                    );
+                }
+                if let Some(root) = function.view_root(local.id)
+                    && function.local(root).is_some_and(|root| root.mutable)
+                {
+                    self.error(
+                        local.span,
+                        "native local views require immutable backing bindings",
+                    );
+                }
             }
         }
 
@@ -918,18 +948,32 @@ pub fn lower(program: &hir::Program, types: &TypeInterner) -> Result<Program, Ve
             })
             .collect());
     }
+    let function_param_modes = program
+        .functions
+        .iter()
+        .map(|function| {
+            (
+                function.id,
+                function.params.iter().map(|param| param.mode).collect(),
+            )
+        })
+        .collect();
     Ok(Program {
         equality_methods: program.equality_methods.clone(),
         functions: program
             .functions
             .iter()
-            .map(|function| lower_function(function, types))
+            .map(|function| lower_function(function, types, &function_param_modes))
             .collect(),
     })
 }
 
-fn lower_function(function: &hir::Function, types: &TypeInterner) -> Function {
-    let mut builder = Builder::new(function.body.span, types);
+fn lower_function(
+    function: &hir::Function,
+    types: &TypeInterner,
+    function_param_modes: &std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+) -> Function {
+    let mut builder = Builder::new(function.body.span, types, function_param_modes);
     builder.locals = function.locals.clone();
     builder.view_params = function
         .params
@@ -937,6 +981,13 @@ fn lower_function(function: &hir::Function, types: &TypeInterner) -> Function {
         .filter(|param| param.mode == ParamMode::View)
         .map(|param| param.local)
         .collect();
+    builder.view_params.extend(
+        function
+            .locals
+            .iter()
+            .filter(|local| local.view_source.is_some())
+            .map(|local| local.id),
+    );
     builder.lower_block(&function.body);
     if builder.open() && function.return_type == jett_types::TypeInterner::NOTHING {
         builder.terminate(TerminatorKind::Return(None), function.body.span);
@@ -957,6 +1008,7 @@ fn lower_function(function: &hir::Function, types: &TypeInterner) -> Function {
 
 struct Builder<'a> {
     types: &'a TypeInterner,
+    function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
     blocks: Vec<BasicBlock>,
     current: BlockId,
     loops: Vec<(BlockId, BlockId)>,
@@ -966,9 +1018,14 @@ struct Builder<'a> {
 }
 
 impl<'a> Builder<'a> {
-    fn new(span: Span, types: &'a TypeInterner) -> Self {
+    fn new(
+        span: Span,
+        types: &'a TypeInterner,
+        function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
+    ) -> Self {
         Self {
             types,
+            function_param_modes,
             blocks: vec![BasicBlock {
                 id: BlockId(0),
                 statements: Vec::new(),

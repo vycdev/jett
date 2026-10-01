@@ -11,10 +11,11 @@ pub use jett_intrinsics::IntrinsicId;
 use jett_parser::ast::{self, Expr, Item, Module, Stmt};
 use jett_resolve::{DefId, DefKind, ResolveResult};
 use jett_typecheck::{
-    CheckResult, CheckedBodyFacts, CheckedCallArgumentOrder, CheckedComptimeTypeBinding,
-    CheckedComptimeTypeSelection, CheckedGenericCall, CheckedGenericFunctionInstantiation,
-    CheckedGenericSpecialization, CheckedInterfaceCall, CheckedMethodCall, CheckedMethodDefinition,
-    CheckedMethodValue, CheckedStaticSelection, CheckedStructConstruction,
+    CheckResult, CheckedBindingMode, CheckedBodyFacts, CheckedCallArgumentOrder,
+    CheckedComptimeTypeBinding, CheckedComptimeTypeSelection, CheckedGenericCall,
+    CheckedGenericFunctionInstantiation, CheckedGenericSpecialization, CheckedInterfaceCall,
+    CheckedMethodCall, CheckedMethodDefinition, CheckedMethodValue, CheckedStaticSelection,
+    CheckedStructConstruction, CheckedViewSource,
 };
 use jett_types::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
@@ -24,9 +25,15 @@ use jett_types::{
 
 mod inline_functions;
 mod interface_values;
+#[cfg(test)]
+mod local_view_tests;
+mod local_views;
 mod type_validation;
 
 pub use interface_values::complete_value_conversions;
+pub use local_views::{
+    is_borrowed_local, local_view_root, validate_local_view_initializer, validate_local_views,
+};
 pub use type_validation::validate_backend_types;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -204,6 +211,9 @@ pub struct Local {
     pub debug_ty: TypeId,
     pub debug_type_name: Option<String>,
     pub mutable: bool,
+    /// Immediate stable backing local for a checked borrowed alias. Parameters
+    /// use `ParamMode`; owned locals and generated snapshots have no source.
+    pub view_source: Option<LocalId>,
     pub span: Span,
 }
 
@@ -591,6 +601,9 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
                 validator.error(local.span, "local IDs must be dense and ordered");
             }
         }
+        validator
+            .errors
+            .extend(local_views::validate_structure(function));
         for param in &function.params {
             validator.check_local(param.local, param.span);
         }
@@ -1541,6 +1554,7 @@ impl<'a> Lowerer<'a> {
             &function_ids,
             self.check.type_map.clone(),
             self.check.debug_type_names.clone(),
+            self.check.binding_modes.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -1626,6 +1640,7 @@ impl<'a> Lowerer<'a> {
             return_type,
             expression_types,
             debug_type_names,
+            binding_modes,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -1646,6 +1661,7 @@ impl<'a> Lowerer<'a> {
                 instantiation.return_type,
                 instantiation.type_map.clone(),
                 instantiation.debug_type_names.clone(),
+                instantiation.binding_modes.clone(),
                 instantiation.generic_calls.clone(),
                 instantiation.intrinsic_ids.clone(),
                 instantiation.intrinsic_type_arguments.clone(),
@@ -1667,6 +1683,7 @@ impl<'a> Lowerer<'a> {
                 method.return_type,
                 self.check.type_map.clone(),
                 self.check.debug_type_names.clone(),
+                self.check.binding_modes.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -1716,6 +1733,7 @@ impl<'a> Lowerer<'a> {
                 return_type,
                 self.check.type_map.clone(),
                 self.check.debug_type_names.clone(),
+                self.check.binding_modes.clone(),
                 self.check.generic_calls.clone(),
                 self.check.intrinsic_ids.clone(),
                 self.check.intrinsic_type_arguments.clone(),
@@ -1746,6 +1764,7 @@ impl<'a> Lowerer<'a> {
             &function_ids,
             expression_types,
             debug_type_names,
+            binding_modes,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -1904,6 +1923,7 @@ impl<'a> Lowerer<'a> {
             &function_ids,
             self.check.type_map.clone(),
             self.check.debug_type_names.clone(),
+            self.check.binding_modes.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -1966,6 +1986,7 @@ impl<'a> Lowerer<'a> {
             let mut metadata = body_lowerer.locals[original.index() as usize].clone();
             metadata.id = captured;
             metadata.name = format!("$actor.capture.{}", original.index());
+            metadata.view_source = None;
             body_lowerer.locals.push(metadata);
             statements.push(Statement {
                 kind: StatementKind::Let {
@@ -2117,6 +2138,7 @@ impl<'a> Lowerer<'a> {
         let function_ids = self.function_ids.clone();
         let expression_types = self.check.type_map.clone();
         let debug_type_names = self.check.debug_type_names.clone();
+        let binding_modes = self.check.binding_modes.clone();
         let generic_calls = self.check.generic_calls.clone();
         let intrinsic_ids = self.check.intrinsic_ids.clone();
         let intrinsic_type_arguments = self.check.intrinsic_type_arguments.clone();
@@ -2135,6 +2157,7 @@ impl<'a> Lowerer<'a> {
             &function_ids,
             expression_types,
             debug_type_names,
+            binding_modes,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2315,6 +2338,7 @@ impl<'a> Lowerer<'a> {
             &function_ids,
             self.check.type_map.clone(),
             self.check.debug_type_names.clone(),
+            self.check.binding_modes.clone(),
             self.check.generic_calls.clone(),
             self.check.intrinsic_ids.clone(),
             self.check.intrinsic_type_arguments.clone(),
@@ -2408,6 +2432,7 @@ struct BodyLowerer<'lowerer, 'program> {
     function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
     expression_types: HashMap<Span, TypeId>,
     debug_type_names: HashMap<Span, String>,
+    binding_modes: HashMap<Span, CheckedBindingMode>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2434,6 +2459,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         function_ids: &'lowerer HashMap<FunctionKey, FunctionId>,
         expression_types: HashMap<Span, TypeId>,
         debug_type_names: HashMap<Span, String>,
+        binding_modes: HashMap<Span, CheckedBindingMode>,
         generic_calls: HashMap<Span, CheckedGenericCall>,
         intrinsic_ids: HashMap<Span, IntrinsicId>,
         intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -2452,6 +2478,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             function_ids,
             expression_types,
             debug_type_names,
+            binding_modes,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -2552,9 +2579,56 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .get(&self.parent.resolve.scope_table.def(definition).span)
                 .cloned(),
             mutable,
+            view_source: None,
             span,
         });
         id
+    }
+
+    fn local_view_source(
+        &mut self,
+        declaration: &ast::VarDecl,
+        value: &Expression,
+        ty: TypeId,
+    ) -> Option<Option<LocalId>> {
+        let Some(mode) = self.binding_modes.get(&declaration.name.span).copied() else {
+            self.parent.error(
+                declaration.name.span,
+                "local declaration has no checked ownership mode",
+            );
+            return None;
+        };
+        let CheckedBindingMode::View { source } = mode else {
+            return Some(None);
+        };
+        let CheckedViewSource::Binding(definition) = source else {
+            self.parent.error(declaration.value.span(), "native borrowed alias requires a stable local origin; temporary and projected views remain unsupported");
+            return None;
+        };
+        let Some(source) = self.local_ids.get(&definition).copied() else {
+            self.parent.error(
+                declaration.value.span(),
+                "native borrowed alias source is not a local binding",
+            );
+            return None;
+        };
+        if declaration.mutable || !local_views::immutable_view_chain(&self.locals, source) {
+            self.parent.error(
+                declaration.span,
+                "native borrowed alias requires immutable bindings along its stable origin",
+            );
+            return None;
+        }
+        if let Err(message) = local_views::validate_local_view_initializer(
+            value,
+            source,
+            ty,
+            &self.parent.check.interner,
+        ) {
+            self.parent.error(declaration.value.span(), message);
+            return None;
+        }
+        Some(Some(source))
     }
 
     fn lower_block(&mut self, block: &ast::Block) -> Block {
@@ -2612,8 +2686,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 // The new binding becomes visible only after its initializer,
                 // including any handled failure and nested breakpoint.
                 let value = self.lower_expression(&decl.value)?;
+                let view_source = self.local_view_source(decl, &value, ty)?;
                 let local =
                     self.allocate_local(definition, &decl.name.name, ty, decl.mutable, decl.span);
+                self.locals[local.index() as usize].view_source = view_source;
                 (StatementKind::Let { local, value }, decl.span)
             }
             Stmt::Assign(assign) => (
@@ -2880,6 +2956,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .get(&declaration)
                 .cloned(),
             mutable: false,
+            view_source: None,
             span: trace.span,
         });
         Some(Statement {
@@ -3035,6 +3112,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let CheckedBodyFacts {
             type_map,
             debug_type_names,
+            binding_modes,
             generic_calls,
             intrinsic_ids,
             intrinsic_type_arguments,
@@ -3052,6 +3130,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         let saved_expression_types = std::mem::replace(&mut self.expression_types, type_map);
         let saved_debug_type_names =
             std::mem::replace(&mut self.debug_type_names, debug_type_names);
+        let saved_binding_modes = std::mem::replace(&mut self.binding_modes, binding_modes);
         let saved_generic_calls = std::mem::replace(&mut self.generic_calls, generic_calls);
         let saved_intrinsic_ids = std::mem::replace(&mut self.intrinsic_ids, intrinsic_ids);
         let saved_intrinsic_type_arguments =
@@ -3084,6 +3163,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         self.local_ids = saved_local_ids;
         self.expression_types = saved_expression_types;
         self.debug_type_names = saved_debug_type_names;
+        self.binding_modes = saved_binding_modes;
         self.generic_calls = saved_generic_calls;
         self.intrinsic_ids = saved_intrinsic_ids;
         self.intrinsic_type_arguments = saved_intrinsic_type_arguments;

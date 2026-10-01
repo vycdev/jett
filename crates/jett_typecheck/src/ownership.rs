@@ -147,7 +147,7 @@ pub(crate) fn cannot_capture_move_only(name: &str, span: Span) -> Diagnostic {
     )
 }
 
-pub(crate) fn is_implicitly_copyable(interner: &TypeInterner, type_id: TypeId) -> bool {
+pub fn is_implicitly_copyable(interner: &TypeInterner, type_id: TypeId) -> bool {
     matches!(
         interner.resolve(type_id),
         Type::Int8

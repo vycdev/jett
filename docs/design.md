@@ -5654,6 +5654,14 @@ Rebinding an owned mutable value from a known move-only view reports E0401;
 use an explicit clone to acquire ownership. Copyable values retain implicit
 copying.
 
+Native lowering currently supports direct and forwarded immutable local views
+with a stable immutable local or view-parameter origin. Explicit clones acquire
+ownership; aliases carry no cleanup obligation. Temporary-backed views, mutable
+chains, and owner consumption or rebinding after alias creation remain native
+implementation limits. These limits do not settle source loan expiry or change
+the checker rules above; see the
+[local view implementation note](active/native_local_view_aliases.md).
+
 **Rule 2: A view cannot be sent to another thread.**
 
 ```

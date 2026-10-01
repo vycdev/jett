@@ -25,10 +25,16 @@ pub fn validate_backend_types(
         interner,
         visited_types: HashSet::new(),
         visited_definitions: HashSet::new(),
+        local_views: Vec::new(),
+        local_types: Vec::new(),
+        borrowed_parameters: HashSet::new(),
         errors: Vec::new(),
     };
     for function in &program.functions {
         validator.function(function);
+    }
+    if let Err(errors) = crate::validate_local_views(program, interner) {
+        validator.errors.extend(errors);
     }
     for (&owner, &method) in &program.equality_methods {
         let target = program
@@ -78,6 +84,9 @@ struct BackendTypeValidator<'a> {
     interner: &'a TypeInterner,
     visited_types: HashSet<TypeId>,
     visited_definitions: HashSet<DefinitionKey>,
+    local_views: Vec<Option<crate::LocalId>>,
+    local_types: Vec<TypeId>,
+    borrowed_parameters: HashSet<crate::LocalId>,
     errors: Vec<ValidationError>,
 }
 
@@ -90,6 +99,18 @@ impl BackendTypeValidator<'_> {
     }
 
     fn function(&mut self, function: &Function) {
+        self.local_views = function
+            .locals
+            .iter()
+            .map(|local| local.view_source)
+            .collect();
+        self.local_types = function.locals.iter().map(|local| local.ty).collect();
+        self.borrowed_parameters = function
+            .params
+            .iter()
+            .filter(|param| param.mode == crate::ParamMode::View)
+            .map(|param| param.local)
+            .collect();
         let function_name = &function.identity.declaration.name;
         for (index, type_argument) in function.identity.type_arguments.iter().enumerate() {
             self.type_id(
@@ -135,8 +156,21 @@ impl BackendTypeValidator<'_> {
 
     fn statement(&mut self, statement: &Statement, function_name: &str) {
         match &statement.kind {
-            StatementKind::Let { value, .. }
-            | StatementKind::HandleDefault(value)
+            StatementKind::Let { local, value } => {
+                if let Some(Some(source)) = self.local_views.get(local.index() as usize)
+                    && let Some(&ty) = self.local_types.get(local.index() as usize)
+                    && let Err(message) = crate::local_views::validate_local_view_initializer(
+                        value,
+                        *source,
+                        ty,
+                        self.interner,
+                    )
+                {
+                    self.error(value.span, message);
+                }
+                self.expression(value, function_name);
+            }
+            StatementKind::HandleDefault(value)
             | StatementKind::Expression(value)
             | StatementKind::Respond(value) => self.expression(value, function_name),
             StatementKind::Assign { target, value } => {
@@ -440,6 +474,27 @@ impl BackendTypeValidator<'_> {
                     format!("function `{function_name}` field owner"),
                 );
             }
+            ExpressionKind::ClosureRef { captures, .. } => {
+                if captures.iter().any(|id| {
+                    (self
+                        .local_views
+                        .get(id.index() as usize)
+                        .is_some_and(Option::is_some)
+                        || self.borrowed_parameters.contains(id))
+                        && self.local_types.get(id.index() as usize).is_some_and(|ty| {
+                            (ty.index() as usize) < self.interner.len()
+                                && !jett_typecheck::ownership::is_implicitly_copyable(
+                                    self.interner,
+                                    *ty,
+                                )
+                        })
+                }) {
+                    self.error(
+                        expression.span,
+                        "native callbacks cannot capture a borrowed local alias",
+                    );
+                }
+            }
             ExpressionKind::Int(_)
             | ExpressionKind::Constant { .. }
             | ExpressionKind::Float(_)
@@ -450,7 +505,6 @@ impl BackendTypeValidator<'_> {
             | ExpressionKind::RuntimeFailure(_)
             | ExpressionKind::Local(_)
             | ExpressionKind::FunctionRef(_)
-            | ExpressionKind::ClosureRef { .. }
             | ExpressionKind::OptionalNone => {}
         }
     }

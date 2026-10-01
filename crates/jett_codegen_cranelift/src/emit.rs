@@ -1261,7 +1261,14 @@ impl Translator<'_, '_> {
             }
 
             StatementKind::Let { local, value } => {
-                let value = self.expression(value)?;
+                let borrowed = self.local_types[local.index() as usize]
+                    .view_source
+                    .is_some();
+                let value = if borrowed {
+                    self.argument(value, true)?
+                } else {
+                    self.expression(value)?
+                };
                 self.define_local(*local, value, statement.span)
             }
             StatementKind::CheckRefinement {
@@ -1791,6 +1798,13 @@ impl Translator<'_, '_> {
                         format!("cannot read native local: {error}"),
                     )
                 })?;
+                if is_copy_owned(self.types, expression.ty) {
+                    return self.own_copy_value(
+                        LoweredValue::Scalar(value),
+                        expression.ty,
+                        expression.span,
+                    );
+                }
                 if let Some(pending_variable) = self.pending_variables[local.index() as usize] {
                     let depth = self
                         .builder
@@ -2118,7 +2132,14 @@ impl Translator<'_, '_> {
             ExpressionKind::Constant { .. } => {
                 Err(self.unsupported(expression.span, "unbaked namespace constant"))
             }
-            ExpressionKind::View(value) => self.argument(value, true),
+            ExpressionKind::View(value) => {
+                let value = self.argument(value, true)?;
+                if is_copy_owned(self.types, expression.ty) {
+                    self.own_copy_value(value, expression.ty, expression.span)
+                } else {
+                    Ok(value)
+                }
+            }
             ExpressionKind::Clone(value) if is_linear(self.types, value.ty) => {
                 let borrowed = self.argument(value, true)?;
                 self.clone_linear(borrowed, value.ty, value.span)

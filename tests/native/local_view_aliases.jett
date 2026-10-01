@@ -1,0 +1,235 @@
+namespace app
+struct Record:
+    values: list[int64]
+    label: string
+type Label = string where true
+enum Choice:
+    selected(values: list[int64])
+    empty
+interface Named:
+    function name(view self: Named) returns string
+implement Named for Record:
+    function name(view self: Record) returns string:
+        return self.label
+function total(view values: list[int64]) returns int64:
+    mutable int64 amount = 0
+    for number in view values:
+        amount = amount + number
+    return amount
+function increment(value: int64) returns int64:
+    return value + 1
+function cloned_alias[T](view source: T) returns T:
+    T borrowed = view source
+    T forwarded = borrowed
+    return clone forwarded
+function parameter_report(view source: list[int64]) returns string:
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    list[int64] copied = clone forwarded
+    return "{total(view forwarded)}:{total(view copied)}:{list.length(view source)}"
+function list_report() returns string:
+    list[int64] source = list(2, 3, 5)
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    mutable list[int64] copied = clone forwarded
+    copied = list.append[int64](copied, 7)
+    return "{total(view forwarded)}:{total(view copied)}:{list.length(view source)}:{parameter_report(view source)}"
+function bytes_report() returns string:
+    bytes source = bytes.from_string("AB")
+    bytes borrowed = view source
+    bytes forwarded = borrowed
+    bytes copied = clone forwarded
+    return "{bytes.to_hex(view forwarded)}:{bytes.to_hex(view copied)}:{bytes.length(view source)}"
+function string_report() returns string:
+    secret[string] source = "secret"
+    secret[string] borrowed = view source
+    secret[string] forwarded = borrowed
+    string copied = declassify clone forwarded
+    string public_copy = declassify forwarded
+    Label label = "refined" handle error:
+        return error
+    Label label_alias = view label
+    Label label_forwarded = label_alias
+    Label label_clone = clone label_forwarded
+    return "{copied}:{public_copy}:{declassify source}:{coarsen label_forwarded}:{coarsen label_clone}:{coarsen label}"
+function record_report() returns string:
+    Record source = Record(values: list(7, 11), label: "record")
+    Record borrowed = view source
+    Record forwarded = borrowed
+    Record copied = clone forwarded
+    return "{forwarded.label}:{total(view forwarded.values)}:{total(view copied.values)}:{total(view source.values)}"
+function interface_report() returns string:
+    Named source = Record(values: list(7), label: "named")
+    Named borrowed = view source
+    Named forwarded = borrowed
+    Named copied = clone forwarded
+    return "{Named.name(view forwarded)}:{Named.name(view copied)}:{Named.name(view source)}"
+function function_report() returns string:
+    int64 offset = 3
+    function(int64) returns int64 source = function(value: int64) returns int64: return value + offset
+    function(int64) returns int64 borrowed = view source
+    function(int64) returns int64 forwarded = borrowed
+    function(int64) returns int64 copied = clone forwarded
+    function(int64) returns int64 named = increment
+    function(int64) returns int64 named_alias = view named
+    return "{forwarded(7)}:{copied(8)}:{source(9)}:{named_alias(10)}:{named(11)}"
+function generic_report() returns string:
+    int64 number = 7
+    int64 scalar = cloned_alias[int64](view number)
+    list[int64] source = list(2, 3)
+    list[int64] copied = cloned_alias[list[int64]](view source)
+    return "{scalar}:{number}:{total(view copied)}:{total(view source)}"
+function choice_total(view source: Choice) returns int64:
+    match view source:
+        selected(values):
+            return total(view values)
+        empty:
+            return 0
+function sum_report() returns string:
+    Choice source = Choice.selected(list(2, 3))
+    Choice borrowed = view source
+    Choice forwarded = borrowed
+    mutable int64 amount = 0
+    match forwarded:
+        selected(values):
+            amount = total(view values)
+        empty:
+            amount = -1
+    return "{amount}:{choice_total(view source)}:{choice_total(view forwarded)}"
+function selected_length(view source: list[int64], marker: int64) returns int64:
+    return list.length(view source) + marker
+function selected_secret(view source: secret[string], marker: int64) returns string:
+    return "{declassify source}:{marker}"
+function selected_label(view source: Label, marker: int64) returns string:
+    return "{coarsen source}:{marker}"
+function handler_report() returns string:
+    list[int64] source = list(7, 11)
+    list[int64] borrowed = view source
+    function(view list[int64], int64) returns int64 callback = selected_length
+    function(view list[int64], int64) returns int64 callback_alias = view callback
+    int64 direct = selected_length(borrowed,(none handle: default 1))
+    list[int64] indirect_borrowed = view source
+    int64 indirect = callback_alias(indirect_borrowed,(none handle: default 2))
+    secret[string] hidden = "secret"
+    secret[string] hidden_alias = view hidden
+    string explicit = selected_secret(view hidden_alias,(none handle: default 3))
+    secret[string] implicit_alias = view hidden
+    string implicit = selected_secret(implicit_alias,(none handle: default 4))
+    Label label = "refined" handle error:
+        return error
+    Label label_alias = view label
+    string refined = selected_label(view label_alias,(none handle: default 5))
+    return "{direct}:{indirect}:{explicit}:{implicit}:{refined}"
+function copied_callbacks(view source: function(int64) returns int64) returns list[function(int64) returns int64]:
+    function(int64) returns int64 borrowed = view source
+    return list(clone borrowed)
+function copied_secret_text(view source: secret[string]) returns optional[string]:
+    secret[string] borrowed = view source
+    return some(declassify borrowed)
+function copied_texts(view source: string) returns list[string]:
+    return list(view source, clone view source)
+function copied_text_sum(view source: string) returns optional[string]:
+    return some(view source)
+function collection_report() returns string:
+    int64 offset = 3
+    function(int64) returns int64 source = function(value: int64) returns int64: return value + offset
+    list[function(int64) returns int64] callbacks = copied_callbacks(view source)
+    function(int64) returns int64 callback = list.get[function(int64) returns int64](view callbacks, 0) handle: default increment
+    string hidden = copied_secret_text("secret") handle: default "missing"
+    list[string] texts = copied_texts("owned")
+    string text = list.get[string](view texts, 1) handle: default "missing"
+    string sum = copied_text_sum("sum") handle: default "missing"
+    return "{callback(7)}:{source(8)}:{hidden}:{text}:{sum}"
+function scope_report(view source: list[int64]) returns int64:
+    mutable int64 amount = 0
+    if true:
+        list[int64] borrowed = view source
+        list[int64] forwarded = borrowed
+        amount = total(view forwarded)
+    else:
+        list[int64] borrowed = view source
+        amount = total(view borrowed)
+    for number in view source:
+        list[int64] borrowed = view source
+        amount = amount + number + list.length(view borrowed)
+    list[int64] borrowed = list(13)
+    return amount + total(view borrowed)
+function reflected_report[T](view source: T) returns string:
+    mutable string text = ""
+    for field in type.fields[T]():
+        T borrowed = view source
+        T forwarded = borrowed
+        T copied = clone forwarded
+        text = "{text}{field.name}:{type.name[T]()};"
+    return text
+function reflection_report() returns string:
+    Record source = Record(values: list(7), label: "reflection")
+    string fields = reflected_report[Record](view source)
+    return "{fields}{source.label}:{total(view source.values)}"
+function pending_report() returns string:
+    list[int64] source = run list(7, 11)
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    list[int64] ready = join clone forwarded handle error:
+        return error
+    list[int64] again = join clone source handle error:
+        return error
+    return "{total(view ready)}:{total(view again)}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "lists:{list_report()}\n")
+    Stdout.write(view stdout, "bytes:{bytes_report()}\n")
+    Stdout.write(view stdout, "strings:{string_report()}\n")
+    Stdout.write(view stdout, "records:{record_report()}\n")
+    Stdout.write(view stdout, "interfaces:{interface_report()}\n")
+    Stdout.write(view stdout, "functions:{function_report()}\n")
+    Stdout.write(view stdout, "generics:{generic_report()}\n")
+    Stdout.write(view stdout, "sums:{sum_report()}\n")
+    Stdout.write(view stdout, "handlers:{handler_report()}\n")
+    Stdout.write(view stdout, "collections:{collection_report()}\n")
+    list[int64] scope_source = list(2, 3)
+    Stdout.write(view stdout, "scopes:{scope_report(view scope_source)}:{total(view scope_source)}\n")
+    Stdout.write(view stdout, "reflection:{reflection_report()}\n")
+    Stdout.write(view stdout, "pending:{pending_report()}\n")
+    list[int64] source = list(2, 3, 5)
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    trace source
+    trace borrowed
+    trace forwarded
+    secret[string] hidden = "hidden"
+    secret[string] hidden_alias = view hidden
+    trace hidden_alias
+    Stdout.write(view stdout, "debug-root:{total(view source)}:{total(view forwarded)}\n")
+verify local_alias_values:
+    assert list_report() == "10:17:3:10:10:3"
+    assert bytes_report() == "4142:4142:2"
+    assert string_report() == "secret:secret:secret:refined:refined:refined"
+    assert record_report() == "record:18:18:18"
+    assert interface_report() == "named:named:named"
+    assert function_report() == "10:11:12:11:12"
+    assert generic_report() == "7:7:5:5"
+    assert sum_report() == "5:5:5"
+    assert handler_report() == "3:4:secret:3:secret:4:refined:5"
+    assert collection_report() == "10:11:secret:owned:sum"
+    assert scope_report(view list(2, 3)) == 27
+    assert reflection_report() == "values:app.Record;label:app.Record;reflection:7"
+    assert pending_report() == "18:18"
+property local_alias_trials:
+    given seed: int64
+    list[int64] source = list(seed, seed + 1)
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    list[int64] copied = cloned_alias[list[int64]](view forwarded)
+    assert total(view forwarded) == seed +(seed + 1)
+    assert total(view copied) == total(view source)
+    assert list.length(view source) == 2
+    assert cloned_alias[int64](view seed) == seed
+    assert bytes_report() == "4142:4142:2"
+    assert string_report() == "secret:secret:secret:refined:refined:refined"
+    assert sum_report() == "5:5:5"
+    assert handler_report() == "3:4:secret:3:secret:4:refined:5"
+    assert collection_report() == "10:11:secret:owned:sum"
+    assert record_report() == "record:18:18:18"
+    assert interface_report() == "named:named:named"
+    assert function_report() == "10:11:12:11:12"
+    assert reflection_report() == "values:app.Record;label:app.Record;reflection:7"

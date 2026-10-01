@@ -534,8 +534,8 @@ regressions and the linked clone-control regression pass, including debug and
 release after source removal and compiled verify/property suites.
 
 These supplemental regressions do not change the inventory denominator or
-establish full view support. Native local view-alias lowering remains
-unsupported; the frontend checks add no lifetime or projection policy.
+establish full view support. At that checkpoint native local view-alias lowering
+remained unsupported; the frontend checks added no lifetime or projection policy.
 
 The direct contextual secret-constructor gap is resolved for source
 `list(...)`, `map(...)`, `some(...)`, `none`, `ok(...)`, and `fail(...)` with
@@ -564,3 +564,37 @@ compiled verify suite and 100 property trials also pass. All 82 HIR, 47 MIR,
 correction. All eight backend-lowering tests also pass, including the 182-file
 run-pass obligation. Complete workspace, inventory, and host distribution gates
 remain independent obligations for the final revision.
+
+Direct and forwarded immutable local view aliases now have a bounded native
+handoff. Checked binding modes retain immediate resolved origins separately in
+ordinary, generic, and reflected bodies. HIR validates immutable backing chains
+and allocation-free carrier-preserving initializers. MIR remaps and retains
+origins, expands every alias read into backing-owner liveness, and excludes
+aliases from cleanup slots. Owner consumption or rebinding after reachable
+alias creation remains a conservative native implementation error; this does
+not settle source loan expiry or temporary lifetime rules. The remaining domain
+is recorded in [the local alias note](native_local_view_aliases.md).
+
+Formal view modes survive direct and indirect handler staging. Copy-owned
+string and callback observations acquire independent snapshots where needed;
+ordinary clones and implicitly copied results acquire owning temporaries before
+entering containers. Borrowed arguments retain their existing backing handle.
+Plain string view expressions keep their existing copy behavior. Borrowed
+enum matches snapshot the scrutinee before payload extraction.
+
+`local_view_aliases.jett` and its two linked tests pass in debug and release
+after source removal. The success test pins fourteen stdout lines and four
+debug traces, including secret redaction and release trace omission. It covers
+list, bytes, string, struct, interface, enum, and function aliases; generic and
+reflected bodies; sibling scopes, loops, pending values, clone independence,
+handled later arguments, and container copies that outlive their helper frame.
+The compiled verify suite and 100 property trials pass. The terminal-failure
+test preserves lexical output and the exact error with exit 71 in both profiles,
+proving successful checked cleanup rather than a cleanup-error override.
+
+All 217 checker, 89 HIR, 59 MIR, 332 reference/comptime, and 78 codegen tests
+pass, as do all 598 frontend fixtures and eight backend-lowering tests, including
+the 182-file run-pass obligation. Thirteen adjacent function-value tests, nine
+handler tests, and three pending-string tests also pass. These supplemental
+fixtures do not change the inventory denominator or establish full workspace,
+inventory execution, or supported-host distribution parity for this revision.

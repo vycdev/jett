@@ -92,6 +92,7 @@ Program {
                         "int64",
                     ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -115,6 +116,7 @@ Program {
                         "int64",
                     ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -256,6 +258,7 @@ Program {
                         "int64",
                     ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,

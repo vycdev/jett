@@ -1213,6 +1213,24 @@ impl Translator<'_, '_> {
         self.own(value)?;
         Ok(LoweredValue::Owned(value, self.temporary_slots[index]))
     }
+    pub(super) fn own_copy_value(
+        &mut self,
+        value: LoweredValue,
+        ty: TypeId,
+        span: Span,
+    ) -> Result<LoweredValue, CodegenError> {
+        if matches!(value, LoweredValue::Owned(..)) {
+            return Ok(value);
+        }
+        let bits = self.scalar(value, span)?;
+        let leaf = if is_function(self.types, ty) {
+            NativeLeaf::StructClone
+        } else {
+            NativeLeaf::Retain
+        };
+        let owned = self.leaf(leaf, &[bits], true)?;
+        self.own(owned)
+    }
     pub(super) fn argument(
         &mut self,
         expression: &Expression,
@@ -1234,7 +1252,7 @@ impl Translator<'_, '_> {
             return self.interface_coerce(inner, expression.ty, true, adapters);
         }
         if borrowed
-            && (is_linear(self.types, expression.ty) || is_function(self.types, expression.ty))
+            && (is_linear(self.types, expression.ty) || is_copy_owned(self.types, expression.ty))
         {
             match &expression.kind {
                 ExpressionKind::View(inner) => return self.argument(inner, true),

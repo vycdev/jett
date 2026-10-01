@@ -814,6 +814,7 @@ pub(super) fn value_expression(
                 debug_ty: ty,
                 debug_type_name: None,
                 mutable: false,
+                view_source: None,
                 span,
             });
             context.bindings.push(Statement {
@@ -927,6 +928,7 @@ fn function_value_expression(
             debug_ty: capture_type,
             debug_type_name: None,
             mutable: false,
+            view_source: None,
             span,
         });
         context.bindings.push(Statement {

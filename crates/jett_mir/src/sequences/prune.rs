@@ -44,6 +44,21 @@ pub(crate) fn unreachable(function: &mut Function) {
             &mut |_| {},
         );
     }
+    loop {
+        let mut changed = false;
+        for local in &function.locals {
+            if used[local.id.index() as usize]
+                && let Some(source) = local.view_source
+                && !used[source.index() as usize]
+            {
+                used[source.index() as usize] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     let mut locals = vec![None; function.locals.len()];
     function
         .locals
@@ -66,6 +81,11 @@ pub(crate) fn unreachable(function: &mut Function) {
     };
     for parameter in &mut function.params {
         remap_local(&mut parameter.local);
+    }
+    for local in &mut function.locals {
+        if let Some(source) = &mut local.view_source {
+            remap_local(source);
+        }
     }
     for block in &mut function.blocks {
         block_locals(block, &mut remap_local, &mut remap_floor);

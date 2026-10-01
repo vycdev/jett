@@ -179,6 +179,12 @@ impl Extractor<'_> {
                 "{}$inline{}_{}",
                 parent.identity.declaration.name, expression.span.start, expression.span.end
             );
+            let mut locals = parent.locals.to_vec();
+            // Captures are independent owned environment entries. Their local
+            // metadata must not retain an origin in the enclosing function.
+            for capture in &captures {
+                locals[capture.index() as usize].view_source = None;
+            }
             self.pending.push(Function {
                 id,
                 identity: FunctionIdentity {
@@ -202,7 +208,7 @@ impl Extractor<'_> {
                 params: capture_parameters,
                 capture_count,
                 return_type: *return_type,
-                locals: parent.locals.to_vec(),
+                locals,
                 body: body.clone(),
                 span: expression.span,
             });

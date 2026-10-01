@@ -55,6 +55,56 @@ fn assert_reachable_and_dense(function: &Function) {
     }
 }
 
+#[test]
+fn uninhabited_iteration_remaps_transitive_local_view_origins() {
+    let (mut program, types) = lower_source(
+        r#"namespace app
+function main() returns int64:
+    for element in list():
+        trace element
+    list[int64] source = list(7, 11)
+    list[int64] borrowed = view source
+    list[int64] forwarded = borrowed
+    trace forwarded
+    return 7
+"#,
+    );
+    let original = main_function(&program);
+    let source_before = original
+        .locals
+        .iter()
+        .find(|local| local.name == "source")
+        .unwrap()
+        .id;
+    prepare_native_sequences(&mut program, &types);
+    validate(&program).unwrap();
+    let function = main_function(&program);
+    assert_reachable_and_dense(function);
+    let source = function
+        .locals
+        .iter()
+        .find(|local| local.name == "source")
+        .unwrap();
+    let borrowed = function
+        .locals
+        .iter()
+        .find(|local| local.name == "borrowed")
+        .unwrap();
+    let forwarded = function
+        .locals
+        .iter()
+        .find(|local| local.name == "forwarded")
+        .unwrap();
+    assert!(source.id.index() < source_before.index());
+    assert_eq!(borrowed.view_source, Some(source.id));
+    assert_eq!(forwarded.view_source, Some(borrowed.id));
+    assert_eq!(function.view_root(forwarded.id), Some(source.id));
+    let plan = crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+    assert!(plan.owned_locals.contains(&(source.id.index() as usize)));
+    assert!(!plan.owned_locals.contains(&(borrowed.id.index() as usize)));
+    assert!(!plan.owned_locals.contains(&(forwarded.id.index() as usize)));
+}
+
 const EMPTY_LOOP: &str = r#"namespace app
 function main(flag: bool) returns int64:
     int64 before = 10

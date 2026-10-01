@@ -29,6 +29,9 @@ impl CopyValuePlan {
         plan_type(types, function.return_type, program)?;
         for local in &function.locals {
             plan_type(types, local.ty, program)?;
+            if function.view_root(local.id).is_none() {
+                return Err("borrowed local origin is invalid or cyclic".into());
+            }
         }
         let cfg = ControlFlowGraph::analyze(function).map_err(|e| format!("{e:?}"))?;
         let n = function.blocks.len();
@@ -76,7 +79,19 @@ impl CopyValuePlan {
                         Some(target.index() as usize)
                     }
                     StatementKind::Let { local, value } => {
-                        visit(value, &mut reads, &mut temporaries, types, program, false)?;
+                        let borrowed = function
+                            .local(*local)
+                            .ok_or("local definition is outside its function")?
+                            .view_source
+                            .is_some();
+                        visit(
+                            value,
+                            &mut reads,
+                            &mut temporaries,
+                            types,
+                            program,
+                            borrowed,
+                        )?;
                         Some(local.index() as usize)
                     }
                     StatementKind::CheckRefinement { local, call, .. } => {
@@ -133,6 +148,7 @@ impl CopyValuePlan {
                     }
                     _ => return Err("statement needs explicit ownership lowering".into()),
                 };
+                expand_view_reads(function, &mut reads)?;
                 max_temporaries = max_temporaries.max(temporaries);
                 statements.push((reads, definition));
             }
@@ -187,6 +203,7 @@ impl CopyValuePlan {
                 | TerminatorKind::Unreachable => {}
                 _ => return Err("terminator needs explicit ownership lowering".into()),
             }
+            expand_view_reads(function, &mut reads)?;
             max_temporaries = max_temporaries.max(temporaries);
             facts.push((statements, reads));
         }
@@ -295,12 +312,11 @@ impl CopyValuePlan {
                 .locals
                 .iter()
                 .filter(|l| {
-                    crate::move_values::is_copy_owned(types, l.ty)
-                        || (program.is_some()
-                            && crate::move_values::is_linear(types, l.ty)
-                            && !function
-                                .parameter_for_local(l.id)
-                                .is_some_and(|p| p.mode == crate::ParamMode::View))
+                    l.view_source.is_none()
+                        && (crate::move_values::is_copy_owned(types, l.ty)
+                            || (program.is_some()
+                                && crate::move_values::is_linear(types, l.ty)
+                                && !function.is_view_local(l.id)))
                 })
                 .map(|l| l.id.index() as usize)
                 .collect(),
@@ -311,6 +327,28 @@ impl CopyValuePlan {
         })
     }
 }
+
+/// Reading a view also observes every alias and owner backing its value. Expand
+/// before both initialization and liveness so cleanup cannot drop that owner.
+fn expand_view_reads(function: &Function, reads: &mut Set) -> Result<(), String> {
+    for index in reads.clone() {
+        let mut local = function
+            .locals
+            .get(index)
+            .ok_or("native read is outside its local table")?;
+        if function.view_root(local.id).is_none() {
+            return Err("borrowed local origin is invalid or cyclic".into());
+        }
+        while let Some(source) = local.view_source {
+            reads.insert(source.index() as usize);
+            local = function
+                .local(source)
+                .ok_or("borrowed local origin is outside its function")?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn switch_bindings_on_edge(
     function: &Function,
     source: crate::BlockId,
@@ -685,7 +723,7 @@ fn visit(
             }
         }
         ExpressionKind::IndirectCall { callee, args, .. } => {
-            visit(callee, reads, temporaries, types, program, false)?;
+            visit(callee, reads, temporaries, types, program, true)?;
             let view_params = match types
                 .resolve(crate::move_values::representation_type(types, callee.ty))
             {

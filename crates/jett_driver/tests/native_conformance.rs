@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 #[path = "support/native_inventory_execution.rs"]
 mod inventory_execution;
 
+#[path = "native_conformance/local_view_aliases.rs"]
+mod local_view_aliases;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

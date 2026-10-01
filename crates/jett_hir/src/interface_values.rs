@@ -110,6 +110,7 @@ impl Lowerer<'_> {
                     debug_ty: param.ty,
                     debug_type_name: None,
                     mutable: false,
+                    view_source: None,
                     span,
                 })
                 .collect();
@@ -457,6 +458,7 @@ impl Adapters {
                 debug_ty: param.ty,
                 debug_type_name: None,
                 mutable: false,
+                view_source: None,
                 span,
             })
             .collect();

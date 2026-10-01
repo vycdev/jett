@@ -7,9 +7,9 @@ pub mod errors;
 pub mod ownership;
 
 pub use checker::{
-    CheckOptions, CheckResult, CheckedBodyFacts, CheckedCallArgumentOrder,
+    CheckOptions, CheckResult, CheckedBindingMode, CheckedBodyFacts, CheckedCallArgumentOrder,
     CheckedComptimeTypeBinding, CheckedComptimeTypeSelection, CheckedGenericCall,
     CheckedGenericFunctionInstantiation, CheckedGenericSpecialization, CheckedInterfaceCall,
     CheckedMethodCall, CheckedMethodDefinition, CheckedMethodValue, CheckedStaticSelection,
-    CheckedStructConstruction, check, check_with_options,
+    CheckedStructConstruction, CheckedViewSource, check, check_with_options,
 };

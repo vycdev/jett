@@ -74,6 +74,7 @@ Program {
                         "string",
                     ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -218,6 +219,7 @@ Program {
                     ),
                     debug_type_name: None,
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -241,6 +243,7 @@ Program {
                         "app.Value",
                     ),
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,
@@ -262,6 +265,7 @@ Program {
                     ),
                     debug_type_name: None,
                     mutable: false,
+                    view_source: None,
                     span: Span {
                         file: FileId(
                             0,

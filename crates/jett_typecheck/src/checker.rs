@@ -45,6 +45,8 @@ pub struct CheckedGenericFunctionInstantiation {
     pub type_map: HashMap<Span, TypeId>,
     /// Checked declared type labels, retaining aliases per concrete body.
     pub debug_type_names: HashMap<Span, String>,
+    /// Physical copy/borrow facts, keyed by local declaration-name span.
+    pub binding_modes: HashMap<Span, CheckedBindingMode>,
     /// Nested generic calls selected while checking this concrete body.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     /// Closed compiler operation selected for each accepted intrinsic call.
@@ -115,6 +117,7 @@ pub struct CheckedBodyFacts {
     pub type_map: HashMap<Span, TypeId>,
     /// Checked declared type labels, retaining aliases per concrete body.
     pub debug_type_names: HashMap<Span, String>,
+    pub binding_modes: HashMap<Span, CheckedBindingMode>,
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     pub intrinsic_ids: HashMap<Span, IntrinsicId>,
     pub intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -127,6 +130,25 @@ pub struct CheckedBodyFacts {
     pub pipeline_step_call_types: HashMap<Span, TypeId>,
     pub static_selections: HashMap<Span, CheckedStaticSelection>,
     pub comptime_type_bindings: HashMap<Span, Vec<CheckedComptimeTypeBinding>>,
+}
+
+/// Checked initializer ownership, independent of declaration readonly policy.
+///
+/// A view records provenance only. It does not select a borrow lifetime or
+/// promise that lowering can preserve the view through a value conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedBindingMode {
+    Owned,
+    View { source: CheckedViewSource },
+}
+
+/// Immediate source of a checked borrowed initializer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckedViewSource {
+    /// Session-local resolver identity; forwarded aliases are not flattened.
+    Binding(DefId),
+    /// A temporary, projection, or another expression without a direct binding.
+    Other,
 }
 
 /// One compile-time control-flow choice made while checking a concrete generic
@@ -226,6 +248,8 @@ pub struct CheckResult {
     pub type_map: HashMap<Span, TypeId>,
     /// Checked declared type labels, retaining aliases per concrete body.
     pub debug_type_names: HashMap<Span, String>,
+    /// Physical copy/borrow facts outside generic bodies, by declaration name.
+    pub binding_modes: HashMap<Span, CheckedBindingMode>,
     /// Session-local resolved definitions and their checked types.
     ///
     /// Lowering uses this map with the resolver's `DefId` join keys. Durable
@@ -359,6 +383,7 @@ pub fn check_with_options(
         diagnostics,
         type_map: checker.type_map,
         debug_type_names: checker.debug_type_names,
+        binding_modes: checker.binding_modes,
         definition_types: checker.type_env,
         generic_calls: checker.generic_calls,
         intrinsic_ids: checker.intrinsic_ids,
@@ -450,6 +475,7 @@ struct ActiveGenericInstantiation {
     manifest_index: usize,
     type_map: HashMap<Span, TypeId>,
     debug_type_names: HashMap<Span, String>,
+    binding_modes: HashMap<Span, CheckedBindingMode>,
     generic_calls: HashMap<Span, CheckedGenericCall>,
     intrinsic_ids: HashMap<Span, IntrinsicId>,
     intrinsic_type_arguments: HashMap<Span, Vec<TypeId>>,
@@ -642,6 +668,8 @@ struct TypeChecker<'a> {
     interface_calls: HashMap<Span, CheckedInterfaceCall>,
     /// Checked source method values outside generic bodies.
     method_values: HashMap<Span, CheckedMethodValue>,
+    /// Physical local binding modes outside generic bodies.
+    binding_modes: HashMap<Span, CheckedBindingMode>,
     /// Checked struct constructions outside generic bodies.
     struct_constructions: HashMap<Span, CheckedStructConstruction>,
     /// Raw pipeline call-result types outside generic bodies.
@@ -747,6 +775,7 @@ impl<'a> TypeChecker<'a> {
             method_calls: HashMap::new(),
             interface_calls: HashMap::new(),
             method_values: HashMap::new(),
+            binding_modes: HashMap::new(),
             struct_constructions: HashMap::new(),
             pipeline_step_call_types: HashMap::new(),
             comptime_type_bindings: HashMap::new(),
@@ -6964,6 +6993,7 @@ impl<'a> TypeChecker<'a> {
                         return_type,
                         type_map: HashMap::new(),
                         debug_type_names: HashMap::new(),
+                        binding_modes: HashMap::new(),
                         generic_calls: HashMap::new(),
                         intrinsic_ids: HashMap::new(),
                         intrinsic_type_arguments: HashMap::new(),
@@ -7009,6 +7039,7 @@ impl<'a> TypeChecker<'a> {
                     manifest_index,
                     type_map: HashMap::new(),
                     debug_type_names: HashMap::new(),
+                    binding_modes: HashMap::new(),
                     generic_calls: HashMap::new(),
                     intrinsic_ids: HashMap::new(),
                     intrinsic_type_arguments: HashMap::new(),
@@ -7037,6 +7068,7 @@ impl<'a> TypeChecker<'a> {
                 let entry = &mut self.generic_function_instantiations[active.manifest_index];
                 entry.type_map.extend(active.type_map);
                 entry.debug_type_names.extend(active.debug_type_names);
+                entry.binding_modes.extend(active.binding_modes);
                 entry.generic_calls.extend(active.generic_calls);
                 entry.intrinsic_ids.extend(active.intrinsic_ids);
                 entry
@@ -7250,6 +7282,14 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn record_binding_mode(&mut self, span: Span, mode: CheckedBindingMode) {
+        if let Some(active) = self.active_generic_instantiations.last_mut() {
+            active.binding_modes.insert(span, mode);
+        } else {
+            self.binding_modes.insert(span, mode);
+        }
+    }
+
     fn clear_interface_method_value(&mut self, span: Span) {
         let values = if let Some(active) = self.active_generic_instantiations.last_mut() {
             &mut active.method_values
@@ -7313,6 +7353,7 @@ impl<'a> TypeChecker<'a> {
         if let Some(active) = self.active_generic_instantiations.last_mut() {
             Self::clear_facts_in_span(&mut active.type_map, owner);
             Self::clear_facts_in_span(&mut active.debug_type_names, owner);
+            Self::clear_facts_in_span(&mut active.binding_modes, owner);
             Self::clear_facts_in_span(&mut active.generic_calls, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut active.intrinsic_type_arguments, owner);
@@ -7326,6 +7367,7 @@ impl<'a> TypeChecker<'a> {
             Self::clear_facts_in_span(&mut active.static_selections, owner);
             Self::clear_facts_in_span(&mut active.comptime_type_bindings, owner);
         } else {
+            Self::clear_facts_in_span(&mut self.binding_modes, owner);
             Self::clear_facts_in_span(&mut self.generic_calls, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_ids, owner);
             Self::clear_facts_in_span(&mut self.intrinsic_type_arguments, owner);
@@ -7345,6 +7387,7 @@ impl<'a> TypeChecker<'a> {
             return CheckedBodyFacts {
                 type_map: Self::facts_in_span(&active.type_map, owner),
                 debug_type_names: Self::facts_in_span(&active.debug_type_names, owner),
+                binding_modes: Self::facts_in_span(&active.binding_modes, owner),
                 generic_calls: Self::facts_in_span(&active.generic_calls, owner),
                 intrinsic_ids: Self::facts_in_span(&active.intrinsic_ids, owner),
                 intrinsic_type_arguments: Self::facts_in_span(
@@ -7371,6 +7414,7 @@ impl<'a> TypeChecker<'a> {
         CheckedBodyFacts {
             type_map: Self::facts_in_span(&self.type_map, owner),
             debug_type_names: Self::facts_in_span(&self.debug_type_names, owner),
+            binding_modes: Self::facts_in_span(&self.binding_modes, owner),
             generic_calls: Self::facts_in_span(&self.generic_calls, owner),
             intrinsic_ids: Self::facts_in_span(&self.intrinsic_ids, owner),
             intrinsic_type_arguments: Self::facts_in_span(&self.intrinsic_type_arguments, owner),
@@ -9068,6 +9112,8 @@ impl<'a> TypeChecker<'a> {
         let declared_type = self.resolve_type_expr(&decl.ty);
         let init_type = self.check_expr_for_expected(&decl.value, declared_type, true);
         self.record_expression_type(decl.name.span, declared_type);
+        let binding_mode = self.checked_binding_mode(decl, init_type);
+        self.record_binding_mode(decl.name.span, binding_mode);
 
         // Bind the variable's DefId to its declared type.
         if let Some(def_id) = self.declaration_def_id(decl.name.span) {
@@ -9239,6 +9285,47 @@ impl<'a> TypeChecker<'a> {
             // when its parent is borrowed. Clone also deliberately owns a copy.
             _ => false,
         }
+    }
+
+    fn checked_binding_mode(
+        &self,
+        declaration: &ast::VarDecl,
+        initializer_type: TypeId,
+    ) -> CheckedBindingMode {
+        if crate::ownership::is_implicitly_copyable(&self.interner, initializer_type)
+            || !(Self::type_is_view(&declaration.ty)
+                || self.initializer_is_view(&declaration.value))
+        {
+            return CheckedBindingMode::Owned;
+        }
+
+        let mut value = &declaration.value;
+        let mut explicit_view = false;
+        loop {
+            match value {
+                Expr::View(inner, _) => {
+                    explicit_view = true;
+                    value = inner;
+                }
+                Expr::Paren(inner, _) | Expr::Coarsen(inner, _) | Expr::Declassify(inner, _) => {
+                    value = inner;
+                }
+                _ => break,
+            }
+        }
+        // Readonly annotations do not turn an ownership-acquiring operation
+        // into a borrow. Explicitly viewing its result remains a temporary view.
+        if !explicit_view && matches!(value, Expr::Clone(_, _) | Expr::FieldAccess(_, _, _)) {
+            return CheckedBindingMode::Owned;
+        }
+        let source = match value {
+            Expr::Ident(ident) => self
+                .ident_def_id(ident)
+                .map(CheckedViewSource::Binding)
+                .unwrap_or(CheckedViewSource::Other),
+            _ => CheckedViewSource::Other,
+        };
+        CheckedBindingMode::View { source }
     }
 
     fn assignment_place_is_view(&self, target: &Expr) -> bool {
@@ -15795,6 +15882,272 @@ mod tests {
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    fn binding_mode_named(
+        modes: &HashMap<Span, CheckedBindingMode>,
+        source: &str,
+        name: &str,
+    ) -> (Span, CheckedBindingMode) {
+        let mut matching = modes
+            .iter()
+            .filter(|(span, _)| &source[span.start as usize..span.end as usize] == name);
+        let (&span, &mode) = matching.next().expect("binding mode should be recorded");
+        assert!(
+            matching.next().is_none(),
+            "binding name must be unique in this body"
+        );
+        (span, mode)
+    }
+
+    #[test]
+    fn checked_binding_modes_keep_immediate_sources_and_owned_copies() {
+        let source = r#"struct Holder:
+    items: list[int64]
+function inspect(view values: list[int64], view holder: Holder) returns nothing:
+    list[int64] borrowed = view values
+    list[int64] forwarded = ((borrowed))
+    list[int64] copied = clone forwarded
+    list[int64] projected = holder.items
+    list[int64] projected_view = view holder.items
+    list[int64] temporary = view list(1)
+    return nothing
+"#;
+        let parsed = parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            resolved.diagnostics
+        );
+        let checked = check(&parsed.module, &resolved);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checked.diagnostics
+        );
+        assert_eq!(checked.binding_modes.len(), 6);
+        let (borrowed_span, borrowed) =
+            binding_mode_named(&checked.binding_modes, source, "borrowed");
+        let CheckedBindingMode::View {
+            source: CheckedViewSource::Binding(parameter),
+        } = borrowed
+        else {
+            panic!("expected a direct binding view, got {borrowed:?}");
+        };
+        assert_eq!(resolved.scope_table.def(parameter).name, "values");
+        assert_eq!(resolved.scope_table.def(parameter).kind, DefKind::Param);
+        let (_, forwarded) = binding_mode_named(&checked.binding_modes, source, "forwarded");
+        let CheckedBindingMode::View {
+            source: CheckedViewSource::Binding(immediate_source),
+        } = forwarded
+        else {
+            panic!("expected a forwarded binding view, got {forwarded:?}");
+        };
+        assert_eq!(
+            resolved.scope_table.def(immediate_source).span,
+            borrowed_span
+        );
+        assert_ne!(immediate_source, parameter);
+        for name in ["copied", "projected"] {
+            assert_eq!(
+                binding_mode_named(&checked.binding_modes, source, name).1,
+                CheckedBindingMode::Owned,
+                "{name}"
+            );
+        }
+        for name in ["projected_view", "temporary"] {
+            assert_eq!(
+                binding_mode_named(&checked.binding_modes, source, name).1,
+                CheckedBindingMode::View {
+                    source: CheckedViewSource::Other
+                },
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_binding_modes_use_actual_copy_types_and_transparent_sources() {
+        for (parameter, output, initializer, owned) in [
+            ("int64", "int64", "view source", true),
+            ("string", "string", "view source", true),
+            ("Count", "int64", "coarsen (view source)", true),
+            ("secret[int64]", "int64", "declassify source", true),
+            ("Numbers", "list[int64]", "coarsen source", false),
+            ("Numbers", "list[int64]", "coarsen (view source)", false),
+            ("Numbers", "list[int64]", "coarsen clone source", true),
+            (
+                "secret[list[int64]]",
+                "list[int64]",
+                "declassify (view source)",
+                false,
+            ),
+            (
+                "secret[list[int64]]",
+                "list[int64]",
+                "declassify clone source",
+                true,
+            ),
+        ] {
+            let source = format!(
+                "type Count = int64 where true\ntype Numbers = list[int64] where true\nfunction inspect(view source: {parameter}) returns nothing:\n    {output} local = {initializer}\n    return nothing\n"
+            );
+            let checked = check_source_result(&source);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{source}\n{:?}",
+                checked.diagnostics
+            );
+            let (_, mode) = binding_mode_named(&checked.binding_modes, &source, "local");
+            if owned {
+                assert_eq!(mode, CheckedBindingMode::Owned, "{source}");
+            } else {
+                assert!(
+                    matches!(
+                        mode,
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Binding(_)
+                        }
+                    ),
+                    "{source}\n{mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn checked_binding_modes_are_distinct_for_generic_copy_and_borrow_bodies() {
+        let source = r#"function inspect[T](view source: T) returns nothing:
+    T borrowed = view source
+    T forwarded = borrowed
+    T copied = clone forwarded
+    return nothing
+function main() returns nothing:
+    int64 number = 7
+    string text = "seven"
+    list[int64] values = list(7)
+    inspect[int64](view number)
+    inspect[list[int64]](view values)
+    inspect[string](view text)
+    return nothing
+"#;
+        let checked = check_source_result(source);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checked.diagnostics
+        );
+        assert_eq!(checked.generic_function_instantiations.len(), 3);
+        assert_eq!(checked.binding_modes.len(), 3);
+        let mut borrowed_count = 0;
+        for body in &checked.generic_function_instantiations {
+            assert_eq!(body.binding_modes.len(), 3);
+            let copies =
+                crate::ownership::is_implicitly_copyable(&checked.interner, body.concrete_args[0]);
+            for name in ["borrowed", "forwarded"] {
+                let (span, mode) = binding_mode_named(&body.binding_modes, source, name);
+                assert_eq!(body.type_map[&span], body.concrete_args[0]);
+                assert_eq!(mode == CheckedBindingMode::Owned, copies);
+                if !copies {
+                    assert!(matches!(
+                        mode,
+                        CheckedBindingMode::View {
+                            source: CheckedViewSource::Binding(_)
+                        }
+                    ));
+                    borrowed_count += 1;
+                }
+                assert!(!checked.binding_modes.contains_key(&span));
+            }
+            assert_eq!(
+                binding_mode_named(&body.binding_modes, source, "copied").1,
+                CheckedBindingMode::Owned
+            );
+        }
+        assert_eq!(borrowed_count, 2);
+    }
+
+    #[test]
+    fn checked_binding_modes_survive_recursive_reflected_body_snapshots() {
+        for (generic, owner, arguments) in [("", "Sample", ""), ("[T]", "T", "[Sample]")] {
+            let source = format!(
+                r#"struct Sample:
+    count: int64
+    items: list[int64]
+function inspect{generic}(view value: {owner}) returns nothing:
+    for field in type.fields[{owner}]():
+        comptime type Field = field.type_info:
+            Field original = type.field_value[{owner}, Field](view value, view field)
+            Field borrowed = view original
+            comptime type Again = type.info[Field]():
+                Again forwarded = borrowed
+    return nothing
+function main() returns nothing:
+    Sample sample = Sample(count: 7, items: list(7))
+    inspect{arguments}(view sample)
+    return nothing
+"#
+            );
+            let checked = check_source_result(&source);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{source}\n{:?}",
+                checked.diagnostics
+            );
+            let bodies = if generic.is_empty() {
+                &checked.comptime_type_bindings
+            } else {
+                &checked.generic_function_instantiations[0].comptime_type_bindings
+            };
+            let expansions = bodies
+                .values()
+                .find(|expansions| expansions.len() == 2)
+                .expect("each reflected field must retain a concrete body");
+            for expansion in expansions {
+                let copies = crate::ownership::is_implicitly_copyable(
+                    &checked.interner,
+                    expansion.bound_type,
+                );
+                let (span, mode) =
+                    binding_mode_named(&expansion.body.binding_modes, &source, "borrowed");
+                assert_eq!(expansion.body.type_map[&span], expansion.bound_type);
+                assert_eq!(mode == CheckedBindingMode::Owned, copies);
+                assert_eq!(
+                    binding_mode_named(&expansion.body.binding_modes, &source, "original").1,
+                    CheckedBindingMode::Owned
+                );
+                let nested = expansion
+                    .body
+                    .comptime_type_bindings
+                    .values()
+                    .next()
+                    .expect("nested comptime expansion must survive its parent snapshot");
+                assert_eq!(nested.len(), 1);
+                assert_eq!(nested[0].bound_type, expansion.bound_type);
+                let (nested_span, nested_mode) =
+                    binding_mode_named(&nested[0].body.binding_modes, &source, "forwarded");
+                assert_eq!(nested[0].body.type_map[&nested_span], expansion.bound_type);
+                assert_eq!(nested_mode == CheckedBindingMode::Owned, copies);
+                assert!(!nested[0].body.binding_modes.contains_key(&span));
+            }
+        }
     }
 
     #[test]

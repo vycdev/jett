@@ -415,6 +415,15 @@ Function types retain the checked view mode of every parameter. Native
 indirect calls borrow view arguments until the call returns and transfer only
 owned arguments; the borrowed callee parameter never destroys the caller's
 value. A call-site `view` to an owned parameter is rejected before codegen.
+Immutable local view aliases retain their immediate backing local in HIR/MIR.
+Native storage excludes these aliases from owning slots and retains the root
+owner through transitive alias reads. This includes qualified strings and
+function descriptors as well as supported linear carriers. Handler extraction
+uses checked formal view modes and stages independent snapshots when needed;
+it resolves an indirect callback after its arguments. Mutable and temporary
+alias origins, allocating conversions, and later root consumption or rebinding
+remain explicit implementation limits, described in
+[the local alias note](native_local_view_aliases.md).
 Function-valued callee expressions use the same descriptor ABI as named local
 callbacks. Argument temporaries remain owned while a returned, projected, or
 handled callee expression is evaluated; a callee failure or handler return

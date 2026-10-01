@@ -23,6 +23,7 @@ fn temporary(function: &mut Function, ty: TypeId, span: Span) -> LocalId {
         debug_ty: ty,
         debug_type_name: None,
         mutable: true,
+        view_source: None,
         span,
     });
     id
