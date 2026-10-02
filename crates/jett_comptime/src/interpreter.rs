@@ -8595,15 +8595,16 @@ impl Interpreter {
             .map(|actual| self.concrete_resolved_type_expr(&actual, &mut HashSet::new()));
         if matches!(&requested, TypeExpr::Named(_)) {
             if let Some(actual) = &actual {
-                let source = type_expr_display(actual);
-                if source == type_expr_display(&requested) {
-                    // Preserve the original bare-refinement boundary's carrier
-                    // normalization and retained identity. The exact declared
-                    // schema supplies proof without rerunning any predicate.
+                if let Some(proven_prefix) =
+                    self.producer_declared_refinement_proof(actual, &requested)
+                {
+                    // The actual declared root chain establishes this exact
+                    // requested prefix. Normalize and retain its result identity
+                    // without evaluating that already established predicate.
                     return self.normalize_and_validate_value_from_source(
                         &requested,
                         value,
-                        Some(&source),
+                        Some(&proven_prefix),
                     );
                 }
             }
@@ -8656,6 +8657,46 @@ impl Interpreter {
         Some(self.struct_field_type(base, &HashMap::new(), Self::type_name_namespace(name)))
     }
 
+    /// Recover an established prefix only from the actual declared root
+    /// refinement chain. Outer qualifiers and nominal child fields are not
+    /// root proofs, and runtime value labels never enter this lookup.
+    fn producer_declared_refinement_proof(
+        &self,
+        actual: &TypeExpr,
+        requested: &TypeExpr,
+    ) -> Option<String> {
+        let TypeExpr::Named(requested) = requested else {
+            return None;
+        };
+        // Both owners were made canonical by the producer's declaration-only
+        // resolver. Do not reinterpret them through a caller namespace alias.
+        if !self
+            .type_aliases
+            .get(&requested.name)
+            .is_some_and(Option::is_some)
+        {
+            return None;
+        }
+        let mut actual = actual.clone();
+        let mut visited = HashSet::new();
+        while let TypeExpr::Named(name) = &actual {
+            if name.name == requested.name {
+                return Some(name.name.clone());
+            }
+            if !visited.insert(name.name.clone())
+                || !self
+                    .type_aliases
+                    .get(&name.name)
+                    .is_some_and(Option::is_some)
+            {
+                return None;
+            }
+            let base = self.producer_refinement_base(&name.name)?;
+            actual = self.concrete_resolved_type_expr(&base, &mut HashSet::new());
+        }
+        None
+    }
+
     fn producer_schema_carrier(&self, ty: &TypeExpr) -> TypeExpr {
         let mut ty = self.concrete_resolved_type_expr(ty, &mut HashSet::new());
         let mut visited = HashSet::new();
@@ -8681,10 +8722,12 @@ impl Interpreter {
     ) -> Result<(), String> {
         let requested = self.concrete_resolved_type_expr(requested, &mut HashSet::new());
         let actual = actual.map(|ty| self.concrete_resolved_type_expr(ty, &mut HashSet::new()));
-        if actual
-            .as_ref()
-            .is_some_and(|actual| type_expr_display(actual) == type_expr_display(&requested))
-            || !self.producer_type_has_refinement(&requested)
+        if actual.as_ref().is_some_and(|actual| {
+            type_expr_display(actual) == type_expr_display(&requested)
+                || self
+                    .producer_declared_refinement_proof(actual, &requested)
+                    .is_some()
+        }) || !self.producer_type_has_refinement(&requested)
         {
             return Ok(());
         }
@@ -14911,6 +14954,207 @@ mod tests {
                 assert_eq!(interpreter.eval_expr(&expression), Ok(original));
                 assert!(reuse_markers(&mut interpreter).is_empty());
             }
+        }
+    }
+
+    #[test]
+    fn reflected_declared_ancestor_proofs_preserve_all_selector_results_and_pending_depths() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for (actual, requested) in [
+                    ("models.Large", "models.Positive"),
+                    ("LargeAlias", "models.Positive"),
+                    ("models.Large", "PositiveAlias"),
+                ] {
+                    for depth in [0, 1, 2] {
+                        let mut payload = Value::Typed {
+                            type_name: "models.Large".into(),
+                            value: Box::new(Value::Int64(7)),
+                        };
+                        let mut expected = Value::Typed {
+                            type_name: "models.Positive".into(),
+                            value: Box::new(Value::Int64(7)),
+                        };
+                        for _ in 0..depth {
+                            payload = Value::Pending(Box::new(payload));
+                            expected = Value::Pending(Box::new(expected));
+                        }
+                        let (mut interpreter, expression) =
+                            reflected_proof_case(shape, actual, requested, payload, checked_layout);
+                        interpreter.register_type_alias(&type_alias(
+                            "LargeAlias",
+                            "models.Large",
+                            None,
+                        ));
+                        let source = interpreter.get_variable("input").unwrap().clone();
+                        let selector = interpreter.get_variable("selector").unwrap().clone();
+                        let output = interpreter.eval_expr(&expression).unwrap();
+                        assert_eq!(
+                            format!("{output:?}"),
+                            format!("{expected:?}"),
+                            "{shape}/{checked_layout}/{actual}/{requested}/{depth}"
+                        );
+                        assert!(reuse_markers(&mut interpreter).is_empty());
+                        assert_eq!(
+                            format!("{:?}", interpreter.get_variable("input").unwrap()),
+                            format!("{source:?}"),
+                        );
+                        assert_eq!(
+                            format!("{:?}", interpreter.get_variable("selector").unwrap()),
+                            format!("{selector:?}"),
+                        );
+                        assert!(interpreter.allow_checked_refinement_proofs);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_declared_ancestor_proofs_preserve_owned_unicode_sources() {
+        for shape in ["record", "enum", "machine"] {
+            for checked_layout in [false, true] {
+                for depth in [0, 1, 2] {
+                    let mut payload = Value::Typed {
+                        type_name: "models.Long".into(),
+                        value: Box::new(Value::String("Agent-???".into())),
+                    };
+                    let mut expected = Value::Typed {
+                        type_name: "models.Text".into(),
+                        value: Box::new(Value::String("Agent-???".into())),
+                    };
+                    for _ in 0..depth {
+                        payload = Value::Pending(Box::new(payload));
+                        expected = Value::Pending(Box::new(expected));
+                    }
+                    let (mut interpreter, expression) = reflected_proof_case(
+                        shape,
+                        "models.Long",
+                        "models.Text",
+                        payload,
+                        checked_layout,
+                    );
+                    for (owner, base, marker) in
+                        [("Text", "string", "text"), ("Long", "Text", "long")]
+                    {
+                        let mut predicate = func_def(
+                            marker,
+                            vec![(marker, "string")],
+                            block(vec![
+                                Stmt::Trace(TraceStmt {
+                                    name: ident(marker),
+                                    span: sp(),
+                                }),
+                                return_stmt(Expr::BoolLiteral(true, sp())),
+                            ]),
+                        );
+                        predicate.return_type = Some(type_named("bool"));
+                        interpreter.register_function_in_namespace(Some("models"), &predicate);
+                        interpreter.register_type_alias_in_namespace(
+                            Some("models"),
+                            &type_alias(owner, base, Some(call(marker, vec![var("value")]))),
+                        );
+                    }
+                    let source = interpreter.get_variable("input").unwrap().clone();
+                    let output = interpreter.eval_expr(&expression).unwrap();
+                    assert_eq!(
+                        format!("{output:?}"),
+                        format!("{expected:?}"),
+                        "{shape}/{checked_layout}/{depth}"
+                    );
+                    assert!(reuse_markers(&mut interpreter).is_empty());
+                    assert_eq!(
+                        format!("{:?}", interpreter.get_variable("input").unwrap()),
+                        format!("{source:?}"),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reflected_declared_ancestor_proofs_do_not_escape_root_schema_or_checked_mode() {
+        for shape in ["record", "enum", "machine"] {
+            for mode in ["no_fact", "unrelated_fact", "raw", "disabled"] {
+                let original = Value::Typed {
+                    type_name: "models.Large".into(),
+                    value: Box::new(Value::Int64(7)),
+                };
+                let (mut interpreter, expression) = reflected_proof_case(
+                    shape,
+                    "models.Large",
+                    "models.Positive",
+                    original.clone(),
+                    true,
+                );
+                if mode == "no_fact" {
+                    interpreter.checked_expression_types = None;
+                } else if mode == "unrelated_fact" {
+                    reuse_facts(
+                        &mut interpreter,
+                        &[(Span::new(FileId::new(0), 970, 971), "models.Positive")],
+                    );
+                } else if mode == "disabled" {
+                    interpreter.allow_checked_refinement_proofs = false;
+                }
+                let source = interpreter.get_variable("input").unwrap().clone();
+                let output = if mode == "raw" {
+                    let Expr::GenericCall(callee, types, _, _) = &expression else {
+                        unreachable!()
+                    };
+                    let Expr::FieldAccess(owner, member, _) = callee.as_ref() else {
+                        unreachable!()
+                    };
+                    let name = Interpreter::extract_dotted_name(owner, &member.name).unwrap();
+                    interpreter.call_function_with_type_args(
+                        &name,
+                        types,
+                        vec![
+                            source.clone(),
+                            interpreter.get_variable("selector").unwrap().clone(),
+                        ],
+                    )
+                } else {
+                    interpreter.eval_expr(&expression)
+                };
+                assert_eq!(output, Ok(original), "{shape}/{mode}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(interpreter.get_variable("input"), Some(&source));
+            }
+            // Runtime labels on an actual primitive field cannot supply proof.
+            let (mut interpreter, expression) = reflected_proof_case(
+                shape,
+                "int64",
+                "models.Positive",
+                Value::Typed {
+                    type_name: "models.Large".into(),
+                    value: Box::new(Value::Int64(-1)),
+                },
+                true,
+            );
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into(),)
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"]);
+        }
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_struct(&struct_def(
+            "Nested",
+            vec![("value", "models.Large")],
+            vec![],
+        ));
+        for actual in [
+            type_named("models.Sibling"),
+            type_named("Nested"),
+            TypeExpr::Generic(ident("secret"), vec![type_named("models.Large")], sp()),
+            TypeExpr::Generic(ident("list"), vec![type_named("models.Large")], sp()),
+        ] {
+            assert!(
+                interpreter
+                    .producer_declared_refinement_proof(&actual, &type_named("models.Positive"),)
+                    .is_none()
+            );
         }
     }
 

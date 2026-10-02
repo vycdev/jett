@@ -1024,6 +1024,10 @@ Checked reflected field producers establish newly requested refinements before
 their result type becomes reusable proof. Ready builtin containers undergo a
 complete shape preflight, then validate occupied payloads in collection order.
 Actual declared schemas supply exact or ancestor proof; runtime labels do not.
+For a requested root refinement, the actual declared root chain also proves its
+ancestors. Reading a stronger declared refinement as its ancestor normalizes the
+result identity without rerunning that established predicate. This lookup never
+descends through an outer secret qualifier, collection, or nominal child field.
 Exact schemas preserve pending values. Changed nested invariants beneath pending
 containers, secret qualifiers, callable signatures, or nominal generic instances
 fail conservatively where conversion or observer contracts remain unresolved.

@@ -983,6 +983,18 @@ tests and all 598 frontend fixtures pass. The four linked call regressions and t
 refined-sum refusal control also pass against this combined source revision.
 Final workspace and supported-host distribution validation remain required.
 
+Reference reflected reads now also reuse a stronger declared refinement as proof
+of its requested root ancestor. The lookup follows only the actual declaration's
+root chain, preserves normalized result identity and pending depths, and never
+uses a runtime label or descends through an outer qualifier or child schema.
+Three regressions cover all three getters, both metadata modes, transparent
+aliases, owned Unicode values, source preservation, pending depths 0/1/2, and
+raw, disabled, unrelated-fact, and forged-label controls. All 399 interpreter
+tests pass. A fresh CLI success probe matches the independent scalar, owned,
+pending, operand-order, and predicate-trace oracle, including five reciprocal
+ancestor reads with no extra predicate. Native execution remains a separate
+producer-validation obligation.
+
 Native returns now establish newly requested root refinements before exposing
 their checked result type. Returning `-1` under Positive, or a Positive value of
 7 under High constrained above 10, rejects with the reference error. The original
