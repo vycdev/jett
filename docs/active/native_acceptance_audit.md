@@ -1030,6 +1030,20 @@ passed both workspace/build/package jobs and both clean installed jobs. This
 certifies that checkpoint, not the later
 call-proof or native-return changes.
 
+The frozen workspace run at `8ad7b1e4` and the supported-host runs at
+[`768fdb15`](https://github.com/vycdev/jett/actions/runs/36923339203) and
+[`8ad7b1e4`](https://github.com/vycdev/jett/actions/runs/36970926217) failed with a
+reference runtime stack overflow during native conformance. Sequential isolation
+identified nested machine JSON parsing. The source call path is finite: a
+temporary diagnostic stack increase completed the case, and unoptimized Windows
+assembly showed the general expression evaluator reserving 79,328 bytes per
+expression. Ordinary and generic calls now dispatch before that large match,
+retaining central checked-result normalization and signal propagation. The
+production stack budget remains 8 MiB. All six adjacent nested JSON conformance
+tests and all 396 interpreter tests pass with the repair. Complete workspace and
+supported-host distribution validation still need to certify the repaired
+revision; the failed runs do not establish those gates.
+
 The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).
 Supplemental cases do not change the inventory denominator. Full workspace and

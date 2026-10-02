@@ -3364,6 +3364,10 @@ classification returns the simple carrier `function`. Coarsening replaces that
 owner with the base signature while preserving the source body and captures.
 Explicit comptime evaluation runs on a scoped worker with the same 8 MiB stack
 budget as reference execution, independent of the compiler caller's thread.
+The reference evaluator dispatches ordinary and generic calls before its general
+expression match. This keeps aggregate expression temporaries off the active
+stack across nested source calls; checked result normalization and control-flow
+signals still pass through the same central boundary.
 Modules without explicit expressions skip worker creation. Worker creation
 failures become compilation diagnostics; evaluation never moves to runtime.
 Explicit values are keyed by source span and checked type context, including

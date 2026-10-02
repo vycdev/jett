@@ -2212,7 +2212,16 @@ impl Interpreter {
     }
 
     fn eval_expr_flow(&mut self, expr: &Expr) -> Result<ExprFlow, String> {
-        let flow = self.eval_expr_flow_inner(expr)?;
+        // Source calls can recurse through many small stdlib functions. Dispatch
+        // them before entering the general expression match, whose aggregate
+        // temporaries otherwise remain on the stack throughout each call.
+        let flow = match expr {
+            Expr::Call(callee, args, span) => self.eval_call_flow(callee, &[], args, *span),
+            Expr::GenericCall(callee, type_args, args, span) => {
+                self.eval_call_flow(callee, type_args, args, *span)
+            }
+            _ => self.eval_expr_flow_inner(expr),
+        }?;
         match flow {
             ExprFlow::Value(value) => Ok(ExprFlow::Value(
                 self.normalize_value_for_checked_expr(expr, value)?,
