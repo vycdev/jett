@@ -1803,5 +1803,88 @@ The independent hidden-secret print choice is still open. Its dedicated phase,
 transport, and protocol gates now pass: 416 comptime, 83 driver library, 144
 runtime, 50 CLI, and five new linked native transport tests. This closes the
 selected channel implementation obligation. The conformance suite now contains
-323 tests; fresh full workspace and supported-host acceptance remain separate.
+323 tests. The frozen `b1cf8943` complete workspace and doc-tests passed,
+including all 182 object obligations and 598 frontend fixtures; the log is
+`target/native-workspace-b1cf8943.log`. Its supported-host workflow
+37002829148 passed all four Linux/Windows build/package and installed-package
+jobs, including clean relocation, source removal, and both profiles.
+The prior `3bc23e6a` revision
+passed all four supported-host jobs in workflow run 36995400983. Later source
+changes retain their own workspace and supported-host acceptance gates.
 The fixed inventory denominator and broad 85% estimate are unchanged.
+
+### Qualified machine JSON and parser pipelines
+
+The checker now selects native JSON source bodies from only the chosen payload
+of a state-qualified machine. A bare machine still requires every state's
+payload to be JSON-compatible, and the invalid selected integer-map payload
+retains public E0343 refusal. All-state metadata and qualified construction
+checks remain unchanged. This repairs a concrete eligibility defect where an unrelated
+integer-keyed map state blocked valid ready-state requests.
+
+Nested `state.fields` loops over the complete `type.machine_states[T]()`
+metadata now check candidates for all declared fields and their source aliases
+when the request uses a canonical machine or state-qualified type. Field-level
+alias identities are preserved; top-level aggregate aliases remain
+non-matching probes with empty metadata.
+Direct active-state field loops remain selected. JSON eligibility and complete
+reflected iteration therefore use separate, existing payload boundaries.
+
+The completed candidate set exposed the private map decoder's incompatible
+string-map return for a non-string-keyed T. The selected source repair rejects
+unsupported key types in a closed, alias-aware branch before checking that
+construction body. Public non-string map requests remain E0343 errors; valid
+string-keyed maps are unchanged. Malformed other-state payloads can now report
+the private unsupported-key error before a final qualified-builder mismatch.
+Required-field and exact-validation precedence, full metadata, and the builder
+lifecycle remain unchanged. The bounded tradeoff is captured in the machine
+JSON contract before guard integration. Fresh reference characterization
+records the unsupported-key error with the `cached.entries` prefix, while
+exact numeric payloads retain the earlier expected-object validation error.
+Expanded literal controls pin these messages and missing-field precedence
+within the earlier passing 22-test linked gate. The later inactive-payload
+decoder group also passes separately. The final-source JSON family gate
+passes all 39 tests, including the 23 new groups; complete workspace/platform
+acceptance remains pending.
+
+The private fallback raw decoder now uses the visible canonical condition
+`type.name[T]() == "json.JsonTree"` to select its typed copying body.
+Existing checked static selection keeps that body out of inactive callable,
+interface, and actor specializations. An ordinary pure metadata helper does
+not authorize branch skipping through folding; source validity stays
+independent of optimization. Public JSON admission and wrapper paths remain
+unchanged.
+
+`json.parse` and `json.parse_exact` pipeline steps also record a checked source
+facade from their result payload through the existing direct-call handoff
+mechanism. Fresh primitive pipeline witnesses establish that the missing
+handoff was an independent defect. Ordinary JSON policy, argument evaluation,
+ownership, and step-local handling are unchanged.
+
+The current supplemental suite has 23 tests over 32 Jett fixtures, covering
+direct/pipeline operations, qualified list aliases, handled state/extra-field
+errors, input preservation, both profiles, source removal, publication policy,
+pure comptime/verify/property execution, exact string-key aliases, and an
+independent all-state reflection control with canonical ready/empty qualifiers.
+All 22 earlier groups passed (323 filtered) in
+`target/native-json-qualified-driver-final.log` before the final fallback
+guard. The additional group over three inactive callable/interface/actor
+fixtures passes all four direct JSON APIs for the selected ready payload in
+both runtime profiles after source removal (one pass, 345 filtered) in
+`target/native-json-qualified-unselected-payloads-final.log`. The compiled
+native corpus now contains 346 tests. These separate focused runs do not
+establish 346 executed passes. The final-source JSON family gate passes all
+39 tests (307 filtered), including all 23 new groups and 16 existing JSON
+regressions, in `target/native-json-qualified-json-family-final.log`
+(438.34 seconds).
+
+Recorded phase checks pass: 40 codegen, 416 comptime, 125 HIR, 79 MIR, and
+221 typechecker tests. The driver batch's 82 passes plus one temporary capture
+PermissionDenied failure are followed by a passing isolated retry of that
+exact test; this is distinct from a clean full-batch result. Native objects
+and final frozen workspace/platform acceptance
+remain pending and must be filled from actual results. All 598 frontend fixtures
+pass on the repaired source in `target/native-json-qualified-frontend-fixtures.log`
+(20.66 seconds). The JSON row
+retains its other concrete-shape obligations; the broad estimate remains about
+85%, and the fixed inventory remains 207 fixtures with 182 object obligations.

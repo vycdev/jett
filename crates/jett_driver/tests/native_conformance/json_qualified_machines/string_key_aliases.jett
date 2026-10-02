@@ -1,0 +1,14 @@
+namespace app
+type Label = string
+type KeyLabel = Label
+type Number = int64
+type Values = map[KeyLabel, Number]
+function main(stdout: Stdout) returns nothing:
+    string raw = "{{\"answer\":41}}"
+    Values direct = json.parse[Values](raw) handle error:
+        return Stdout.write(view stdout, "direct error:{error}\n")
+    Values piped = clone raw into json.parse_exact[Values]() handle error:
+        return Stdout.write(view stdout, "pipeline error:{error}\n")
+    int64 first = map.get_or[KeyLabel, Number](clone direct, "answer", 0)
+    int64 second = map.get_or[KeyLabel, Number](clone piped, "answer", 0)
+    Stdout.write(view stdout, "{first}:{second}:{raw}\n")

@@ -3952,6 +3952,11 @@ and `json.parse_exact` contracts as a non-recursive struct. Its finite base
 value ends runtime traversal; the source decoder and serializer may call their
 own checked specialization again for a nested value.
 
+Typed JSON parser calls also use ordinary pipeline semantics:
+`raw into json.parse[T]()` and `raw into json.parse_exact[T]()` apply the
+same target type, compiler-owned JSON policy, and step-local error handling
+as their direct-call forms.
+
 **Using auto-generated serialization:**
 
 ```
@@ -4043,6 +4048,33 @@ envelope but omits secret-bearing payload fields, just like public record
 projection. `json.parse[Machine]` accepts any declared state in the envelope,
 while `json.parse[Machine at state]` requires the envelope to carry that exact
 state.
+
+JSON admission for `Machine at state` checks that state's payload. A
+non-JSON payload in another state does not block an otherwise valid
+state-qualified request. A bare `Machine` request checks every declared
+state because its value or parsed envelope may select any of them.
+Qualification does not remove states from reflection metadata. Aggregate
+probes still inspect the top-level kind: a top-level alias is non-matching
+and exposes empty metadata. Field-level `TypeInfo` preserves its source
+alias identity.
+
+Private source decoders use a visible canonical reflection condition,
+`type.name[T]() == "json.JsonTree"`, to select raw-tree copying. This
+checked type condition keeps the raw return body out of unrelated field
+specializations, including callable, interface, and actor payloads in an
+unselected state. An ordinary pure helper call does not authorize skipping
+typechecking by being folded; optimizations cannot change source validity.
+This source repair does not admit those payloads as public JSON targets.
+
+Public JSON object maps require string keys, including transparent aliases
+that resolve to string; non-string map targets are rejected before
+evaluation. If a malformed qualified-machine document names another
+declared state's non-string map payload, the private decoder reports an
+unsupported-key failure when it reaches that field. It does not convert
+keys before the later qualified-state construction check. Required-field
+lookup still runs first, and exact parsing retains its separate validation
+before decoding. The canonical envelope and valid target behavior are
+unchanged.
 
 The serialized shape includes the state tag:
 

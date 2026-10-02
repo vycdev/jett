@@ -49,6 +49,7 @@ mutual:
     function json_decode_tree_list_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_set_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_array_items_reflected[Elem](view raw: JsonTree) returns result[list[Elem], string]
+    function json_decode_tree_string_map_reflected[Val](view raw: JsonTree) returns result[map[string, Val], string]
     function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]
     function json_tree_result_payload(view raw: JsonTree) returns result[JsonTreeObjectField, string]
@@ -319,7 +320,7 @@ function json_decode_tree_other_reflected[T](view raw: JsonTree, view info: Type
     TypeKind kind = info.kind_tag
     TypePrimitive primitive = info.primitive_tag handle:
         default TypePrimitive.unknown_type
-    if json_reflected_raw_type(view info):
+    if type.name[T]() == "json.JsonTree":
         return json_decode_tree_raw_reflected[T](view raw)
     if primitive != TypePrimitive.unknown_type:
         return json_decode_tree_primitive_reflected[T](view raw, primitive)
@@ -529,18 +530,31 @@ function json_decode_tree_array_items_reflected[Elem](view raw: JsonTree) return
             return fail("{index}: {error}")
         items = list.append[Elem](items, item)
     return ok(items)
-function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]:
-    comptime type Val = type.arg[T](1):
-        list[string] keys = json_tree_object_keys(view raw) handle error:
+function json_decode_tree_string_map_reflected[Val](view raw: JsonTree) returns result[map[string, Val], string]:
+    list[string] keys = json_tree_object_keys(view raw) handle error:
+        return fail(error)
+    mutable map[string, Val] entries = map.new[string, Val]()
+    for key in keys:
+        JsonTree raw_item = json_tree_require_field(view raw, key) handle error:
             return fail(error)
-        mutable map[string, Val] entries = map.new[string, Val]()
-        for key in keys:
-            JsonTree raw_item = json_tree_require_field(view raw, key) handle error:
-                return fail(error)
-            Val item = json_decode_tree_reflected[Val](view raw_item) handle error:
-                return fail("{key}: {error}")
-            entries = map.insert[string, Val](entries, key, item)
-        return ok(entries)
+        Val item = json_decode_tree_reflected[Val](view raw_item) handle error:
+            return fail("{key}: {error}")
+        entries = map.insert[string, Val](entries, key, item)
+    return ok(entries)
+function json_decode_tree_map_reflected[T](view raw: JsonTree) returns result[T, string]:
+    comptime type Key = type.arg[T](0):
+        if type.kind_tag[Key]() == TypeKind.alias_type:
+            comptime type Base = type.arg[Key](0):
+                comptime type Val = type.arg[T](1):
+                    return json_decode_tree_map_reflected[map[Base, Val]](view raw)
+        else:
+            TypePrimitive primitive = type.primitive_tag[Key]() handle:
+                default TypePrimitive.unknown_type
+            if primitive == TypePrimitive.string_type:
+                comptime type Val = type.arg[T](1):
+                    return json_decode_tree_string_map_reflected[Val](view raw)
+            else:
+                return fail("JSON object maps require string keys, got {type.name[Key]()}")
 function json_decode_tree_optional_reflected[T](view raw: JsonTree) returns result[T, string]:
     if json_tree_is_null(view raw) == true:
         return ok(none)

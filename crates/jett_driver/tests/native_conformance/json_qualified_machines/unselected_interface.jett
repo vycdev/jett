@@ -1,0 +1,19 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+machine Session:
+    states:
+        ready(count: int64)
+        cached(owner: Named)
+    transitions:
+        ready to cached
+type Ready = Session at ready
+function main(stdout: Stdout) returns nothing:
+    Ready original = Session(ready, 31)
+    string encoded = json.serialize[Ready](view original)
+    string public_encoded = json.serialize_public[Ready](view original)
+    Ready parsed = json.parse[Ready]("{{\"state\":\"ready\",\"payload\":{{\"count\":32}}}}") handle error:
+        return Stdout.write(view stdout, "parse error:{error}\n")
+    Ready exact = json.parse_exact[Ready]("{{\"state\":\"ready\",\"payload\":{{\"count\":33}}}}") handle error:
+        return Stdout.write(view stdout, "exact error:{error}\n")
+    Stdout.write(view stdout, "{encoded}\n{public_encoded}\n{parsed.count}:{exact.count}:{original.count}\n")

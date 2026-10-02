@@ -1,0 +1,11 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function rejected(view value: Session at cached) returns string:
+    return json.serialize_public[Session at cached](view value)
+function main() returns nothing:
+    return nothing

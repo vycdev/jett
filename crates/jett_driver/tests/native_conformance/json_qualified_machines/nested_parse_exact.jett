@@ -1,0 +1,15 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+type Ready = Session at ready
+function main(stdout: Stdout) returns nothing:
+    string raw = "[{{\"state\":\"ready\",\"payload\":{{\"count\":21}}}},{{\"state\":\"ready\",\"payload\":{{\"count\":22}}}}]"
+    list[Ready] values = raw into json.parse_exact[list[Ready]]() handle error:
+        return Stdout.write(view stdout, "error:{error}\n")
+    for value in view values:
+        Stdout.write(view stdout, "{value.count},")
+    Stdout.write(view stdout, "\n")

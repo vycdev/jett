@@ -12,10 +12,12 @@ builder path followed by `type.construct_put` and `type.construct_finish`.
 
 - `json.serialize` and `json.serialize_public` accept bare `Machine` and
   `Machine at state` targets, including nested machine fields inside structs
-  and containers, when all serialized payload fields are JSON-compatible.
+  and containers. Bare targets require every state's serialized payload to
+  be JSON-compatible; a qualified target checks only its selected payload.
 - `json.parse` and `json.parse_exact` accept bare `Machine` and
   `Machine at state` targets, including nested machine fields inside structs
-  and containers, when all payload fields are JSON-compatible.
+  and containers. Bare targets require every state's payload to be
+  JSON-compatible; a qualified target checks only its selected payload.
 - The wire envelope has exactly two canonical keys, `state` and `payload`.
   Serializers do not emit a machine type tag, and exact parsing rejects extra
   envelope keys such as `type`.
@@ -83,6 +85,66 @@ envelope shape. The malformed-envelope cases are pinned in
 
 Missing optional payload fields should use the same `none` default as struct
 decoding. Missing required payload fields should fail.
+
+## Private Map Decoder Boundary
+
+JSON object map keys are exact strings, including transparent aliases that
+resolve to string. Non-string map targets, including integer-keyed maps in a
+bare machine or the selected state, retain frontend E0343 rejection. This
+public domain does not change when a qualified request has an unrelated state
+with a non-JSON payload.
+
+`type.machine_states[Machine at state]()` still exposes all declared states.
+Top-level aliases remain non-matching aggregate probes with empty metadata;
+the source aliases preserved below are field-level TypeInfo identities.
+Nested `state.fields` loops must therefore have checked type and source-alias
+candidates for every declared field. Direct active-state field loops retain
+their selected payload candidates. Omitting other-state candidates masked the
+old private map decoder's incompatible return: it constructed
+`map[string, Val]` even when its actual T had non-string keys.
+
+The selected repair uses a closed, alias-aware key guard before the private
+decoder's typed string-map body. Unsupported keys produce a failure rather than
+a key cast or a dummy value. Valid public string-map parsing and the canonical
+wire envelope are unchanged.
+
+This intentionally changes error precedence for malformed qualified input
+that names another declared state's unsupported map payload. If field decoding
+is reached, the private unsupported-key error precedes map construction and
+the eventual qualified-builder state mismatch. Pre-change reference
+characterization showed empty and nonempty map objects reaching that final
+state mismatch; a numeric payload reached the map's expected-object error.
+Lenient parsing now rejects unsupported keys before that object-kind check.
+Missing required-field lookup still runs before this decoder, and exact parsing
+retains its separate object/unknown-field validation before decoding. Fresh
+reference characterization of the regression Session records
+`cached.entries: JSON object maps require string keys, got int64` for empty
+and nonempty other-state map objects. Lenient numeric payloads reach the
+same key guard; exact numeric payloads first report
+`entries: expected object, got number`. Missing entries still fail the
+required-field lookup. All 22 linked qualified-JSON groups passed in
+`target/native-json-qualified-driver-final.log`, including these literal
+first-error controls in direct and pipeline forms. The later inactive-payload
+decoder group also passed separately. The final-source JSON family gate passes
+all 39 tests, including the 23 new groups, in
+`target/native-json-qualified-json-family-final.log` (438.34 seconds).
+Complete workspace and supported-host acceptance remain pending.
+
+This is a bounded private type-correctness repair selected before guard
+integration. It does not add an early machine-state gate, filter public
+metadata, change global builder behavior, coerce carriers, or admit non-string
+public map targets. Migration annotations and broader JSON questions remain
+separate.
+
+The private fallback decoder also uses the visible canonical condition
+`type.name[T]() == "json.JsonTree"` before raw-tree copying. This reuses
+checked static selection, keeping its typed raw return body out of unrelated
+inactive callable, interface, and actor field specializations. Ordinary
+pure predicate calls are not folded to determine source validity or skip
+typechecking. One additional group over those three inactive payloads passes
+all four direct JSON APIs for the valid selected state in both runtime
+profiles after source removal. It does not broaden the public JSON domain
+or establish malformed-input behavior for those unsupported payloads.
 
 ## Serialize Semantics
 

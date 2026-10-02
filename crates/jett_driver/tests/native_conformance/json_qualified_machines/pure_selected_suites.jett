@@ -1,0 +1,21 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function selected_json() returns string:
+    Session at ready value = Session(ready, 27)
+    return value into view json.serialize[Session at ready]()
+function main(stdout: Stdout) returns nothing:
+    string baked = comptime selected_json()
+    Stdout.write(view stdout, "{baked}\n")
+verify selected_ready:
+    string baked = comptime selected_json()
+    assert baked == "{{\"state\":\"ready\",\"payload\":{{\"count\":27}}}}"
+    assert selected_json() == baked
+property selected_ready_trials:
+    given checked: bool
+    assert checked == checked
+    assert selected_json() == "{{\"state\":\"ready\",\"payload\":{{\"count\":27}}}}"

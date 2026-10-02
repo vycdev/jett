@@ -1356,6 +1356,11 @@ other concrete generic JSON bodies are staged for native specialization.
 Structs, lists, string-keyed maps, optionals, and results composed of supported
 primitive values now run the checked reflected stdlib serializer. The
 compiler-owned public policy gates still run first.
+The checker also records a source parser facade for `json.parse[T]` and
+`json.parse_exact[T]` pipeline steps from the checked result's success type.
+It uses the existing direct-call facade mechanism after public JSON policy
+and ordinary argument checks; HIR retains pipeline argument order, ownership,
+and step-local handlers.
 
 ---
 
@@ -3546,8 +3551,39 @@ Native JSON parsing now checks and emits the stdlib decoder for concrete
 structs, lists, sets of primitive-backed hashable types, string-keyed maps,
 optionals, results, supported `secret[T]` wrappers, and bare or
 state-qualified machines recursively composed of supported leaves.
+Native JSON eligibility checks every state's payload for a bare machine,
+but only the exact selected payload for a state-qualified machine. An
+unrelated state's non-JSON map key or other unsupported field cannot block
+a valid qualified source specialization. Declared state metadata remains
+complete; this eligibility boundary does not filter public reflection.
+Loops over `type.machine_states[Machine at state]()` expose all declared
+states. The checker therefore records field-type and field-level source-alias
+candidates from all states for nested `state.fields` loops. Top-level aggregate
+aliases remain non-matching probes with empty metadata; this does not add
+automatic aggregate alias unwrapping. Direct loops over
+`type.machine_state_value[T](view value).fields` retain the selected payload
+boundary. This distinction keeps checked reflected dispatch complete without
+broadening JSON admission.
+The private fallback decoder selects raw-tree copying through the direct
+condition `type.name[T]() == "json.JsonTree"`, matching the named decoder.
+The existing checked static selection excludes that body when T is an
+unrelated inactive callable, interface, or actor payload. An ordinary
+`json_reflected_raw_type(view info)` call cannot supply the same checked
+fact: pure-call folding never permits an incompatible generic return body
+to escape typechecking. Alias, refinement, and secret dispatch continue
+through their existing typed paths; public JSON eligibility is unchanged.
+The private reflected map decoder uses an alias-aware closed key guard.
+Only an exact string key reaches its typed string-map construction body;
+other keys return an unsupported-key failure. Completing all-state checked
+candidates exposed the old incompatible return of a string map as a
+non-string-keyed T. No carrier conversion substitutes for a typed branch.
+For malformed qualified input naming another state's unsupported map,
+the guard can fail before the eventual builder state mismatch. Required
+field lookup and exact pre-decoding validation retain their order. Public
+non-string map requests still fail E0343; builder behavior is unchanged.
 Machine parsing uses the reflected state builder; an empty state has no field
 specializations, and HIR lowers its checked empty field loop as an empty scope.
+Builder finish still rejects a state that differs from the qualified target.
 Raw `secret[json.JsonTree]` uses a dedicated trusted parser; other unsupported
 field shapes remain on the generic intrinsic path. Set elements may be narrow
 integers or primitive-backed refinements, with their ordinary range and
@@ -3571,7 +3607,11 @@ enums with supported payload fields, including nested raw `json.JsonTree`, use
 dedicated checked native parse and serialize hooks. Raw trees retain their JSON
 wire behavior and are cloned when a decoder returns a borrowed tree. Pipeline
 calls to `json.serialize` and `json.serialize_public` select the same checked
-source serializer for supported structured types as direct calls. Supported
+source serializer for supported structured types as direct calls. Parser
+pipelines select the declared `json.parse` or `json.parse_exact` source facade
+using their checked result payload and the existing recursive parse
+eligibility predicate. This includes ordinary primitive parser pipelines;
+the policy, argument metadata, and input ownership remain unchanged. Supported
 sets with primitive-backed elements use that serializer directly or as record
 fields; iteration clones the viewed set before consuming its elements.
 Supported bitfields use dedicated checked parse, exact-parse, and serialization hooks

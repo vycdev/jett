@@ -3444,7 +3444,7 @@ impl<'a> TypeChecker<'a> {
                 visiting.remove(&ty);
                 supported
             }
-            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+            Type::Machine(id) => {
                 if !visiting.insert(ty) {
                     return false;
                 }
@@ -3457,6 +3457,23 @@ impl<'a> TypeChecker<'a> {
                     .all(|(_, field_ty)| {
                         self.type_contains_secret_data(*field_ty)
                             || self.native_json_source_supported(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::MachineState { machine, state } => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*machine)
+                    .state(*state)
+                    .is_some_and(|state| {
+                        state.fields.iter().all(|(_, field_ty)| {
+                            self.type_contains_secret_data(*field_ty)
+                                || self.native_json_source_supported(*field_ty, visiting)
+                        })
                     });
                 visiting.remove(&ty);
                 supported
@@ -3616,7 +3633,7 @@ impl<'a> TypeChecker<'a> {
                 visiting.remove(&ty);
                 supported
             }
-            Type::Machine(id) | Type::MachineState { machine: id, .. } => {
+            Type::Machine(id) => {
                 if !visiting.insert(ty) {
                     return false;
                 }
@@ -3628,6 +3645,22 @@ impl<'a> TypeChecker<'a> {
                     .flat_map(|state| state.fields.iter())
                     .all(|(_, field_ty)| {
                         self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                    });
+                visiting.remove(&ty);
+                supported
+            }
+            Type::MachineState { machine, state } => {
+                if !visiting.insert(ty) {
+                    return false;
+                }
+                let supported = self
+                    .interner
+                    .resolve_machine(*machine)
+                    .state(*state)
+                    .is_some_and(|state| {
+                        state.fields.iter().all(|(_, field_ty)| {
+                            self.native_json_parse_source_supported_inner(*field_ty, visiting)
+                        })
                     });
                 visiting.remove(&ty);
                 supported
@@ -8728,6 +8761,18 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn push_reflected_machine_state_type_scope(&mut self, state_name: &str, owner_ty: TypeId) {
+        // type.machine_states[T]() exposes every declared state even when T
+        // names one state. Its state.fields loops need every corresponding
+        // checked body; direct machine_state_value[T]().fields stays selected.
+        let machine = match self.interner.resolve(owner_ty) {
+            Type::MachineState { machine, .. } => Some(*machine),
+            _ => None,
+        };
+        let owner_ty = if let Some(machine) = machine {
+            self.interner.intern(Type::Machine(machine))
+        } else {
+            owner_ty
+        };
         let mut scope = HashMap::new();
         scope.insert(state_name.to_string(), owner_ty);
         self.reflected_machine_state_type_scopes.push(scope);
@@ -10685,6 +10730,13 @@ impl<'a> TypeChecker<'a> {
             && self.native_json_source_supported(current_ty, &mut HashSet::new())
         {
             self.check_source_facade_instantiation(name, current_ty, step.span);
+        }
+
+        if let Some(name @ ("json.parse" | "json.parse_exact")) = callee_name.as_deref()
+            && let Type::Result(value_ty, _) = self.interner.resolve(return_type)
+            && self.native_json_parse_source_supported(*value_ty)
+        {
+            self.check_source_facade_instantiation(name, *value_ty, step.span);
         }
 
         if tainted_return {
@@ -15893,6 +15945,307 @@ mod tests {
             .into_iter()
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .collect()
+    }
+
+    const NATIVE_JSON_QUALIFIED_STATE_SCHEMA: &str = r#"namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+type Ready = Session at ready
+type Cached = Session at cached
+struct Snapshot:
+    current: Ready
+    history: list[Ready]
+"#;
+
+    #[test]
+    fn native_json_qualified_state_selectors_follow_the_public_payload_boundary() {
+        let parsed = parse(NATIVE_JSON_QUALIFIED_STATE_SCHEMA, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolve = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolve
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            resolve.diagnostics
+        );
+        let mut checker = TypeChecker::new(&resolve, CheckOptions::default());
+        checker.check_module(&parsed.module);
+        assert!(
+            checker
+                .sink
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "{:?}",
+            checker.sink.diagnostics()
+        );
+        let ready = checker.named_types["app.Ready"];
+        let cached = checker.named_types["app.Cached"];
+        let bare = checker.named_types["app.Session"];
+        let snapshot = checker.named_types["app.Snapshot"];
+        let ready_list = checker.interner.intern(Type::List(ready));
+        let ready_optional = checker.interner.intern(Type::Optional(ready));
+        let ready_map = checker
+            .interner
+            .intern(Type::Map(TypeInterner::STRING, ready));
+        let ready_result = checker
+            .interner
+            .intern(Type::Result(ready, TypeInterner::STRING));
+        let bare_list = checker.interner.intern(Type::List(bare));
+        for (ty, expected) in [
+            (ready, true),
+            (snapshot, true),
+            (ready_list, true),
+            (ready_optional, true),
+            (ready_map, true),
+            (ready_result, true),
+            (cached, false),
+            (bare, false),
+            (bare_list, false),
+        ] {
+            assert_eq!(
+                checker.native_json_source_supported(ty, &mut HashSet::new()),
+                expected,
+                "serializer for {}",
+                checker.type_name(ty)
+            );
+            assert_eq!(
+                checker.native_json_parse_source_supported(ty),
+                expected,
+                "parser for {}",
+                checker.type_name(ty)
+            );
+        }
+        assert!(checker.json_non_string_map_key_types(ready).is_empty());
+        assert!(checker.json_unsupported_parse_types(ready).is_empty());
+        assert!(checker.json_unsupported_serialize_types(ready).is_empty());
+        assert_eq!(checker.json_non_string_map_key_types(bare), ["int64"]);
+        assert_eq!(checker.json_non_string_map_key_types(cached), ["int64"]);
+        assert_eq!(
+            checker
+                .interner
+                .resolve_machine(match checker.interner.resolve(bare) {
+                    Type::Machine(machine) => *machine,
+                    _ => panic!("checked machine owner"),
+                })
+                .states
+                .len(),
+            2,
+            "qualification does not filter declared machine metadata"
+        );
+    }
+
+    #[test]
+    fn qualified_machine_state_loops_check_all_declared_field_bodies_and_aliases() {
+        let source = r#"namespace app
+type Count = int64
+type Entries = map[int64, int64]
+type BackupCount = int64
+machine Session:
+    states:
+        empty
+        ready(count: Count)
+        cached(entries: Entries, backup: BackupCount)
+    transitions:
+        empty to ready
+        ready to cached
+type Ready = Session at ready
+type Empty = Session at empty
+function all_states() returns nothing:
+    for state in type.machine_states[Session at ready]():
+        for field in state.fields:
+            comptime type All = field.type_info:
+                string name = type.name[All]()
+    return nothing
+function all_empty_target_states() returns nothing:
+    for state in type.machine_states[Session at empty]():
+        for field in state.fields:
+            comptime type AllEmpty = field.type_info:
+                string name = type.name[AllEmpty]()
+    return nothing
+function selected(view value: Ready) returns nothing:
+    for field in type.machine_state_value[Session at ready](view value).fields:
+        comptime type Selected = field.type_info:
+            string name = type.name[Selected]()
+    return nothing
+function selected_empty(view value: Empty) returns nothing:
+    for field in type.machine_state_value[Session at empty](view value).fields:
+        comptime type SelectedEmpty = field.type_info:
+            string name = type.name[SelectedEmpty]()
+    return nothing
+"#;
+        let result = check_source_result(source);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let bindings_for = |name: &str| {
+            let prefix = format!("comptime type {name} =");
+            result
+                .comptime_type_bindings
+                .iter()
+                .find_map(|(span, bindings)| {
+                    source[span.start as usize..span.end as usize]
+                        .starts_with(&prefix)
+                        .then_some(bindings)
+                })
+                .expect("checked source binding")
+        };
+        for name in ["All", "AllEmpty"] {
+            let bindings = bindings_for(name);
+            assert_eq!(bindings.len(), 3, "{name}");
+            assert_eq!(
+                bindings
+                    .iter()
+                    .map(|binding| binding.reflection.type_name.as_str())
+                    .collect::<Vec<_>>(),
+                ["app.Count", "app.Entries", "app.BackupCount"],
+                "{name}: source aliases follow declared field order"
+            );
+            assert_eq!(bindings[0].bound_type, TypeInterner::INT64);
+            assert!(matches!(
+                result.interner.resolve(bindings[1].bound_type),
+                Type::Map(key, value)
+                    if *key == TypeInterner::INT64 && *value == TypeInterner::INT64
+            ));
+            assert_eq!(bindings[2].bound_type, TypeInterner::INT64);
+            for (index, binding) in bindings.iter().enumerate() {
+                assert_eq!(
+                    binding.selection,
+                    CheckedComptimeTypeSelection::ReflectedIteration(index)
+                );
+                assert_eq!(
+                    binding
+                        .body
+                        .intrinsic_type_arguments
+                        .values()
+                        .collect::<Vec<_>>(),
+                    vec![&vec![binding.bound_type]],
+                    "{name}: each alias has its own checked type.name body"
+                );
+            }
+        }
+        let selected = bindings_for("Selected");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].reflection.type_name, "app.Count");
+        assert_eq!(selected[0].bound_type, TypeInterner::INT64);
+        assert!(bindings_for("SelectedEmpty").is_empty());
+    }
+
+    #[test]
+    fn native_json_parser_pipelines_keep_checked_source_targets_and_owned_inputs() {
+        for parser in ["parse", "parse_exact"] {
+            // Minimal trusted facades isolate checker target selection. Actual
+            // stdlib execution is covered by the linked driver fixtures.
+            let source = format!(
+                r#"namespace json
+export function parse[T](raw: string) returns result[T, string]:
+    return fail(raw)
+export function parse_exact[T](raw: string) returns result[T, string]:
+    return fail(raw)
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+type Ready = Session at ready
+function direct(raw: string) returns result[Ready, string]:
+    return json.{parser}[Ready](raw)
+function piped(raw: string) returns result[Ready, string]:
+    return raw into json.{parser}[Ready]()
+function primitive(raw: string) returns result[int64, string]:
+    return raw into json.{parser}[int64]()
+function nested(raw: string) returns result[list[Ready], string]:
+    return raw into json.{parser}[list[Ready]]()
+function preserve(raw: string) returns string:
+    Ready value = clone raw into json.{parser}[Ready]() handle error:
+        return raw
+    return raw
+"#
+            );
+            let file_id = FileId::new(STDLIB_FILE_ID_START);
+            let parsed = parse(&source, file_id);
+            assert!(parsed.errors.is_empty(), "{parser}: {:?}", parsed.errors);
+            let resolve = jett_resolve::resolve(&parsed.module);
+            assert!(
+                resolve
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{parser}: {:?}",
+                resolve.diagnostics
+            );
+            let checked = check(&parsed.module, &resolve);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{parser}: {:?}",
+                checked.diagnostics
+            );
+            let call_span = |name: &str| {
+                let function = parsed
+                    .module
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        Item::Function(function) if function.name.name == name => Some(function),
+                        _ => None,
+                    })
+                    .expect("source function");
+                let Stmt::Return(returned) = &function.body.stmts[0] else {
+                    panic!("source function returns its checked call");
+                };
+                match returned.value.as_ref().expect("returned expression") {
+                    Expr::GenericCall(_, _, _, span) => *span,
+                    Expr::Pipeline(_, steps, _) => {
+                        assert_eq!(steps.len(), 1);
+                        steps[0].span
+                    }
+                    _ => panic!("direct or pipeline JSON call"),
+                }
+            };
+            let direct = &checked.generic_calls[&call_span("direct")];
+            let piped = &checked.generic_calls[&call_span("piped")];
+            assert_eq!(piped, direct, "same concrete source target for {parser}");
+            assert_eq!(
+                resolve.scope_table.def(piped.definition).name,
+                format!("json.{parser}")
+            );
+            let primitive = &checked.generic_calls[&call_span("primitive")];
+            assert_eq!(primitive.definition, direct.definition);
+            assert_eq!(primitive.concrete_args, [TypeInterner::INT64]);
+            let nested = &checked.generic_calls[&call_span("nested")];
+            assert_eq!(nested.definition, direct.definition);
+            assert!(matches!(
+                checked.interner.resolve(nested.concrete_args[0]),
+                Type::List(inner) if direct.concrete_args == [*inner]
+            ));
+            for function in ["piped", "primitive", "nested"] {
+                let span = call_span(function);
+                assert_eq!(
+                    checked.intrinsic_ids[&span],
+                    if parser == "parse" {
+                        IntrinsicId::JsonParse
+                    } else {
+                        IntrinsicId::JsonParseExact
+                    }
+                );
+            }
+        }
     }
 
     fn binding_mode_named(

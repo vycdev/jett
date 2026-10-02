@@ -1,0 +1,7 @@
+namespace app
+function main(stdout: Stdout) returns nothing:
+    string raw = "14"
+    int64 value = clone raw into json.parse[int64]() handle error:
+        return Stdout.write(view stdout, "error:{error}\n")
+    Stdout.write(view stdout, "{value}\n")
+    Stdout.write(view stdout, "raw:{raw}\n")

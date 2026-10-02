@@ -1254,11 +1254,127 @@ The final focused logs are `target/native-debug-isolation-comptime-final.log`,
 `target/native-debug-isolation-native-transport-final.log`; the unchanged runtime
 gate is in `target/native-debug-isolation-library-driver-check.log`.
 
-The prior frozen `3bc23e6a` workspace and doc-tests passed, including all 318
-native conformance tests and all fixed inventory gates, in
-`target/native-workspace-3bc23e6a.log`. That result applies to the prior revision.
-The new suite contains 323 supplemental conformance tests; its fresh full
-workspace and supported-host distribution gates remain required. Linux-only
-transport oracles are source-reviewed here and still require execution on Linux.
+The frozen `b1cf8943` workspace passed
+`cargo test --locked --workspace --no-fail-fast`, including all doc-tests,
+323 supplemental native conformance tests, all 182 native object obligations,
+598 frontend fixtures, and the complete fixed inventory gates. The log is
+`target/native-workspace-b1cf8943.log`. This verifies that frozen revision;
+the later JSON changes require their own workspace acceptance.
+
+The prior `3bc23e6a` revision passed its frozen workspace and doc-tests in
+`target/native-workspace-3bc23e6a.log` and all four supported-host jobs in
+[workflow run 36995400983](https://github.com/vycdev/jett/actions/runs/36995400983).
+The `b1cf8943` supported-host
+[workflow run 37002829148](https://github.com/vycdev/jett/actions/runs/37002829148)
+passed all four Linux/Windows build/package and installed-package jobs.
+The installed-package jobs cover clean relocation, execution after source
+removal, and both debug/release profiles. This accepts the frozen debug
+isolation revision on its supported hosts; later JSON source changes still
+require their own workspace and supported-host acceptance.
 The broad estimate remains about 85%; the fixed inventory denominator remains
 207. Hidden-secret policy and other semantic obligations remain independent.
+
+### Qualified machine JSON and parser pipeline dispatch
+
+Native JSON source eligibility now matches the existing public admission
+boundary: a state-qualified machine visits only its selected payload, while a
+bare machine still visits every declared state. The unrelated state in the
+regression schema contains an integer-keyed map; qualified ready-state JSON is
+admitted, but bare and cached-state requests retain E0343. Public policy,
+all-state reflection metadata, secret projection, and qualified builder-finish
+checks are unchanged.
+
+Nested `state.fields` loops originating in `type.machine_states[T]()` receive
+checked field-type and source-alias candidates from every declared state,
+including canonical `Machine at state` requests. Source aliases in these
+candidates belong to field TypeInfo; top-level aggregate aliases remain
+non-matching probes with empty metadata. Runtime state metadata remains complete,
+so an unselected field must not reach an unmatched reflected dispatch arm.
+Direct active-state field loops retain their selected-payload candidates.
+This compiler handoff repair is distinct from selected-state JSON eligibility.
+
+The private fallback decoder now uses the direct canonical condition
+`type.name[T]() == "json.JsonTree"` for raw-tree copying, matching the
+named decoder's existing checked static selection. An ordinary pure metadata
+helper call had left the raw return body typechecked under unrelated T,
+exposing E0311 for inactive callable, interface, and actor fields. Pure-call
+folding does not control source validity. This narrow source repair keeps
+the raw body out of those specializations without changing public JSON
+eligibility, reflection metadata, or the existing typed wrapper paths.
+
+Completing those candidates exposed a private map decoder branch that returned
+`map[string, Val]` for a non-string-keyed T. An alias-aware closed key guard now
+limits typed string-map construction to exact string keys. Public non-string
+map targets still fail E0343. A malformed qualified envelope naming another
+state's unsupported map payload instead returns an unsupported-key failure
+when its field decoder is reached, before the eventual qualified builder
+mismatch. Required-field lookup and exact validation retain their order.
+This bounded diagnostic-precedence tradeoff is recorded in the
+[machine JSON contract](../open_design/state_machine_json_contract.md);
+it introduces no key cast, dummy value, early state gate, or global builder
+change. Fresh reference characterization pins the actual first wrapped
+error for empty and nonempty cached-state maps as
+`cached.entries: JSON object maps require string keys, got int64`. Lenient
+numeric entries reach the same key refusal; exact numeric entries retain
+the earlier `entries: expected object, got number` validation error. Missing
+entries still report `missing required field 'entries' for app.Session at ready.cached`.
+The expanded direct/pipeline controls compare these exact error prefixes,
+continued successful parsing, retained owners, and complete reference/native
+streams. All 22 groups passed (323 filtered) in 175.92 seconds in
+`target/native-json-qualified-driver-final.log`.
+
+Parser pipelines now record the declared `json.parse` or `json.parse_exact`
+source facade from their checked `result[T, string]` payload using the existing
+direct-call handoff mechanism and recursive eligibility predicate. Argument
+checking, input ownership, pipeline order, step-local handlers, and intrinsic
+identity are unchanged. An independent int64 pipeline witness exposes this
+dispatch defect without requiring machine qualification.
+
+Fresh pre-change CLI witnesses checked and ran successfully through the
+reference path while native lowering refused the generic JSON intrinsic. Bare
+machine controls reported E0343. These characterization results identify the
+defects; they are not validation of the new implementation or regression suite.
+
+The current linked suite contains 23 independent tests and 32 Jett fixtures.
+It is intended to cover all four JSON operations in direct and pipeline forms,
+qualified aliases in lists, wrong-state handling, lenient and exact extra fields,
+borrowed-value preservation, primitive parser input clone/reread, debug and
+release profiles, source deletion, output publication controls, and pure
+selected-state serialization through explicit comptime, verify, and 100-trial
+property suites. Additional controls exercise exact string-key aliases and
+independent all-state reflection with field aliases, canonical ready/empty
+qualifiers, and direct selected-field loops. Runtime fixtures use
+capability-backed Stdout, with debug and frontend observations checked
+separately. Missing entries in the wrong-state payload are now covered;
+unknown or missing state tags, missing payloads, other missing required
+fields, secrecy, and broader wrapper combinations remain outside this
+suite's claim. One new group over three inactive callable/interface/actor
+payloads checks all four direct JSON APIs for a valid selected ready state,
+both runtime profiles, retained source owners, and source deletion. Those
+cases do not admit the unsupported payloads themselves as JSON targets or
+claim malformed-input behavior for them.
+
+Recorded phase checks pass: 40 codegen and 416 comptime library tests in
+`target/native-json-qualified-compiler-phases.log`, plus 125 HIR, 79 MIR,
+and 221 typechecker tests in `target/native-json-qualified-remaining-phases.log`.
+The driver library batch reported 82 passes and one temporary capture-file
+creation PermissionDenied failure; the exact failed test passed its isolated
+retry (one pass, 82 filtered) in
+`target/native-json-qualified-driver-permission-retry.log`. The original
+batch is not described as an uninterrupted passing run.
+
+The compiled supplemental native corpus now contains 346 tests, confirmed
+by the final JSON family gate's 39 passes and 307 filtered in
+`target/native-json-qualified-json-family-final.log` (438.34 seconds).
+That gate includes all 23 new groups on the final source and 16 existing JSON
+regressions; it is not 346 executed passes. The earlier 22-group checkpoint
+and additional group's pass remain recorded separately in
+`target/native-json-qualified-driver-final.log` and
+`target/native-json-qualified-unselected-payloads-final.log`.
+All 598 frontend fixtures pass on the repaired source
+in `target/native-json-qualified-frontend-fixtures.log` (20.66 seconds).
+Native object gates, a frozen complete workspace with doc-tests, and
+supported-host jobs for the current JSON changes remain pending. Earlier
+phase results do not validate later source additions.
+This slice supplements the unchanged 207-fixture inventory; the
+broad estimate remains about 85%.
