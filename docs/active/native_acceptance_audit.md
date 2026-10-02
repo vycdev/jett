@@ -1016,9 +1016,31 @@ predicate-error, operand-precedence, and exit-71 cleanup expectations. Closed
 comptime, compiled verify suites, and 100-trial property suites also pass.
 These five supplemental tests bring native conformance to 298 tests without
 changing the fixed acceptance inventory. Full workspace and supported-host
-distribution checks still need to certify the final revision. Native reflected
-producers that admit newly requested refinements remain a separate concrete gap;
-return proof reuse cannot replace validation at that producer.
+distribution checks still need to certify the final revision. Return proof reuse
+cannot replace validation at a reflected producer.
+
+Native reflected root-refinement producers now validate their selected cloned
+field after the original getter completes its selector and payload checks. Exact
+and stronger declared sources reuse established proof; ancestor promotions
+evaluate only their missing suffix, and sibling or base sources check the whole
+requested chain. HIR retains complete per-slot plans and exact canonical
+predicate identities. MIR consumes those plans before exposing its internal
+raw-read marker, preserving owned cleanup, pending depths, source identity, and
+the first original error. Requested admission and outer secret/callable/nominal
+conversion rules are unchanged.
+
+Fourteen focused HIR, MIR, and object tests, all 224 HIR/MIR/codegen library tests,
+and all 55 object-emission tests pass. Three linked regressions pass through both
+direct and piped getter forms in debug and release after source removal,
+including all three getters, dynamic selectors, thirteen terminal failure cases,
+owned Unicode/string/list values, unchanged sources, pending depths 1/2,
+operand staging, closed comptime, verify, and 100-trial property execution.
+The pipeline helper shares the direct getter's metadata expansion, preserving
+source/selector order, complete slot plans, bitfields, and narrowed machine owners.
+Native conformance now has 301 supplemental tests; the fixed inventory denominator
+is unchanged. New native nested-container invariants and metadata expansion for
+other admitted reflection pipeline forms remain concrete implementation gaps.
+Final workspace and supported-host distribution gates still require verification.
 
 The locked Windows workspace run at `52bd4dcb` passed every target and doc-test
 with tracked source frozen throughout. All 284 native conformance tests passed,

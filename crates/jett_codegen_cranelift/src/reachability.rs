@@ -341,6 +341,7 @@ fn collect_expression_references(expression: &Expression, references: &mut Refer
             type_arguments: _,
             reflection_arguments: _,
             refinement_predicates: _,
+            field_validation: _,
             args,
             evaluation_order: _,
         } => {

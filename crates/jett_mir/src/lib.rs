@@ -266,6 +266,7 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
         }
         FunctionValidator {
             function,
+            functions: &program.functions,
             function_count: program.functions.len(),
             errors: &mut errors,
         }
@@ -280,6 +281,7 @@ pub fn validate(program: &Program) -> Result<(), Vec<ValidationError>> {
 
 struct FunctionValidator<'function, 'errors> {
     function: &'function Function,
+    functions: &'function [Function],
     function_count: usize,
     errors: &'errors mut Vec<ValidationError>,
 }
@@ -487,9 +489,37 @@ impl FunctionValidator<'_, '_> {
                 self.check_local(*local, statement.span, "let statement");
                 self.expression(value);
             }
-            StatementKind::CheckRefinement { local, call, .. } => {
+            StatementKind::CheckRefinement {
+                local,
+                call,
+                type_name,
+            } => {
                 self.check_local(*local, statement.span, "refinement error text");
                 self.expression(call);
+                let valid = if let hir::ExpressionKind::Call { function, args, .. } = &call.kind {
+                    self.functions
+                        .get(function.index() as usize)
+                        .is_some_and(|predicate| {
+                            hir::refinement_predicate_declaration_matches(
+                                &predicate.identity.declaration,
+                                type_name,
+                            ) && predicate.capture_count == 0
+                                && predicate.params.len() == 1
+                                && predicate.params[0].mode == ParamMode::Owned
+                                && predicate.return_type == jett_types::TypeInterner::BOOL
+                                && args.len() == 1
+                                && args[0].ty == predicate.params[0].ty
+                                && call.ty == jett_types::TypeInterner::BOOL
+                        })
+                } else {
+                    false
+                };
+                if !valid {
+                    self.error(
+                        statement.span,
+                        "refinement check does not call its exact predicate declaration",
+                    );
+                }
             }
             StatementKind::Assign { target, value } => {
                 self.expression(target);
@@ -784,10 +814,22 @@ impl FunctionValidator<'_, '_> {
                 }
             }
             hir::ExpressionKind::Intrinsic {
+                intrinsic,
+                field_validation,
                 args,
                 evaluation_order,
                 ..
             } => {
+                match (
+                    hir::is_reflected_field_intrinsic(*intrinsic),
+                    field_validation,
+                ) {
+                    (true, Some(hir::ReflectedFieldValidation::Read)) | (false, None) => {}
+                    _ => self.error(
+                        expression.span,
+                        "reflected selector proof plans were not lowered",
+                    ),
+                }
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
@@ -1889,6 +1931,7 @@ function first(left: int64, right: int64) returns int64:
             type_arguments: vec![bound_type],
             reflection_arguments: Vec::new(),
             refinement_predicates: Vec::new(),
+            field_validation: None,
             args: Vec::new(),
             evaluation_order: vec![0],
         };

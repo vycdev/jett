@@ -28,11 +28,18 @@ mod interface_values;
 #[cfg(test)]
 mod local_view_tests;
 mod local_views;
+mod reflected_fields;
 mod type_validation;
 
 pub use interface_values::complete_value_conversions;
 pub use local_views::{
     is_borrowed_local, local_view_root, validate_local_view_initializer, validate_local_views,
+};
+pub use reflected_fields::{
+    ReflectedFieldAction, ReflectedFieldPlan, ReflectedFieldRequirement, ReflectedFieldUnsupported,
+    ReflectedFieldValidation, is_reflected_field_intrinsic,
+    refinement_predicate_declaration_matches, reflected_field_layout, reflected_field_requirement,
+    valid_reflected_field_metadata_type, validate_reflected_field_plans,
 };
 pub use type_validation::validate_backend_types;
 
@@ -362,6 +369,8 @@ pub enum ExpressionKind {
         /// enum variant payloads, or machine state payloads. Empty for other
         /// intrinsics and targets without refinement fields.
         refinement_predicates: Vec<Vec<RefinementPredicate>>,
+        /// Per-declared-field proof plans, consumed into CFG after selector checks.
+        field_validation: Option<ReflectedFieldValidation>,
         args: Vec<Expression>,
         evaluation_order: Vec<usize>,
     },
@@ -877,10 +886,47 @@ impl Validator<'_> {
                 }
             }
             ExpressionKind::Intrinsic {
+                intrinsic,
+                field_validation,
                 args,
                 evaluation_order,
                 ..
             } => {
+                match (is_reflected_field_intrinsic(*intrinsic), field_validation) {
+                    (true, Some(ReflectedFieldValidation::Validate(plans))) => {
+                        for plan in plans {
+                            if let ReflectedFieldAction::Predicates(predicates) = &plan.action {
+                                for predicate in predicates {
+                                    let valid = self
+                                        .program
+                                        .functions
+                                        .get(predicate.function.index() as usize)
+                                        .is_some_and(|function| {
+                                            refinement_predicate_declaration_matches(
+                                                &function.identity.declaration,
+                                                &predicate.type_name,
+                                            ) && function.params.len() == 1
+                                                && function.capture_count == 0
+                                                && function.params[0].mode == ParamMode::Owned
+                                                && function.params[0].ty == predicate.input_type
+                                                && function.return_type == TypeInterner::BOOL
+                                        });
+                                    if !valid {
+                                        self.error(
+                                            expression.span,
+                                            "reflected validation predicate function is invalid",
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (false, None) => {}
+                    _ => self.error(
+                        expression.span,
+                        "reflected read requires checked source validation plans",
+                    ),
+                }
                 self.check_evaluation_order(evaluation_order, args.len(), expression.span);
                 for argument in args {
                     self.expression(argument);
@@ -4404,37 +4450,6 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     });
                 }
             }
-            if intrinsic == IntrinsicId::TypeMachineFieldValue
-                && type_arguments.len() == 2
-                && lowered_args.len() == 2
-                && reflection_arguments
-                    .first()
-                    .is_some_and(|info| matches!(info.kind.as_str(), "machine" | "machine_state"))
-            {
-                let machine = self.checked_reflection_machine(type_arguments[0], call_span)?;
-                let owner_name = reflection_arguments[0]
-                    .type_name
-                    .split_once(" at ")
-                    .map_or(reflection_arguments[0].type_name.as_str(), |(base, _)| base);
-                let field_ty = lowered_args[1].ty;
-                for state in &machine.states {
-                    for field in &state.fields {
-                        let kind = self.lower_reflection_type_field(
-                            field,
-                            owner_name,
-                            Some(&state.name),
-                            field_ty,
-                            call_span,
-                        )?;
-                        evaluation_order.push(lowered_args.len());
-                        lowered_args.push(Expression {
-                            kind,
-                            ty: field_ty,
-                            span: call_span,
-                        });
-                    }
-                }
-            }
             if intrinsic == IntrinsicId::TypeArg
                 && type_arguments.len() == 1
                 && lowered_args.len() == 1
@@ -4451,89 +4466,24 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     });
                 }
             }
-            if intrinsic == IntrinsicId::TypeFieldValue
-                && type_arguments.len() == 2
-                && lowered_args.len() == 2
-                && reflection_arguments
-                    .first()
-                    .is_some_and(|info| matches!(info.kind.as_str(), "struct" | "bitfield"))
-            {
-                let info = &reflection_arguments[0];
-                let fields = self
-                    .parent
-                    .check
-                    .reflection_metadata
-                    .get_type_fields_for_id(type_arguments[0])
-                    .map(<[_]>::to_vec);
-                let Some(fields) = fields else {
-                    self.parent
-                        .error(call_span, "type.field_value has no checked field metadata");
-                    return None;
-                };
-                let field_ty = lowered_args[1].ty;
-                for field in &fields {
-                    let kind = self.lower_reflection_type_field(
-                        field,
-                        &info.type_name,
-                        None,
-                        field_ty,
-                        call_span,
-                    )?;
-                    evaluation_order.push(lowered_args.len());
-                    lowered_args.push(Expression {
-                        kind,
-                        ty: field_ty,
-                        span: call_span,
-                    });
-                }
-            }
-            if intrinsic == IntrinsicId::TypeVariantFieldValue
-                && type_arguments.len() == 2
-                && lowered_args.len() == 2
-                && reflection_arguments
-                    .first()
-                    .is_some_and(|info| info.kind == "enum")
-            {
-                let info = &reflection_arguments[0];
-                let variants = self
-                    .parent
-                    .check
-                    .reflection_metadata
-                    .get_type_variants_for_id(type_arguments[0])
-                    .map(<[_]>::to_vec);
-                let Some(variants) = variants else {
-                    self.parent.error(
-                        call_span,
-                        "type.variant_field_value has no checked variant metadata",
-                    );
-                    return None;
-                };
-                let field_ty = lowered_args[1].ty;
-                for variant in &variants {
-                    for field in &variant.fields {
-                        let kind = self.lower_reflection_type_field(
-                            field,
-                            &info.type_name,
-                            Some(&variant.name),
-                            field_ty,
-                            call_span,
-                        )?;
-                        evaluation_order.push(lowered_args.len());
-                        lowered_args.push(Expression {
-                            kind,
-                            ty: field_ty,
-                            span: call_span,
-                        });
-                    }
-                }
-            }
+            self.append_reflected_read_arguments(
+                intrinsic,
+                &type_arguments,
+                &reflection_arguments,
+                &mut lowered_args,
+                &mut evaluation_order,
+                call_span,
+            )?;
             let refinement_predicates =
                 self.reflected_finish_predicates(intrinsic, &type_arguments, call_span)?;
+            let field_validation =
+                self.reflected_read_validation(intrinsic, &type_arguments, call_span)?;
             Some(ExpressionKind::Intrinsic {
                 intrinsic,
                 type_arguments,
                 reflection_arguments,
                 refinement_predicates,
+                field_validation,
                 args: lowered_args,
                 evaluation_order,
             })
@@ -6312,7 +6262,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         } else {
             piped
         };
-        let (args, evaluation_order) =
+        let (mut args, mut evaluation_order) =
             self.lower_pipeline_arguments(piped, extra_args, step.span)?;
         let source_call = self.is_source_call(callee, step.span);
         let kind = if let Some(variant) = self.enum_constructor_variant(callee, output_type) {
@@ -6342,17 +6292,29 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             let intrinsic = self.checked_intrinsic_id(step.span)?;
             let type_arguments =
                 self.checked_intrinsic_type_arguments(step.span, has_explicit_type_arguments)?;
+            let reflection_arguments = self
+                .intrinsic_reflection_arguments
+                .get(&step.span)
+                .cloned()
+                .unwrap_or_default();
+            self.append_reflected_read_arguments(
+                intrinsic,
+                &type_arguments,
+                &reflection_arguments,
+                &mut args,
+                &mut evaluation_order,
+                step.span,
+            )?;
             let refinement_predicates =
                 self.reflected_finish_predicates(intrinsic, &type_arguments, step.span)?;
+            let field_validation =
+                self.reflected_read_validation(intrinsic, &type_arguments, step.span)?;
             ExpressionKind::Intrinsic {
                 intrinsic,
                 type_arguments,
-                reflection_arguments: self
-                    .intrinsic_reflection_arguments
-                    .get(&step.span)
-                    .cloned()
-                    .unwrap_or_default(),
+                reflection_arguments,
                 refinement_predicates,
+                field_validation,
                 args,
                 evaluation_order,
             }

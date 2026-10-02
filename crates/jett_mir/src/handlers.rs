@@ -34,10 +34,12 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         ExpressionKind::Intrinsic {
             args,
             refinement_predicates,
+            field_validation,
             ..
         } => {
             args.iter().any(has_extractable_handle)
                 || refinement_predicates.iter().any(|chain| !chain.is_empty())
+                || matches!(field_validation, Some(hir::ReflectedFieldValidation::Validate(_)))
         }
         ExpressionKind::IndirectCall { callee, args, .. } => {
             has_extractable_handle(callee) || args.iter().any(has_extractable_handle)
@@ -639,6 +641,17 @@ impl Builder<'_> {
             );
         }
         if let ExpressionKind::Intrinsic {
+            field_validation: Some(hir::ReflectedFieldValidation::Validate(plans)),
+            ..
+        } = &expression.kind
+        {
+            // Invalid plans stay visible for native contract rejection; never
+            // turn missing or malformed proof metadata into an unchecked read.
+            return self
+                .lower_reflected_field_read(expression, plans)
+                .unwrap_or_else(|| expression.clone());
+        }
+        if let ExpressionKind::Intrinsic {
             intrinsic: hir::IntrinsicId::TypeConstructFinish,
             refinement_predicates,
             ..
@@ -832,6 +845,7 @@ impl Builder<'_> {
             type_arguments,
             reflection_arguments,
             refinement_predicates,
+            field_validation,
             args,
             evaluation_order,
         } = &expression.kind
@@ -867,6 +881,7 @@ impl Builder<'_> {
                     type_arguments: type_arguments.clone(),
                     reflection_arguments: reflection_arguments.clone(),
                     refinement_predicates: refinement_predicates.clone(),
+                    field_validation: field_validation.clone(),
                     args,
                     evaluation_order: evaluation_order.clone(),
                 };
@@ -1088,6 +1103,290 @@ impl Builder<'_> {
             ty: expression.ty,
             span,
         }
+    }
+
+    fn lower_reflected_field_read(
+        &mut self,
+        expression: &Expression,
+        plans: &[hir::ReflectedFieldPlan],
+    ) -> Option<Expression> {
+        let ExpressionKind::Intrinsic {
+            intrinsic,
+            type_arguments,
+            args,
+            evaluation_order,
+            ..
+        } = &expression.kind
+        else {
+            return None;
+        };
+        let [owner_type, requested] = type_arguments.as_slice() else {
+            return None;
+        };
+        if *requested != expression.ty {
+            return None;
+        }
+        hir::validate_reflected_field_plans(self.types, *intrinsic, *owner_type, *requested, plans)
+            .ok()?;
+        let layout = hir::reflected_field_layout(self.types, *intrinsic, *owner_type)?;
+        let metadata_type = args.get(1)?.ty;
+        if !hir::valid_reflected_field_metadata_type(self.types, metadata_type) {
+            return None;
+        }
+        let Type::Struct(metadata_id) = self.types.resolve(metadata_type) else {
+            return None;
+        };
+        let metadata = self.types.resolve_struct(*metadata_id);
+        if args.len() != layout.len() + 2
+            || args[0].ty != *owner_type
+            || args[1..].iter().any(|arg| arg.ty != metadata_type)
+        {
+            return None;
+        }
+        let member_type = metadata.fields[2].1;
+        if plans
+            .iter()
+            .all(|plan| matches!(plan.action, hir::ReflectedFieldAction::Exact))
+        {
+            let mut raw = expression.clone();
+            if let ExpressionKind::Intrinsic {
+                field_validation, ..
+            } = &mut raw.kind
+            {
+                *field_validation = Some(hir::ReflectedFieldValidation::Read);
+            }
+            return Some(self.lower_value(&raw));
+        }
+        let inputs: Vec<_> = args
+            .iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                if crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
+                    && !matches!(arg.kind, ExpressionKind::View(_))
+                {
+                    Expression {
+                        kind: ExpressionKind::View(Box::new(arg.clone())),
+                        ty: arg.ty,
+                        span: arg.span,
+                    }
+                } else {
+                    arg.clone()
+                }
+            })
+            .collect();
+        let args = self.lower_ordered_owned_values(&inputs, evaluation_order)?;
+        let mut raw = expression.clone();
+        if let ExpressionKind::Intrinsic {
+            field_validation,
+            args: raw_args,
+            ..
+        } = &mut raw.kind
+        {
+            *field_validation = Some(hir::ReflectedFieldValidation::Read);
+            *raw_args = args.clone();
+        }
+        let span = expression.span;
+        let candidate = self.temporary(expression.ty, span);
+        // The existing raw getter completes every selector, metadata, owner,
+        // pending and payload read check before any proof predicate executes.
+        self.push(
+            StatementKind::Let {
+                local: candidate,
+                value: raw,
+            },
+            span,
+        );
+        let selected_member = if layout.iter().any(|(member, _, _)| member.is_some()) {
+            let member = self.temporary(member_type, span);
+            self.push(
+                StatementKind::Let {
+                    local: member,
+                    value: Expression {
+                        kind: ExpressionKind::Field {
+                            base: Box::new(args[1].clone()),
+                            owner_type: metadata_type,
+                            field: hir::FieldId::new(2),
+                        },
+                        ty: member_type,
+                        span,
+                    },
+                },
+                span,
+            );
+            let present = self.temporary(TypeInterner::BOOL, span);
+            self.push(
+                StatementKind::SumTag {
+                    source: member,
+                    target: present,
+                },
+                span,
+            );
+            let accepted = self.new_block(span);
+            let absent = self.new_block(span);
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition: Expression {
+                        kind: ExpressionKind::Local(present),
+                        ty: TypeInterner::BOOL,
+                        span,
+                    },
+                    then_block: accepted,
+                    else_block: absent,
+                },
+                span,
+            );
+            self.current = absent;
+            self.terminate(TerminatorKind::Unreachable, span);
+            self.current = accepted;
+            let text = self.temporary(TypeInterner::STRING, span);
+            self.push(
+                StatementKind::SumTake {
+                    source: member,
+                    target: text,
+                    success: true,
+                },
+                span,
+            );
+            Some(text)
+        } else {
+            None
+        };
+        let continuation = self.new_block(span);
+        for ((member, index, _), plan) in layout.iter().zip(plans) {
+            let case = self.new_block(span);
+            let next = self.new_block(span);
+            let field = |index, ty| Expression {
+                kind: ExpressionKind::Field {
+                    base: Box::new(args[1].clone()),
+                    owner_type: metadata_type,
+                    field: hir::FieldId::new(index),
+                },
+                ty,
+                span,
+            };
+            let index_matches = Expression {
+                kind: ExpressionKind::Binary {
+                    left: Box::new(field(0, TypeInterner::INT64)),
+                    op: hir::BinaryOp::Equal,
+                    right: Box::new(Expression {
+                        kind: ExpressionKind::Int(*index as i128),
+                        ty: TypeInterner::INT64,
+                        span,
+                    }),
+                },
+                ty: TypeInterner::BOOL,
+                span,
+            };
+            let condition = if let Some(member) = member {
+                let member_matches = Expression {
+                    kind: ExpressionKind::Binary {
+                        left: Box::new(Expression {
+                            kind: ExpressionKind::View(Box::new(Expression {
+                                kind: ExpressionKind::Local(selected_member?),
+                                ty: TypeInterner::STRING,
+                                span,
+                            })),
+                            ty: TypeInterner::STRING,
+                            span,
+                        }),
+                        op: hir::BinaryOp::Equal,
+                        right: Box::new(Expression {
+                            kind: ExpressionKind::String(member.clone()),
+                            ty: TypeInterner::STRING,
+                            span,
+                        }),
+                    },
+                    ty: TypeInterner::BOOL,
+                    span,
+                };
+                Expression {
+                    kind: ExpressionKind::Binary {
+                        left: Box::new(index_matches),
+                        op: hir::BinaryOp::And,
+                        right: Box::new(member_matches),
+                    },
+                    ty: TypeInterner::BOOL,
+                    span,
+                }
+            } else {
+                index_matches
+            };
+            self.terminate(
+                TerminatorKind::Branch {
+                    condition,
+                    then_block: case,
+                    else_block: next,
+                },
+                span,
+            );
+            self.current = case;
+            match &plan.action {
+                hir::ReflectedFieldAction::Exact => self.close_to(continuation, span),
+                hir::ReflectedFieldAction::Unsupported(reason) => {
+                    self.push(
+                        StatementKind::Evaluate(Expression {
+                            kind: ExpressionKind::RuntimeFailure(reason.message().into()),
+                            ty: TypeInterner::NOTHING,
+                            span,
+                        }),
+                        span,
+                    );
+                    self.terminate(TerminatorKind::Unreachable, span);
+                }
+                hir::ReflectedFieldAction::Predicates(predicates) => {
+                    for predicate in predicates {
+                        let input = self.refinement_predicate_input(
+                            candidate,
+                            expression.ty,
+                            predicate,
+                            span,
+                        );
+                        let (error_text, passed) =
+                            self.lower_refinement_check(input, predicate, span);
+                        let accepted = self.new_block(span);
+                        let rejected = self.new_block(span);
+                        self.terminate(
+                            TerminatorKind::Branch {
+                                condition: Expression {
+                                    kind: ExpressionKind::Local(passed),
+                                    ty: TypeInterner::BOOL,
+                                    span,
+                                },
+                                then_block: accepted,
+                                else_block: rejected,
+                            },
+                            span,
+                        );
+                        self.current = rejected;
+                        self.push(
+                            StatementKind::Evaluate(Expression {
+                                kind: ExpressionKind::RuntimeFailureMessage(Box::new(Expression {
+                                    kind: ExpressionKind::Local(error_text),
+                                    ty: TypeInterner::STRING,
+                                    span,
+                                })),
+                                ty: TypeInterner::NOTHING,
+                                span,
+                            }),
+                            span,
+                        );
+                        self.terminate(TerminatorKind::Unreachable, span);
+                        self.current = accepted;
+                    }
+                    self.close_to(continuation, span);
+                }
+            }
+            self.current = next;
+        }
+        // A successful getter already proved one of these exact member/index
+        // pairs. Never fabricate a result if a malformed plan misses that pair.
+        self.terminate(TerminatorKind::Unreachable, span);
+        self.current = continuation;
+        Some(Expression {
+            kind: ExpressionKind::Local(candidate),
+            ty: expression.ty,
+            span,
+        })
     }
 
     fn lower_refinement_check(
@@ -2037,6 +2336,295 @@ mod tests {
             .iter()
             .find(|function| function.identity.declaration.name == "inspect")
             .unwrap()
+    }
+
+    #[test]
+    fn native_reflected_root_reads_run_selector_guards_before_slot_predicates() {
+        for (owner, getter, declaration, expected) in [
+            (
+                "Record",
+                "field_value",
+                "struct Record:\n    raw: int64\n    positive: Positive\n    higher: Higher\n    sibling: Sibling\n",
+                5,
+            ),
+            (
+                "Event",
+                "variant_field_value",
+                "enum Event:\n    first(raw: int64, positive: Positive, higher: Higher, sibling: Sibling)\n    second(higher: Higher, raw: int64)\n",
+                7,
+            ),
+            (
+                "Session",
+                "machine_field_value",
+                "machine Session:\n    states:\n        first(raw: int64, positive: Positive, higher: Higher, sibling: Sibling)\n        second(higher: Higher, raw: int64)\n    transitions:\n        first to second\n",
+                7,
+            ),
+        ] {
+            let source = format!(
+                "namespace app\ntype Positive = int64 where value > 0\ntype Higher = Positive where value > 10\ntype Sibling = int64 where value >= 0\n{declaration}function inspect(view source: {owner}, view field: TypeField) returns Higher:\n    return type.{getter}[{owner}, Higher](view source, view field)\n"
+            );
+            let (program, types) = lower_handler_source(&source);
+            validate(&program).unwrap();
+            let function = inspected_handler_function(&program);
+            let raw_reads = function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .filter_map(|s| match &s.kind {
+                    StatementKind::Let {
+                        local,
+                        value:
+                            Expression {
+                                kind:
+                                    ExpressionKind::Intrinsic {
+                                        intrinsic,
+                                        field_validation: Some(hir::ReflectedFieldValidation::Read),
+                                        ..
+                                    },
+                                ..
+                            },
+                    } if hir::is_reflected_field_intrinsic(*intrinsic) => Some(*local),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(raw_reads.len(), 1, "{owner}: getter is staged once");
+            let entry = &function.blocks[function.entry.index() as usize];
+            assert!(entry.statements.iter().any(
+                |s| matches!(s.kind, StatementKind::Let { local, .. } if local == raw_reads[0])
+            ));
+            assert!(
+                !entry
+                    .statements
+                    .iter()
+                    .any(|s| matches!(s.kind, StatementKind::CheckRefinement { .. })),
+                "raw guard runs before predicates"
+            );
+            let checks = function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .filter(|s| matches!(s.kind, StatementKind::CheckRefinement { .. }))
+                .count();
+            assert_eq!(
+                checks, expected,
+                "{owner}: exact slot skips, ancestor suffix only, sibling full chain"
+            );
+            let members = function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .filter(|s| matches!(s.kind, StatementKind::SumTake { .. }))
+                .count();
+            assert_eq!(
+                members,
+                usize::from(owner != "Record"),
+                "only enum/machine extract the validated optional member"
+            );
+            for block in &function.blocks {
+                if let TerminatorKind::Branch {
+                    condition:
+                        Expression {
+                            kind:
+                                ExpressionKind::Binary {
+                                    left,
+                                    op: hir::BinaryOp::And,
+                                    right,
+                                },
+                            ..
+                        },
+                    ..
+                } = &block.terminator.kind
+                {
+                    assert_eq!(left.ty, TypeInterner::BOOL);
+                    let ExpressionKind::Binary {
+                        left,
+                        op: hir::BinaryOp::Equal,
+                        right,
+                    } = &right.kind
+                    else {
+                        panic!("canonical member condition");
+                    };
+                    assert_eq!(left.ty, TypeInterner::STRING);
+                    assert_eq!(right.ty, TypeInterner::STRING);
+                }
+            }
+            crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        }
+    }
+
+    #[test]
+    fn native_reflected_root_owned_reads_keep_candidate_and_error_cleanup() {
+        let (program, types) = lower_handler_source(
+            r#"namespace app
+type Nonempty = list[int64] where true
+struct Parcel:
+    exact: Nonempty
+    raw: list[int64]
+function inspect(view source: Parcel, view field: TypeField) returns Nonempty:
+    return type.field_value[Parcel, Nonempty](view source, view field)
+"#,
+        );
+        validate(&program).unwrap();
+        let function = inspected_handler_function(&program);
+        let plan = crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        let candidate = function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .find_map(|s| match &s.kind {
+                StatementKind::Let {
+                    local,
+                    value:
+                        Expression {
+                            kind:
+                                ExpressionKind::Intrinsic {
+                                    field_validation: Some(hir::ReflectedFieldValidation::Read),
+                                    ..
+                                },
+                            ..
+                        },
+                } => Some(*local),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            plan.owned_locals.contains(&(candidate.index() as usize)),
+            "returned clone belongs to this function"
+        );
+        let checks = function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .filter_map(|s| match &s.kind {
+                StatementKind::CheckRefinement {
+                    local, type_name, ..
+                } => Some((*local, type_name.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            checks.len(),
+            1,
+            "exact declared list refinement skips its predicate"
+        );
+        assert_eq!(checks[0].1, "app.Nonempty");
+        let (block, message) = function
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(index, b)| {
+                b.statements.iter().find_map(|s| match &s.kind {
+                    StatementKind::Evaluate(Expression {
+                        kind: ExpressionKind::RuntimeFailureMessage(message),
+                        ..
+                    }) => Some((index, message)),
+                    _ => None,
+                })
+            })
+            .unwrap();
+        assert!(matches!(message.kind, ExpressionKind::Local(local) if local == checks[0].0));
+        assert!(plan.owned_locals.contains(&(checks[0].0.index() as usize)));
+        assert!(plan.live_in[block].contains(&(checks[0].0.index() as usize)));
+        assert!(matches!(
+            function.blocks[block].terminator.kind,
+            TerminatorKind::Unreachable
+        ));
+    }
+
+    #[test]
+    fn native_reflected_root_mir_rejects_unlowered_and_wrong_predicate_contracts() {
+        let source = r#"namespace app
+type Positive = int64 where value > 0
+type Sibling = int64 where value >= 0
+struct Record:
+    raw: int64
+function inspect(view source: Record, view field: TypeField) returns Positive:
+    return type.field_value[Record, Positive](view source, view field)
+"#;
+        let (original, types) = lower_handler_source(source);
+        let sibling = original
+            .functions
+            .iter()
+            .find(|f| f.identity.declaration.name == "Sibling")
+            .unwrap()
+            .id;
+        for mutation in 0..3 {
+            let mut program = original.clone();
+            let function = program
+                .functions
+                .iter_mut()
+                .find(|f| f.identity.declaration.name == "inspect")
+                .unwrap();
+            if mutation < 2 {
+                let value = function
+                    .blocks
+                    .iter_mut()
+                    .flat_map(|b| &mut b.statements)
+                    .find_map(|s| match &mut s.kind {
+                        StatementKind::Let {
+                            value:
+                                Expression {
+                                    kind:
+                                        ExpressionKind::Intrinsic {
+                                            field_validation, ..
+                                        },
+                                    ..
+                                },
+                            ..
+                        } => Some(field_validation),
+                        _ => None,
+                    })
+                    .unwrap();
+                *value = if mutation == 0 {
+                    None
+                } else {
+                    Some(hir::ReflectedFieldValidation::Validate(Vec::new()))
+                };
+            } else {
+                let call = function
+                    .blocks
+                    .iter_mut()
+                    .flat_map(|b| &mut b.statements)
+                    .find_map(|s| match &mut s.kind {
+                        StatementKind::CheckRefinement { call, .. } => Some(call),
+                        _ => None,
+                    })
+                    .unwrap();
+                let ExpressionKind::Call { function, .. } = &mut call.kind else {
+                    panic!("predicate call");
+                };
+                *function = sibling;
+            }
+            let errors = validate(&program).expect_err("malformed reflected MIR");
+            assert!(errors.iter().any(|e| e.message.contains(if mutation < 2 {
+                "proof plans were not lowered"
+            } else {
+                "exact predicate declaration"
+            })));
+        }
+        let (mut hir, _) = handler_source_hir(source);
+        let function = hir
+            .functions
+            .iter_mut()
+            .find(|f| f.identity.declaration.name == "inspect")
+            .unwrap();
+        let hir::StatementKind::Return(Some(Expression {
+            kind:
+                ExpressionKind::Intrinsic {
+                    field_validation: Some(hir::ReflectedFieldValidation::Validate(plans)),
+                    ..
+                },
+            ..
+        })) = &mut function.body.statements[0].kind
+        else {
+            panic!("source plans");
+        };
+        plans[0].source_type = TypeInterner::BOOL;
+        let malformed = lower(&hir, &types).unwrap();
+        assert!(
+            validate(&malformed).is_err(),
+            "malformed source type plan cannot become unchecked Read"
+        );
     }
 
     #[test]

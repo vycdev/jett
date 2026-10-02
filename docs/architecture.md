@@ -1020,7 +1020,7 @@ Fresh private sum fallback results validate their selected actual type before
 checked source execution can reuse it as a proof. Raw and metadata-free calls
 keep the existing forced facade return boundary. This does not select a broader
 summation domain or change primitive arithmetic.
-Checked reflected field producers establish newly requested refinements before
+Reference reflected field producers establish newly requested refinements before
 their result type becomes reusable proof. Ready builtin containers undergo a
 complete shape preflight, then validate occupied payloads in collection order.
 Actual declared schemas supply exact or ancestor proof; runtime labels do not.
@@ -1033,6 +1033,19 @@ containers, secret qualifiers, callable signatures, or nominal generic instances
 fail conservatively where conversion or observer contracts remain unresolved.
 These safeguards preserve selector checks and source ownership without selecting
 the broader reflected requested-type admission rule.
+Native root-refinement reads carry complete per-declared-slot validation plans
+in HIR. Direct and piped getters share the canonical hidden field-metadata tail,
+appended after the original source and selector operands. Narrowed machines keep
+their checked state identity while metadata uses the complete machine layout.
+MIR stages the original operands, completes the existing raw getter
+checks first, and validates only the selected slot's unproven predicate suffix.
+Predicate identities must match the exact canonical refinement declaration.
+The internal raw-read marker appears only after MIR consumes a checked plan;
+unlowered or incomplete plans fail verification. Owned candidates and dynamic
+error strings use the existing refinement and runtime-failure cleanup paths.
+Exact reads preserve pending depth and source ownership. Native validation of
+new nested container invariants remains an implementation gap, and changed
+secret, callable, or nominal generic proofs retain their conservative refusals.
 Written type aliases resolve once in lexical context. Resolved checked owners,
 installed generic arguments, captured bindings, and reflected metadata retain
 their canonical declaration identities through selection and normalization.

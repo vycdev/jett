@@ -1477,8 +1477,37 @@ impl Verifier<'_> {
                 args,
                 type_arguments,
                 reflection_arguments,
+                field_validation,
                 ..
             } => {
+                if jett_hir::is_reflected_field_intrinsic(*intrinsic) {
+                    if !matches!(
+                        field_validation,
+                        Some(jett_hir::ReflectedFieldValidation::Read)
+                    ) {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "reflected selector proof plans were not lowered",
+                        ));
+                    }
+                } else if field_validation.is_some() {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "non-selector intrinsic carries reflected validation plans",
+                    ));
+                }
+                if type_arguments
+                    .iter()
+                    .any(|ty| ty.index() as usize >= self.types.len())
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "intrinsic type operand is absent from checked type table",
+                    ));
+                }
                 for arg in args {
                     self.expression(function, arg)?;
                 }
@@ -1792,8 +1821,7 @@ impl Verifier<'_> {
                     };
                     let field_ty = args.get(1).map(|arg| arg.ty);
                     let valid_field_ty = field_ty.is_some_and(|ty| {
-                        matches!(self.types.resolve(ty), Type::Struct(id)
-                        if self.types.resolve_struct(*id).name == "TypeField")
+                        jett_hir::valid_reflected_field_metadata_type(self.types, ty)
                     });
                     let valid = type_arguments.len() == 2
                         && type_arguments[1] == expression.ty
@@ -1837,8 +1865,7 @@ impl Verifier<'_> {
                         .sum::<usize>();
                     let field_ty = args.get(1).map(|arg| arg.ty);
                     let valid_field_ty = field_ty.is_some_and(|ty| {
-                        matches!(self.types.resolve(ty), Type::Struct(id)
-                        if self.types.resolve_struct(*id).name == "TypeField")
+                        jett_hir::valid_reflected_field_metadata_type(self.types, ty)
                     });
                     let valid = type_arguments.len() == 2
                         && type_arguments[1] == expression.ty
@@ -1886,8 +1913,7 @@ impl Verifier<'_> {
                         .sum::<usize>();
                     let field_ty = args.get(1).map(|arg| arg.ty);
                     let valid_field_ty = field_ty.is_some_and(|ty| {
-                        matches!(self.types.resolve(ty), Type::Struct(id)
-                        if self.types.resolve_struct(*id).name == "TypeField")
+                        jett_hir::valid_reflected_field_metadata_type(self.types, ty)
                     });
                     let valid = type_arguments.len() == 2
                         && type_arguments[1] == expression.ty

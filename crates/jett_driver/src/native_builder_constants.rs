@@ -235,6 +235,7 @@ fn intrinsic_expression(
             type_arguments,
             reflection_arguments,
             refinement_predicates: Vec::new(),
+            field_validation: None,
             evaluation_order: (0..args.len()).collect(),
             args,
         },

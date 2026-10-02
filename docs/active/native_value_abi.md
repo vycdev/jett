@@ -554,8 +554,7 @@ candidate into the refined output only after all predicates pass. A false
 result creates the interpreter's type-specific error string and enters the
 source failure block. When the candidate is a cloneable owned local, MIR
 snapshots it before validation so both success and handled failure can still
-read the original source. Predicate evaluation failures and secret-backed or
-already-refined inputs still require native parity work.
+read the original source.
 
 Direct local and struct-field validation reuses the original checked source
 refinement, skipping its established ancestor prefix while preserving remaining
@@ -591,6 +590,21 @@ secret observation remain open policy questions. Canonical generic, captured,
 reflected, and checked type identities survive caller import shadowing. These
 reference safeguards add no runtime operation or representation and do not certify
 equivalent native reflected producer validation.
+
+Native reflected root-refinement reads now use complete HIR plans for every
+declared field slot. Exact and established ancestor reads reuse proof; ancestor
+promotion checks its new suffix, while an unrefined or sibling source checks the
+requested chain in base-first order. MIR stages source and selector once, runs
+the original getter's metadata, owner, member, index, requested-type and pending
+checks first, then validates only the selected clone. Predicate identities and
+TypeField layouts are verified before descriptor use. Dynamic predicate errors
+use the existing borrowed failure leaf and cleanup path; no ABI operation is
+added. New native nested-container invariants remain an implementation gap.
+Changed secret, callable and nominal generic proofs retain conservative
+value-free refusals without broadening requested-type admission.
+Direct and piped getters append the same checked field metadata in declaration,
+variant, or state order after the original source/selector evaluation order.
+Narrowed machine owners keep their checked identity and base metadata spelling.
 
 ## Result and optional ownership and handlers
 

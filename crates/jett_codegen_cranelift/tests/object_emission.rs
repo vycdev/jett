@@ -52,6 +52,184 @@ fn lower_source_with_equatable(source: &str, include_equatable: bool) -> (Progra
 }
 
 #[test]
+fn native_reflected_root_reads_retain_only_selected_predicates_and_failure_leaf() {
+    let (mut program, types) = lower_source(
+        r#"namespace app
+type Positive = int64 where value > 0
+type Higher = Positive where value > 10
+type Sibling = int64 where value >= 0
+struct Record:
+    raw: int64
+    positive: Positive
+    higher: Higher
+    sibling: Sibling
+enum Event:
+    first(raw: int64, positive: Positive, higher: Higher, sibling: Sibling)
+    second(higher: Higher, raw: int64)
+machine Session:
+    states:
+        first(raw: int64, positive: Positive, higher: Higher, sibling: Sibling)
+        second(higher: Higher, raw: int64)
+    transitions:
+        first to second
+function record_read(view source: Record, view field: TypeField) returns Higher:
+    return type.field_value[Record, Higher](view source, view field)
+function event_read(view source: Event, view field: TypeField) returns Higher:
+    return type.variant_field_value[Event, Higher](view source, view field)
+function session_read(view source: Session, view field: TypeField) returns Higher:
+    return type.machine_field_value[Session, Higher](view source, view field)
+"#,
+    );
+    let mut predicate_symbols = HashMap::new();
+    for function in &mut program.functions {
+        if function.identity.declaration.kind == DeclarationKind::RefinementPredicate {
+            function.identity.declaration.origin = SourceOrigin::Stdlib;
+            predicate_symbols.insert(
+                function.identity.declaration.name.clone(),
+                symbol_name(&function.identity, &types).unwrap(),
+            );
+        }
+    }
+    let artifact = emit_host_object(&program, &types).expect("root reflected producer object");
+    for name in ["Positive", "Higher"] {
+        assert!(
+            artifact.symbols.contains(&predicate_symbols[name]),
+            "selected predicate {name} remains reachable"
+        );
+    }
+    assert!(
+        !artifact.symbols.contains(&predicate_symbols["Sibling"]),
+        "declared sibling proof is not an extra requested predicate"
+    );
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    let failure = jett_runtime::native_abi::values::NativeLeaf::RuntimeFailMessage.symbol();
+    assert!(
+        object.symbols().any(|s| s.name().ok() == Some(failure)),
+        "dynamic first predicate error uses existing borrowed failure ABI"
+    );
+}
+
+#[test]
+fn native_reflected_root_emission_rejects_missing_plans_and_invalid_type_operands() {
+    let source = r#"namespace app
+type Positive = int64 where value > 0
+struct Record:
+    raw: int64
+function main(view source: Record, view field: TypeField) returns Positive:
+    return type.field_value[Record, Positive](view source, view field)
+"#;
+    for mutation in 0..4 {
+        let (mut program, types) = lower_source(source);
+        let mut foreign = TypeInterner::new();
+        let mut invalid_type = TypeInterner::INT64;
+        for index in 0..types.len() + 1 {
+            invalid_type = foreign.intern(Type::Refinement {
+                name: format!("Foreign{index}"),
+                base: TypeInterner::INT64,
+            });
+        }
+        assert!(invalid_type.index() as usize >= types.len());
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|f| f.identity.declaration.name == "main")
+            .unwrap();
+        let kind = function
+            .blocks
+            .iter_mut()
+            .flat_map(|b| &mut b.statements)
+            .find_map(|s| match &mut s.kind {
+                jett_mir::StatementKind::Let {
+                    value:
+                        jett_hir::Expression {
+                            kind: kind @ jett_hir::ExpressionKind::Intrinsic { .. },
+                            ..
+                        },
+                    ..
+                } => Some(kind),
+                _ => None,
+            })
+            .unwrap();
+        let jett_hir::ExpressionKind::Intrinsic {
+            field_validation,
+            type_arguments,
+            ..
+        } = kind
+        else {
+            unreachable!();
+        };
+        match mutation {
+            0 => *field_validation = None,
+            1 => *field_validation = Some(jett_hir::ReflectedFieldValidation::Validate(Vec::new())),
+            2 => type_arguments[0] = invalid_type,
+            3 => {
+                type_arguments.pop();
+            }
+            _ => unreachable!(),
+        }
+        let error = emit_host_object(&program, &types).expect_err("malformed reflected selector");
+        if mutation < 2 {
+            assert!(
+                matches!(error, CodegenError::InvalidMir(ref errors) if errors.iter().any(|e| e.message.contains("proof plans were not lowered"))),
+                "{error:?}"
+            );
+        } else {
+            assert!(
+                matches!(error, CodegenError::InvalidMirContract { .. }),
+                "{error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_reflected_root_emission_rejects_wrong_same_signature_predicate() {
+    let (mut program, types) = lower_source(
+        r#"namespace app
+type Positive = int64 where value > 0
+type Sibling = int64 where value >= 0
+struct Record:
+    raw: int64
+function main(view source: Record, view field: TypeField) returns Positive:
+    return type.field_value[Record, Positive](view source, view field)
+"#,
+    );
+    let sibling = program
+        .functions
+        .iter()
+        .find(|f| {
+            f.identity.declaration.kind == DeclarationKind::RefinementPredicate
+                && f.identity.declaration.name == "Sibling"
+        })
+        .unwrap()
+        .id;
+    let function = program
+        .functions
+        .iter_mut()
+        .find(|f| f.identity.declaration.name == "main")
+        .unwrap();
+    let call = function
+        .blocks
+        .iter_mut()
+        .flat_map(|b| &mut b.statements)
+        .find_map(|s| match &mut s.kind {
+            jett_mir::StatementKind::CheckRefinement { call, .. } => Some(call),
+            _ => None,
+        })
+        .unwrap();
+    let jett_hir::ExpressionKind::Call { function, .. } = &mut call.kind else {
+        panic!("canonical predicate call");
+    };
+    *function = sibling;
+    let error =
+        emit_host_object(&program, &types).expect_err("predicate identity is part of proof");
+    assert!(
+        matches!(error, CodegenError::InvalidMir(ref errors) if errors.iter().any(|e| e.message.contains("exact predicate declaration"))),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn native_return_refinement_rejections_use_the_existing_borrowed_failure_leaf() {
     let (program, types) = lower_source(
         r#"namespace app
@@ -2241,4 +2419,68 @@ function read(view pair: Pair) returns string:
     }
     // Copy-only public plan must not become a back door for struct ownership.
     assert!(jett_mir::copy_values::CopyValuePlan::analyze(&baseline.functions[0], &types).is_err());
+}
+
+#[test]
+fn native_reflected_getter_pipelines_emit_checked_root_and_owned_reads() {
+    let (program, types) = lower_source(
+        r#"namespace app
+type Positive = int64 where value > 0
+type Higher = Positive where value > 10
+struct Record:
+    raw: int64
+    positive: Positive
+    higher: Higher
+enum Event:
+    first(raw: int64, higher: Higher)
+    second(higher: Higher, raw: int64)
+machine Session:
+    states:
+        first(raw: int64, higher: Higher)
+        second(higher: Higher, raw: int64)
+    transitions:
+        first to second
+bitfield Header:
+    first: 4 bits
+    second: 8 bits
+struct Parcel:
+    text: string
+    values: list[int64]
+enum Packet:
+    first(text: string)
+    second(values: list[int64])
+machine Store:
+    states:
+        first(text: string)
+        second(values: list[int64])
+    transitions:
+        first to second
+function record_pipe(view source: Record, view field: TypeField) returns Higher:
+    return source into view type.field_value[Record, Higher](view field)
+function event_pipe(view source: Event, view field: TypeField) returns Higher:
+    return source into view type.variant_field_value[Event, Higher](view field)
+function session_pipe(view source: Session, view field: TypeField) returns Higher:
+    return source into view type.machine_field_value[Session, Higher](view field)
+function narrowed_pipe(view source: Session at first, view field: TypeField) returns Higher:
+    return source into view type.machine_field_value[Session at first, Higher](view field)
+function header_pipe(view source: Header, view field: TypeField) returns int64:
+    return source into view type.field_value[Header, int64](view field)
+function parcel_text(view source: Parcel, view field: TypeField) returns string:
+    return source into view type.field_value[Parcel, string](view field)
+function parcel_values(view source: Parcel, view field: TypeField) returns list[int64]:
+    return source into view type.field_value[Parcel, list[int64]](view field)
+function packet_text(view source: Packet, view field: TypeField) returns string:
+    return source into view type.variant_field_value[Packet, string](view field)
+function packet_values(view source: Packet, view field: TypeField) returns list[int64]:
+    return source into view type.variant_field_value[Packet, list[int64]](view field)
+function store_text(view source: Store, view field: TypeField) returns string:
+    return source into view type.machine_field_value[Store, string](view field)
+function store_values(view source: Store, view field: TypeField) returns list[int64]:
+    return source into view type.machine_field_value[Store, list[int64]](view field)
+"#,
+    );
+    let artifact = emit_host_object(&program, &types).expect("checked reflected getter pipelines");
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    let failure = jett_runtime::native_abi::values::NativeLeaf::RuntimeFailMessage.symbol();
+    assert!(object.symbols().any(|s| s.name().ok() == Some(failure)));
 }

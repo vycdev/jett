@@ -322,10 +322,39 @@ impl BackendTypeValidator<'_> {
                 }
             }
             ExpressionKind::Intrinsic {
+                intrinsic,
                 type_arguments,
+                field_validation,
                 args,
                 ..
             } => {
+                if crate::is_reflected_field_intrinsic(*intrinsic) {
+                    match (type_arguments.as_slice(), field_validation) {
+                        (
+                            [owner, requested],
+                            Some(crate::ReflectedFieldValidation::Validate(plans)),
+                        ) if *requested == expression.ty => {
+                            if let Err(message) = crate::validate_reflected_field_plans(
+                                self.interner,
+                                *intrinsic,
+                                *owner,
+                                *requested,
+                                plans,
+                            ) {
+                                self.error(expression.span, message);
+                            }
+                        }
+                        _ => self.error(
+                            expression.span,
+                            "reflected read has no complete checked validation plan",
+                        ),
+                    }
+                } else if field_validation.is_some() {
+                    self.error(
+                        expression.span,
+                        "non-selector intrinsic carries reflected validation plans",
+                    );
+                }
                 for (index, type_argument) in type_arguments.iter().enumerate() {
                     self.type_id(
                         *type_argument,
@@ -1103,6 +1132,7 @@ mod tests {
                     type_arguments: vec![nested_error],
                     reflection_arguments: Vec::new(),
                     refinement_predicates: Vec::new(),
+                    field_validation: None,
                     args: Vec::new(),
                     evaluation_order: Vec::new(),
                 },
