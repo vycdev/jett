@@ -75,9 +75,13 @@ frontend fixtures pass (21.88 seconds) in
 fixture-format checks in `target/native-bitfield-local-view-format.json`, and
 Rust formatting and diff checks pass.
 
-The corpus registers 432 supplemental tests. New-head complete workspace,
-all 182 object obligations and supported-host acceptance remain
-pending. The accepted clean 08f9f7e7 parser predecessor is recorded separately
+The bitfield checkpoint registers 432 supplemental tests. The later exact
+clean `cb617ecf` workspace includes this repair and passes all 439 native tests
+(905.04 seconds), all 182 object obligations (516.91 seconds), remaining
+workspace targets and doc-tests. Its unchanged-head, clean-start/end result
+finishes at `2026-10-02T20:55:57.0941072Z` with exit zero; logs and metadata are
+`target/native-workspace-cb617ecf.log` and its JSON summary. Supported-host
+acceptance for the owner-view revisions remains pending. The accepted clean 08f9f7e7 parser predecessor is recorded separately
 in [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
 It cannot substitute for the new source gates. Whole-language native parity
 remains the 100% objective, tracked with the unchanged about-85% estimate and

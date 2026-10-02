@@ -2041,8 +2041,9 @@ both matching runtime profiles after source deletion and preserve exact output,
 owner rereads, empty payloads, pending-owner failure and ordered copy-join traces.
 The crossed compiler gate passes 951 library tests, followed by all 83 driver
 library tests, 598 frontend fixtures and seven source-format checks. The corpus
-registers 432 tests. Complete new-head workspace/object obligations and
-supported-host acceptance remain pending. Required proof, pre-change captures and exact executed logs are
+registers 432 tests at its checkpoint. The later clean `cb617ecf` full workspace
+includes the repair and passes 439 native tests and all 182 object obligations.
+Supported-host acceptance for these owner-view revisions remains pending. Required proof, pre-change captures and exact executed logs are
 in [the bitfield contract](native_bitfield_projected_local_views.md) and
 [the acceptance audit](native_acceptance_audit.md#bitfield-field-local-views-focused-acceptance).
 The broad estimate stays about 85%, the fixed inventory stays 207, and the
@@ -2062,8 +2063,10 @@ pins raw reference error and existing native redaction separately under the
 [open observation policy](../open_design/debug_print_hidden_secrets.md), with
 matching partial stdout/status and preserved cleanup. It does not establish
 diagnostic parity or select new policy. All 83 driver library tests, 598 frontend
-fixtures and seven source-format checks pass. New-head 439-test full
-workspace/object/platform gates remain pending. Exact
+fixtures and seven source-format checks pass. The exact clean `cb617ecf`
+workspace passes all 439 native tests, all 182 object obligations, remaining
+workspace targets and doc-tests, with unchanged head and exit zero at
+`2026-10-02T20:55:57.0941072Z`. Supported-host platform gates remain pending. Exact
 proof, captures and required resolution are in
 [the secret-owner contract](native_secret_owner_projected_local_views.md) and
 [the acceptance audit](native_acceptance_audit.md#direct-secret-aggregate-local-views-focused-acceptance-and-open-observation).

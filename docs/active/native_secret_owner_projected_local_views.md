@@ -91,9 +91,16 @@ pass (22.51 seconds) in `target/native-secret-owner-local-view-frontend.log`.
 All seven source-format checks, Rust formatting and diff checks pass in
 `target/native-secret-owner-local-view-format.json`.
 
-The supplemental corpus registers 439 tests. New-head full workspace,
-all 182 object obligations and supported-host acceptance remain pending. The prior accepted
-08f9f7e7 workspace/platform and bitfield focused gates are centralized in
+The supplemental corpus registers 439 tests. The exact clean `cb617ecf`
+workspace passes all 439 native tests (905.04 seconds), all 182 object
+obligations (516.91 seconds), 83 driver library tests (91.44 seconds), all 598
+frontend fixtures (19.08 seconds), remaining workspace targets and doc-tests.
+The unchanged-head, clean-start/end wrapper finishes at
+`2026-10-02T20:55:57.0941072Z` with exit zero and 92 successful result groups,
+recorded in `target/native-workspace-cb617ecf.log` and its JSON summary.
+Supported-host acceptance for this revision remains pending. The prior accepted
+08f9f7e7 platform and bitfield focused gates are centralized in
 [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
-They do not validate this new secret repair. Whole-language native parity
+The predecessor platform result does not validate this secret revision.
+Whole-language native parity
 remains the 100% objective, tracked with about-85% and the fixed 207 inventory.

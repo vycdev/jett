@@ -1576,8 +1576,9 @@ frontend fixtures pass (21.88 seconds) in
 checks pass in `target/native-bitfield-local-view-format.json`; Rust formatting
 and diff checks pass.
 
-The corpus registers 432 supplemental tests. New complete-workspace acceptance,
-182 object obligations and supported-host jobs remain pending. Initial source characterization,
+The bitfield checkpoint registers 432 supplemental tests. The later clean
+`cb617ecf` workspace below includes this repair and passes all 182 object
+obligations. Supported-host jobs for these owner-view revisions remain pending. Initial source characterization,
 exact qualification/ownership limits and required gates are in
 [the bitfield contract](native_bitfield_projected_local_views.md). The accepted
 08f9f7e7 result above is predecessor evidence, not new-head acceptance. The
@@ -1614,9 +1615,18 @@ pass (22.51 seconds) in `target/native-secret-owner-local-view-frontend.log`.
 All seven source-format checks, Rust formatting and diff checks pass in
 `target/native-secret-owner-local-view-format.json`.
 
-The corpus registers 439 supplemental tests. New-head full workspace/object/
-platform gates remain pending. The accepted 08f9f7e7 workspace/platform and bitfield focused gates
-above are predecessor evidence. Exact selected rules and actual seven-source
+The corpus registers 439 supplemental tests. The exact `cb617ecf` workspace
+passes with clean start/end and unchanged head at
+`2026-10-02T20:55:57.0941072Z`, recorded in
+`target/native-workspace-cb617ecf.log` and its JSON summary. All 439 native
+conformance tests pass (905.04 seconds), all 182 object obligations pass in the
+four-test manifest gate (516.91 seconds), and all 83 driver library tests
+(91.44 seconds), 598 frontend fixtures (19.08 seconds), remaining workspace
+targets and doc-tests pass. The wrapper reports exit zero and 92 successful
+result groups. This accepts both owner-view repairs at that exact source
+revision; it does not settle the preserved observation-policy boundary.
+Supported-host platform gates for the owner-view revisions remain pending.
+The accepted 08f9f7e7 platform result above is predecessor evidence. Exact selected rules and actual seven-source
 characterization are in
 [the secret-owner contract](native_secret_owner_projected_local_views.md).
 The about-85% estimate, fixed 207 inventory and whole-language 100% objective
