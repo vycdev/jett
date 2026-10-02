@@ -1,0 +1,16 @@
+namespace app
+struct Envelope[T]:
+    items: list[T]
+function inspect[T](view shape: list[T], raw: string) returns string:
+    use json
+    Envelope[T] parsed = json.parse_exact[Envelope[T]](raw) handle error:
+        return "decode-error:{error}"
+    return "length:{list.length[T](view parsed.items)}"
+function main(stdout: Stdout) returns nothing:
+    string valid = inspect(view list(), "{{\"items\":[]}}")
+    Stdout.write(view stdout, "valid:{valid}\n")
+    string occupied = inspect(view list(), "{{\"items\":[7]}}")
+    Stdout.write(view stdout, "occupied:{occupied}\n")
+    string malformed = inspect(view list(), "{{\"items\":[")
+    Stdout.write(view stdout, "malformed:{malformed}\n")
+    return nothing

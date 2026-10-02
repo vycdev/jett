@@ -7,8 +7,9 @@ executes its checked trusted stdlib body. The characterized native selector
 omitted Type::Never and left otherwise admitted targets on unsupported generic
 JSON intrinsics. The applied serializer repair passes its compiler, linked,
 ownership and public-policy gates below. The accepted `774b13e7` complete
-workspace predates this repair; a new complete workspace and supported-host
-run remain required for the final JSON revision.
+workspace predates this repair. The `05494ed4` serializer revision now passes its
+complete frozen workspace and all four supported-host jobs, centralized in
+[the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
 
 ## Bounded contract
 
@@ -140,10 +141,12 @@ fixtures pass in 21.73 seconds in `target/native-json-inferred-slots-frontend.lo
 All 17 byte-identical characterized Jett sources pass formatting, along with
 Rust formatting and whitespace checks, in `target/native-json-inferred-slots-format.log`.
 
-The supplemental corpus now registers 406 tests. The focused gates do not
-substitute for a fresh complete frozen workspace and all four supported-host
-jobs for the final JSON revision. Parser eligibility remains unchanged; its
-independently characterized uninhabited-slot gap remains a separate follow-up.
+The accepted `05494ed4` revision registers and executes all 406 supplemental
+native tests, along with the complete workspace and all four supported-host
+jobs. The audit centralizes its exact results; these accepted serializer gates
+do not validate later source changes. The separately characterized parser gap
+and its pending repair are recorded in
+[the parser contract](native_json_uninhabited_parse_slots.md).
 
 The independent current machine checkpoint and predecessor workspace/platform
 evidence are in

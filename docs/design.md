@@ -3969,6 +3969,16 @@ impossible iteration or sum extraction is omitted. Carrier evaluation,
 ownership, pending-state errors and cleanup remain observable even when no
 payload can be read.
 
+Typed parsing preserves those inferred slots too. An empty array, absent
+optional, or supported arm of a one-sided result may decode into its otherwise
+admitted carrier. An input that tries to populate an uninhabited slot returns
+the existing reflected-decoder error, including its field, index or result-arm
+prefix; it cannot manufacture a Never payload. Raw JSON syntax, shape checks
+and parse_exact validation keep their ordinary order. The error-producing
+decoder still executes even though its success type is uninhabited. Checked
+source specialization supplies that behavior independently of optimization;
+ordinary pure-call folding cannot make an ill-typed decoder body valid.
+
 **Using auto-generated serialization:**
 
 ```

@@ -1964,9 +1964,9 @@ distinctions are recorded in
 
 The accepted a0bf12df workspace and all four supported-host jobs are recorded
 in [the acceptance audit](native_acceptance_audit.md#exact-qualified-machine-field-local-view-focused-acceptance).
-The `774b13e7` complete frozen workspace now passes, including all 392 native
-tests and 182 object obligations; its supported-host workflow remains in
-progress. Exact logs and acceptance boundaries are in the audit. This accepted
+The `774b13e7` complete frozen workspace passes, including all 392 native
+tests and 182 object obligations; all four supported-host jobs also pass.
+Exact logs and acceptance boundaries are in the audit. This accepted
 local revision predates the inferred JSON repair below.
 
 At that machine checkpoint the corpus registered 392 tests. The estimate
@@ -1997,5 +1997,31 @@ All 14 new driver tests pass together, covering the original carriers, pure
 native suites, public projection, grouped negative publication controls and
 owner rereads. The crossed compiler gate passes 948 library tests, followed
 by 83 driver library tests, all 598 frontend fixtures and 17 Jett format checks.
-The supplemental corpus registers 406 tests; a complete frozen workspace and
-all four supported-host jobs for the final JSON revision remain required.
+The serializer revision `05494ed4` passes its complete 406-test frozen native
+corpus, 182 object obligations, remaining workspace/doc-tests and all four
+supported-host jobs. Exact logs and counts are centralized in
+[the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
+
+### Inferred uninhabited JSON parser slots: separate selected repair
+
+The existing checked decoder returns an error when raw input tries to populate
+an inferred Never slot; empty/absent carriers and supported one-sided result
+arms still decode. The bounded source-selector repair preserves that slot and
+retains the error-producing result[Never, string] specialization, ordinary raw
+parse/exact validation and field/index/arm prefixes. It changes no public JSON
+domain, inferred default, body-validity rule, runtime representation or ABI.
+
+Actual pre-change source characterization covers eight direct and eight pipeline
+sources across four inferred shapes and both parse APIs, plus three recursive
+carrier sources with their actual field/key/index failure prefixes. All 19
+linked cases now pass together in both profiles after source removal; the
+crossed compiler gate passes 949 tests, followed by 83 driver library tests,
+all 598 frontend fixtures and all 19 new source format checks. The corpus
+registers 425 supplemental tests, separate from this executed focused gate.
+Current-head complete workspace/object and supported-host acceptance remain
+pending. The scoped
+evidence and acceptance requirements are in
+[the parser contract](native_json_uninhabited_parse_slots.md). This follow-up
+does not increase the broad about-85% estimate, change the fixed 207 inventory,
+or narrow the whole-language 100% objective. The bitfield alias candidate remains
+an independent later change.

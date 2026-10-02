@@ -1,0 +1,16 @@
+namespace app
+function inspect[T](view shape: optional[T], raw: string) returns string:
+    use json
+    optional[T] parsed = json.parse_exact[optional[T]](raw) handle error:
+        return "decode-error:{error}"
+    T occupied = parsed handle:
+        return "none"
+    return "some:{type.name[T]()}"
+function main(stdout: Stdout) returns nothing:
+    string valid = inspect(view none, "null")
+    Stdout.write(view stdout, "valid:{valid}\n")
+    string occupied = inspect(view none, "7")
+    Stdout.write(view stdout, "occupied:{occupied}\n")
+    string malformed = inspect(view none, "[")
+    Stdout.write(view stdout, "malformed:{malformed}\n")
+    return nothing

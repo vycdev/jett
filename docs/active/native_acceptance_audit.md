@@ -79,11 +79,11 @@ The following semantic and implementation gaps prevent a full parity claim:
   current checks admit some refinement/base requests with matching carriers and
   secrecy. Preserving the actual owner on an admitted interface read does not
   select the broader requested-type contract or authorize arbitrary nominal casts.
-- [Inferred uninhabited JSON slots](native_json_uninhabited_slots.md): the
-  characterized serializer selector omitted an already-admitted Never slot.
-  The applied source repair passes 14 linked/publication gates and the affected
-  compiler/frontend checks. Complete 406-test workspace and supported-host
-  acceptance remain required; parser eligibility is a separate open gap.
+- [Inferred uninhabited JSON parser slots](native_json_uninhabited_parse_slots.md):
+  public policy and actual reference execution admit empty/absent carriers and
+  return handled errors for occupied Never slots. The serializer repair is
+  accepted at `05494ed4`; the separate parser source-selector repair requires
+  its own full-stdlib, linked/compiler and release acceptance.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
@@ -1510,8 +1510,7 @@ workspace passes with unchanged source and exit zero at 17:12:39 UTC in
 seconds), all 182 object obligations (the four-test object manifest gate passes
 in 505.90 seconds), the remaining workspace targets and doc-tests. Its
 [workflow 37035818971](https://github.com/vycdev/jett/actions/runs/37035818971)
-was still in progress at this checkpoint; supported-host acceptance remains
-pending. Broader owner/endpoint
+now passes all four supported-host jobs. Broader owner/endpoint
 combinations and independent language surfaces remain audit obligations.
 
 The applied inferred JSON serializer repair passes 14 new linked/publication
@@ -1520,8 +1519,27 @@ tests, all 598 frontend fixtures, and 17 Jett format checks. Both profiles pin
 source-deleted execution, pending failure/cleanup, pure/comptime/verify/property,
 public policy and owner rereads. Its actual captures, exact logs and boundaries
 are centralized in [the scoped note](native_json_uninhabited_slots.md).
-The supplemental corpus registers 406 tests; a fresh complete workspace and
-all four supported-host jobs for the JSON revision remain required. The
-unchanged objective
+The serializer revision `05494ed4` passes its complete frozen workspace with
+unchanged source, clean start/end and exit zero at 18:03:56 UTC in
+`target/native-workspace-05494ed4.log` and its JSON summary: all 406 native tests
+(873.42 seconds), all 182 object obligations (four-test manifest gate, 508.07
+seconds), 83 driver library tests (65.72 seconds), all 598 frontend fixtures
+(20.69 seconds), remaining workspace targets and doc-tests. Its
+[workflow 37041625704](https://github.com/vycdev/jett/actions/runs/37041625704)
+passes all four Linux GNU/Windows MSVC build/package and clean installed-package
+jobs. These accepted serializer results do not validate subsequent parser or
+bitfield changes.
+
+The applied parser source-selector repair passes all 19 direct, pipeline and
+recursive linked tests together (14.08 seconds, 406 filtered), pinning actual
+valid, occupied-slot and malformed-input lines in both profiles after source
+removal. The metadata unit passes once; the crossed library gate passes 949
+tests, followed by 83 driver library tests, all 598 frontend fixtures and all
+19 new source format checks.
+The corpus now registers 425 supplemental tests. The current-head complete
+frozen workspace/object obligations and all four
+supported-host jobs remain pending; earlier serializer acceptance does not
+validate this revision. Exact source behavior, logs and remaining gates are in
+[the parser contract](native_json_uninhabited_parse_slots.md). The unchanged objective
 is whole-language native parity; the about-85% planning estimate and fixed
 207-fixture denominator do not measure completion of these focused slices.

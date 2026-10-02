@@ -3582,6 +3582,9 @@ impl<'a> TypeChecker<'a> {
             | Type::Uint64
             | Type::Float32
             | Type::Float64 => true,
+            // The checked unknown-kind decoder returns only a string error.
+            // Empty carriers retain their inferred uninhabited payload slot.
+            Type::Never => true,
             Type::List(element) => {
                 self.native_json_parse_source_supported_inner(*element, visiting)
             }
@@ -16255,6 +16258,125 @@ function selected_empty(view value: Empty) returns nothing:
         assert_eq!(selected[0].reflection.type_name, "app.Count");
         assert_eq!(selected[0].bound_type, TypeInterner::INT64);
         assert!(bindings_for("SelectedEmpty").is_empty());
+    }
+
+    #[test]
+    fn native_json_parsers_keep_inferred_uninhabited_source_targets() {
+        for parser in ["parse", "parse_exact"] {
+            for (shape, params, carrier, seed, expected_args) in [
+                ("list", "T", "list[T]", "list()", vec![TypeInterner::NEVER]),
+                (
+                    "optional",
+                    "T",
+                    "optional[T]",
+                    "none",
+                    vec![TypeInterner::NEVER],
+                ),
+                (
+                    "missing_error",
+                    "Value, Failure",
+                    "result[Value, Failure]",
+                    "ok(7)",
+                    vec![TypeInterner::INT64, TypeInterner::NEVER],
+                ),
+                (
+                    "missing_success",
+                    "Value, Failure",
+                    "result[Value, Failure]",
+                    "fail(\"seed\")",
+                    vec![TypeInterner::NEVER, TypeInterner::STRING],
+                ),
+            ] {
+                // Trusted facades isolate checked target identity; the
+                // actual stdlib/link gates must prove occupied Never decoding fails.
+                let source = format!(
+                    r#"namespace json
+export function parse[T](raw: string) returns result[T, string]:
+    return fail(raw)
+export function parse_exact[T](raw: string) returns result[T, string]:
+    return fail(raw)
+namespace app
+function direct[{params}](view shape: {carrier}, raw: string) returns string:
+    {carrier} payload = json.{parser}[{carrier}](raw) handle error:
+        return error
+    return "selected"
+function piped[{params}](view shape: {carrier}, raw: string) returns string:
+    {carrier} payload = raw into json.{parser}[{carrier}]() handle error:
+        return error
+    return "selected"
+function main() returns nothing:
+    string direct_value = direct(view {seed}, "null")
+    string pipeline_value = piped(view {seed}, "null")
+    return nothing
+"#
+                );
+                let parsed = parse(&source, FileId::new(STDLIB_FILE_ID_START));
+                assert!(
+                    parsed.errors.is_empty(),
+                    "{parser}, {shape}: {:?}",
+                    parsed.errors
+                );
+                let resolved = jett_resolve::resolve(&parsed.module);
+                assert!(
+                    resolved.diagnostics.iter().all(|diagnostic| {
+                        diagnostic.severity != jett_diagnostics::Severity::Error
+                    }),
+                    "{parser}, {shape}: {:?}",
+                    resolved.diagnostics
+                );
+                let checked = check(&parsed.module, &resolved);
+                assert!(
+                    checked.diagnostics.iter().all(|diagnostic| {
+                        diagnostic.severity != jett_diagnostics::Severity::Error
+                    }),
+                    "{parser}, {shape}: {:?}",
+                    checked.diagnostics
+                );
+                let mut names = Vec::new();
+                for instance in &checked.generic_function_instantiations {
+                    let name = resolved.scope_table.def(instance.definition).name.as_str();
+                    if !matches!(name, "app.direct" | "app.piped") {
+                        continue;
+                    }
+                    assert_eq!(
+                        instance.concrete_args, expected_args,
+                        "{parser}, {shape}, {name}"
+                    );
+                    let calls = instance
+                        .generic_calls
+                        .values()
+                        .filter(|call| {
+                            resolved.scope_table.def(call.definition).name
+                                == format!("json.{parser}")
+                        })
+                        .collect::<Vec<_>>();
+                    let [call] = calls.as_slice() else {
+                        panic!("one exact parser source target: {parser}, {shape}, {name}");
+                    };
+                    let [target] = call.concrete_args.as_slice() else {
+                        panic!("one parser type argument");
+                    };
+                    let children = match checked.interner.resolve(*target) {
+                        Type::List(inner) | Type::Optional(inner) => vec![*inner],
+                        Type::Result(ok, error) => vec![*ok, *error],
+                        _ => panic!("exact inferred carrier target"),
+                    };
+                    assert_eq!(children, expected_args, "{parser}, {shape}, {name}");
+                    assert_eq!(instance.parameter_types, [*target, TypeInterner::STRING]);
+                    assert_eq!(instance.return_type, TypeInterner::STRING);
+                    assert!(instance.intrinsic_ids.values().any(|id| {
+                        *id == if parser == "parse" {
+                            IntrinsicId::JsonParse
+                        } else {
+                            IntrinsicId::JsonParseExact
+                        }
+                    }));
+                    names.push(name);
+                }
+                names.sort_unstable();
+                assert_eq!(names, ["app.direct", "app.piped"], "{parser}, {shape}");
+            }
+        }
     }
 
     #[test]

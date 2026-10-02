@@ -87,6 +87,9 @@ mod json_qualified_machines;
 #[path = "native_conformance/json_inferred_slots.rs"]
 mod json_inferred_slots;
 
+#[path = "native_conformance/json_inferred_parse_slots.rs"]
+mod json_inferred_parse_slots;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

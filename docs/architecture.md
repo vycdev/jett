@@ -1397,9 +1397,21 @@ before normal native verification, independently of optimization.
 The selector repair, executed focused gates and remaining release gates are
 recorded in
 [the inferred JSON slot note](active/native_json_uninhabited_slots.md).
-Parser eligibility is a separate follow-up requiring actual empty/nonempty
-input and failure-order characterization; this serializer work does not
-change it.
+The separate parser eligibility repair retains `Type::Never` in otherwise
+supported inferred carriers. Checked reflection facts select the existing
+unknown-kind decoder, whose return type is inhabited `result[Never, string]`:
+it returns the ordinary unsupported-reflected-type error and must remain
+reachable. It does not construct Never, choose a default payload type, or
+replace the checked stdlib body with a native generic fallback. The ordinary
+array index loop still calls this decoder for occupied input; optional and
+result decoding skip only genuinely unoccupied payloads. Raw parsing, exact
+validation, field/index/arm prefixes, pending checks and cleanup retain their
+order. Existing uninhabited sum preparation may remove an impossible success
+extraction only after retaining the decoder call and sum observation. Checked
+TypeInfo/TypeKind argument facts select source branches; ordinary pure helper
+folding supplies no source-validity proof. Public JSON/key filters and inhabited
+unsupported targets are unchanged. Characterization and pending acceptance
+are recorded in [the parser contract](active/native_json_uninhabited_parse_slots.md).
 The checker also records a source parser facade for `json.parse[T]` and
 `json.parse_exact[T]` pipeline steps from the checked result's success type.
 It uses the existing direct-call facade mechanism after public JSON policy
