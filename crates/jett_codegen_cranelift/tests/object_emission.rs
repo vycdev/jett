@@ -2484,3 +2484,107 @@ function store_values(view source: Store, view field: TypeField) returns list[in
     let failure = jett_runtime::native_abi::values::NativeLeaf::RuntimeFailMessage.symbol();
     assert!(object.symbols().any(|s| s.name().ok() == Some(failure)));
 }
+
+const REFLECTED_VALUE_PIPELINES: &str = r#"namespace app
+struct Holder[T]:
+    value: T
+type Positive = int64 where value > 0
+enum Event:
+    empty = 17
+    content(text: string, values: list[optional[int64]])
+machine Session:
+    states:
+        empty
+        content(text: string, values: list[optional[int64]])
+    transitions:
+        empty to content
+function variant_pipe(view source: Event) returns TypeVariant:
+    TypeVariant selected = source into view type.variant_value[Event]()
+    return selected
+function state_pipe(view source: Session) returns TypeMachineState:
+    TypeMachineState selected = source into view type.machine_state_value[Session]()
+    return selected
+function narrowed_pipe(view source: Session at content) returns TypeMachineState:
+    TypeMachineState selected = source into view type.machine_state_value[Session at content]()
+    return selected
+function map_pipe(index: int64) returns TypeInfo:
+    TypeInfo selected = index into type.arg[map[string, list[optional[int64]]]]()
+    return selected
+function holder_pipe(index: int64) returns TypeInfo:
+    return index into type.arg[Holder[list[optional[int64]]]]()
+function refinement_pipe(index: int64) returns TypeInfo:
+    return index into type.arg[Positive]()
+function primitive_pipe(index: int64) returns TypeInfo:
+    return index into type.arg[int64]()
+"#;
+
+#[test]
+fn native_reflected_value_pipelines_emit_owned_metadata_and_existing_observation_guards() {
+    let (program, types) = lower_source(REFLECTED_VALUE_PIPELINES);
+    let artifact = emit_host_object(&program, &types).expect("checked reflected value pipelines");
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    for leaf in [
+        jett_runtime::native_abi::values::NativeLeaf::TypeArgCheckedIndex,
+        jett_runtime::native_abi::values::NativeLeaf::ReflectedOwnerPendingCheck,
+        jett_runtime::native_abi::values::NativeLeaf::StructClone,
+    ] {
+        assert!(
+            object
+                .symbols()
+                .any(|symbol| symbol.name().ok() == Some(leaf.symbol())),
+            "{} must retain its existing checked ownership/observation ABI",
+            leaf.symbol()
+        );
+    }
+}
+
+#[test]
+fn native_reflected_value_pipelines_reject_missing_and_wrong_typed_metadata() {
+    for name in ["variant_pipe", "state_pipe", "narrowed_pipe", "map_pipe"] {
+        for remove in [true, false] {
+            let (mut program, types) = lower_source(REFLECTED_VALUE_PIPELINES);
+            let function = program
+                .functions
+                .iter_mut()
+                .find(|f| f.identity.declaration.name == name)
+                .unwrap();
+            let value = function
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find_map(|statement| match &mut statement.kind {
+                    jett_mir::StatementKind::Let { value, .. }
+                        if matches!(value.kind, jett_hir::ExpressionKind::Intrinsic { .. }) =>
+                    {
+                        Some(value)
+                    }
+                    _ => None,
+                })
+                .expect("lowered observer initializer");
+            let jett_hir::ExpressionKind::Intrinsic {
+                args,
+                evaluation_order,
+                ..
+            } = &mut value.kind
+            else {
+                panic!("observer intrinsic");
+            };
+            assert!(args.len() > 1, "{name}: checked hidden metadata");
+            if remove {
+                args.pop();
+                evaluation_order.pop();
+            } else {
+                let metadata = args.last_mut().unwrap();
+                metadata.kind = jett_hir::ExpressionKind::Bool(false);
+                metadata.ty = TypeInterner::BOOL;
+            }
+            let rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                emit_host_object(&program, &types)
+            }));
+            assert!(
+                matches!(rejection, Ok(Err(CodegenError::InvalidMirContract { .. }))),
+                "{name}, remove={remove}: malformed metadata must be rejected without panicking: {rejection:?}"
+            );
+        }
+    }
+}

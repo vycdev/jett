@@ -605,6 +605,11 @@ value-free refusals without broadening requested-type admission.
 Direct and piped getters append the same checked field metadata in declaration,
 variant, or state order after the original source/selector evaluation order.
 Narrowed machine owners keep their checked identity and base metadata spelling.
+The admitted one-operand observers `type.variant_value`,
+`type.machine_state_value`, and `type.arg` now share direct/pipeline metadata
+expansion too. Their checked output type selects metadata carrier types after
+the original operand runs once. Existing pending/index checks and independently
+owned metadata clones use the same runtime leaves, with no ABI addition.
 
 ## Result and optional ownership and handlers
 

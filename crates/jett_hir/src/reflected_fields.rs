@@ -343,6 +343,94 @@ pub fn validate_reflected_field_plans(
 }
 
 impl BodyLowerer<'_, '_> {
+    /// Reflected value observers use compiler metadata after their one source
+    /// operand. A pipeline result type comes from its checked step signature;
+    /// the step span itself describes the input, so never infer this from it.
+    pub(super) fn append_reflected_value_arguments(
+        &mut self,
+        intrinsic: IntrinsicId,
+        type_arguments: &[TypeId],
+        reflection_arguments: &[ReflectionTypeInfo],
+        args: &mut Vec<Expression>,
+        evaluation_order: &mut Vec<usize>,
+        result_type: Option<TypeId>,
+        span: Span,
+    ) -> Option<()> {
+        if type_arguments.len() != 1 || args.len() != 1 {
+            return Some(());
+        }
+        let Some(info) = reflection_arguments.first() else {
+            return Some(());
+        };
+        let selected = match intrinsic {
+            IntrinsicId::TypeVariantValue => info.kind == "enum",
+            IntrinsicId::TypeMachineStateValue => {
+                matches!(info.kind.as_str(), "machine" | "machine_state")
+            }
+            IntrinsicId::TypeArg => reflection_arguments.len() == 1,
+            _ => false,
+        };
+        if !selected {
+            return Some(());
+        }
+        let result_type = result_type?;
+        let values: Vec<ExpressionKind> = match intrinsic {
+            IntrinsicId::TypeVariantValue => {
+                let Some(variants) = self
+                    .parent
+                    .check
+                    .reflection_metadata
+                    .get_type_variants_for_id(type_arguments[0])
+                    .map(<[_]>::to_vec)
+                else {
+                    self.parent
+                        .error(span, "type.variant_value has no checked variant metadata");
+                    return None;
+                };
+                variants
+                    .iter()
+                    .map(|variant| {
+                        self.lower_reflection_type_variant(
+                            variant,
+                            &info.type_name,
+                            result_type,
+                            span,
+                        )
+                    })
+                    .collect::<Option<_>>()?
+            }
+            IntrinsicId::TypeMachineStateValue => {
+                let machine = self.checked_reflection_machine(type_arguments[0], span)?;
+                let owner_name = info
+                    .type_name
+                    .split_once(" at ")
+                    .map_or(info.type_name.as_str(), |(base, _)| base);
+                machine
+                    .states
+                    .iter()
+                    .map(|state| {
+                        self.lower_reflection_machine_state(state, owner_name, result_type, span)
+                    })
+                    .collect::<Option<_>>()?
+            }
+            IntrinsicId::TypeArg => info
+                .args
+                .iter()
+                .map(|arg| self.lower_reflection_type_info(arg, result_type, span))
+                .collect::<Option<_>>()?,
+            _ => return Some(()),
+        };
+        for kind in values {
+            evaluation_order.push(args.len());
+            args.push(Expression {
+                kind,
+                ty: result_type,
+                span,
+            });
+        }
+        Some(())
+    }
+
     /// Direct and piped getters share the same compiler-owned metadata tail.
     /// User operands keep their checked source order and run before this tail.
     pub(super) fn append_reflected_read_arguments(
@@ -1111,5 +1199,342 @@ function pipeline_operands(view value: Record, view field: TypeField) returns in
             panic!("requested checked result");
         };
         assert_eq!(name, "app.Higher");
+    }
+
+    const VALUE_OBSERVERS: &str = r#"namespace app
+struct Holder[T]:
+    value: T
+type Positive = int64 where value > 0
+enum Event:
+    empty = 17
+    content(text: string, values: list[optional[int64]])
+machine Session:
+    states:
+        empty
+        content(text: string, values: list[optional[int64]])
+    transitions:
+        empty to content
+function variant_direct(view source: Event) returns TypeVariant:
+    return type.variant_value[Event](view source)
+function variant_pipe(view source: Event) returns TypeVariant:
+    return source into view type.variant_value[Event]()
+function state_direct(view source: Session) returns TypeMachineState:
+    return type.machine_state_value[Session](view source)
+function state_pipe(view source: Session) returns TypeMachineState:
+    return source into view type.machine_state_value[Session]()
+function narrowed_direct(view source: Session at content) returns TypeMachineState:
+    return type.machine_state_value[Session at content](view source)
+function narrowed_pipe(view source: Session at content) returns TypeMachineState:
+    return source into view type.machine_state_value[Session at content]()
+function map_direct(index: int64) returns TypeInfo:
+    return type.arg[map[string, list[optional[int64]]]](index)
+function map_pipe(index: int64) returns TypeInfo:
+    return index into type.arg[map[string, list[optional[int64]]]]()
+function holder_direct(index: int64) returns TypeInfo:
+    return type.arg[Holder[list[optional[int64]]]](index)
+function holder_pipe(index: int64) returns TypeInfo:
+    return index into type.arg[Holder[list[optional[int64]]]]()
+function refinement_direct(index: int64) returns TypeInfo:
+    return type.arg[Positive](index)
+function refinement_pipe(index: int64) returns TypeInfo:
+    return index into type.arg[Positive]()
+function primitive_direct(index: int64) returns TypeInfo:
+    return type.arg[int64](index)
+function primitive_pipe(index: int64) returns TypeInfo:
+    return index into type.arg[int64]()
+"#;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum MetadataKind {
+        Int(i128),
+        String(String),
+        Bool(bool),
+        Struct(TypeId, Vec<MetadataValue>),
+        Enum(TypeId, VariantId, Vec<MetadataValue>),
+        List(Vec<MetadataValue>),
+        Some(Box<MetadataValue>),
+        None,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct MetadataValue {
+        ty: TypeId,
+        kind: MetadataKind,
+    }
+
+    // Compare complete recursive metadata without source spans. In particular,
+    // this catches an input type being substituted for a pipeline result type.
+    fn metadata_value(value: &Expression) -> MetadataValue {
+        let kind = match &value.kind {
+            ExpressionKind::Int(value) => MetadataKind::Int(*value),
+            ExpressionKind::String(value) => MetadataKind::String(value.clone()),
+            ExpressionKind::Bool(value) => MetadataKind::Bool(*value),
+            ExpressionKind::StructConstruct {
+                struct_type,
+                fields,
+                evaluation_order,
+                validates_refinements,
+                refinement_predicates,
+            } => {
+                assert!(!validates_refinements);
+                assert!(refinement_predicates.is_empty());
+                assert_eq!(*evaluation_order, (0..fields.len()).collect::<Vec<_>>());
+                MetadataKind::Struct(*struct_type, fields.iter().map(metadata_value).collect())
+            }
+            ExpressionKind::EnumConstruct {
+                enum_type,
+                variant,
+                payloads,
+                evaluation_order,
+            } => {
+                assert_eq!(*evaluation_order, (0..payloads.len()).collect::<Vec<_>>());
+                MetadataKind::Enum(
+                    *enum_type,
+                    *variant,
+                    payloads.iter().map(metadata_value).collect(),
+                )
+            }
+            ExpressionKind::ListConstruct { elements } => {
+                MetadataKind::List(elements.iter().map(metadata_value).collect())
+            }
+            ExpressionKind::OptionalSome(value) => {
+                MetadataKind::Some(Box::new(metadata_value(value)))
+            }
+            ExpressionKind::OptionalNone => MetadataKind::None,
+            other => panic!("non-metadata expression: {other:?}"),
+        };
+        MetadataValue { ty: value.ty, kind }
+    }
+
+    fn metadata_fields(value: &Expression) -> &[Expression] {
+        let ExpressionKind::StructConstruct { fields, .. } = &value.kind else {
+            panic!("checked metadata struct");
+        };
+        fields
+    }
+
+    fn metadata_text(value: &Expression) -> &str {
+        let ExpressionKind::String(value) = &value.kind else {
+            panic!("checked metadata text");
+        };
+        value
+    }
+
+    fn assert_value_metadata_parity(program: &Program, direct: &str, pipe: &str, count: usize) {
+        let direct = returned_read(program, direct);
+        let pipe = returned_read(program, pipe);
+        let ExpressionKind::Intrinsic {
+            intrinsic: direct_id,
+            type_arguments: direct_types,
+            reflection_arguments: direct_reflection,
+            args: direct_args,
+            field_validation: None,
+            ..
+        } = &direct.kind
+        else {
+            panic!("direct value observer");
+        };
+        let ExpressionKind::Intrinsic {
+            intrinsic,
+            type_arguments,
+            reflection_arguments,
+            args,
+            evaluation_order,
+            field_validation: None,
+            ..
+        } = &pipe.kind
+        else {
+            panic!("pipeline value observer");
+        };
+        assert_eq!(pipe.ty, direct.ty);
+        assert_eq!(intrinsic, direct_id);
+        assert_eq!(type_arguments, direct_types);
+        assert_eq!(reflection_arguments, direct_reflection);
+        assert_eq!(args[0].ty, direct_args[0].ty);
+        assert_eq!(args.len(), count + 1);
+        assert_eq!(*evaluation_order, (0..args.len()).collect::<Vec<_>>());
+        assert!(args[1..].iter().all(|arg| arg.ty == pipe.ty));
+        assert_eq!(
+            args[1..].iter().map(metadata_value).collect::<Vec<_>>(),
+            direct_args[1..]
+                .iter()
+                .map(metadata_value)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn native_reflected_value_pipelines_match_complete_direct_metadata() {
+        let (program, types) = lower_source_text(VALUE_OBSERVERS);
+        validate(&program).unwrap();
+        validate_backend_types(&program, &types).unwrap();
+        for (direct, pipe, count) in [
+            ("variant_direct", "variant_pipe", 2),
+            ("state_direct", "state_pipe", 2),
+            ("narrowed_direct", "narrowed_pipe", 2),
+            ("map_direct", "map_pipe", 2),
+            ("holder_direct", "holder_pipe", 1),
+            ("refinement_direct", "refinement_pipe", 1),
+            ("primitive_direct", "primitive_pipe", 0),
+        ] {
+            assert_value_metadata_parity(&program, direct, pipe, count);
+        }
+        for (name, expected) in [
+            ("map_pipe", vec!["string", "list[optional[int64]]"]),
+            ("holder_pipe", vec!["list[optional[int64]]"]),
+            ("refinement_pipe", vec!["int64"]),
+        ] {
+            let ExpressionKind::Intrinsic { args, .. } = &returned_read(&program, name).kind else {
+                panic!("type.arg");
+            };
+            assert_eq!(
+                args[1..]
+                    .iter()
+                    .map(|arg| metadata_text(&metadata_fields(arg)[0]))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn native_reflected_value_pipeline_metadata_keeps_owner_members_and_all_narrowed_states() {
+        let (program, types) = lower_source_text(VALUE_OBSERVERS);
+        for (name, owner, fields_index) in [
+            ("variant_pipe", "app.Event", 5),
+            ("state_pipe", "app.Session", 4),
+            ("narrowed_pipe", "app.Session", 4),
+        ] {
+            let ExpressionKind::Intrinsic {
+                type_arguments,
+                args,
+                ..
+            } = &returned_read(&program, name).kind
+            else {
+                panic!("value observer");
+            };
+            if name == "narrowed_pipe" {
+                assert!(matches!(
+                    types.resolve(type_arguments[0]),
+                    Type::MachineState { .. }
+                ));
+                assert_eq!(args[0].ty, type_arguments[0]);
+            }
+            for (index, (metadata, member)) in
+                args[1..].iter().zip(["empty", "content"]).enumerate()
+            {
+                let fields = metadata_fields(metadata);
+                assert!(
+                    matches!(fields[0].kind, ExpressionKind::Int(actual) if actual == index as i128)
+                );
+                assert_eq!(metadata_text(&fields[1]), owner);
+                assert_eq!(metadata_text(&fields[2]), member);
+                if name == "variant_pipe" {
+                    assert!(
+                        matches!(fields[3].kind, ExpressionKind::Int(actual) if actual == 17 + index as i128)
+                    );
+                }
+                let ExpressionKind::ListConstruct { elements } = &fields[fields_index].kind else {
+                    panic!("payload TypeField list");
+                };
+                assert_eq!(elements.len(), index * 2);
+                for (field_index, (field, field_name)) in
+                    elements.iter().zip(["text", "values"]).enumerate()
+                {
+                    let slots = metadata_fields(field);
+                    assert!(
+                        matches!(slots[0].kind, ExpressionKind::Int(actual) if actual == field_index as i128)
+                    );
+                    assert_eq!(metadata_text(&slots[1]), owner);
+                    let ExpressionKind::OptionalSome(actual_member) = &slots[2].kind else {
+                        panic!("declared owner member");
+                    };
+                    assert_eq!(metadata_text(actual_member), member);
+                    assert_eq!(metadata_text(&slots[3]), field_name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_reflected_value_pipeline_stages_one_operand_and_feeds_the_next_call() {
+        let source = format!(
+            "{VALUE_OBSERVERS}{}",
+            r#"
+function source_operand(view source: Event) returns Event:
+    return clone source
+function state_operand(view source: Session at content) returns Session at content:
+    return clone source
+function index_operand(index: int64) returns int64:
+    return index
+function consume_variant(value: TypeVariant) returns string:
+    return value.name
+function consume_state(value: TypeMachineState) returns string:
+    return value.name
+function consume_info(value: TypeInfo) returns string:
+    return value.type_name
+function variant_order(view source: Event) returns string:
+    return source_operand(view source) into view type.variant_value[Event]() into consume_variant
+function state_order(view source: Session at content) returns string:
+    return state_operand(view source) into view type.machine_state_value[Session at content]() into consume_state
+function arg_order(index: int64) returns string:
+    return index_operand(index) into type.arg[map[string, list[optional[int64]]]]() into consume_info
+"#
+        );
+        let (program, types) = lower_source_text(&source);
+        validate(&program).unwrap();
+        validate_backend_types(&program, &types).unwrap();
+        for (name, producer, consumer, borrowed) in [
+            ("variant_order", "source_operand", "consume_variant", true),
+            ("state_order", "state_operand", "consume_state", true),
+            ("arg_order", "index_operand", "consume_info", false),
+        ] {
+            let ExpressionKind::Call {
+                function,
+                args,
+                evaluation_order,
+            } = &returned_read(&program, name).kind
+            else {
+                panic!("following call");
+            };
+            assert_eq!(
+                program.functions[function.index() as usize]
+                    .identity
+                    .declaration
+                    .name,
+                consumer
+            );
+            assert_eq!(evaluation_order, &[0]);
+            let ExpressionKind::Intrinsic {
+                args,
+                evaluation_order,
+                ..
+            } = &args[0].kind
+            else {
+                panic!("observed pipeline input");
+            };
+            assert_eq!(*evaluation_order, (0..args.len()).collect::<Vec<_>>());
+            let input = if borrowed {
+                let ExpressionKind::View(value) = &args[0].kind else {
+                    panic!("borrowed source temporary");
+                };
+                value.as_ref()
+            } else {
+                &args[0]
+            };
+            let ExpressionKind::Call { function, .. } = &input.kind else {
+                panic!("one source operand call");
+            };
+            assert_eq!(
+                program.functions[function.index() as usize]
+                    .identity
+                    .declaration
+                    .name,
+                producer
+            );
+            for metadata in &args[1..] {
+                metadata_value(metadata);
+            }
+        }
     }
 }

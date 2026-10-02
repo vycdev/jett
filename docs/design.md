@@ -7879,6 +7879,12 @@ Reflected type bindings preserve supported finite nested type arguments and
 alias identities at runtime. Native dispatch must not reject a checked type
 solely because its metadata exceeds a backend traversal depth limit.
 
+Direct calls and admitted pipeline forms of `type.variant_value`,
+`type.machine_state_value`, and `type.arg` return the same checked metadata.
+Their source operand is evaluated once before observation. Pipeline results use
+the observer's checked output type and retain the ordinary pending and index
+checks, source ownership, and complete owner layout.
+
 Generic casts may be justified only by reflection evidence that stays visibly
 tied to the reflected type. Direct `TypeKind` / `TypePrimitive` comparisons,
 immutable locals carrying those tags, typed helper parameters receiving them

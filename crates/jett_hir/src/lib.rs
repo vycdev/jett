@@ -4333,43 +4333,6 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                     _ => unreachable!(),
                 };
             }
-            if intrinsic == IntrinsicId::TypeVariantValue
-                && type_arguments.len() == 1
-                && lowered_args.len() == 1
-                && reflection_arguments
-                    .first()
-                    .is_some_and(|info| info.kind == "enum")
-            {
-                let result_ty = self.expression_types.get(&call_span).copied()?;
-                let info = &reflection_arguments[0];
-                let variants = self
-                    .parent
-                    .check
-                    .reflection_metadata
-                    .get_type_variants_for_id(type_arguments[0])
-                    .map(<[_]>::to_vec);
-                let Some(variants) = variants else {
-                    self.parent.error(
-                        call_span,
-                        "type.variant_value has no checked variant metadata",
-                    );
-                    return None;
-                };
-                for variant in &variants {
-                    let kind = self.lower_reflection_type_variant(
-                        variant,
-                        &info.type_name,
-                        result_ty,
-                        call_span,
-                    )?;
-                    evaluation_order.push(lowered_args.len());
-                    lowered_args.push(Expression {
-                        kind,
-                        ty: result_ty,
-                        span: call_span,
-                    });
-                }
-            }
             if intrinsic == IntrinsicId::TypeConstructStart
                 && type_arguments.len() == 1
                 && reflection_arguments
@@ -4426,46 +4389,15 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         .flat_map(|state| state.fields.iter().map(|field| field.type_info.clone())),
                 );
             }
-            if intrinsic == IntrinsicId::TypeMachineStateValue
-                && type_arguments.len() == 1
-                && lowered_args.len() == 1
-                && reflection_arguments
-                    .first()
-                    .is_some_and(|info| matches!(info.kind.as_str(), "machine" | "machine_state"))
-            {
-                let result_ty = self.expression_types.get(&call_span).copied()?;
-                let machine = self.checked_reflection_machine(type_arguments[0], call_span)?;
-                let owner_name = reflection_arguments[0]
-                    .type_name
-                    .split_once(" at ")
-                    .map_or(reflection_arguments[0].type_name.as_str(), |(base, _)| base);
-                for state in &machine.states {
-                    let kind = self
-                        .lower_reflection_machine_state(state, owner_name, result_ty, call_span)?;
-                    evaluation_order.push(lowered_args.len());
-                    lowered_args.push(Expression {
-                        kind,
-                        ty: result_ty,
-                        span: call_span,
-                    });
-                }
-            }
-            if intrinsic == IntrinsicId::TypeArg
-                && type_arguments.len() == 1
-                && lowered_args.len() == 1
-                && reflection_arguments.len() == 1
-            {
-                let result_ty = self.expression_types.get(&call_span).copied()?;
-                for arg_info in &reflection_arguments[0].args {
-                    let kind = self.lower_reflection_type_info(arg_info, result_ty, call_span)?;
-                    evaluation_order.push(lowered_args.len());
-                    lowered_args.push(Expression {
-                        kind,
-                        ty: result_ty,
-                        span: call_span,
-                    });
-                }
-            }
+            self.append_reflected_value_arguments(
+                intrinsic,
+                &type_arguments,
+                &reflection_arguments,
+                &mut lowered_args,
+                &mut evaluation_order,
+                self.expression_types.get(&call_span).copied(),
+                call_span,
+            )?;
             self.append_reflected_read_arguments(
                 intrinsic,
                 &type_arguments,
@@ -6297,6 +6229,15 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 .get(&step.span)
                 .cloned()
                 .unwrap_or_default();
+            self.append_reflected_value_arguments(
+                intrinsic,
+                &type_arguments,
+                &reflection_arguments,
+                &mut args,
+                &mut evaluation_order,
+                Some(output_type),
+                step.span,
+            )?;
             self.append_reflected_read_arguments(
                 intrinsic,
                 &type_arguments,

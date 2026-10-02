@@ -1038,8 +1038,9 @@ operand staging, closed comptime, verify, and 100-trial property execution.
 The pipeline helper shares the direct getter's metadata expansion, preserving
 source/selector order, complete slot plans, bitfields, and narrowed machine owners.
 Native conformance now has 301 supplemental tests; the fixed inventory denominator
-is unchanged. New native nested-container invariants and metadata expansion for
-other admitted reflection pipeline forms remain concrete implementation gaps.
+is unchanged. New native nested-container invariants remain concrete
+implementation gaps. The other admitted one-operand reflection pipeline forms
+are covered by the later checkpoint below.
 Final workspace and supported-host distribution gates still require verification.
 
 The locked Windows workspace run at `52bd4dcb` passed every target and doc-test
@@ -1093,6 +1094,24 @@ passed both workspace/build/package jobs and both clean installed jobs. The
 [run for `f8e70722`](https://github.com/vycdev/jett/actions/runs/36975813263)
 is still in progress; the earlier repair's distribution evidence does not certify
 the later reflected producer changes.
+
+The admitted one-operand observers `type.variant_value`,
+`type.machine_state_value`, and `type.arg` now append their existing checked
+metadata through a shared direct/pipeline HIR helper. Pipeline result signatures
+select metadata types; the step span describes the input. Source operands run
+first and once. Variant ordinals remain distinct from discriminants, and narrowed
+machines retain the complete base layout. Admission, runtime ABI, pending/index
+checks, and ownership semantics are unchanged.
+
+Five focused HIR/object tests, all 227 HIR/MIR/codegen library tests, and all
+57 object-emission tests pass. Three linked regressions pass through direct and
+pipeline forms in debug and release after source removal, covering exact metadata,
+independent field ownership, operand/consumer order, nine terminal errors, closed
+comptime, compiled verify, and 100-trial property execution. The fixtures use
+ordinary return factories to keep a separate whole-machine reassignment defect
+outside these observer tests. Native conformance now has 304 supplemental tests;
+the fixed inventory denominator is unchanged. Full workspace and supported-host
+distribution validation remain obligations for this later revision.
 
 The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).

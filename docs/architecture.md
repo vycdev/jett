@@ -1037,6 +1037,12 @@ Native root-refinement reads carry complete per-declared-slot validation plans
 in HIR. Direct and piped getters share the canonical hidden field-metadata tail,
 appended after the original source and selector operands. Narrowed machines keep
 their checked state identity while metadata uses the complete machine layout.
+The one-operand observers `type.variant_value`, `type.machine_state_value`, and
+`type.arg` likewise share their direct/pipeline metadata expansion. User operands
+run first; the checked pipeline output type selects each hidden metadata value's
+type, because the pipeline step span describes its input. Variant ordinals and
+discriminants remain distinct, and narrowed machine observations retain all base
+states. Existing runtime observation and cleanup leaves consume the same metadata.
 MIR stages the original operands, completes the existing raw getter
 checks first, and validates only the selected slot's unproven predicate suffix.
 Predicate identities must match the exact canonical refinement declaration.

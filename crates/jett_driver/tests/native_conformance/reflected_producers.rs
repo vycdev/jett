@@ -743,3 +743,355 @@ fn native_reflected_root_refinement_failures_preserve_selector_precedence_and_cl
 // name, or declared type. Corrupt-plan coverage belongs in HIR/MIR tests.
 // These linked cases preserve the original compatibility admission domain;
 // changed nested-container requests remain outside the native parity claim.
+
+const REFLECTED_VALUE_OBSERVERS: &str = r#"namespace app
+struct Holder[T]:
+    value: T
+type Positive = int64 where value > 0
+type NumberList = list[int64]
+enum Event:
+    empty = 17
+    content(text: string, values: list[optional[int64]])
+machine Session:
+    states:
+        empty
+        content(text: string, values: list[optional[int64]])
+    transitions:
+        empty to content
+function field_summary(view fields: list[TypeField]) returns string:
+    mutable list[string] parts = list.new[string]()
+    for field in view fields:
+        string member = clone field.owner_member handle:
+            default "none"
+        string part = "{field.index}:{field.owner_type}.{member}:{field.name}:{field.type_info.type_name}"
+        parts = list.append[string](parts, part)
+    return string.join(parts, ";")
+function variant_summary(value: TypeVariant) returns string:
+    string fields = field_summary(view value.fields)
+    return "{value.index}:{value.owner_type}:{value.name}:{value.discriminant}:{value.has_secret}:[{fields}]"
+function state_summary(value: TypeMachineState) returns string:
+    string fields = field_summary(view value.fields)
+    return "{value.index}:{value.owner_type}:{value.name}:{value.has_secret}:[{fields}]"
+function info_summary(value: TypeInfo) returns string:
+    int64 count = list.length[TypeInfo](view value.args)
+    return "{value.type_name}:{value.kind}:{value.has_secret}:{count}"
+function variant_report(view source: Event) returns string:
+    TypeVariant first = type.variant_value[Event](view source)
+    list[TypeField] consumed = first.fields
+    int64 count = list.length[TypeField](view consumed)
+    TypeVariant second = type.variant_value[Event](view source)
+    return "{count}|{variant_summary(second)}"
+function state_report(view source: Session) returns string:
+    TypeMachineState first = type.machine_state_value[Session](view source)
+    list[TypeField] consumed = first.fields
+    int64 count = list.length[TypeField](view consumed)
+    TypeMachineState second = type.machine_state_value[Session](view source)
+    return "{count}|{state_summary(second)}"
+function narrowed_report(view source: Session at content) returns string:
+    TypeMachineState selected = type.machine_state_value[Session at content](view source)
+    return state_summary(selected)
+function map_report(index: int64) returns string:
+    TypeInfo selected = type.arg[map[string, list[optional[int64]]]](index)
+    return info_summary(selected)
+function holder_report(index: int64) returns string:
+    TypeInfo selected = type.arg[Holder[list[optional[int64]]]](index)
+    return info_summary(selected)
+function refinement_report(index: int64) returns string:
+    TypeInfo selected = type.arg[Positive](index)
+    return info_summary(selected)
+function report_event(filled: bool) returns Event:
+    if filled:
+        return Event.content("owned", list(some(7), none))
+    return Event.empty
+function report_session(filled: bool) returns Session:
+    if filled:
+        return Session(content, "owned", list(some(7), none))
+    return Session(empty)
+function report(filled: bool) returns string:
+    Event event = report_event(filled)
+    Session session = report_session(filled)
+    string variant = variant_report(view event)
+    string state = state_report(view session)
+    return "{variant}|{state}|{map_report(0)}|{map_report(1)}|{holder_report(0)}|{refinement_report(0)}"
+function narrowed_ready() returns string:
+    Session at content source = Session(content, "owned", list(some(7), none))
+    return narrowed_report(view source)
+function event_operand(view stdout: Stdout, view source: Event) returns Event:
+    Stdout.write(view stdout, "event operand\n")
+    return clone source
+function state_operand(view stdout: Stdout, view source: Session at content) returns Session at content:
+    Stdout.write(view stdout, "state operand\n")
+    return clone source
+function index_operand(view stdout: Stdout, index: int64) returns int64:
+    Stdout.write(view stdout, "index operand\n")
+    return index
+function consume_variant(value: TypeVariant, view stdout: Stdout) returns string:
+    Stdout.write(view stdout, "variant consumer\n")
+    return value.name
+function consume_state(value: TypeMachineState, view stdout: Stdout) returns string:
+    Stdout.write(view stdout, "state consumer\n")
+    return value.name
+function consume_info(value: TypeInfo, view stdout: Stdout) returns string:
+    Stdout.write(view stdout, "info consumer\n")
+    return value.type_name
+function operand_report(view stdout: Stdout) returns string:
+    Event source = Event.content("owned", list(some(7), none))
+    Session at content session = Session(content, "owned", list(some(7), none))
+    string variant = type.variant_value[Event](view event_operand(view stdout, view source)) into consume_variant(view stdout)
+    string state = type.machine_state_value[Session at content](view state_operand(view stdout, view session)) into consume_state(view stdout)
+    string info = type.arg[map[string, list[optional[int64]]]](index_operand(view stdout, 1)) into consume_info(view stdout)
+    return "{variant}:{state}:{info}|{variant_report(view source)}|{narrowed_report(view session)}"
+"#;
+
+const VALUE_EMPTY: &str = concat!(
+    "0|0:app.Event:empty:17:false:[]|0|0:app.Session:empty:false:[]|",
+    "string:primitive:false:0|list[optional[int64]]:list:false:1|",
+    "list[optional[int64]]:list:false:1|int64:primitive:false:0"
+);
+const VALUE_FIELDS_EVENT: &str = concat!(
+    "0:app.Event.content:text:string;",
+    "1:app.Event.content:values:list[optional[int64]]"
+);
+const VALUE_FIELDS_STATE: &str = concat!(
+    "0:app.Session.content:text:string;",
+    "1:app.Session.content:values:list[optional[int64]]"
+);
+
+fn value_content() -> String {
+    format!(
+        "2|1:app.Event:content:18:false:[{VALUE_FIELDS_EVENT}]|2|1:app.Session:content:false:[{VALUE_FIELDS_STATE}]|string:primitive:false:0|list[optional[int64]]:list:false:1|list[optional[int64]]:list:false:1|int64:primitive:false:0"
+    )
+}
+
+fn value_narrowed() -> String {
+    format!("1:app.Session:content:false:[{VALUE_FIELDS_STATE}]")
+}
+
+fn piped_value_observers(text: &str) -> String {
+    let mut piped = text.to_owned();
+    for (direct, pipeline) in [
+        (
+            "type.variant_value[Event](view source)",
+            "source into view type.variant_value[Event]()",
+        ),
+        (
+            "type.machine_state_value[Session](view source)",
+            "source into view type.machine_state_value[Session]()",
+        ),
+        (
+            "type.machine_state_value[Session at content](view source)",
+            "source into view type.machine_state_value[Session at content]()",
+        ),
+        (
+            "type.arg[map[string, list[optional[int64]]]](index)",
+            "index into type.arg[map[string, list[optional[int64]]]]()",
+        ),
+        (
+            "type.arg[Holder[list[optional[int64]]]](index)",
+            "index into type.arg[Holder[list[optional[int64]]]]()",
+        ),
+        (
+            "type.arg[Positive](index)",
+            "index into type.arg[Positive]()",
+        ),
+        (
+            "type.variant_value[Event](view event_operand(view stdout, view source))",
+            "event_operand(view stdout, view source) into view type.variant_value[Event]()",
+        ),
+        (
+            "type.machine_state_value[Session at content](view state_operand(view stdout, view session))",
+            "state_operand(view stdout, view session) into view type.machine_state_value[Session at content]()",
+        ),
+        (
+            "type.arg[map[string, list[optional[int64]]]](index_operand(view stdout, 1))",
+            "index_operand(view stdout, 1) into type.arg[map[string, list[optional[int64]]]]()",
+        ),
+        (
+            "type.variant_value[Event](view paused)",
+            "paused into view type.variant_value[Event]()",
+        ),
+        (
+            "type.machine_state_value[Session](view paused)",
+            "paused into view type.machine_state_value[Session]()",
+        ),
+        (
+            "type.machine_state_value[Session at empty](view paused)",
+            "paused into view type.machine_state_value[Session at empty]()",
+        ),
+    ] {
+        piped = piped.replace(direct, pipeline);
+    }
+    for ty in ["list[int64]", "map[string, int64]", "NumberList", "int64"] {
+        piped = piped.replace(
+            &format!("type.arg[{ty}](index_operand(view stdout, index))"),
+            &format!("index_operand(view stdout, index) into type.arg[{ty}]()"),
+        );
+    }
+    piped
+}
+
+fn run_value_observer_case(
+    name: &str,
+    source: &str,
+    stdout: &str,
+    message: Option<&str>,
+    suites: bool,
+) {
+    run_reflected_form(name, source, stdout, message, &[], suites);
+    let piped = piped_value_observers(source);
+    assert_ne!(
+        piped, source,
+        "{name}: fixture must exercise an observer pipeline"
+    );
+    run_reflected_form(
+        &format!("{name}_pipeline"),
+        &piped,
+        stdout,
+        message,
+        &[],
+        suites,
+    );
+}
+
+#[test]
+fn native_reflected_value_observer_pipelines_preserve_metadata_ownership_and_operand_order() {
+    let source = format!(
+        "{REFLECTED_VALUE_OBSERVERS}{}",
+        r#"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "empty:{report(false)}\ncontent:{report(true)}\nnarrowed:{narrowed_ready()}\n")
+    Stdout.write(view stdout, "operands\n")
+    string observed = operand_report(view stdout)
+    Stdout.write(view stdout, "observed:{observed}\n")
+"#
+    );
+    let stdout = format!(
+        "empty:{VALUE_EMPTY}\ncontent:{}\nnarrowed:{}\noperands\nevent operand\nvariant consumer\nstate operand\nstate consumer\nindex operand\ninfo consumer\nobserved:content:content:list[optional[int64]]|2|1:app.Event:content:18:false:[{VALUE_FIELDS_EVENT}]|{}\n",
+        value_content(),
+        value_narrowed(),
+        value_narrowed()
+    );
+    run_value_observer_case("reflected_value_observers", &source, &stdout, None, false);
+}
+
+#[test]
+fn native_reflected_value_observer_pipelines_support_closed_comptime_and_native_suites() {
+    let (pure, _) = REFLECTED_VALUE_OBSERVERS
+        .split_once("function event_operand(")
+        .unwrap();
+    let source = format!(
+        "{pure}{}",
+        r#"
+function main(stdout: Stdout) returns nothing:
+    string baked = comptime report(true)
+    Stdout.write(view stdout, "pure:{report(false)}|{baked}|{narrowed_ready()}\n")
+verify reflected_value_metadata:
+    assert report(false) == comptime report(false)
+    assert report(true) == comptime report(true)
+    assert narrowed_ready() == comptime narrowed_ready()
+property reflected_value_metadata_trials:
+    given filled: bool
+    string runtime_value = report(filled)
+    mutable string expected = comptime report(false)
+    if filled:
+        expected = comptime report(true)
+    assert runtime_value == expected
+"#
+    );
+    let stdout = format!(
+        "pure:{VALUE_EMPTY}|{}|{}\n",
+        value_content(),
+        value_narrowed()
+    );
+    run_value_observer_case(
+        "reflected_value_observers_pure",
+        &source,
+        &stdout,
+        None,
+        true,
+    );
+}
+
+#[test]
+fn native_reflected_value_observer_pipeline_errors_keep_pending_depth_and_fail_before_consumers() {
+    for (name, ty, index, message) in [
+        (
+            "negative",
+            "list[int64]",
+            "-1",
+            "runtime error: type.arg expects a non-negative int64 index, got -1",
+        ),
+        (
+            "out_of_range",
+            "map[string, int64]",
+            "2",
+            "runtime error: type.arg index 2 is out of range for type 'map[string, int64]'",
+        ),
+        (
+            "alias_range",
+            "NumberList",
+            "1",
+            "runtime error: type.arg index 1 is out of range for type 'app.NumberList'",
+        ),
+        (
+            "zero_args",
+            "int64",
+            "0",
+            "runtime error: type.arg index 0 is out of range for type 'int64'",
+        ),
+        (
+            "pending_index",
+            "list[int64]",
+            "run 0",
+            "runtime error: type.arg expects a non-negative int64 index, got pending(0)",
+        ),
+        (
+            "nested_pending_index",
+            "map[string, int64]",
+            "run run 0",
+            "runtime error: type.arg expects a non-negative int64 index, got pending(pending(0))",
+        ),
+    ] {
+        let source = format!(
+            "{REFLECTED_VALUE_OBSERVERS}function main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"before\\n\")\n    int64 index = {index}\n    string observed = type.arg[{ty}](index_operand(view stdout, index)) into consume_info(view stdout)\n    Stdout.write(view stdout, \"after:{{observed}}\\n\")\n"
+        );
+        run_value_observer_case(
+            &format!("reflected_value_{name}"),
+            &source,
+            "before\nindex operand\n",
+            Some(message),
+            false,
+        );
+    }
+    for (name, setup, read, message) in [
+        (
+            "pending_enum",
+            "Event paused = run Event.empty",
+            "type.variant_value[Event](view paused) into consume_variant(view stdout)",
+            "runtime error: type.variant_value: expected enum value for 'app.Event', got pending(app.Event.empty)",
+        ),
+        (
+            "pending_machine",
+            "Session paused = run run Session(empty)",
+            "type.machine_state_value[Session](view paused) into consume_state(view stdout)",
+            "runtime error: type.machine_state_value: expected machine value for 'app.Session', got pending(pending(app.Session@empty))",
+        ),
+        (
+            "pending_narrowed",
+            "Session at empty paused = run Session(empty)",
+            "type.machine_state_value[Session at empty](view paused) into consume_state(view stdout)",
+            "runtime error: type.machine_state_value: expected machine value for 'app.Session at empty', got pending(app.Session@empty)",
+        ),
+    ] {
+        let source = format!(
+            "{REFLECTED_VALUE_OBSERVERS}function main(stdout: Stdout) returns nothing:\n    Stdout.write(view stdout, \"before\\n\")\n    {setup}\n    string observed = {read}\n    Stdout.write(view stdout, \"after:{{observed}}\\n\")\n"
+        );
+        run_value_observer_case(
+            &format!("reflected_value_{name}"),
+            &source,
+            "before\n",
+            Some(message),
+            false,
+        );
+    }
+}
