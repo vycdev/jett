@@ -173,7 +173,8 @@ fn collect_function_references(function: &Function, references: &mut References<
                         collect_expression_references(condition, references);
                     }
                 }
-                StatementKind::IterationBorrow { .. }
+                StatementKind::ReflectedContainerReady { .. }
+                | StatementKind::IterationBorrow { .. }
                 | StatementKind::SequenceLength { .. }
                 | StatementKind::SequenceGet { .. }
                 | StatementKind::SumTag { .. }

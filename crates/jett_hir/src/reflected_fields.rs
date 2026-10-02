@@ -12,6 +12,7 @@ pub enum ReflectedFieldValidation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReflectedFieldPlan {
     pub source_type: TypeId,
+    pub requested_type: TypeId,
     pub action: ReflectedFieldAction,
 }
 
@@ -20,6 +21,52 @@ pub enum ReflectedFieldAction {
     Exact,
     Predicates(Vec<RefinementPredicate>),
     Unsupported(ReflectedFieldUnsupported),
+    Refine {
+        base: Box<ReflectedFieldPlan>,
+        predicates: Vec<RefinementPredicate>,
+    },
+    List(Box<ReflectedFieldPlan>),
+    Set(Box<ReflectedFieldPlan>),
+    Map {
+        key: Box<ReflectedFieldPlan>,
+        value: Box<ReflectedFieldPlan>,
+    },
+    Optional(Box<ReflectedFieldPlan>),
+    Result {
+        ok: Box<ReflectedFieldPlan>,
+        error: Box<ReflectedFieldPlan>,
+    },
+}
+
+impl ReflectedFieldPlan {
+    /// Canonical execution order, also used by function reachability visitors.
+    pub fn predicates(&self) -> Vec<&RefinementPredicate> {
+        let mut result = Vec::new();
+        self.collect_predicates(&mut result);
+        result
+    }
+
+    fn collect_predicates<'a>(&'a self, result: &mut Vec<&'a RefinementPredicate>) {
+        match &self.action {
+            ReflectedFieldAction::Exact | ReflectedFieldAction::Unsupported(_) => {}
+            ReflectedFieldAction::Predicates(predicates) => result.extend(predicates),
+            ReflectedFieldAction::Refine { base, predicates } => {
+                base.collect_predicates(result);
+                result.extend(predicates);
+            }
+            ReflectedFieldAction::List(child)
+            | ReflectedFieldAction::Set(child)
+            | ReflectedFieldAction::Optional(child) => child.collect_predicates(result),
+            ReflectedFieldAction::Map { key, value } => {
+                key.collect_predicates(result);
+                value.collect_predicates(result);
+            }
+            ReflectedFieldAction::Result { ok, error } => {
+                ok.collect_predicates(result);
+                error.collect_predicates(result);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +97,28 @@ pub enum ReflectedFieldRequirement {
     Exact,
     Predicates(Vec<TypeId>),
     Unsupported(ReflectedFieldUnsupported),
+    Refine {
+        base: Box<ReflectedFieldRequirementPlan>,
+        predicates: Vec<TypeId>,
+    },
+    List(Box<ReflectedFieldRequirementPlan>),
+    Set(Box<ReflectedFieldRequirementPlan>),
+    Map {
+        key: Box<ReflectedFieldRequirementPlan>,
+        value: Box<ReflectedFieldRequirementPlan>,
+    },
+    Optional(Box<ReflectedFieldRequirementPlan>),
+    Result {
+        ok: Box<ReflectedFieldRequirementPlan>,
+        error: Box<ReflectedFieldRequirementPlan>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectedFieldRequirementPlan {
+    pub source_type: TypeId,
+    pub requested_type: TypeId,
+    pub requirement: ReflectedFieldRequirement,
 }
 
 pub fn is_reflected_field_intrinsic(id: IntrinsicId) -> bool {
@@ -183,30 +252,15 @@ fn contains_refinement(types: &TypeInterner, ty: TypeId, seen: &mut HashSet<Type
             .copied()
             .chain(std::iter::once(*return_type))
             .collect(),
-        Type::Struct(id) => types
-            .resolve_struct(*id)
-            .fields
-            .iter()
-            .map(|(_, ty)| *ty)
-            .collect(),
-        Type::Enum(id) => types
-            .resolve_enum(*id)
-            .variants
-            .iter()
-            .flat_map(|variant| variant.fields.iter().map(|(_, ty)| *ty))
-            .collect(),
-        Type::Machine(id) | Type::MachineState { machine: id, .. } => types
-            .resolve_machine(*id)
-            .states
-            .iter()
-            .flat_map(|state| state.fields.iter().map(|(_, ty)| *ty))
-            .collect(),
-        Type::Bitfield(id) => types
-            .resolve_bitfield(*id)
-            .fields
-            .iter()
-            .map(|field| field.ty)
-            .collect(),
+        // Named payload fields never make a requested nominal type contain a
+        // new producer invariant. Only its declared generic arguments do.
+        Type::Struct(_)
+        | Type::Enum(_)
+        | Type::Machine(_)
+        | Type::MachineState { .. }
+        | Type::Bitfield(_)
+        | Type::Interface(_)
+        | Type::Actor(_) => types.nominal_type_arguments(ty).to_vec(),
         _ => Vec::new(),
     };
     children
@@ -239,45 +293,96 @@ pub fn reflected_field_requirement(
     actual: TypeId,
     requested: TypeId,
 ) -> Option<ReflectedFieldRequirement> {
-    if actual.index() as usize >= types.len() || requested.index() as usize >= types.len() {
+    requirement_node(types, actual, requested, types.len()).map(|node| node.requirement)
+}
+
+fn requirement_node(
+    types: &TypeInterner,
+    actual: TypeId,
+    requested: TypeId,
+    budget: usize,
+) -> Option<ReflectedFieldRequirementPlan> {
+    if budget == 0
+        || actual.index() as usize >= types.len()
+        || requested.index() as usize >= types.len()
+    {
         return None;
     }
+    let requirement = requirement_action(types, actual, requested, budget - 1)?;
+    Some(ReflectedFieldRequirementPlan {
+        source_type: actual,
+        requested_type: requested,
+        requirement,
+    })
+}
+
+fn requirement_action(
+    types: &TypeInterner,
+    actual: TypeId,
+    requested: TypeId,
+    budget: usize,
+) -> Option<ReflectedFieldRequirement> {
+    use ReflectedFieldRequirement as R;
     if actual == requested || !contains_refinement(types, requested, &mut HashSet::new()) {
-        return Some(ReflectedFieldRequirement::Exact);
+        return Some(R::Exact);
     }
     let (actual_base, actual_chain) = refinement_chain(types, actual)?;
-    // Reading an already established refinement through its exact base does
-    // not create any child invariant, even if that base is nominal or secret.
-    if actual_base == requested || actual_chain.contains(&requested) {
-        return Some(ReflectedFieldRequirement::Exact);
+    // Only the declared root chain establishes an ancestor proof. A changed
+    // wrapper must still be ready even if every occupied child is already exact.
+    if actual_chain.contains(&requested) {
+        return Some(R::Exact);
+    }
+    // Keep the established non-builtin root-base contracts separate. A bare
+    // ready builtin request with refined children has a structural preflight
+    // even when the actual root declaration proves every child exactly.
+    if actual_base == requested
+        && !matches!(
+            types.resolve(requested),
+            Type::List(_) | Type::Set(_) | Type::Map(..) | Type::Optional(_) | Type::Result(..)
+        )
+    {
+        return Some(R::Exact);
     }
     let (base, mut chain) = refinement_chain(types, requested)?;
     if !chain.is_empty() {
-        // A new outer predicate may rely on existing child invariants. Never
-        // claim those from equal erased carrier bits alone.
-        if base != actual_base && contains_refinement(types, base, &mut HashSet::new()) {
-            return Some(ReflectedFieldRequirement::Unsupported(unsupported_shape(
-                types, base,
-            )));
-        }
-        if let Some(index) = chain.iter().position(|ty| *ty == actual) {
+        // Reuse the nearest declared requested ancestor, including a common
+        // ancestor of sibling root branches. Its proof already establishes the
+        // complete base, so a remaining root suffix needs no wrapper preflight.
+        if let Some(index) = chain.iter().rposition(|ty| actual_chain.contains(ty)) {
             chain.drain(..=index);
+            return Some(R::Predicates(chain));
         }
-        return Some(ReflectedFieldRequirement::Predicates(chain));
+        // A new root over a generic base must keep the original declared source
+        // spelling. Erasing its root here would turn changed-wrapper readiness
+        // into a false whole-schema Exact before any outer predicate executes.
+        let child = requirement_node(types, actual, base, budget)?;
+        return Some(match child.requirement {
+            R::Exact => R::Predicates(chain),
+            R::Unsupported(reason) => R::Unsupported(reason),
+            _ => R::Refine {
+                base: Box::new(child),
+                predicates: chain,
+            },
+        });
     }
-    Some(ReflectedFieldRequirement::Unsupported(unsupported_shape(
-        types, requested,
-    )))
-}
-
-fn unsupported_shape(types: &TypeInterner, requested: TypeId) -> ReflectedFieldUnsupported {
-    match types.resolve(requested) {
-        Type::Secret(_) => ReflectedFieldUnsupported::Secret,
-        Type::List(_) | Type::Set(_) | Type::Map(..) | Type::Optional(_) | Type::Result(..) => {
-            ReflectedFieldUnsupported::Nested
-        }
-        _ => ReflectedFieldUnsupported::CallableOrNominal,
-    }
+    let child = |source, target| requirement_node(types, source, target, budget).map(Box::new);
+    Some(
+        match (types.resolve(actual_base), types.resolve(requested)) {
+            (Type::List(a), Type::List(b)) => R::List(child(*a, *b)?),
+            (Type::Set(a), Type::Set(b)) => R::Set(child(*a, *b)?),
+            (Type::Map(ak, av), Type::Map(bk, bv)) => R::Map {
+                key: child(*ak, *bk)?,
+                value: child(*av, *bv)?,
+            },
+            (Type::Optional(a), Type::Optional(b)) => R::Optional(child(*a, *b)?),
+            (Type::Result(a, b), Type::Result(c, d)) => R::Result {
+                ok: child(*a, *c)?,
+                error: child(*b, *d)?,
+            },
+            (_, Type::Secret(_)) => R::Unsupported(ReflectedFieldUnsupported::Secret),
+            _ => R::Unsupported(ReflectedFieldUnsupported::CallableOrNominal),
+        },
+    )
 }
 
 pub fn validate_reflected_field_plans(
@@ -293,50 +398,87 @@ pub fn validate_reflected_field_plans(
         return Err("reflected validation plan count disagrees with field layout");
     }
     for ((_, _, actual), plan) in layout.iter().zip(plans) {
-        if plan.source_type != *actual {
-            return Err("reflected validation source type disagrees with declared field");
+        if plan.source_type != *actual || plan.requested_type != requested {
+            return Err("reflected validation types disagree with declared field and request");
         }
-        let requirement = reflected_field_requirement(types, *actual, requested)
+        let requirement = requirement_node(types, *actual, requested, types.len())
             .ok_or("invalid reflected validation type")?;
-        match (requirement, &plan.action) {
-            (ReflectedFieldRequirement::Exact, ReflectedFieldAction::Exact) => {}
-            (
-                ReflectedFieldRequirement::Unsupported(expected),
-                ReflectedFieldAction::Unsupported(actual),
-            ) if expected == *actual => {}
-            (
-                ReflectedFieldRequirement::Predicates(expected),
-                ReflectedFieldAction::Predicates(predicates),
-            ) => {
-                if predicates
-                    .iter()
-                    .map(|predicate| predicate.refined_type)
-                    .ne(expected.iter().copied())
-                {
-                    return Err(
-                        "reflected validation predicate suffix disagrees with checked source",
-                    );
-                }
-                let (base_type, _) = refinement_chain(types, requested)
-                    .ok_or("invalid reflected refinement chain")?;
-                let input_type = match types.resolve(base_type) {
-                    Type::Secret(inner) => *inner,
-                    _ => base_type,
-                };
-                for predicate in predicates {
-                    let Type::Refinement { name, .. } = types.resolve(predicate.refined_type)
-                    else {
-                        return Err("reflected predicate is not a refinement");
-                    };
-                    if predicate.type_name != *name
-                        || predicate.base_type != base_type
-                        || predicate.input_type != input_type
-                    {
-                        return Err("reflected predicate metadata disagrees with declaration");
-                    }
-                }
-            }
-            _ => return Err("reflected validation action disagrees with checked source"),
+        validate_requirement_node(types, &requirement, plan)?;
+    }
+    Ok(())
+}
+
+fn validate_requirement_node(
+    types: &TypeInterner,
+    expected: &ReflectedFieldRequirementPlan,
+    plan: &ReflectedFieldPlan,
+) -> Result<(), &'static str> {
+    use ReflectedFieldAction as A;
+    use ReflectedFieldRequirement as R;
+    if plan.source_type != expected.source_type || plan.requested_type != expected.requested_type {
+        return Err("reflected validation child types disagree with checked schema");
+    }
+    match (&expected.requirement, &plan.action) {
+        (R::Exact, A::Exact) => Ok(()),
+        (R::Unsupported(a), A::Unsupported(b)) if a == b => Ok(()),
+        (R::Predicates(expected), A::Predicates(predicates)) => {
+            validate_plan_predicates(types, plan.requested_type, expected, predicates)
+        }
+        (
+            R::Refine {
+                base: expected,
+                predicates: suffix,
+            },
+            A::Refine { base, predicates },
+        ) => {
+            validate_requirement_node(types, expected, base)?;
+            validate_plan_predicates(types, plan.requested_type, suffix, predicates)
+        }
+        (R::List(a), A::List(b)) | (R::Set(a), A::Set(b)) | (R::Optional(a), A::Optional(b)) => {
+            validate_requirement_node(types, a, b)
+        }
+        (R::Map { key: a, value: b }, A::Map { key: c, value: d })
+        | (R::Result { ok: a, error: b }, A::Result { ok: c, error: d }) => {
+            validate_requirement_node(types, a, c)?;
+            validate_requirement_node(types, b, d)
+        }
+        _ => Err("reflected validation action disagrees with checked source"),
+    }
+}
+
+fn validate_plan_predicates(
+    types: &TypeInterner,
+    requested: TypeId,
+    expected: &[TypeId],
+    predicates: &[RefinementPredicate],
+) -> Result<(), &'static str> {
+    if predicates
+        .iter()
+        .map(|p| p.refined_type)
+        .ne(expected.iter().copied())
+    {
+        return Err("reflected validation predicate suffix disagrees with checked source");
+    }
+    let (base_type, _) =
+        refinement_chain(types, requested).ok_or("invalid reflected refinement chain")?;
+    let input_type = match types.resolve(base_type) {
+        Type::Secret(inner) => *inner,
+        _ => base_type,
+    };
+    if input_type.index() as usize >= types.len() {
+        return Err("invalid reflected predicate input type");
+    }
+    for predicate in predicates {
+        // Expected ids came from the checked chain, so a forged id can never
+        // reach resolve without first failing the exact suffix comparison.
+        let Type::Refinement { name, .. } = types.resolve(predicate.refined_type) else {
+            return Err("reflected predicate is not a refinement");
+        };
+        if predicate.type_name != *name
+            || predicate.base_type != base_type
+            || predicate.input_type != input_type
+        {
+            return Err("reflected predicate metadata disagrees with declaration");
         }
     }
     Ok(())
@@ -550,30 +692,83 @@ impl BodyLowerer<'_, '_> {
         };
         let mut plans = Vec::with_capacity(layout.len());
         for (_, _, source_type) in layout {
-            let Some(requirement) =
-                reflected_field_requirement(&self.parent.check.interner, source_type, *requested)
-            else {
+            let Some(requirement) = requirement_node(
+                &self.parent.check.interner,
+                source_type,
+                *requested,
+                self.parent.check.interner.len(),
+            ) else {
                 self.parent
                     .error(span, "reflected read has invalid proof types");
                 return None;
             };
-            let action = match requirement {
-                ReflectedFieldRequirement::Exact => ReflectedFieldAction::Exact,
-                ReflectedFieldRequirement::Unsupported(reason) => {
-                    ReflectedFieldAction::Unsupported(reason)
-                }
-                ReflectedFieldRequirement::Predicates(expected) => {
-                    let mut predicates = self.checked_refinement_predicates(*requested, span)?;
-                    predicates.retain(|predicate| expected.contains(&predicate.refined_type));
-                    ReflectedFieldAction::Predicates(predicates)
-                }
-            };
-            plans.push(ReflectedFieldPlan {
-                source_type,
-                action,
-            });
+            plans.push(self.lower_reflected_requirement(requirement, span)?);
         }
         Some(Some(ReflectedFieldValidation::Validate(plans)))
+    }
+
+    fn lower_reflected_requirement(
+        &mut self,
+        node: ReflectedFieldRequirementPlan,
+        span: Span,
+    ) -> Option<ReflectedFieldPlan> {
+        use ReflectedFieldAction as A;
+        use ReflectedFieldRequirement as R;
+        let action = match node.requirement {
+            R::Exact => A::Exact,
+            R::Unsupported(reason) => A::Unsupported(reason),
+            R::Predicates(expected) => A::Predicates(self.reflected_predicate_suffix(
+                node.requested_type,
+                &expected,
+                span,
+            )?),
+            R::Refine { base, predicates } => A::Refine {
+                base: Box::new(self.lower_reflected_requirement(*base, span)?),
+                predicates: self.reflected_predicate_suffix(
+                    node.requested_type,
+                    &predicates,
+                    span,
+                )?,
+            },
+            R::List(child) => A::List(Box::new(self.lower_reflected_requirement(*child, span)?)),
+            R::Set(child) => A::Set(Box::new(self.lower_reflected_requirement(*child, span)?)),
+            R::Optional(child) => {
+                A::Optional(Box::new(self.lower_reflected_requirement(*child, span)?))
+            }
+            R::Map { key, value } => A::Map {
+                key: Box::new(self.lower_reflected_requirement(*key, span)?),
+                value: Box::new(self.lower_reflected_requirement(*value, span)?),
+            },
+            R::Result { ok, error } => A::Result {
+                ok: Box::new(self.lower_reflected_requirement(*ok, span)?),
+                error: Box::new(self.lower_reflected_requirement(*error, span)?),
+            },
+        };
+        Some(ReflectedFieldPlan {
+            source_type: node.source_type,
+            requested_type: node.requested_type,
+            action,
+        })
+    }
+
+    fn reflected_predicate_suffix(
+        &mut self,
+        requested: TypeId,
+        expected: &[TypeId],
+        span: Span,
+    ) -> Option<Vec<RefinementPredicate>> {
+        let mut predicates = self.checked_refinement_predicates(requested, span)?;
+        predicates.retain(|predicate| expected.contains(&predicate.refined_type));
+        if predicates
+            .iter()
+            .map(|p| p.refined_type)
+            .ne(expected.iter().copied())
+        {
+            self.parent
+                .error(span, "reflected read has no canonical predicate suffix");
+            return None;
+        }
+        Some(predicates)
     }
 }
 
@@ -696,7 +891,7 @@ function session_read(view value: Session, view field: TypeField) returns Higher
                     ReflectedFieldAction::Predicates(chain) => {
                         chain.iter().map(|p| p.type_name.as_str()).collect()
                     }
-                    ReflectedFieldAction::Unsupported(_) => panic!("root scalar is supported"),
+                    _ => panic!("root scalar is supported"),
                 })
                 .collect::<Vec<Vec<_>>>();
             assert_eq!(actual, expected, "{name}");
@@ -824,6 +1019,227 @@ function session_read(view value: Session, view field: TypeField) returns Higher
     }
 
     #[test]
+    fn producer_nominal_argument_detection_never_infers_arguments_from_payload_fields() {
+        let mut types = TypeInterner::new();
+        let positive = types.intern(Type::Refinement {
+            name: "models.Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let element = types.add_struct(jett_types::StructDef {
+            name: "models.Element".into(),
+            fields: vec![("value".into(), positive)],
+            methods: Vec::new(),
+        });
+        let element = types.intern(Type::Struct(element));
+        let event = types.add_enum(jett_types::EnumDef {
+            name: "models.Event".into(),
+            variants: vec![jett_types::VariantDef {
+                name: "content".into(),
+                fields: vec![("value".into(), positive)],
+                discriminant: 0,
+            }],
+        });
+        let event = types.intern(Type::Enum(event));
+        let machine = types.add_machine(jett_types::MachineDef {
+            name: "models.Session".into(),
+            states: vec![jett_types::MachineStateDef {
+                name: "content".into(),
+                fields: vec![("value".into(), positive)],
+            }],
+            transitions: Vec::new(),
+        });
+        let state = types.intern(Type::MachineState {
+            machine,
+            state: jett_types::MachineStateId::new(0),
+        });
+        let machine = types.intern(Type::Machine(machine));
+        let bitfield = types.add_bitfield(jett_types::BitfieldDef {
+            name: "models.Packet".into(),
+            network_order: false,
+            fields: vec![jett_types::BitfieldFieldDef {
+                name: "value".into(),
+                ty: positive,
+                kind: jett_types::BitfieldFieldKind::Payload,
+            }],
+        });
+        let bitfield = types.intern(Type::Bitfield(bitfield));
+        for leaf in [element, event, machine, state, bitfield] {
+            assert!(types.nominal_type_arguments(leaf).is_empty());
+            assert!(!contains_refinement(&types, leaf, &mut HashSet::new()));
+        }
+        let marker = types.add_struct(jett_types::StructDef {
+            name: "models.Marker[models.Positive]".into(),
+            fields: vec![("value".into(), TypeInterner::INT64)],
+            methods: Vec::new(),
+        });
+        let marker = types.intern(Type::Struct(marker));
+        types
+            .register_nominal_type_arguments(marker, vec![positive])
+            .unwrap();
+        let plain_marker = types.add_struct(jett_types::StructDef {
+            name: "models.Marker[int64]".into(),
+            fields: vec![("value".into(), TypeInterner::INT64)],
+            methods: Vec::new(),
+        });
+        let plain_marker = types.intern(Type::Struct(plain_marker));
+        types
+            .register_nominal_type_arguments(plain_marker, vec![TypeInterner::INT64])
+            .unwrap();
+        for (leaf, requires_ready) in [(element, false), (marker, true), (plain_marker, false)] {
+            let list = types.intern(Type::List(leaf));
+            let root = types.intern(Type::Refinement {
+                name: format!("models.Values{}", leaf.index()),
+                base: list,
+            });
+            let requirement = reflected_field_requirement(&types, root, list).unwrap();
+            if requires_ready {
+                assert_eq!(
+                    requirement,
+                    ReflectedFieldRequirement::List(Box::new(ReflectedFieldRequirementPlan {
+                        source_type: leaf,
+                        requested_type: leaf,
+                        requirement: ReflectedFieldRequirement::Exact,
+                    }))
+                );
+            } else {
+                assert_eq!(requirement, ReflectedFieldRequirement::Exact);
+            }
+        }
+        assert_eq!(
+            reflected_field_requirement(&types, plain_marker, marker),
+            Some(ReflectedFieldRequirement::Unsupported(
+                ReflectedFieldUnsupported::CallableOrNominal
+            ))
+        );
+    }
+
+    fn nominal_leaf_source(leaf: &str) -> String {
+        format!(
+            r#"
+namespace app
+type Positive = int64 where value > 0
+type Alias = Positive
+struct Element:
+    value: Positive
+struct Holder[T]:
+    value: T
+struct Unused[T]:
+    value: int64
+type Values = list[{leaf}] where true
+struct Record:
+    values: Values
+enum Event:
+    content(values: Values)
+machine Session:
+    states:
+        content(values: Values)
+        empty
+    transitions:
+        content to empty
+function record_read(view source: Record, view field: TypeField) returns list[{leaf}]:
+    return type.field_value[Record, list[{leaf}]](view source, view field)
+function record_pipe(view source: Record, view field: TypeField) returns list[{leaf}]:
+    return source into view type.field_value[Record, list[{leaf}]](view field)
+function event_read(view source: Event, view field: TypeField) returns list[{leaf}]:
+    return type.variant_field_value[Event, list[{leaf}]](view source, view field)
+function event_pipe(view source: Event, view field: TypeField) returns list[{leaf}]:
+    return source into view type.variant_field_value[Event, list[{leaf}]](view field)
+function machine_read(view source: Session, view field: TypeField) returns list[{leaf}]:
+    return type.machine_field_value[Session, list[{leaf}]](view source, view field)
+function machine_pipe(view source: Session, view field: TypeField) returns list[{leaf}]:
+    return source into view type.machine_field_value[Session, list[{leaf}]](view field)
+"#
+        )
+    }
+
+    #[test]
+    fn checked_nominal_leaf_plans_preserve_ordinary_proof_and_unused_generic_invariants() {
+        for (leaf, requires_ready) in [
+            ("Element", false),
+            ("Holder[Positive]", true),
+            ("Unused[Alias]", true),
+            ("Unused[int64]", false),
+            ("Holder[Element]", false),
+        ] {
+            let (mut program, types) = lower_source_text(&nominal_leaf_source(leaf));
+            validate_backend_types(&program, &types).unwrap();
+            for name in [
+                "record_read",
+                "record_pipe",
+                "event_read",
+                "event_pipe",
+                "machine_read",
+                "machine_pipe",
+            ] {
+                let function = program
+                    .functions
+                    .iter()
+                    .find(|f| f.identity.declaration.name == name)
+                    .unwrap();
+                let StatementKind::Return(Some(Expression {
+                    kind:
+                        ExpressionKind::Intrinsic {
+                            field_validation: Some(ReflectedFieldValidation::Validate(plans)),
+                            ..
+                        },
+                    ..
+                })) = &function.body.statements[0].kind
+                else {
+                    panic!("{name} nominal leaf plan");
+                };
+                assert_eq!(plans.len(), 1);
+                assert!(
+                    plans[0].predicates().is_empty(),
+                    "no proven predicates rerun"
+                );
+                if requires_ready {
+                    let ReflectedFieldAction::List(child) = &plans[0].action else {
+                        panic!("{name}: {leaf} requires readiness");
+                    };
+                    assert_eq!(child.action, ReflectedFieldAction::Exact);
+                    assert_eq!(child.source_type, child.requested_type);
+                } else {
+                    assert_eq!(
+                        plans[0].action,
+                        ReflectedFieldAction::Exact,
+                        "{name}: {leaf} stays exact"
+                    );
+                }
+            }
+            // Closed IR must reject both adding readiness to a plain nominal
+            // leaf and deleting it when a declared generic argument is refined.
+            let read = read_mut(&mut program);
+            let ExpressionKind::Intrinsic {
+                field_validation: Some(ReflectedFieldValidation::Validate(plans)),
+                ..
+            } = &mut read.kind
+            else {
+                panic!("record plan");
+            };
+            if requires_ready {
+                plans[0].action = ReflectedFieldAction::Exact;
+            } else {
+                let Type::List(child) = types.resolve(plans[0].requested_type) else {
+                    panic!("requested list");
+                };
+                plans[0].action = ReflectedFieldAction::List(Box::new(ReflectedFieldPlan {
+                    source_type: *child,
+                    requested_type: *child,
+                    action: ReflectedFieldAction::Exact,
+                }));
+            }
+            let errors =
+                validate_backend_types(&program, &types).expect_err("forged readiness plan");
+            assert!(
+                errors.iter().any(|error| error
+                    .message
+                    .contains("reflected validation action disagrees")),
+                "{leaf}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
     fn native_reflected_root_schema_reuses_ancestors_and_keeps_nested_base_proofs() {
         let mut types = TypeInterner::new();
         let positive = types.intern(Type::Refinement {
@@ -842,6 +1258,14 @@ function session_read(view value: Session, view field: TypeField) returns Higher
             reflected_field_requirement(&types, higher, TypeInterner::INT64),
             Some(ReflectedFieldRequirement::Exact)
         );
+        let sibling_high = types.intern(Type::Refinement {
+            name: "app.SiblingHigh".into(),
+            base: positive,
+        });
+        assert_eq!(
+            reflected_field_requirement(&types, higher, sibling_high),
+            Some(ReflectedFieldRequirement::Predicates(vec![sibling_high]))
+        );
         let list = types.intern(Type::List(positive));
         let nonempty = types.intern(Type::Refinement {
             name: "app.Nonempty".into(),
@@ -853,14 +1277,31 @@ function session_read(view value: Session, view field: TypeField) returns Higher
         );
         assert_eq!(
             reflected_field_requirement(&types, nonempty, list),
-            Some(ReflectedFieldRequirement::Exact)
+            Some(ReflectedFieldRequirement::List(Box::new(
+                ReflectedFieldRequirementPlan {
+                    source_type: positive,
+                    requested_type: positive,
+                    requirement: ReflectedFieldRequirement::Exact,
+                }
+            )))
         );
         let plain_list = types.intern(Type::List(TypeInterner::INT64));
         assert_eq!(
             reflected_field_requirement(&types, plain_list, nonempty),
-            Some(ReflectedFieldRequirement::Unsupported(
-                ReflectedFieldUnsupported::Nested
-            ))
+            Some(ReflectedFieldRequirement::Refine {
+                base: Box::new(ReflectedFieldRequirementPlan {
+                    source_type: plain_list,
+                    requested_type: list,
+                    requirement: ReflectedFieldRequirement::List(Box::new(
+                        ReflectedFieldRequirementPlan {
+                            source_type: TypeInterner::INT64,
+                            requested_type: positive,
+                            requirement: ReflectedFieldRequirement::Predicates(vec![positive]),
+                        }
+                    )),
+                }),
+                predicates: vec![nonempty],
+            })
         );
         let secret = types.intern(Type::Secret(positive));
         let hidden = types.intern(Type::Refinement {
@@ -898,6 +1339,469 @@ function session_read(view value: Session, view field: TypeField) returns Higher
                 ReflectedFieldUnsupported::CallableOrNominal
             ))
         );
+    }
+
+    fn requirement_children(
+        requirement: &ReflectedFieldRequirement,
+    ) -> Vec<&ReflectedFieldRequirementPlan> {
+        match requirement {
+            ReflectedFieldRequirement::List(child)
+            | ReflectedFieldRequirement::Set(child)
+            | ReflectedFieldRequirement::Optional(child) => vec![child],
+            ReflectedFieldRequirement::Map { key, value } => vec![key, value],
+            ReflectedFieldRequirement::Result { ok, error } => vec![ok, error],
+            _ => panic!("changed builtin wrapper"),
+        }
+    }
+
+    fn requirement_wrapper(types: &mut TypeInterner, kind: usize, child: TypeId) -> TypeId {
+        types.intern(match kind {
+            0 => Type::List(child),
+            1 => Type::Set(child),
+            2 => Type::Map(child, child),
+            3 => Type::Optional(child),
+            4 => Type::Result(child, child),
+            _ => panic!("test wrapper kind"),
+        })
+    }
+
+    #[test]
+    fn native_reflected_recursive_requirements_keep_wrapper_readiness_and_leaf_provenance() {
+        let mut types = TypeInterner::new();
+        let positive = types.intern(Type::Refinement {
+            name: "app.Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let higher = types.intern(Type::Refinement {
+            name: "app.Higher".into(),
+            base: positive,
+        });
+        let sibling = types.intern(Type::Refinement {
+            name: "app.Sibling".into(),
+            base: TypeInterner::INT64,
+        });
+        for kind in 0..5 {
+            let requested = requirement_wrapper(&mut types, kind, positive);
+            assert_eq!(
+                reflected_field_requirement(&types, requested, requested),
+                Some(ReflectedFieldRequirement::Exact)
+            );
+            for (source, expected) in [
+                (higher, ReflectedFieldRequirement::Exact),
+                (
+                    sibling,
+                    ReflectedFieldRequirement::Predicates(vec![positive]),
+                ),
+                (
+                    TypeInterner::INT64,
+                    ReflectedFieldRequirement::Predicates(vec![positive]),
+                ),
+            ] {
+                let actual = requirement_wrapper(&mut types, kind, source);
+                let requirement = reflected_field_requirement(&types, actual, requested).unwrap();
+                for child in requirement_children(&requirement) {
+                    assert_eq!(child.source_type, source);
+                    assert_eq!(child.requested_type, positive);
+                    assert_eq!(child.requirement, expected);
+                }
+            }
+        }
+        let plain_secret = types.intern(Type::Secret(TypeInterner::INT64));
+        let refined_secret = types.intern(Type::Secret(positive));
+        let actual = types.intern(Type::Optional(plain_secret));
+        let requested = types.intern(Type::Optional(refined_secret));
+        let requirement = reflected_field_requirement(&types, actual, requested).unwrap();
+        assert_eq!(
+            requirement_children(&requirement)[0].requirement,
+            ReflectedFieldRequirement::Unsupported(ReflectedFieldUnsupported::Secret)
+        );
+        let plain_callable = types.intern(Type::Function {
+            params: vec![],
+            view_params: vec![],
+            return_type: TypeInterner::INT64,
+        });
+        let refined_callable = types.intern(Type::Function {
+            params: vec![],
+            view_params: vec![],
+            return_type: positive,
+        });
+        let actual = types.intern(Type::List(plain_callable));
+        let requested = types.intern(Type::List(refined_callable));
+        let requirement = reflected_field_requirement(&types, actual, requested).unwrap();
+        assert_eq!(
+            requirement_children(&requirement)[0].requirement,
+            ReflectedFieldRequirement::Unsupported(ReflectedFieldUnsupported::CallableOrNominal)
+        );
+    }
+
+    #[test]
+    fn native_reflected_root_to_builtin_base_checks_readiness_without_repeating_child_proofs() {
+        let mut types = TypeInterner::new();
+        let positive = types.intern(Type::Refinement {
+            name: "app.Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        for kind in 0..5 {
+            let base = requirement_wrapper(&mut types, kind, positive);
+            let named = types.intern(Type::Refinement {
+                name: format!("app.Wrapper{kind}"),
+                base,
+            });
+            let higher = types.intern(Type::Refinement {
+                name: format!("app.HigherWrapper{kind}"),
+                base: named,
+            });
+            let sibling = types.intern(Type::Refinement {
+                name: format!("app.SiblingWrapper{kind}"),
+                base: named,
+            });
+            let independent = types.intern(Type::Refinement {
+                name: format!("app.IndependentWrapper{kind}"),
+                base,
+            });
+            let plain = requirement_wrapper(&mut types, kind, TypeInterner::INT64);
+            // Plan shape is independent of runtime pending depth. Exact named
+            // and generic requests and no-refinement requests skip preflight,
+            // retaining the original pending owner rather than joining it.
+            for (actual, requested) in [
+                (named, named),
+                (higher, named),
+                (base, base),
+                (named, plain),
+            ] {
+                assert_eq!(
+                    reflected_field_requirement(&types, actual, requested),
+                    Some(ReflectedFieldRequirement::Exact)
+                );
+            }
+            assert_eq!(
+                reflected_field_requirement(&types, named, higher),
+                Some(ReflectedFieldRequirement::Predicates(vec![higher]))
+            );
+            assert_eq!(
+                reflected_field_requirement(&types, higher, sibling),
+                Some(ReflectedFieldRequirement::Predicates(vec![sibling]))
+            );
+            for actual in [named, higher] {
+                let ReflectedFieldRequirement::Refine {
+                    base: ready,
+                    predicates,
+                } = reflected_field_requirement(&types, actual, independent).unwrap()
+                else {
+                    panic!("new root must preflight generic base");
+                };
+                assert_eq!(ready.source_type, actual);
+                assert_eq!(ready.requested_type, base);
+                assert_eq!(predicates, [independent]);
+                for child in requirement_children(&ready.requirement) {
+                    assert_eq!(child.requirement, ReflectedFieldRequirement::Exact);
+                }
+                let requirement = reflected_field_requirement(&types, actual, base).unwrap();
+                for child in requirement_children(&requirement) {
+                    assert_eq!(child.source_type, positive);
+                    assert_eq!(child.requested_type, positive);
+                    assert_eq!(child.requirement, ReflectedFieldRequirement::Exact);
+                }
+            }
+        }
+    }
+
+    const RECURSIVE_SOURCE: &str = r#"namespace app
+ type Positive = int64 where value > 0
+ type Higher = Positive where value > 10
+ type Sibling = int64 where value >= 0
+ type Text = string where value != ""
+ function is_nonempty(view values: list[Positive]) returns bool:
+     for item in view values:
+         return true
+     return false
+ type Nonempty = list[Positive] where is_nonempty(view value)
+ type Larger = Nonempty where true
+ type AlternateLarger = Nonempty where true
+ type OtherValues = list[Positive] where true
+ struct RecursiveRecord:
+     raw: list[optional[result[map[int64, list[int64]], set[int64]]]]
+     known: list[optional[result[map[Higher, list[Higher]], set[Higher]]]]
+ enum RecursiveEvent:
+     content(raw: list[optional[result[map[int64, list[int64]], set[int64]]]])
+     known(value: list[optional[result[map[Higher, list[Higher]], set[Higher]]]])
+ machine RecursiveSession:
+     states:
+         content(raw: list[optional[result[map[int64, list[int64]], set[int64]]]])
+         known(value: list[optional[result[map[Higher, list[Higher]], set[Higher]]]])
+     transitions:
+         content to known
+ struct TextRecord:
+     raw: optional[string]
+ struct RootRecord:
+     raw: list[int64]
+ struct ProvenRootRecord:
+     established: Nonempty
+ struct HigherRootRecord:
+     established: Larger
+ function record_read(view value: RecursiveRecord, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+     return type.field_value[RecursiveRecord, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view value, view field)
+ function record_pipe(view value: RecursiveRecord, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+     return value into view type.field_value[RecursiveRecord, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view field)
+ function event_read(view value: RecursiveEvent, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+     return type.variant_field_value[RecursiveEvent, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view value, view field)
+ function event_pipe(view value: RecursiveEvent, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+     return value into view type.variant_field_value[RecursiveEvent, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view field)
+ function session_read(view value: RecursiveSession, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+     return type.machine_field_value[RecursiveSession, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view value, view field)
+ function session_pipe(view value: RecursiveSession, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+     return value into view type.machine_field_value[RecursiveSession, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view field)
+ function text_read(view value: TextRecord, view field: TypeField) returns optional[Text]:
+     return type.field_value[TextRecord, optional[Text]](view value, view field)
+ function root_read(view value: RootRecord, view field: TypeField) returns Nonempty:
+     return type.field_value[RootRecord, Nonempty](view value, view field)
+ function named_root_read(view value: ProvenRootRecord, view field: TypeField) returns Nonempty:
+     return type.field_value[ProvenRootRecord, Nonempty](view value, view field)
+ function generic_root_base_read(view value: ProvenRootRecord, view field: TypeField) returns list[Positive]:
+     return type.field_value[ProvenRootRecord, list[Positive]](view value, view field)
+ function plain_root_base_read(view value: ProvenRootRecord, view field: TypeField) returns list[int64]:
+     return type.field_value[ProvenRootRecord, list[int64]](view value, view field)
+ function promoted_root_read(view value: ProvenRootRecord, view field: TypeField) returns Larger:
+     return type.field_value[ProvenRootRecord, Larger](view value, view field)
+ function independent_root_read(view value: ProvenRootRecord, view field: TypeField) returns OtherValues:
+     return type.field_value[ProvenRootRecord, OtherValues](view value, view field)
+ function shared_root_read(view value: HigherRootRecord, view field: TypeField) returns AlternateLarger:
+     return type.field_value[HigherRootRecord, AlternateLarger](view value, view field)
+"#;
+
+    fn recursive_source() -> String {
+        // Keep this long type matrix readable without changing Jett indentation.
+        RECURSIVE_SOURCE
+            .lines()
+            .map(|line| line.strip_prefix(' ').unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn plans(value: &Expression) -> &[ReflectedFieldPlan] {
+        let ExpressionKind::Intrinsic {
+            field_validation: Some(ReflectedFieldValidation::Validate(plans)),
+            ..
+        } = &value.kind
+        else {
+            panic!("reflected plans");
+        };
+        plans
+    }
+
+    #[test]
+    fn native_reflected_recursive_plans_preserve_builtin_shapes_declared_proofs_and_call_forms() {
+        let (program, types) = lower_source_text(&recursive_source());
+        validate(&program).unwrap();
+        validate_backend_types(&program, &types).unwrap();
+        for prefix in ["record", "event", "session"] {
+            let direct = plans(returned_read(&program, &format!("{prefix}_read")));
+            let piped = plans(returned_read(&program, &format!("{prefix}_pipe")));
+            assert_eq!(direct, piped);
+            let ReflectedFieldAction::List(optional) = &direct[0].action else {
+                panic!("list");
+            };
+            let ReflectedFieldAction::Optional(result) = &optional.action else {
+                panic!("optional");
+            };
+            let ReflectedFieldAction::Result { ok, error } = &result.action else {
+                panic!("result");
+            };
+            let ReflectedFieldAction::Map { key, value } = &ok.action else {
+                panic!("map");
+            };
+            assert!(matches!(key.action, ReflectedFieldAction::Predicates(_)));
+            assert!(matches!(value.action, ReflectedFieldAction::List(_)));
+            assert!(matches!(error.action, ReflectedFieldAction::Set(_)));
+            assert_eq!(
+                direct[0]
+                    .predicates()
+                    .iter()
+                    .map(|p| p.type_name.as_str())
+                    .collect::<Vec<_>>(),
+                ["app.Positive", "app.Positive", "app.Positive"]
+            );
+            // A changed whole wrapper retains readiness even when all leaves
+            // are declared Higher values read through established Positive.
+            assert!(matches!(direct[1].action, ReflectedFieldAction::List(_)));
+            assert!(direct[1].predicates().is_empty());
+        }
+        let named = &plans(returned_read(&program, "named_root_read"))[0];
+        let generic = &plans(returned_read(&program, "generic_root_base_read"))[0];
+        let plain = &plans(returned_read(&program, "plain_root_base_read"))[0];
+        assert!(matches!(named.action, ReflectedFieldAction::Exact));
+        assert!(matches!(plain.action, ReflectedFieldAction::Exact));
+        let ReflectedFieldAction::List(child) = &generic.action else {
+            panic!("generic base readiness");
+        };
+        assert!(matches!(child.action, ReflectedFieldAction::Exact));
+        assert!(generic.predicates().is_empty());
+        let promoted = &plans(returned_read(&program, "promoted_root_read"))[0];
+        let shared = &plans(returned_read(&program, "shared_root_read"))[0];
+        assert!(matches!(
+            promoted.action,
+            ReflectedFieldAction::Predicates(_)
+        ));
+        assert_eq!(
+            promoted
+                .predicates()
+                .iter()
+                .map(|p| p.type_name.as_str())
+                .collect::<Vec<_>>(),
+            ["app.Larger"]
+        );
+        assert!(matches!(shared.action, ReflectedFieldAction::Predicates(_)));
+        assert_eq!(
+            shared
+                .predicates()
+                .iter()
+                .map(|p| p.type_name.as_str())
+                .collect::<Vec<_>>(),
+            ["app.AlternateLarger"]
+        );
+        let independent = &plans(returned_read(&program, "independent_root_read"))[0];
+        let ReflectedFieldAction::Refine { base, predicates } = &independent.action else {
+            panic!("sibling base readiness");
+        };
+        assert_eq!(base.source_type, named.source_type);
+        let ReflectedFieldAction::List(child) = &base.action else {
+            panic!("base list");
+        };
+        assert!(matches!(child.action, ReflectedFieldAction::Exact));
+        assert_eq!(predicates[0].type_name, "app.OtherValues");
+        assert_eq!(independent.predicates().len(), 1);
+        let text = &plans(returned_read(&program, "text_read"))[0];
+        assert!(matches!(text.action, ReflectedFieldAction::Optional(_)));
+        assert_eq!(text.predicates()[0].input_type, TypeInterner::STRING);
+        let root = &plans(returned_read(&program, "root_read"))[0];
+        let ReflectedFieldAction::Refine { base, predicates } = &root.action else {
+            panic!("base-first root");
+        };
+        assert!(matches!(base.action, ReflectedFieldAction::List(_)));
+        assert_eq!(predicates[0].type_name, "app.Nonempty");
+        assert_eq!(
+            root.predicates()
+                .iter()
+                .map(|p| p.type_name.as_str())
+                .collect::<Vec<_>>(),
+            ["app.Positive", "app.Nonempty"]
+        );
+    }
+
+    fn recursive_key_mut(plan: &mut ReflectedFieldPlan) -> &mut ReflectedFieldPlan {
+        let ReflectedFieldAction::List(optional) = &mut plan.action else {
+            panic!("list");
+        };
+        let ReflectedFieldAction::Optional(result) = &mut optional.action else {
+            panic!("optional");
+        };
+        let ReflectedFieldAction::Result { ok, .. } = &mut result.action else {
+            panic!("result");
+        };
+        let ReflectedFieldAction::Map { key, .. } = &mut ok.action else {
+            panic!("map");
+        };
+        key
+    }
+
+    #[test]
+    fn native_reflected_recursive_hir_rejects_forged_child_schemas_and_canonical_predicates() {
+        let (original, types) = lower_source_text(&recursive_source());
+        let sibling = original
+            .functions
+            .iter()
+            .find(|f| {
+                f.identity.declaration.kind == DeclarationKind::RefinementPredicate
+                    && f.identity.declaration.name == "Sibling"
+            })
+            .unwrap()
+            .id;
+        let mut foreign = TypeInterner::new();
+        let mut invalid = TypeInterner::INT64;
+        for index in 0..=types.len() {
+            invalid = foreign.intern(Type::Refinement {
+                name: format!("app.UncheckedForeignType{index}"),
+                base: TypeInterner::INT64,
+            });
+        }
+        assert!(invalid.index() as usize >= types.len());
+        for mutation in 0..12 {
+            let mut program = original.clone();
+            let value = read_mut(&mut program);
+            let ExpressionKind::Intrinsic {
+                field_validation: Some(ReflectedFieldValidation::Validate(plans)),
+                ..
+            } = &mut value.kind
+            else {
+                panic!("plans");
+            };
+            if mutation == 0 {
+                plans[0].requested_type = invalid;
+            } else if mutation == 1 {
+                let ReflectedFieldAction::List(child) = &plans[0].action else {
+                    panic!("list");
+                };
+                plans[0].action = ReflectedFieldAction::Optional(child.clone());
+            } else {
+                let key = recursive_key_mut(&mut plans[0]);
+                match mutation {
+                    2 => key.source_type = TypeInterner::STRING,
+                    3 => key.requested_type = invalid,
+                    4 => key.action = ReflectedFieldAction::Exact,
+                    _ => {
+                        let ReflectedFieldAction::Predicates(predicates) = &mut key.action else {
+                            panic!("leaf");
+                        };
+                        match mutation {
+                            5 => predicates[0].function = sibling,
+                            6 => predicates[0].function = FunctionId::new(u32::MAX),
+                            7 => predicates[0].refined_type = invalid,
+                            8 => predicates[0].base_type = TypeInterner::STRING,
+                            9 => predicates[0].input_type = TypeInterner::STRING,
+                            10 => predicates.clear(),
+                            11 => predicates.push(predicates[0].clone()),
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+            }
+            let structural = validate(&program).is_err();
+            let typed = validate_backend_types(&program, &types).is_err();
+            assert!(structural || typed, "accepted child mutation {mutation}");
+            if matches!(mutation, 5 | 6) {
+                assert!(structural, "recursive function identity is checked");
+            } else {
+                assert!(typed, "recursive checked schema is authoritative");
+            }
+        }
+    }
+
+    #[test]
+    fn native_reflected_refine_base_plan_retains_declared_source_identity() {
+        let (mut program, types) = lower_source_text(&recursive_source());
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|f| f.identity.declaration.name == "independent_root_read")
+            .unwrap();
+        let StatementKind::Return(Some(value)) = &mut function.body.statements[0].kind else {
+            panic!("root return");
+        };
+        let ExpressionKind::Intrinsic {
+            field_validation: Some(ReflectedFieldValidation::Validate(plans)),
+            ..
+        } = &mut value.kind
+        else {
+            panic!("reflected root plan");
+        };
+        let ReflectedFieldAction::Refine { base, .. } = &mut plans[0].action else {
+            panic!("independent root base");
+        };
+        assert_ne!(base.source_type, base.requested_type);
+        // Forged erasure must not transform structural readiness into exact
+        // whole-schema proof or discard the original declared producer owner.
+        base.source_type = base.requested_type;
+        assert!(validate_backend_types(&program, &types).is_err());
     }
 
     fn returned_read<'a>(program: &'a Program, name: &str) -> &'a Expression {

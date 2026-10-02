@@ -64,8 +64,11 @@ Repeated alias or refinement arguments normalize independently within this
 existing relation. The reference comparator now tracks only the active expansion
 path; a completed sibling is not a recursive re-entry. This repairs repeated
 map/result slot comparison without selecting broader admission or converting
-nominal owners. Native raw compatibility still keeps exact child TypeIds, so new
-nested container requests remain a separate native parity obligation.
+nominal owners. Native raw carrier compatibility now follows the five admitted
+builtin shapes, retaining matching secrecy and exact primitive, nominal, and
+callable identities. Checked producer trees establish their new refinements
+after complete occupied-shape preflight. This implements the bounded ready
+builtin safeguard without selecting broader requested-type admission.
 
 Pending containers require a separate conversion contract. An exact
 actual/requested schema preserves pending values unchanged. Establishing a

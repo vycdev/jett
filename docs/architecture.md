@@ -1033,24 +1033,50 @@ Fresh private sum fallback results validate their selected actual type before
 checked source execution can reuse it as a proof. Raw and metadata-free calls
 keep the existing forced facade return boundary. This does not select a broader
 summation domain or change primitive arithmetic.
-Reference reflected field producers establish newly requested refinements before
-their result type becomes reusable proof. Ready builtin containers undergo a
-complete shape preflight, then validate occupied payloads in collection order.
-Actual declared schemas supply exact or ancestor proof; runtime labels do not.
-For a requested root refinement, the actual declared root chain also proves its
-ancestors. Reading a stronger declared refinement as its ancestor normalizes the
-result identity without rerunning that established predicate. This lookup never
-descends through an outer secret qualifier, collection, or nominal child field.
-Exact schemas preserve pending values. Changed nested invariants beneath pending
-containers, secret qualifiers, callable signatures, or nominal generic instances
-fail conservatively where conversion or observer contracts remain unresolved.
-These safeguards preserve selector checks and source ownership without selecting
-the broader reflected requested-type admission rule.
+Reference and native reflected field producers establish newly requested
+refinements before the result type becomes reusable proof. Already admitted
+requests use recursive producer trees for `list`, `set`, `map`, `optional`, and
+`result`, including root refinements over those wrappers. A complete structural
+pass over occupied payloads precedes every new predicate. Collection order is
+preserved, with each map key before its value and child validation before an
+enclosing root predicate. Empty collections, absent optional payloads, and
+inactive result arms have no child checks. Pending changed wrappers fail
+readiness before predicates; primitive pending children retain the ordinary
+predicate-error boundary. Neither pass joins a value.
+
+Actual checked declared schemas supply exact or ancestor proof; runtime labels
+do not. Requested named ancestors skip their established predicates, and the
+nearest established common named ancestor supplies a root branch's proven
+prefix. Exact whole schemas preserve pending depth. Child proof reuse does not
+make a changed outer wrapper exact: a named root over `list[Positive]` requested
+as `list[Positive]` still needs a ready list, despite zero child predicates.
+Requests containing no refinements skip producer validation. The root-ancestor
+lookup never obtains facts from an outer secret qualifier, collection, or
+nominal payload field.
+
+TypeInterner retains immutable canonical argument TypeIds for instantiated
+generic structs. The checker registers the selected arguments before resolving
+recursive fields or installing the instance cache; repeated registration must
+agree and invalid IDs or conflicting arguments fail registration. Producer
+refinement detection follows these argument edges, including unused parameters,
+and never substitutes ordinary struct, enum, machine, or bitfield payload
+fields for generic arguments. Transparent aliases share canonical IDs while
+source reflection retains their written identities. Closed HIR type validation
+also visits unused argument edges, so an unresolved error type cannot hide in a
+phantom parameter. This metadata does not select a nominal conversion.
+
 Reference reflected-name normalization tracks only the active alias-expansion
 path. Completed sibling arguments leave that path, so repeated aliases and
 refinements compare independently while actual recursive re-entry remains bounded.
-Native root-refinement reads carry complete per-declared-slot validation plans
-in HIR. Direct and piped getters share the canonical hidden field-metadata tail,
+Native reads carry complete per-declared-slot typed validation trees in HIR.
+Each node retains its actual declared source TypeId and requested TypeId;
+validators reconstruct the canonical action, occupied wrapper schema, and
+unproven refinement suffix. Predicate targets must be the exact canonical
+refinement declarations with their selected base and input types. A new root's
+base node retains the original actual root TypeId so erasure cannot manufacture
+an exact-schema exemption.
+
+Direct and piped getters share the canonical hidden field-metadata tail,
 appended after the original source and selector operands. Narrowed machines keep
 their checked state identity while metadata uses the complete machine layout.
 The one-operand observers `type.variant_value`, `type.machine_state_value`, and
@@ -1059,15 +1085,30 @@ run first; the checked pipeline output type selects each hidden metadata value's
 type, because the pipeline step span describes its input. Variant ordinals and
 discriminants remain distinct, and narrowed machine observations retain all base
 states. Existing runtime observation and cleanup leaves consume the same metadata.
-MIR stages the original operands, completes the existing raw getter
-checks first, and validates only the selected slot's unproven predicate suffix.
-Predicate identities must match the exact canonical refinement declaration.
-The internal raw-read marker appears only after MIR consumes a checked plan;
-unlowered or incomplete plans fail verification. Owned candidates and dynamic
-error strings use the existing refinement and runtime-failure cleanup paths.
-Exact reads preserve pending depth and source ownership. Native validation of
-new nested container invariants remains an implementation gap, and changed
-secret, callable, or nominal generic proofs retain their conservative refusals.
+
+MIR stages the original operands once and completes the raw getter's existing
+selector and compatibility checks before dispatching the selected slot's tree.
+The getter produces an independent candidate; both passes leave it unchanged.
+Sequence projections clone private child snapshots, and occupied sum projections
+take payloads only from private sum clones. The first failure borrows its captured
+string through `RuntimeFailureMessage` before cleanup, preserving the original
+predicate error. Ownership, reachability, and backend verification cover the
+expanded control flow. The internal raw-read marker is emitted after consuming
+a checked HIR plan; leftover or missing markers fail MIR validation.
+
+`ReflectedContainerReady` is a compiler-owned typed MIR statement with a
+canonical diagnostic and an exact builtin wrapper contract. Codegen borrows its
+handle and extends dispatch tags of the existing `RejectPendingHandle` leaf for
+sets, maps, and sums; no runtime symbol or signature changes. Readiness inspects
+only that wrapper's pending depth, preserving source identity and child depths.
+Raw carrier compatibility recurses through the five builtin shapes, matching
+secrecy at every layer and retaining exact nominal, callable, and primitive
+identities. Existing root interface conversion remains separate; nested erased
+interface adapters and changed secret, callable, or nominal generic proofs keep
+their conservative refusals. Occupied unsupported proof nodes fail during
+preflight, while inactive branches do not run proof checks. The raw selector's
+compatibility relation still runs first. These safeguards do not select the
+broader [reflected requested-type admission rule](open_design/reflected_field_request_compatibility.md).
 Written type aliases resolve once in lexical context. Resolved checked owners,
 installed generic arguments, captured bindings, and reflected metadata retain
 their canonical declaration identities through selection and normalization.

@@ -580,6 +580,17 @@ impl BackendTypeValidator<'_> {
             return;
         }
 
+        // An unused nominal type parameter remains part of checked identity.
+        // It must be closed even when no payload field refers to its type.
+        let nominal_arguments = self.interner.nominal_type_arguments(type_id).to_vec();
+        for (index, argument) in nominal_arguments.into_iter().enumerate() {
+            self.type_id(
+                argument,
+                span,
+                format!("{context} nominal type argument {index}"),
+            );
+        }
+
         match self.interner.resolve(type_id).clone() {
             Type::List(element) | Type::Set(element) | Type::Optional(element) => {
                 self.type_id(element, span, format!("{context} element type"));
@@ -1071,6 +1082,39 @@ mod tests {
                 .any(|error| error.message.contains("comptime binding `Bound`")
                     && error.message.contains("unresolved `<error>` type"))
         );
+    }
+
+    #[test]
+    fn backend_type_gate_visits_unused_nominal_argument_edges() {
+        for invalid in [false, true] {
+            let mut interner = TypeInterner::new();
+            let marker = interner.add_struct(StructDef {
+                name: "test.Marker".into(),
+                fields: Vec::new(),
+                methods: Vec::new(),
+            });
+            let marker = interner.intern(Type::Struct(marker));
+            let argument = if invalid {
+                interner.intern(Type::Optional(TypeInterner::ERROR))
+            } else {
+                TypeInterner::INT64
+            };
+            interner
+                .register_nominal_type_arguments(marker, vec![argument])
+                .unwrap();
+            let result = validate_backend_types(&program_with(marker, Vec::new()), &interner);
+            if invalid {
+                let errors = result.expect_err("unused nominal arguments must be closed");
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.message.contains("nominal type argument 0")
+                            && error.message.contains("unresolved `<error>` type"))
+                );
+            } else {
+                result.expect("closed unused nominal argument");
+            }
+        }
     }
 
     #[test]

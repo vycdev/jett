@@ -624,6 +624,24 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
+            StatementKind::ReflectedContainerReady { source, kind } => {
+                let source = function.local(*source).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "missing reflected container place",
+                    )
+                })?;
+                if !kind.matches_type(self.types, source.ty) {
+                    return Err(self.contract_error(
+                        function,
+                        statement.span,
+                        "reflected container readiness kind disagrees with checked wrapper",
+                    ));
+                }
+                // Diagnostic text is canonical to the typed enum, never a source operand.
+                Ok(())
+            }
             StatementKind::SequenceLength { source, target }
             | StatementKind::SequenceGet { source, target, .. } => {
                 if matches!(

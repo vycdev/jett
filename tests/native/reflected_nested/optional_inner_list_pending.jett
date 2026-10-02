@@ -1,0 +1,65 @@
+namespace app
+function positive_check(value: int64) returns bool:
+    string marker = "positive"
+    trace marker
+    return value > 0
+type Positive = int64 where positive_check(value)
+function high_check(value: int64) returns bool:
+    string marker = "high"
+    trace marker
+    return value > 10
+type High = Positive where high_check(value)
+
+struct Holder:
+    payload: optional[list[int64]]
+enum Event:
+    content(payload: optional[list[int64]])
+machine Session:
+    states:
+        content(payload: optional[list[int64]])
+        empty
+    transitions:
+        content to empty
+function seed() returns optional[list[int64]]:
+    return some(run list(7, 9))
+function record_field() returns TypeField:
+    return list.get[TypeField](type.fields[Holder](), 0) handle:
+        return record_field()
+function event_field(view source: Event) returns TypeField:
+    TypeVariant variant = type.variant_value[Event](view source)
+    return list.get[TypeField](variant.fields, 0) handle:
+        return event_field(view source)
+function session_field(view source: Session) returns TypeField:
+    TypeMachineState state = type.machine_state_value[Session](view source)
+    return list.get[TypeField](state.fields, 0) handle:
+        return session_field(view source)
+function read_record(view source: Holder, view field: TypeField) returns optional[list[Positive]]:
+    return type.field_value[Holder, optional[list[Positive]]](view source, view field)
+function read_event(view source: Event, view field: TypeField) returns optional[list[Positive]]:
+    return type.variant_field_value[Event, optional[list[Positive]]](view source, view field)
+function read_session(view source: Session, view field: TypeField) returns optional[list[Positive]]:
+    return type.machine_field_value[Session, optional[list[Positive]]](view source, view field)
+function summarize(items: optional[list[Positive]]) returns string:
+    list[Positive] values = items handle:
+        return "none"
+    return "{list.length(view values)}"
+function report() returns string:
+    Holder record = Holder(payload: seed())
+    Event event = Event.content(seed())
+    Session session = Session(content, seed())
+    TypeField record_selector = record_field()
+    TypeField event_selector = event_field(view event)
+    TypeField session_selector = session_field(view session)
+    string first = summarize(read_record(view record, view record_selector))
+    string second = summarize(read_event(view event, view event_selector))
+    string third = summarize(read_session(view session, view session_selector))
+    trace record
+    trace event
+    trace session
+    return "{first}|{second}|{third}"
+function main(stdout: Stdout) returns nothing:
+    bytes earlier = bytes.from_string("earlier-owned")
+    list[string] retained = list("kept", "owned")
+    Stdout.write(view stdout, "before\n")
+    string value = report()
+    Stdout.write(view stdout, "after:{value}:{bytes.to_hex(view earlier)}:{list.length(view retained)}\n")

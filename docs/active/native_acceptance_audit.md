@@ -60,6 +60,11 @@ The following semantic and implementation gaps prevent a full parity claim:
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
 - [Concrete-owner arguments in erased calls](../open_design/interface_same_owner_arguments.md): runtime validation versus rejecting unsafe erased calls statically.
 - [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
+- [Debug print channel isolation](../open_design/print_debug_builtin_policy.md):
+  the channel policy is selected, but both execution paths still mix `print`
+  and `println` into application stdout. Typed, ordered observations must retain
+  exact partial text and isolate runtime, comptime, and verification events from
+  agent protocol output. Release rejection alone does not establish this gate.
 - [Projected field assignment](../open_design/projected_field_assignment.md):
   implement safe updates to owned mutable locals versus reject projected writes
   and use construction/rebinding. The checker now rejects immutable, temporary,
@@ -1038,8 +1043,9 @@ operand staging, closed comptime, verify, and 100-trial property execution.
 The pipeline helper shares the direct getter's metadata expansion, preserving
 source/selector order, complete slot plans, bitfields, and narrowed machine owners.
 Native conformance now has 301 supplemental tests; the fixed inventory denominator
-is unchanged. New native nested-container invariants remain concrete
-implementation gaps. The other admitted one-operand reflection pipeline forms
+is unchanged. At that checkpoint, new native nested-container invariants were
+implementation gaps; the recursive builtin checkpoint below closes that bounded
+producer work. The other admitted one-operand reflection pipeline forms
 are covered by the later checkpoint below.
 Final workspace and supported-host distribution gates still require verification.
 
@@ -1181,3 +1187,37 @@ pipeline requests, nested callable arguments and locals, source spans,
 non-consuming recognition, missing EOF sentinels, and malformed-input recovery.
 This repairs recognition of existing syntax; recursive reflected-field native
 execution remains a separate obligation.
+
+### Recursive builtin reflected producers
+
+Native reflected field reads now establish newly requested refinements inside
+the five already admitted builtin wrappers: list, set, map, optional, and result.
+Typed HIR trees retain actual and requested types, canonical predicate identities,
+and proven prefixes. MIR completes all occupied structural checks before any new
+predicate, then checks values in collection order with each map key before its
+value. Both passes preserve the independent candidate and original source.
+Exact schemas, named ancestors, and shared root prefixes reuse declared proof;
+changed wrappers retain readiness even when their child predicates are skipped.
+
+Canonical generic argument TypeIds distinguish nominal fields from arguments.
+An ordinary Element containing a Positive field does not request new invariants
+through list[Element]. Used or unused Positive generic arguments do retain
+wrapper readiness, including transparent aliases. Closed backend validation
+visits unused argument edges and rejects malformed or forged plans.
+
+All ten new linked groups pass over 96 source cases. They cover every getter,
+direct and pipeline calls, debug/release runtime profiles, source deletion,
+ready/empty/inactive wrappers, recursive combinations, Unicode ownership,
+operand order, exact and ancestor pending exceptions, first-failure order,
+selector precedence, terminal-handler bypass, and compiled verify/property
+suites with 100 trials. Fresh reference admission and literal output/trace
+oracles agree. The logs are `target/native-recursive-linked-all.log` and
+`target/native-recursive-linked-nominal.log`.
+
+All 494 types/typechecker/HIR/MIR/codegen library tests, 141 runtime tests,
+62 object-emission tests, and 598 frontend fixtures pass. Native conformance
+contains 318 supplemental tests; the fixed inventory denominator remains 207.
+This closes the bounded recursive builtin producer gap, without selecting
+broader requested-type admission, changed nominal/callable/interface casts,
+or protected secret observation. Final frozen workspace and supported-host
+distribution gates remain required for this revision.

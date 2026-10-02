@@ -146,6 +146,7 @@ fn block_locals(
 ) {
     for statement in &mut block.statements {
         match &mut statement.kind {
+            StatementKind::ReflectedContainerReady { source, .. } => visit(source),
             StatementKind::SequenceLength { source, target } => {
                 source_local(source, visit);
                 visit(target);

@@ -1,0 +1,68 @@
+namespace app
+function positive_check(value: int64) returns bool:
+    string marker = "positive"
+    trace marker
+    return value > 0
+type Positive = int64 where positive_check(value)
+function high_check(value: int64) returns bool:
+    string marker = "high"
+    trace marker
+    return value > 10
+type High = Positive where high_check(value)
+
+struct Holder:
+    payload: map[int64, optional[int64]]
+enum Event:
+    content(payload: map[int64, optional[int64]])
+machine Session:
+    states:
+        content(payload: map[int64, optional[int64]])
+        empty
+    transitions:
+        content to empty
+function seed() returns map[int64, optional[int64]]:
+    return map(1: some(7), 2: run some(9))
+function record_field() returns TypeField:
+    return list.get[TypeField](type.fields[Holder](), 0) handle:
+        return record_field()
+function event_field(view source: Event) returns TypeField:
+    TypeVariant variant = type.variant_value[Event](view source)
+    return list.get[TypeField](variant.fields, 0) handle:
+        return event_field(view source)
+function session_field(view source: Session) returns TypeField:
+    TypeMachineState state = type.machine_state_value[Session](view source)
+    return list.get[TypeField](state.fields, 0) handle:
+        return session_field(view source)
+function read_record(view source: Holder, view field: TypeField) returns map[Positive, optional[Positive]]:
+    return type.field_value[Holder, map[Positive, optional[Positive]]](view source, view field)
+function read_event(view source: Event, view field: TypeField) returns map[Positive, optional[Positive]]:
+    return type.variant_field_value[Event, map[Positive, optional[Positive]]](view source, view field)
+function read_session(view source: Session, view field: TypeField) returns map[Positive, optional[Positive]]:
+    return type.machine_field_value[Session, map[Positive, optional[Positive]]](view source, view field)
+function summarize(items: map[Positive, optional[Positive]]) returns string:
+    mutable string output = ""
+    for key, item in items:
+        Positive value = item handle:
+            return "none"
+        output = "{output}:{coarsen key}={coarsen value}"
+    return output
+function report() returns string:
+    Holder record = Holder(payload: seed())
+    Event event = Event.content(seed())
+    Session session = Session(content, seed())
+    TypeField record_selector = record_field()
+    TypeField event_selector = event_field(view event)
+    TypeField session_selector = session_field(view session)
+    string first = summarize(read_record(view record, view record_selector))
+    string second = summarize(read_event(view event, view event_selector))
+    string third = summarize(read_session(view session, view session_selector))
+    trace record
+    trace event
+    trace session
+    return "{first}|{second}|{third}"
+function main(stdout: Stdout) returns nothing:
+    bytes earlier = bytes.from_string("earlier-owned")
+    list[string] retained = list("kept", "owned")
+    Stdout.write(view stdout, "before\n")
+    string value = report()
+    Stdout.write(view stdout, "after:{value}:{bytes.to_hex(view earlier)}:{list.length(view retained)}\n")

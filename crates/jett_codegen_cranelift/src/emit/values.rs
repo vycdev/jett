@@ -96,9 +96,65 @@ fn reflected_field_types_compatible(
     actual: TypeId,
     requested: TypeId,
 ) -> bool {
-    representation_type(types, actual) == representation_type(types, requested)
-        && jett_mir::move_values::is_secret(types, actual)
-            == jett_mir::move_values::is_secret(types, requested)
+    reflected_field_carriers_compatible(types, actual, requested, true, types.len())
+}
+
+fn reflected_field_carriers_compatible(
+    types: &TypeInterner,
+    actual: TypeId,
+    requested: TypeId,
+    root: bool,
+    budget: usize,
+) -> bool {
+    if budget == 0
+        || actual.index() as usize >= types.len()
+        || requested.index() as usize >= types.len()
+    {
+        return false;
+    }
+    if actual == requested {
+        return true;
+    }
+    // Only the original root read knows how to box an interface refinement.
+    // A collection clone cannot manufacture nested interface conversions.
+    if !root && is_erased_interface(types, actual) != is_erased_interface(types, requested) {
+        return false;
+    }
+    let Some(actual) = reflected_field_carrier(types, actual) else {
+        return false;
+    };
+    let Some(requested) = reflected_field_carrier(types, requested) else {
+        return false;
+    };
+    let child =
+        |a, b, at_root| reflected_field_carriers_compatible(types, a, b, at_root, budget - 1);
+    match (types.resolve(actual), types.resolve(requested)) {
+        // Match every secrecy layer rather than comparing only an outer flag.
+        (Type::Secret(a), Type::Secret(b)) => child(*a, *b, root),
+        (Type::Secret(_), _) | (_, Type::Secret(_)) => false,
+        (Type::List(a), Type::List(b))
+        | (Type::Set(a), Type::Set(b))
+        | (Type::Optional(a), Type::Optional(b)) => child(*a, *b, false),
+        (Type::Map(a, b), Type::Map(c, d)) | (Type::Result(a, b), Type::Result(c, d)) => {
+            child(*a, *c, false) && child(*b, *d, false)
+        }
+        // Canonical nominal identity, callable signatures and primitive widths
+        // remain exact. Equal machine words or field layouts are not casts.
+        _ => actual == requested,
+    }
+}
+
+fn reflected_field_carrier(types: &TypeInterner, mut ty: TypeId) -> Option<TypeId> {
+    for _ in 0..types.len() {
+        if ty.index() as usize >= types.len() {
+            return None;
+        }
+        match types.resolve(ty) {
+            Type::Refinement { base, .. } => ty = *base,
+            _ => return Some(ty),
+        }
+    }
+    None
 }
 
 fn reflected_field_needs_interface_box(
@@ -2893,6 +2949,141 @@ mod reflected_field_tests {
                 &types, actual, requested
             ));
         }
+    }
+
+    fn wrapper(types: &mut TypeInterner, kind: usize, child: TypeId) -> TypeId {
+        types.intern(match kind {
+            0 => Type::List(child),
+            1 => Type::Set(child),
+            2 => Type::Map(child, child),
+            3 => Type::Optional(child),
+            4 => Type::Result(child, child),
+            _ => panic!("test wrapper kind"),
+        })
+    }
+
+    #[test]
+    fn reflected_builtin_carriers_recurse_through_all_shapes_and_repeated_children() {
+        let mut types = TypeInterner::new();
+        let positive = refinement(&mut types, "app.Positive", TypeInterner::INT64);
+        let higher = refinement(&mut types, "app.Higher", positive);
+        let sibling = refinement(&mut types, "app.Sibling", TypeInterner::INT64);
+        let text = refinement(&mut types, "app.Text", TypeInterner::STRING);
+        for kind in 0..5 {
+            for (actual, requested) in [
+                (TypeInterner::INT64, positive),
+                (higher, positive),
+                (sibling, higher),
+                (positive, TypeInterner::INT64),
+                (TypeInterner::STRING, text),
+            ] {
+                let actual = wrapper(&mut types, kind, actual);
+                let requested = wrapper(&mut types, kind, requested);
+                assert!(
+                    reflected_field_types_compatible(&types, actual, requested),
+                    "shape {kind}"
+                );
+                assert!(!reflected_field_needs_interface_box(
+                    &types, actual, requested
+                ));
+            }
+        }
+        let mut actual = TypeInterner::INT64;
+        let mut requested = higher;
+        // Four full rounds distinguish arbitrary recursion from a one-level fix.
+        for _ in 0..4 {
+            for kind in 0..5 {
+                actual = wrapper(&mut types, kind, actual);
+                requested = wrapper(&mut types, kind, requested);
+            }
+        }
+        assert!(reflected_field_types_compatible(&types, actual, requested));
+        let actual_root = refinement(&mut types, "app.ActualTree", actual);
+        let requested_root = refinement(&mut types, "app.RequestedTree", requested);
+        assert!(reflected_field_types_compatible(
+            &types,
+            actual_root,
+            requested_root
+        ));
+        assert!(reflected_field_types_compatible(
+            &types,
+            actual_root,
+            requested
+        ));
+    }
+
+    #[test]
+    fn reflected_builtin_carriers_preserve_secrecy_and_refuse_nested_adapters_and_nominal_casts() {
+        let mut types = TypeInterner::new();
+        let positive = refinement(&mut types, "app.Positive", TypeInterner::INT64);
+        let secret_plain = types.intern(Type::Secret(TypeInterner::INT64));
+        let secret_positive = types.intern(Type::Secret(positive));
+        let twice_secret = types.intern(Type::Secret(secret_plain));
+        let named = interface(&mut types, "app.Named");
+        let selected = refinement(&mut types, "app.Selected", named);
+        let callback_plain = types.intern(Type::Function {
+            params: vec![TypeInterner::INT64],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        let callback_refined = types.intern(Type::Function {
+            params: vec![TypeInterner::INT64],
+            view_params: vec![false],
+            return_type: positive,
+        });
+        let first = types.add_struct(jett_types::StructDef {
+            name: "app.Holder[int64]".into(),
+            fields: vec![("value".into(), TypeInterner::INT64)],
+            methods: vec![],
+        });
+        let first = types.intern(Type::Struct(first));
+        let second = types.add_struct(jett_types::StructDef {
+            name: "app.Holder[app.Positive]".into(),
+            fields: vec![("value".into(), positive)],
+            methods: vec![],
+        });
+        let second = types.intern(Type::Struct(second));
+        for kind in [0, 2, 3, 4] {
+            let actual = wrapper(&mut types, kind, secret_plain);
+            let requested = wrapper(&mut types, kind, secret_positive);
+            // Same secrecy placement is raw-compatible; checked planning then
+            // refuses to establish a new invariant underneath that secret.
+            assert!(reflected_field_types_compatible(&types, actual, requested));
+            for (a, b) in [
+                (secret_plain, positive),
+                (positive, secret_positive),
+                (twice_secret, secret_positive),
+                (selected, named),
+                (named, selected),
+                (callback_plain, callback_refined),
+                (first, second),
+                (TypeInterner::INT32, positive),
+            ] {
+                let a = wrapper(&mut types, kind, a);
+                let b = wrapper(&mut types, kind, b);
+                assert!(
+                    !reflected_field_types_compatible(&types, a, b),
+                    "shape {kind}"
+                );
+            }
+        }
+        let list = types.intern(Type::List(positive));
+        let set = types.intern(Type::Set(positive));
+        let optional = types.intern(Type::Optional(positive));
+        assert!(!reflected_field_types_compatible(&types, list, set));
+        assert!(!reflected_field_types_compatible(&types, list, optional));
+        let mut foreign = TypeInterner::new();
+        let mut invalid = TypeInterner::INT64;
+        for index in 0..=types.len() {
+            invalid = refinement(
+                &mut foreign,
+                &format!("app.Foreign{index}"),
+                TypeInterner::INT64,
+            );
+        }
+        assert!(invalid.index() as usize >= types.len());
+        assert!(!reflected_field_types_compatible(&types, invalid, positive));
+        assert!(!reflected_field_types_compatible(&types, positive, invalid));
     }
 
     #[test]

@@ -75,6 +75,9 @@ mod reflected_producers;
 #[path = "native_conformance/suite_options.rs"]
 mod suite_options;
 
+#[path = "native_conformance/reflected_nested_producers.rs"]
+mod reflected_nested_producers;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

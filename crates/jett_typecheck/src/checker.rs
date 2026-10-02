@@ -15298,6 +15298,17 @@ impl<'a> TypeChecker<'a> {
             methods: Vec::new(),
         });
         let ty = self.interner.intern(Type::Struct(sid));
+        if self
+            .interner
+            .register_nominal_type_arguments(ty, type_args.to_vec())
+            .is_err()
+        {
+            self.sink.emit(errors::unknown_type(
+                "invalid canonical nominal type arguments",
+                span,
+            ));
+            return TypeInterner::ERROR;
+        }
         self.monomorphized_structs.insert(cache_key, ty);
 
         // Build substitution map: type param name → concrete TypeId.
@@ -18694,6 +18705,78 @@ function main() returns nothing:
         assert_eq!(
             metadata.get_type_fields_for_id(owner).unwrap()[0].type_name,
             "string"
+        );
+    }
+
+    #[test]
+    fn nominal_argument_ids_preserve_aliases_unused_parameters_and_canonical_owners() {
+        let result = check_source_result(
+            r#"
+namespace models
+export type Positive = int64 where value > 0
+export type Copy = Positive
+export struct Element:
+    value: Positive
+export struct Holder[T]:
+    value: T
+export struct Marker[T]:
+    value: int64
+namespace alternate
+export type Positive = int64 where value < 0
+namespace app
+function inspect(view element: models.Element, view used: models.Holder[models.Positive], view unused: models.Marker[models.Positive], view plain: models.Marker[int64], view shadow: models.Marker[alternate.Positive]) returns nothing:
+    return nothing
+function alias_metadata() returns TypeInfo:
+    use models as m
+    return type.info[m.Marker[m.Copy]]()
+"#,
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.severity != jett_diagnostics::Severity::Error),
+            "{:?}",
+            result.diagnostics
+        );
+        let types = &result.interner;
+        let metadata = &result.reflection_metadata;
+        let positive = metadata.type_id_for_name("models.Positive").unwrap();
+        let other = metadata.type_id_for_name("alternate.Positive").unwrap();
+        assert_ne!(positive, other);
+        for (name, expected) in [
+            ("models.Element", Vec::new()),
+            ("models.Holder[models.Positive]", vec![positive]),
+            ("models.Marker[models.Positive]", vec![positive]),
+            ("models.Marker[int64]", vec![TypeInterner::INT64]),
+            ("models.Marker[alternate.Positive]", vec![other]),
+        ] {
+            let ty = metadata.type_id_for_name(name).expect(name);
+            assert_eq!(
+                types.nominal_type_arguments(ty),
+                expected.as_slice(),
+                "{name}"
+            );
+        }
+        let marker = metadata
+            .type_id_for_name("models.Marker[models.Positive]")
+            .unwrap();
+        let Type::Struct(id) = types.resolve(marker) else {
+            panic!("marker");
+        };
+        assert_eq!(types.resolve_struct(*id).fields[0].1, TypeInterner::INT64);
+        let alias = result
+            .intrinsic_reflection_arguments
+            .values()
+            .flatten()
+            .find(|info| info.type_name == "models.Marker[models.Copy]")
+            .expect("source alias metadata");
+        assert_eq!(alias.args[0].type_name, "models.Copy");
+        assert!(
+            result
+                .intrinsic_type_arguments
+                .values()
+                .any(|args| args.as_slice() == [marker])
         );
     }
 

@@ -1,0 +1,4 @@
+trace marker: string = positive
+trace marker: string = nonempty
+trace extracted: list[app.Unused[int64]] = list(app.Unused(value: 7))
+trace source: app.Record = app.Record(values: list(app.Unused(value: 7)))

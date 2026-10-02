@@ -555,12 +555,47 @@ A return entering a new refinement must validate its unproven constraints;
 the function's return annotation alone does not prove the returned expression.
 
 A reflected field read must also establish newly requested refinements before
-its result type supplies proof. The field's actual declared root refinement
-chain proves its established ancestors; a requested annotation alone does not.
-Existing selector checks run before new predicates. Requested-type admission
-and unresolved qualified or nested conversions retain their separate contract.
-Within admitted generic requests, each type argument compares independently.
-Repeating an alias or refinement does not itself imply recursive expansion.
+its result type supplies proof. For already admitted requests,
+`type.field_value`, `type.variant_field_value`, and `type.machine_field_value`
+use the same rule in direct calls and pipelines. Existing owner, member, field,
+requested-type, and pending-selector checks finish before producer validation.
+
+New invariants may occur recursively inside `list`, `set`, `map`, `optional`,
+and `result`. The read completes structural preflight over all occupied
+payloads before running any new predicate. Changed wrappers that request
+refinements must be ready; absent optional payloads, inactive result arms, and
+empty collections supply no child to validate. Predicate checks follow
+collection order, checking each map key before its value, and establish child
+invariants before an enclosing root refinement. The first structural or
+predicate error stops the read. Primitive pending children reach their ordinary
+predicate boundary rather than acquiring an earlier container-readiness error.
+The read never implicitly joins a pending value and preserves its original
+source; validation operates on an independent candidate.
+
+Only the field's actual checked declared schema supplies an established proof.
+Exact schemas and requested named ancestors retain pending depth without
+rerunning their predicates. Promotion or a sibling root branch with an
+established common named ancestor checks only its unproven suffix. A changed
+builtin wrapper still requires readiness even when every child has an exact or
+ancestor proof: a named root over `list[Positive]` read as `list[Positive]` is
+such a changed wrapper. Requests without a refinement do not acquire this
+producer-validation traversal. Runtime labels and a requested annotation alone
+cannot establish an invariant.
+
+A nominal type's ordinary payload fields are not its generic arguments. For
+example, a named `Element` with a `Positive` field does not make
+`list[Element]` a request for a new nested producer refinement. An actual
+`Holder[Positive]` or unused `Marker[Positive]` argument does; transparent
+aliases retain the same canonical argument proof. Each requested generic
+argument compares independently, so repeating an alias or refinement does not
+itself imply recursive expansion.
+
+These checks preserve the separate requested-type admission contract. They do
+not select arbitrary nominal or callable casts, nested erased-interface
+adapters, or new proofs across secret qualifiers. Existing exact declared
+proofs remain separate from those changed-conversion refusals; broader
+admission remains in
+[reflected field request compatibility](open_design/reflected_field_request_compatibility.md).
 
 Generic struct fields use the constructor's selected concrete type arguments,
 resolved in the caller. Field declarations then resolve in the struct's own

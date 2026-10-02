@@ -6,6 +6,14 @@ use crate::defs::{
 };
 use crate::types::{CapabilityKind, Type, TypeId};
 
+/// Invalid registration of canonical arguments for a nominal type instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NominalTypeArgumentsError {
+    InvalidOwner(TypeId),
+    InvalidArgument(TypeId),
+    ConflictingArguments(TypeId),
+}
+
 /// Type interner that deduplicates types and provides stable [`TypeId`] handles.
 ///
 /// All primitive types are pre-registered at construction time and have
@@ -28,6 +36,9 @@ pub struct TypeInterner {
     actors: Vec<ActorDef>,
     /// User-defined state machine definitions.
     machines: Vec<MachineDef>,
+    /// Checker-selected arguments for concrete nominal generic instances.
+    /// Ordinary nominal definitions have no arguments, regardless of fields.
+    nominal_type_arguments: HashMap<TypeId, Vec<TypeId>>,
 }
 
 // Constant TypeId values for every primitive type.
@@ -127,6 +138,7 @@ impl TypeInterner {
             interfaces: Vec::new(),
             actors: Vec::new(),
             machines: Vec::new(),
+            nominal_type_arguments: HashMap::new(),
         }
     }
 
@@ -140,6 +152,45 @@ impl TypeInterner {
         self.map.insert(ty.clone(), id);
         self.types.push(ty);
         id
+    }
+
+    /// Record the canonical arguments selected when the checker instantiates a
+    /// generic nominal declaration. Structs are the only current generic
+    /// nominal kind. Repeating the same facts is harmless; they cannot change.
+    pub fn register_nominal_type_arguments(
+        &mut self,
+        owner: TypeId,
+        arguments: Vec<TypeId>,
+    ) -> Result<(), NominalTypeArgumentsError> {
+        if !matches!(
+            self.types.get(owner.index() as usize),
+            Some(Type::Struct(_))
+        ) {
+            return Err(NominalTypeArgumentsError::InvalidOwner(owner));
+        }
+        if let Some(argument) = arguments
+            .iter()
+            .find(|argument| argument.index() as usize >= self.types.len())
+        {
+            return Err(NominalTypeArgumentsError::InvalidArgument(*argument));
+        }
+        if let Some(existing) = self.nominal_type_arguments.get(&owner) {
+            return if existing == &arguments {
+                Ok(())
+            } else {
+                Err(NominalTypeArgumentsError::ConflictingArguments(owner))
+            };
+        }
+        self.nominal_type_arguments.insert(owner, arguments);
+        Ok(())
+    }
+
+    /// Borrow the canonical arguments of a nominal generic instance. Plain
+    /// nominal definitions have no arguments; their fields are not arguments.
+    pub fn nominal_type_arguments(&self, owner: TypeId) -> &[TypeId] {
+        self.nominal_type_arguments
+            .get(&owner)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Look up a type by its [`TypeId`].
@@ -551,6 +602,84 @@ mod tests {
         // Intern the struct type and check round-trip
         let struct_type_id = interner.intern(Type::Struct(sid));
         assert_eq!(*interner.resolve(struct_type_id), Type::Struct(sid));
+    }
+
+    #[test]
+    fn nominal_arguments_are_explicit_immutable_and_independent_of_fields() {
+        let mut interner = TypeInterner::new();
+        let positive = interner.intern(Type::Refinement {
+            name: "models.Positive".into(),
+            base: TypeInterner::INT64,
+        });
+        let element = interner.add_struct(StructDef {
+            name: "models.Element".into(),
+            fields: vec![("value".into(), positive)],
+            methods: Vec::new(),
+        });
+        let element = interner.intern(Type::Struct(element));
+        let marker = interner.add_struct(StructDef {
+            name: "models.Marker[models.Positive]".into(),
+            fields: vec![("value".into(), TypeInterner::INT64)],
+            methods: Vec::new(),
+        });
+        let marker = interner.intern(Type::Struct(marker));
+        assert!(interner.nominal_type_arguments(element).is_empty());
+        assert!(interner.nominal_type_arguments(marker).is_empty());
+        interner
+            .register_nominal_type_arguments(marker, vec![positive])
+            .unwrap();
+        interner
+            .register_nominal_type_arguments(marker, vec![positive])
+            .unwrap();
+        assert_eq!(interner.nominal_type_arguments(marker), [positive]);
+        assert!(interner.nominal_type_arguments(element).is_empty());
+        assert_eq!(
+            interner.register_nominal_type_arguments(marker, vec![TypeInterner::STRING]),
+            Err(NominalTypeArgumentsError::ConflictingArguments(marker))
+        );
+        assert_eq!(interner.nominal_type_arguments(marker), [positive]);
+        let Type::Struct(id) = interner.resolve(marker) else {
+            panic!("marker");
+        };
+        assert_eq!(
+            interner.resolve_struct(*id).fields[0].1,
+            TypeInterner::INT64
+        );
+    }
+
+    #[test]
+    fn nominal_argument_registration_rejects_unknown_ids_without_mutation() {
+        let mut interner = TypeInterner::new();
+        let marker = interner.add_struct(StructDef {
+            name: "Marker".into(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+        });
+        let marker = interner.intern(Type::Struct(marker));
+        let unknown = TypeId(interner.len() as u32);
+        for owner in [unknown, TypeInterner::INT64] {
+            assert_eq!(
+                interner.register_nominal_type_arguments(owner, vec![TypeInterner::INT64]),
+                Err(NominalTypeArgumentsError::InvalidOwner(owner))
+            );
+            assert!(interner.nominal_type_arguments(owner).is_empty());
+        }
+        assert_eq!(
+            interner.register_nominal_type_arguments(marker, vec![unknown]),
+            Err(NominalTypeArgumentsError::InvalidArgument(unknown))
+        );
+        assert!(interner.nominal_type_arguments(marker).is_empty());
+        interner
+            .register_nominal_type_arguments(marker, vec![TypeInterner::INT64])
+            .unwrap();
+        assert_eq!(
+            interner.register_nominal_type_arguments(marker, vec![unknown]),
+            Err(NominalTypeArgumentsError::InvalidArgument(unknown))
+        );
+        assert_eq!(
+            interner.nominal_type_arguments(marker),
+            [TypeInterner::INT64]
+        );
     }
 
     #[test]

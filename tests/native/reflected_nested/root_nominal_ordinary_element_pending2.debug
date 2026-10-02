@@ -1,0 +1,4 @@
+trace marker: string = positive
+trace marker: string = nonempty
+trace extracted: list[app.Element] = pending(pending(list(app.Element(value: 7))))
+trace source: app.Record = app.Record(values: pending(pending(list(app.Element(value: 7)))))

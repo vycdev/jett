@@ -1,0 +1,80 @@
+namespace app
+function positive_check(value: int64) returns bool:
+    string marker = "positive"
+    trace marker
+    return value > 0
+type Positive = int64 where positive_check(value)
+function high_check(value: int64) returns bool:
+    string marker = "high"
+    trace marker
+    return value > 10
+type High = Positive where high_check(value)
+function root_lower_check(view values: list[Positive]) returns bool:
+    string marker = "rootlower"
+    trace marker
+    return list.length(view values) > 0
+type RootLower = list[Positive] where root_lower_check(view value)
+function root_upper_check(view values: list[Positive]) returns bool:
+    string marker = "rootupper"
+    trace marker
+    return list.length(view values) > 0
+type RootUpper = RootLower where root_upper_check(view value)
+struct Holder:
+    payload: RootUpper
+enum Event:
+    content(payload: RootUpper)
+machine Session:
+    states:
+        content(payload: RootUpper)
+        empty
+    transitions:
+        content to empty
+function seed() returns RootUpper:
+    Positive value = 7 handle error:
+        return seed()
+    RootLower lower = list(value) handle error:
+        return seed()
+    RootUpper upper = clone lower handle error:
+        return seed()
+    return run run upper
+function record_field() returns TypeField:
+    return list.get[TypeField](type.fields[Holder](), 0) handle:
+        return record_field()
+function event_field(view source: Event) returns TypeField:
+    TypeVariant variant = type.variant_value[Event](view source)
+    return list.get[TypeField](variant.fields, 0) handle:
+        return event_field(view source)
+function session_field(view source: Session) returns TypeField:
+    TypeMachineState state = type.machine_state_value[Session](view source)
+    return list.get[TypeField](state.fields, 0) handle:
+        return session_field(view source)
+function read_record(view source: Holder, view field: TypeField) returns RootLower:
+    return type.field_value[Holder, RootLower](view source, view field)
+function read_event(view source: Event, view field: TypeField) returns RootLower:
+    return type.variant_field_value[Event, RootLower](view source, view field)
+function read_session(view source: Session, view field: TypeField) returns RootLower:
+    return type.machine_field_value[Session, RootLower](view source, view field)
+function summarize(items: RootLower) returns string:
+    trace items
+    return "exact"
+function report() returns string:
+    Holder record = Holder(payload: seed()) handle error:
+        return error
+    Event event = Event.content(seed())
+    Session session = Session(content, seed())
+    TypeField record_selector = record_field()
+    TypeField event_selector = event_field(view event)
+    TypeField session_selector = session_field(view session)
+    string first = summarize(read_record(view record, view record_selector))
+    string second = summarize(read_event(view event, view event_selector))
+    string third = summarize(read_session(view session, view session_selector))
+    trace record
+    trace event
+    trace session
+    return "{first}|{second}|{third}"
+function main(stdout: Stdout) returns nothing:
+    bytes earlier = bytes.from_string("earlier-owned")
+    list[string] retained = list("kept", "owned")
+    Stdout.write(view stdout, "before\n")
+    string value = report()
+    Stdout.write(view stdout, "after:{value}:{bytes.to_hex(view earlier)}:{list.length(view retained)}\n")

@@ -2717,3 +2717,123 @@ fn native_machine_rebinding_rejects_foreign_owner_and_forged_exact_targets() {
         );
     }
 }
+
+const RECURSIVE_REFLECTED_SOURCE: &str = r#"namespace app
+type Positive = int64 where value > 0
+struct Record:
+    values: list[optional[result[map[int64, list[int64]], set[int64]]]]
+function inspect(view source: Record, view field: TypeField) returns list[optional[result[map[Positive, list[Positive]], set[Positive]]]]:
+    return source into view type.field_value[Record, list[optional[result[map[Positive, list[Positive]], set[Positive]]]]](view field)
+"#;
+
+#[test]
+fn native_recursive_reflected_producers_emit_existing_projection_and_failure_leaves() {
+    let (program, types) = lower_source(RECURSIVE_REFLECTED_SOURCE);
+    let artifact = emit_host_object(&program, &types).expect("recursive reflected checked CFG");
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    for leaf in [
+        jett_runtime::native_abi::values::NativeLeaf::RejectPendingHandle,
+        jett_runtime::native_abi::values::NativeLeaf::ListElementClone,
+        jett_runtime::native_abi::values::NativeLeaf::SetElementClone,
+        jett_runtime::native_abi::values::NativeLeaf::MapKeyClone,
+        jett_runtime::native_abi::values::NativeLeaf::MapValueClone,
+        jett_runtime::native_abi::values::NativeLeaf::SumClone,
+        jett_runtime::native_abi::values::NativeLeaf::SumTake,
+        jett_runtime::native_abi::values::NativeLeaf::RuntimeFailMessage,
+    ] {
+        assert!(
+            object
+                .symbols()
+                .any(|symbol| symbol.name().ok() == Some(leaf.symbol())),
+            "{} must use the existing native ABI",
+            leaf.symbol()
+        );
+    }
+}
+
+#[test]
+fn native_recursive_reflected_readiness_rejects_wrong_kind_and_missing_source() {
+    for corruption in [0, 1, 2] {
+        let (mut program, types) = lower_source(RECURSIVE_REFLECTED_SOURCE);
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        let scalar = function
+            .locals
+            .iter()
+            .find(|local| local.ty == TypeInterner::BOOL)
+            .unwrap()
+            .id;
+        let statement = function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find(|statement| {
+                matches!(
+                    statement.kind,
+                    jett_mir::StatementKind::ReflectedContainerReady { .. }
+                )
+            })
+            .expect("typed reflected readiness");
+        let jett_mir::StatementKind::ReflectedContainerReady { source, kind } = &mut statement.kind
+        else {
+            unreachable!()
+        };
+        match corruption {
+            0 => *kind = jett_mir::ReflectedContainerKind::Result,
+            1 => *source = jett_hir::LocalId::new(u32::MAX),
+            2 => *source = scalar,
+            _ => unreachable!(),
+        }
+        let rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            emit_host_object(&program, &types)
+        }));
+        let expected = if corruption == 1 {
+            matches!(rejection, Ok(Err(CodegenError::InvalidMir(_))))
+        } else {
+            matches!(rejection, Ok(Err(CodegenError::InvalidMirContract { .. })))
+        };
+        assert!(
+            expected,
+            "readiness corruption {corruption} must be rejected without panicking: {rejection:?}"
+        );
+    }
+}
+
+#[test]
+fn native_recursive_reflected_new_root_keeps_original_declared_base_preflight() {
+    let (program, types) = lower_source(
+        r#"namespace app
+type Positive = int64 where value > 0
+type Values = list[Positive] where true
+type Independent = list[Positive] where true
+struct Record:
+    values: Values
+function inspect(view source: Record, view field: TypeField) returns Independent:
+    return source into view type.field_value[Record, Independent](view field)
+"#,
+    );
+    let artifact = emit_host_object(&program, &types).expect("original declared root base CFG");
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    assert!(object.symbols().any(|symbol| {
+        symbol.name().ok()
+            == Some(jett_runtime::native_abi::values::NativeLeaf::RejectPendingHandle.symbol())
+    }));
+    let function = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let checks: Vec<_> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| match &statement.kind {
+            jett_mir::StatementKind::CheckRefinement { type_name, .. } => Some(type_name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(checks, ["app.Independent"]);
+}

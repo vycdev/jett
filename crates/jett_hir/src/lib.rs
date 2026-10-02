@@ -36,10 +36,11 @@ pub use local_views::{
     is_borrowed_local, local_view_root, validate_local_view_initializer, validate_local_views,
 };
 pub use reflected_fields::{
-    ReflectedFieldAction, ReflectedFieldPlan, ReflectedFieldRequirement, ReflectedFieldUnsupported,
-    ReflectedFieldValidation, is_reflected_field_intrinsic,
-    refinement_predicate_declaration_matches, reflected_field_layout, reflected_field_requirement,
-    valid_reflected_field_metadata_type, validate_reflected_field_plans,
+    ReflectedFieldAction, ReflectedFieldPlan, ReflectedFieldRequirement,
+    ReflectedFieldRequirementPlan, ReflectedFieldUnsupported, ReflectedFieldValidation,
+    is_reflected_field_intrinsic, refinement_predicate_declaration_matches, reflected_field_layout,
+    reflected_field_requirement, valid_reflected_field_metadata_type,
+    validate_reflected_field_plans,
 };
 pub use type_validation::validate_backend_types;
 
@@ -895,28 +896,28 @@ impl Validator<'_> {
                 match (is_reflected_field_intrinsic(*intrinsic), field_validation) {
                     (true, Some(ReflectedFieldValidation::Validate(plans))) => {
                         for plan in plans {
-                            if let ReflectedFieldAction::Predicates(predicates) = &plan.action {
-                                for predicate in predicates {
-                                    let valid = self
-                                        .program
-                                        .functions
-                                        .get(predicate.function.index() as usize)
-                                        .is_some_and(|function| {
-                                            refinement_predicate_declaration_matches(
+                            for predicate in plan.predicates() {
+                                let valid = self
+                                    .program
+                                    .functions
+                                    .get(predicate.function.index() as usize)
+                                    .is_some_and(|function| {
+                                        function.id == predicate.function
+                                            && refinement_predicate_declaration_matches(
                                                 &function.identity.declaration,
                                                 &predicate.type_name,
-                                            ) && function.params.len() == 1
-                                                && function.capture_count == 0
-                                                && function.params[0].mode == ParamMode::Owned
-                                                && function.params[0].ty == predicate.input_type
-                                                && function.return_type == TypeInterner::BOOL
-                                        });
-                                    if !valid {
-                                        self.error(
-                                            expression.span,
-                                            "reflected validation predicate function is invalid",
-                                        );
-                                    }
+                                            )
+                                            && function.params.len() == 1
+                                            && function.capture_count == 0
+                                            && function.params[0].mode == ParamMode::Owned
+                                            && function.params[0].ty == predicate.input_type
+                                            && function.return_type == TypeInterner::BOOL
+                                    });
+                                if !valid {
+                                    self.error(
+                                        expression.span,
+                                        "reflected validation predicate function is invalid",
+                                    );
                                 }
                             }
                         }

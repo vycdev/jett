@@ -43,6 +43,10 @@ impl CopyValuePlan {
                 let mut reads = Set::new();
                 let mut temporaries = 0;
                 let definition = match &statement.kind {
+                    StatementKind::ReflectedContainerReady { source, .. } => {
+                        reads.insert(source.index() as usize);
+                        None
+                    }
                     StatementKind::IterationBorrow { source, .. } => {
                         reads.insert(source.root().index() as usize);
                         None

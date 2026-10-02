@@ -10,7 +10,7 @@ pub use defs::{
     BitfieldId, EnumDef, EnumId, FunctionSig, InterfaceDef, InterfaceId, MachineDef, MachineId,
     MachineStateDef, MachineStateId, MachineTransitionDef, StructDef, StructId, VariantDef,
 };
-pub use interner::TypeInterner;
+pub use interner::{NominalTypeArgumentsError, TypeInterner};
 pub use reflection::{
     ReflectionBitfieldFieldInfo, ReflectionBitfieldInfo, ReflectionFieldInfo,
     ReflectionMachineInfo, ReflectionMachineStateInfo, ReflectionMachineTransitionInfo,

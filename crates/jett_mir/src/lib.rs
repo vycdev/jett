@@ -89,6 +89,39 @@ pub enum SequencePart {
     Key,
     Value,
 }
+/// Internal producer preflight; it has no source spelling or payload observer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReflectedContainerKind {
+    List,
+    Set,
+    Map,
+    Optional,
+    Result,
+}
+impl ReflectedContainerKind {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::List => "reflected field refinement: expected a ready list value",
+            Self::Set => "reflected field refinement: expected a ready set value",
+            Self::Map => "reflected field refinement: expected a ready map value",
+            Self::Optional => "reflected field refinement: expected a ready optional value",
+            Self::Result => "reflected field refinement: expected a ready result value",
+        }
+    }
+    pub fn matches_type(self, types: &TypeInterner, ty: TypeId) -> bool {
+        if ty.index() as usize >= types.len() {
+            return false;
+        }
+        matches!(
+            (self, types.resolve(ty)),
+            (Self::List, jett_types::Type::List(_))
+                | (Self::Set, jett_types::Type::Set(_))
+                | (Self::Map, jett_types::Type::Map(..))
+                | (Self::Optional, jett_types::Type::Optional(_))
+                | (Self::Result, jett_types::Type::Result(..))
+        )
+    }
+}
 /// One checked struct-field step in a borrowed sequence projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SequenceField {
@@ -125,6 +158,11 @@ impl SequenceSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// Reject a changed wrapper's outer pending depth before any producer predicate.
+    ReflectedContainerReady {
+        source: LocalId,
+        kind: ReflectedContainerKind,
+    },
     SequenceLength {
         source: SequenceSource,
         target: LocalId,
@@ -460,6 +498,9 @@ impl FunctionValidator<'_, '_> {
 
     fn statement(&mut self, statement: &Statement) {
         match &statement.kind {
+            StatementKind::ReflectedContainerReady { source, .. } => {
+                self.check_local(*source, statement.span, "reflected container source");
+            }
             StatementKind::SequenceLength { source, target } => {
                 self.check_sequence_source(source, statement.span);
                 self.check_local(*target, statement.span, "sequence length");

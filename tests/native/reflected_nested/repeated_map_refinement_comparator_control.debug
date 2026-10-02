@@ -1,0 +1,15 @@
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace marker: string = positive
+trace record: app.Holder = app.Holder(payload: map(1: 7, 2: 9))
+trace event: app.Event = app.Event.content(map(1: 7, 2: 9))
+trace session: app.Session = app.Session@content(map(1: 7, 2: 9))

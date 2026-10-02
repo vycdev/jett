@@ -310,6 +310,9 @@ impl Flow<'_> {
         let block = &self.function.blocks[id.index() as usize];
         for statement in &block.statements {
             match &statement.kind {
+                StatementKind::ReflectedContainerReady { source, .. } => {
+                    self.read(*source, "reflected container source")?;
+                }
                 StatementKind::IterationBorrow {
                     source,
                     token,

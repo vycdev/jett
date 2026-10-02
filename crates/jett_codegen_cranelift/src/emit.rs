@@ -1078,6 +1078,32 @@ struct Translator<'a, 'builder> {
 impl Translator<'_, '_> {
     fn statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match &statement.kind {
+            StatementKind::ReflectedContainerReady { source, kind } => {
+                let ty = self.local_types[source.index() as usize].ty;
+                let expression = Expression {
+                    kind: ExpressionKind::Local(*source),
+                    ty,
+                    span: statement.span,
+                };
+                let handle = self.argument(&expression, true)?;
+                let handle = self.scalar(handle, statement.span)?;
+                // Extend only dispatch tags of the existing custom-message leaf.
+                let tag = match kind {
+                    jett_mir::ReflectedContainerKind::List => 2,
+                    jett_mir::ReflectedContainerKind::Set => 5,
+                    jett_mir::ReflectedContainerKind::Map => 6,
+                    jett_mir::ReflectedContainerKind::Optional
+                    | jett_mir::ReflectedContainerKind::Result => 7,
+                };
+                let tag = self.builder.ins().iconst(ir::types::I32, tag);
+                let (pointer, length) = self.static_data(kind.message().as_bytes())?;
+                self.leaf(
+                    NativeLeaf::RejectPendingHandle,
+                    &[handle, tag, pointer, length],
+                    true,
+                )?;
+                Ok(())
+            }
             StatementKind::IterationBorrow { .. } => Ok(()),
             StatementKind::SequenceLength { source, target }
             | StatementKind::SequenceGet { source, target, .. } => {

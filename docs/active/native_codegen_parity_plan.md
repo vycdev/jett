@@ -1761,3 +1761,24 @@ types, callable and local type trees, non-consuming bounded recognition, and
 malformed-input recovery. All 92 parser tests and 598 frontend fixtures pass.
 This preserves the existing grammar and does not claim completion of recursive
 reflected-field execution or change the broad 85% estimate.
+
+### Recursive builtin reflected producers
+
+Already admitted list, set, map, optional, and result requests now carry recursive
+typed producer plans from HIR through MIR. Structural preflight over every
+occupied child completes before new predicates; child checks precede enclosing
+root checks, and map keys precede values. Declared exact/ancestor proofs and
+shared root prefixes skip established checks. Changed wrappers still require
+readiness when their children reuse proof, without joining pending values.
+Private projections preserve the candidate and original source through success,
+failure, and cleanup.
+
+Generic nominal argument facts come from canonical checker TypeIds, including
+unused parameters and aliases. Ordinary nominal payload fields are excluded
+from requested-refinement detection, and backend validation visits unused args.
+All ten new linked groups pass across 96 cases, every getter/direct/pipeline
+form, both runtime profiles, source deletion, terminal errors, and compiled
+verify/property suites with 100 trials. Library, object, runtime, and frontend
+checks pass; supplemental conformance now contains 318 tests. The fixed inventory
+and broad 85% estimate are unchanged. Broader reflected admission, open semantic
+rules, and final workspace/distribution acceptance retain their separate gates.

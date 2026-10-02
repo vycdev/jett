@@ -3,6 +3,8 @@ use super::*;
 use jett_hir::{ExpressionKind, HandleKind};
 use jett_types::{Type, TypeInterner};
 
+mod reflected;
+
 fn has_extractable_handle(expression: &Expression) -> bool {
     match &expression.kind {
         ExpressionKind::Handle {
@@ -1320,62 +1322,8 @@ impl Builder<'_> {
                 span,
             );
             self.current = case;
-            match &plan.action {
-                hir::ReflectedFieldAction::Exact => self.close_to(continuation, span),
-                hir::ReflectedFieldAction::Unsupported(reason) => {
-                    self.push(
-                        StatementKind::Evaluate(Expression {
-                            kind: ExpressionKind::RuntimeFailure(reason.message().into()),
-                            ty: TypeInterner::NOTHING,
-                            span,
-                        }),
-                        span,
-                    );
-                    self.terminate(TerminatorKind::Unreachable, span);
-                }
-                hir::ReflectedFieldAction::Predicates(predicates) => {
-                    for predicate in predicates {
-                        let input = self.refinement_predicate_input(
-                            candidate,
-                            expression.ty,
-                            predicate,
-                            span,
-                        );
-                        let (error_text, passed) =
-                            self.lower_refinement_check(input, predicate, span);
-                        let accepted = self.new_block(span);
-                        let rejected = self.new_block(span);
-                        self.terminate(
-                            TerminatorKind::Branch {
-                                condition: Expression {
-                                    kind: ExpressionKind::Local(passed),
-                                    ty: TypeInterner::BOOL,
-                                    span,
-                                },
-                                then_block: accepted,
-                                else_block: rejected,
-                            },
-                            span,
-                        );
-                        self.current = rejected;
-                        self.push(
-                            StatementKind::Evaluate(Expression {
-                                kind: ExpressionKind::RuntimeFailureMessage(Box::new(Expression {
-                                    kind: ExpressionKind::Local(error_text),
-                                    ty: TypeInterner::STRING,
-                                    span,
-                                })),
-                                ty: TypeInterner::NOTHING,
-                                span,
-                            }),
-                            span,
-                        );
-                        self.terminate(TerminatorKind::Unreachable, span);
-                        self.current = accepted;
-                    }
-                    self.close_to(continuation, span);
-                }
-            }
+            self.lower_reflected_plan(candidate, plan, span);
+            self.close_to(continuation, span);
             self.current = next;
         }
         // A successful getter already proved one of these exact member/index
@@ -2285,6 +2233,8 @@ impl Builder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod reflected_recursive;
 
     fn handler_source_hir(source: &str) -> (hir::Program, TypeInterner) {
         handler_source_hir_with_equatable(source, false)

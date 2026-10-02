@@ -1887,6 +1887,9 @@ impl NativeValues {
                     .ok_or(INVALID_STRUCT)?
                     .pending_depth
             }
+            5 => self.sets.get(&handle).ok_or(INVALID_SET)?.pending_depth,
+            6 => self.maps.get(&handle).ok_or(INVALID_MAP)?.pending_depth,
+            7 => self.sums.get(&handle).ok_or(INVALID_SUM)?.pending_depth,
             _ => return Err(INVALID_PENDING_HANDLE_CHECK),
         };
         if depth == 0 {
@@ -10550,3 +10553,6 @@ mod tests {
         assert!(values.is_empty());
     }
 }
+
+#[cfg(test)]
+mod reflected_container_tests;
