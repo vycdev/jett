@@ -820,7 +820,19 @@ impl Verifier<'_> {
                     local.ty,
                     value.ty,
                     "assigned value type does not match its local",
-                )
+                )?;
+                // Storage can be a bare machine while a visible guard makes
+                // this assignment target exact. Preserve that checked state.
+                if matches!(self.types.resolve(target.ty), Type::MachineState { .. }) {
+                    self.require_same_type(
+                        function,
+                        statement.span,
+                        target.ty,
+                        value.ty,
+                        "assigned value type does not match its exact machine target",
+                    )?;
+                }
+                Ok(())
             }
             StatementKind::Evaluate(value) => self.expression(function, value),
             StatementKind::HandleDefault(_) => {

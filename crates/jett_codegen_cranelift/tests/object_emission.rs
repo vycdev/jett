@@ -2588,3 +2588,132 @@ fn native_reflected_value_pipelines_reject_missing_and_wrong_typed_metadata() {
         }
     }
 }
+
+const MACHINE_REBINDING: &str = r#"namespace app
+machine Session:
+    states:
+        empty
+        content(values: list[int64])
+    transitions:
+        empty to content
+machine Other:
+    states:
+        empty
+        content(values: list[int64])
+    transitions:
+        empty to content
+function other() returns Other at empty:
+    return Other(empty)
+function replace(values: list[int64]) returns Session:
+    mutable Session source = Session(empty)
+    source = Session(content, values)
+    source = Session(empty)
+    return source
+function copied(view source: Session at content) returns Session:
+    mutable Session destination = Session(empty)
+    destination = clone source
+    return destination
+function pending() returns Session:
+    mutable Session source = run Session(empty)
+    source = run run Session(content, list(7))
+    return source
+function same_guard() returns Session:
+    mutable Session source = Session(content, list(1))
+    if source at content:
+        source = Session(content, list(2))
+    return source
+"#;
+
+#[test]
+fn native_machine_rebinding_emits_whole_owner_storage_and_owned_cleanup() {
+    let (program, types) = lower_source(MACHINE_REBINDING);
+    for name in ["replace", "copied", "pending", "same_guard"] {
+        let function = program
+            .functions
+            .iter()
+            .find(|f| f.identity.declaration.name == name)
+            .unwrap();
+        let local = function.locals.iter().find(|local| local.mutable).unwrap();
+        assert!(
+            matches!(types.resolve(local.ty), Type::Machine(_)),
+            "{name}: bare annotation owns the whole machine"
+        );
+    }
+    let artifact = emit_host_object(&program, &types).expect("checked whole-machine rebinding");
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    let drop = jett_runtime::native_abi::values::NativeLeaf::DropValue.symbol();
+    assert!(
+        object
+            .symbols()
+            .any(|symbol| symbol.name().ok() == Some(drop)),
+        "replaced owned payloads retain cleanup"
+    );
+}
+
+#[test]
+fn native_machine_rebinding_rejects_foreign_owner_and_forged_exact_targets() {
+    for mutation in ["foreign_owner", "explicit_target", "guarded_target"] {
+        let (mut program, types) = lower_source(MACHINE_REBINDING);
+        let foreign = program
+            .functions
+            .iter()
+            .find(|f| f.identity.declaration.name == "other")
+            .unwrap()
+            .return_type;
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|f| f.identity.declaration.name == "replace")
+            .unwrap();
+        let initial = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                jett_mir::StatementKind::Let { local, value }
+                    if matches!(
+                        value.kind,
+                        jett_hir::ExpressionKind::MachineConstruct { .. }
+                    ) =>
+                {
+                    Some((*local, value.ty))
+                }
+                _ => None,
+            })
+            .unwrap();
+        if mutation == "explicit_target" {
+            function.locals[initial.0.index() as usize].ty = initial.1;
+        }
+        let (target, value) = function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                jett_mir::StatementKind::Assign { target, value } => Some((target, value)),
+                _ => None,
+            })
+            .unwrap();
+        if mutation == "foreign_owner" {
+            value.kind = jett_hir::ExpressionKind::MachineConstruct {
+                state_type: foreign,
+                state: jett_hir::StateId::new(0),
+                payloads: vec![],
+            };
+            value.ty = foreign;
+        } else if mutation == "guarded_target" {
+            // The storage remains the full machine; only this checked target
+            // is exact, as it is inside a visible source-level state guard.
+            target.ty = initial.1;
+        }
+        let error = emit_host_object(&program, &types).expect_err("forged machine assignment");
+        let expected = if mutation == "guarded_target" {
+            "exact machine target"
+        } else {
+            "match its local"
+        };
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. } if message.contains(expected)),
+            "{mutation}: {error:?}"
+        );
+    }
+}

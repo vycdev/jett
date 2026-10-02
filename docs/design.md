@@ -1906,7 +1906,9 @@ accepting or returning bare `UserAuth`, the value must be guarded again before
 it can flow back into a `UserAuth at logged_in` parameter. This erasure is
 permanent and signature-directed: a function declared `returns UserAuth`
 returns a bare value even when its implementation returned `UserAuth at
-logged_in`; the compiler does not preserve hidden caller provenance. Guards
+logged_in`; the compiler does not preserve hidden caller provenance. A mutable
+local explicitly declared as bare `UserAuth` keeps that full type when rebound
+to another valid value of the same machine. Guards
 over arbitrary paths such as `holder.session at logged_in` are state tests only;
 narrowing is permanently limited to bare local variables, so paths do not
 narrow later field accesses.

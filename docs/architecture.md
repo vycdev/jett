@@ -830,6 +830,10 @@ For each `machine` type:
   when an API intentionally erases precise state. Parameter, return, and local
   annotation boundaries are authoritative: once typed as bare `Machine`, exact
   state is forgotten and is not recovered from construction or caller history.
+  Native HIR retains that declared bare type for local storage while constructor
+  and assignment expressions keep their precise state, owner, and source span.
+  Ordinary owned rebinding therefore accepts another valid state of the same
+  machine and retires the old payload through the existing cleanup plan.
   A positive `if value at state:` guard narrows that local variable back to
   `Machine at state` for the guarded branch, exposing state payload fields and
   legal transitions there. A bare `Machine` value cannot satisfy a
@@ -842,6 +846,8 @@ For each `machine` type:
 - A narrowed local keeps the exact state type for the guarded branch. Assigning
   a different state to that same local is rejected rather than silently widening
   the branch fact in place.
+  Native assignment verification checks the target's exact state alongside the
+  underlying storage type, including when the backing slot is a bare machine.
 - If the guarded value is a bare machine and an `if` / `else if` chain excludes
   all but one declared state, the final `else` branch narrows to that single
   remaining state. For `if not (value at state):`, the immediate `else` branch

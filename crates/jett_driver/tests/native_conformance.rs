@@ -7819,3 +7819,127 @@ fn native_contextual_secret_constructors_match_interpreter_in_both_profiles() {
         assert!(actual.stderr.is_empty(), "{actual:?}");
     }
 }
+
+const WHOLE_MACHINE_REBINDING: &str = r#"namespace app
+machine Session:
+    states:
+        empty
+        content(values: list[int64])
+    transitions:
+        empty to content
+function describe(view source: Session) returns string:
+    if source at content:
+        int64 count = list.length[int64](view source.values)
+        int64 first = list.get[int64](view source.values, 0) handle:
+            default -1
+        return "content:{count}:{first}"
+    return "empty"
+function report() returns string:
+    mutable Session source = Session(content, list(3, 5))
+    string before = describe(view source)
+    source = Session(empty)
+    string blank = describe(view source)
+    Session at content precise = Session(content, list(7, 11, 13))
+    source = clone precise
+    string copied = describe(view source)
+    string original = describe(view precise)
+    source = precise
+    string moved = describe(view source)
+    source = clone source
+    string cloned = describe(view source)
+    return "{before}|{blank}|{copied}|{original}|{moved}|{cloned}"
+function guarded_rebind() returns string:
+    mutable Session source = Session(content, list(1))
+    if source at content:
+        source = Session(content, list(19, 23))
+        return describe(view source)
+    return "missing"
+function cycle(count: int64) returns string:
+    mutable Session source = Session(empty)
+    mutable int64 cursor = 0
+    while cursor < count:
+        source = Session(content, list(cursor, cursor + 1))
+        source = Session(empty)
+        cursor = cursor + 1
+    source = Session(content, list(31, 37))
+    return describe(view source)
+function pending_report() returns string:
+    mutable Session current = Session(content, list(1, 2))
+    current = run run Session(content, list(41))
+    trace current
+    Session once = join current handle error:
+        return error
+    trace once
+    Session ready = join once handle error:
+        return error
+    return describe(view ready)
+function main(stdout: Stdout) returns nothing:
+    string baked = comptime report()
+    Stdout.write(view stdout, "moves:{report()}|{baked}\n")
+    Stdout.write(view stdout, "guard:{guarded_rebind()}\ncycle:{cycle(32)}\npending:{pending_report()}\n")
+verify whole_machine_rebinding:
+    assert report() == comptime report()
+    assert guarded_rebind() == "content:2:19"
+    assert cycle(32) == "content:2:31"
+property whole_machine_rebinding_trials:
+    given many: bool
+    mutable int64 count = 1
+    if many:
+        count = 32
+    assert cycle(count) == "content:2:31"
+"#;
+
+#[test]
+fn native_whole_machine_rebinding_preserves_owned_payloads_pending_depth_and_source_independence() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("machine_rebinding.jett");
+    fs::write(&source, WHOLE_MACHINE_REBINDING).unwrap();
+    let report = "content:2:3|empty|content:3:7|content:3:7|content:3:7|content:3:7";
+    let stdout = format!(
+        "moves:{report}|{report}\nguard:content:2:19\ncycle:content:2:31\npending:content:1:41\n"
+    );
+    let debug = [
+        "trace current: app.Session = pending(pending(app.Session@content(list(41))))",
+        "trace once: app.Session = pending(app.Session@content(list(41)))",
+    ];
+    let expected =
+        jett_driver::run_file_capture_outcome(&source).expect("selected whole-machine moves");
+    assert_eq!(expected.stdout, stdout);
+    assert_eq!(expected.debug_output, debug);
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory
+            .path()
+            .join(format!("machine_rebinding_{release}.exe"));
+        jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher(),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .expect("native whole-machine moves");
+        binaries.push((binary, release));
+    }
+    let verify = directory.path().join("machine_rebinding_verify.exe");
+    build_host_verify_suite_executable(&source, launcher(), &verify).unwrap();
+    let property = directory.path().join("machine_rebinding_property.exe");
+    build_host_property_suite_executable(&source, launcher(), &property).unwrap();
+    fs::remove_file(&source).unwrap();
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert_eq!(actual.status.code(), Some(0), "{actual:?}");
+        assert_eq!(actual.stdout, stdout.as_bytes());
+        let stderr = if release {
+            String::new()
+        } else {
+            format!("{}\n", debug.join("\n"))
+        };
+        assert_eq!(actual.stderr, stderr.as_bytes(), "{actual:?}");
+    }
+    for binary in [verify, property] {
+        let actual = run_bounded(&binary, directory.path());
+        assert_eq!(actual.status.code(), Some(0), "{actual:?}");
+        assert!(actual.stdout.is_empty(), "{actual:?}");
+        assert!(actual.stderr.is_empty(), "{actual:?}");
+    }
+}

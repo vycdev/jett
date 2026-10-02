@@ -1124,6 +1124,25 @@ controls pass through all three getters with the expected predicate traces and
 unchanged sources. This reference repair does not widen the native raw getter's
 currently narrower nested-type compatibility gate.
 
+Native whole-machine local storage now retains the checked bare machine
+annotation instead of the initializer's precise state. Owned mutable locals can
+therefore be rebound to another valid state of the same nominal machine, as the
+existing annotation-erasure rule selects. Producer types, owner identities, and
+source spans remain precise. Assignment verification retains the storage/owner
+check and additionally enforces an exact checked state target when a visible
+guard narrows a full-machine slot; foreign owners and other states still fail.
+
+Two HIR and two object regressions pass, along with all 229 HIR/MIR/codegen
+library tests and all 59 object-emission tests. The linked regression passes in
+debug and release after source removal, including owned replacement, move and
+clone independence, self-clone, 32 repeated cleanup cycles, same-state guarded
+replacement, pending depths 2/1, closed comptime, compiled verify and 100-trial
+property execution. Fresh reference CLI output and traces match the independent
+oracle. This closes the separate whole-machine reassignment defect found while
+isolating the observer pipeline fixtures. Native conformance now has 305
+supplemental tests; the fixed inventory denominator is unchanged. Full workspace
+and supported-host distribution gates remain required for this later revision.
+
 The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).
 Supplemental cases do not change the inventory denominator. Full workspace and

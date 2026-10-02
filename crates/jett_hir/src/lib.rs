@@ -2721,21 +2721,23 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         .get(&decl.name.span)
                         .copied()
                         .filter(|ty| {
-                            // A qualified binding can receive a less-qualified
-                            // producer; the later coercion preserves both types.
-                            matches!(self.parent.check.interner.resolve(*ty), Type::Secret(_))
-                                || interface_values::contains_erased_boundary(
-                                    &self.parent.check.interner,
-                                    *ty,
-                                )
-                                || self.expression_types.get(&decl.value.span()).is_some_and(
-                                    |actual| {
-                                        interface_values::contains_erased_boundary(
-                                            &self.parent.check.interner,
-                                            *actual,
-                                        )
-                                    },
-                                )
+                            // Bare machine annotations erase precise state in
+                            // the binding while its producer keeps that state.
+                            // Secret qualification also preserves both sides.
+                            matches!(
+                                self.parent.check.interner.resolve(*ty),
+                                Type::Machine(_) | Type::Secret(_)
+                            ) || interface_values::contains_erased_boundary(
+                                &self.parent.check.interner,
+                                *ty,
+                            ) || self.expression_types.get(&decl.value.span()).is_some_and(
+                                |actual| {
+                                    interface_values::contains_erased_boundary(
+                                        &self.parent.check.interner,
+                                        *actual,
+                                    )
+                                },
+                            )
                         })
                         .or_else(|| self.expression_types.get(&decl.value.span()).copied())
                         .or_else(|| self.parent.check.definition_types.get(&definition).copied())
@@ -11517,5 +11519,134 @@ function main() returns nothing:
         assert_eq!(*ty, adapter.return_type);
         assert_ne!(*ty, value.ty);
         assert!(adapters.is_empty());
+    }
+
+    #[test]
+    fn machine_bare_local_annotations_keep_storage_type_and_exact_producer_provenance() {
+        let (program, checked) = lower_source_with_check(
+            r#"namespace app
+machine Session:
+    states:
+        empty
+        content(values: list[int64])
+    transitions:
+        empty to content
+type SessionAlias = Session
+function replace() returns Session:
+    mutable Session source = Session(empty)
+    source = Session(content, list(7))
+    return source
+function immutable() returns Session:
+    Session source = Session(content, list(7))
+    return source
+function alias() returns Session:
+    SessionAlias source = Session(empty)
+    return source
+function copy(view source: Session at content) returns Session:
+    Session erased = clone source
+    return erased
+function pending() returns Session:
+    mutable Session source = run Session(empty)
+    source = run run Session(content, list(7))
+    return source
+function precise() returns Session at empty:
+    Session at empty source = Session(empty)
+    return source
+"#,
+            false,
+        );
+        validate(&program).unwrap();
+        validate_backend_types(&program, &checked.interner).unwrap();
+        for name in ["replace", "immutable", "alias", "copy", "pending"] {
+            let function = program
+                .functions
+                .iter()
+                .find(|f| f.identity.declaration.name == name)
+                .unwrap();
+            let StatementKind::Let { local, value } = &function.body.statements[0].kind else {
+                panic!("{name}: machine binding");
+            };
+            let local = &function.locals[local.index() as usize];
+            let Type::Machine(owner) = checked.interner.resolve(local.ty) else {
+                panic!("{name}: declaration must erase initializer state in storage");
+            };
+            assert_eq!(local.ty, function.return_type);
+            assert_eq!(local.debug_ty, local.ty);
+            assert_eq!(checked.type_map.get(&value.span), Some(&value.ty));
+            let Type::MachineState { machine, .. } = checked.interner.resolve(value.ty) else {
+                panic!("{name}: original producer state must remain precise");
+            };
+            assert_eq!(machine, owner);
+            if name == "copy" {
+                assert!(matches!(value.kind, ExpressionKind::Clone(_)));
+            } else {
+                let mut producer = value;
+                while let ExpressionKind::Run(inner) = &producer.kind {
+                    producer = inner;
+                }
+                let ExpressionKind::MachineConstruct {
+                    state_type, state, ..
+                } = &producer.kind
+                else {
+                    panic!("{name}: exact constructor must remain intact");
+                };
+                assert_eq!(*state_type, producer.ty);
+                let Type::MachineState {
+                    state: expected, ..
+                } = checked.interner.resolve(*state_type)
+                else {
+                    panic!("checked constructor state");
+                };
+                assert_eq!(state.index(), expected.index());
+            }
+            if matches!(name, "replace" | "pending") {
+                let StatementKind::Assign { target, value } = &function.body.statements[1].kind
+                else {
+                    panic!("{name}: ordinary rebinding");
+                };
+                assert_eq!(target.ty, local.ty);
+                assert_eq!(checked.type_map.get(&value.span), Some(&value.ty));
+                assert!(
+                    matches!(checked.interner.resolve(value.ty), Type::MachineState { machine, .. } if machine == owner)
+                );
+            }
+        }
+        let precise = program
+            .functions
+            .iter()
+            .find(|f| f.identity.declaration.name == "precise")
+            .unwrap();
+        let StatementKind::Let { local, value } = &precise.body.statements[0].kind else {
+            panic!("precise binding");
+        };
+        assert_eq!(precise.locals[local.index() as usize].ty, value.ty);
+        assert!(matches!(
+            checked.interner.resolve(value.ty),
+            Type::MachineState { .. }
+        ));
+    }
+
+    #[test]
+    fn machine_rebinding_does_not_widen_explicit_or_guarded_state_targets() {
+        for body in [
+            "    mutable Session at empty source = Session(empty)\n    source = Session(content, list(7))\n    return source\n",
+            "    mutable Session source = Session(empty)\n    if source at empty:\n        source = Session(content, list(7))\n    return source\n",
+        ] {
+            let source = format!(
+                "namespace app\nmachine Session:\n    states:\n        empty\n        content(values: list[int64])\n    transitions:\n        empty to content\nfunction invalid() returns Session:\n{body}"
+            );
+            let parsed = jett_parser::parse(&source, FileId::new(0));
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let resolved = jett_resolve::resolve(&parsed.module);
+            let checked = jett_typecheck::check(&parsed.module, &resolved);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.severity == jett_diagnostics::Severity::Error),
+                "precise assignment must remain rejected: {:?}",
+                checked.diagnostics
+            );
+        }
     }
 }
