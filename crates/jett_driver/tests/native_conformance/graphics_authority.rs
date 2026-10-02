@@ -26,7 +26,7 @@ fn native_pending_graphics_authority_fails_before_config_validation_in_both_prof
     let expected = jett_driver::run_file_capture_outcome(&source)
         .expect_err("pending Graphics authority must fail before the width-zero domain error");
     assert_eq!(expected.output.stdout, "before\n");
-    assert!(expected.output.debug_output.is_empty());
+    assert!(expected.output.debug_events.is_empty());
     assert_eq!(
         expected.message,
         "runtime error: graphics.__run expects a Graphics capability"
@@ -191,7 +191,7 @@ fn native_graphics_authority_depth_and_ready_controls_match_reference_in_both_pr
                 let expected =
                     outcome.expect_err(&format!("{name} must fail before graphics effects"));
                 assert_eq!(expected.output.stdout, "before\n", "{name}");
-                assert!(expected.output.debug_output.is_empty(), "{name}");
+                assert!(expected.output.debug_events.is_empty(), "{name}");
                 assert_eq!(
                     expected.message,
                     format!("runtime error: {message}"),
@@ -201,7 +201,7 @@ fn native_graphics_authority_depth_and_ready_controls_match_reference_in_both_pr
             AuthorityExpectation::Handled { attempts } => {
                 let expected = outcome.unwrap_or_else(|error| panic!("{name}: {error:?}"));
                 assert_eq!(expected.stdout, handled_output(attempts), "{name}");
-                assert!(expected.debug_output.is_empty(), "{name}");
+                assert!(expected.debug_events.is_empty(), "{name}");
             }
         }
         let mut binaries = Vec::new();
@@ -258,7 +258,7 @@ fn native_fully_joined_graphics_authority_reopens_scripted_sessions_in_both_prof
         jett_driver::run_file_capture_outcome_with_graphics_test_events(&source, events.clone())
             .expect("fully joined Graphics authority must open two successive scripted sessions");
     assert_eq!(expected.stdout, "before\nclosed\nbefore\nclosed\nafter\n");
-    assert!(expected.debug_output.is_empty());
+    assert!(expected.debug_events.is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory

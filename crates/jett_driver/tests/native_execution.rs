@@ -91,14 +91,21 @@ fn native_scalar_entry_links_and_executes_without_source_tree() {
 fn native_actor_spawn_releases_state_with_context() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/actor_spawn.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
-    assert_eq!(expected.stdout, "spawned\n");
+    assert!(expected.stdout.is_empty());
+    assert_eq!(
+        jett_driver::render_debug_events(&expected.debug_events),
+        "spawned\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("actor_spawn");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -106,14 +113,21 @@ fn native_actor_messages_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/actor_messages.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
-    assert_eq!(expected.stdout, "hits: 5\n");
+    assert!(expected.stdout.is_empty());
+    assert_eq!(
+        jett_driver::render_debug_events(&expected.debug_events),
+        "hits: 5\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("actor_messages");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -121,14 +135,21 @@ fn native_graphics_authority_reaches_main() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/graphics_authority.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
-    assert_eq!(expected.stdout, "graphics authority granted\n");
+    assert!(expected.stdout.is_empty());
+    assert_eq!(
+        jett_driver::render_debug_events(&expected.debug_events),
+        "graphics authority granted\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("graphics_authority");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -161,6 +182,7 @@ fn native_actor_fixture_bodies_match_interpreter() {
         let source_path = directory.path().join(fixture);
         std::fs::write(&source_path, format!("{source}\n{main}")).unwrap();
         let expected = jett_driver::run_file_capture_output(&source_path).unwrap();
+        assert!(expected.stdout.is_empty());
         let binary = directory.path().join("program");
         build_host_executable(&source_path, &launcher(), &binary)
             .unwrap_or_else(|error| panic!("{fixture}: {error:?}"));
@@ -171,7 +193,10 @@ fn native_actor_fixture_bodies_match_interpreter() {
             expected.stdout.as_bytes(),
             "{fixture}: {actual:?}"
         );
-        assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+        );
     }
 }
 
@@ -180,14 +205,21 @@ fn native_structured_concurrency_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/structured_concurrency.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
-    assert_eq!(expected.stdout, "hello:ready:failed\n");
+    assert!(expected.stdout.is_empty());
+    assert_eq!(
+        jett_driver::render_debug_events(&expected.debug_events),
+        "hello:ready:failed\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("structured_concurrency");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -195,13 +227,17 @@ fn native_named_function_callbacks_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/function_values.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("function_values");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty());
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -209,13 +245,17 @@ fn native_json_refinement_source_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/json_refinement_source.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("json_refinement_source");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -223,13 +263,17 @@ fn native_json_bytes_raw_source_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_bytes_raw_source.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("json_bytes_raw_source");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -237,13 +281,17 @@ fn native_json_bitfield_source_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_bitfield_source.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("json_bitfield_source");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -251,13 +299,17 @@ fn native_json_enum_raw_source_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_enum_raw_source.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("json_enum_raw_source");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -265,13 +317,17 @@ fn native_json_pipeline_source_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_pipeline_source.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("json_pipeline_source");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -279,13 +335,17 @@ fn native_json_refined_record_source_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/json_refined_record_source.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("json_refined_record_source");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -293,13 +353,17 @@ fn native_list_source_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/list_source_values.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
+    assert!(expected.stdout.is_empty());
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("list_source_values");
     build_host_executable(&fixture, &launcher(), &binary).unwrap();
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty());
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 struct ExecutionChild(std::process::Child);
@@ -389,7 +453,7 @@ fn native_uint32_wrapping_contract_matches_interpreter() {
     assert!(actual.status.success());
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert!(actual.stderr.is_empty());
-    assert!(expected.debug_output.is_empty());
+    assert!(expected.debug_events.is_empty());
 
     // The original fixture has no observable arithmetic result. Supplement it
     // with a runtime branch so a non-wrapping result cannot pass merely by exit.

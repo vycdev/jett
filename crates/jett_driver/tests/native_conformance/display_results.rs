@@ -64,7 +64,11 @@ fn assert_display_failure_in_both_profiles(
         .expect_err("implicit display must fail before later interpolation effects");
     assert_eq!(expected.output.stdout, stdout, "{name}");
     assert_eq!(expected.message, message, "{name}");
-    assert_eq!(expected.output.debug_output, debug, "{name}");
+    assert_eq!(
+        debug_trace_lines(&expected.output.debug_events),
+        debug,
+        "{name}"
+    );
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("display_{release}.exe"));
@@ -85,7 +89,7 @@ fn assert_display_failure_in_both_profiles(
         let mut stderr = if release || debug.is_empty() {
             String::new()
         } else {
-            format!("{}\n", debug.join("\n"))
+            jett_driver::render_debug_events(&expected.output.debug_events)
         };
         stderr.push_str(message);
         stderr.push('\n');
@@ -245,7 +249,7 @@ fn native_joined_display_and_explicit_pending_calls_match_reference_in_both_prof
         )
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace pending: string = pending(pending(shown-λ🙂))",
             "trace once: string = pending(shown-λ🙂)",
@@ -280,7 +284,7 @@ fn native_joined_display_and_explicit_pending_calls_match_reference_in_both_prof
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }

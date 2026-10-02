@@ -83,7 +83,7 @@ fn native_local_view_aliases_match_interpreter_in_both_profiles() {
         )
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace source: list[int64] = list(2, 3, 5)",
             "trace borrowed: list[int64] = list(2, 3, 5)",
@@ -119,7 +119,7 @@ fn native_local_view_aliases_match_interpreter_in_both_profiles() {
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }
@@ -162,7 +162,7 @@ function main(stdout: Stdout) returns nothing:
     let expected = jett_driver::run_file_capture_outcome(&source)
         .expect_err("later owned argument fails after alias observation");
     assert_eq!(expected.output.stdout, "before\nborrowed:2\nfailure\n");
-    assert!(expected.output.debug_output.is_empty());
+    assert!(expected.output.debug_events.is_empty());
     assert_eq!(
         expected.message,
         "runtime error: list.__remove_at: index -1 out of bounds"
@@ -240,7 +240,7 @@ function main(stdout: Stdout) returns nothing:
         expected.output.stdout,
         "coarsen:2:3:2:3:13\ndeclassify:2:3:5:7:17\nearlier:owned:2\n"
     );
-    assert!(expected.output.debug_output.is_empty());
+    assert!(expected.output.debug_events.is_empty());
     assert_eq!(
         expected.message,
         "runtime error: list.__remove_at: index -1 out of bounds"

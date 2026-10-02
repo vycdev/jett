@@ -209,7 +209,7 @@ fn native_secret_field_reads_preserve_qualified_values_and_owners_in_both_profil
             "comptime:-128:Ada-λ🙂:2:selected:small:7:7:token:nothing|-128:Ada-λ🙂:2:selected:small:7:7:token:nothing|-128:Ada-λ🙂:2:selected:small:7:7:token:nothing\n",
         )
     );
-    assert!(expected.debug_output.is_empty(), "{expected:?}");
+    assert!(expected.debug_events.is_empty(), "{expected:?}");
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -275,7 +275,7 @@ fn assert_failure(
         .expect_err("secret field access must preserve the first runtime failure");
     assert_eq!(expected.message, reference_message, "{name}");
     assert_eq!(expected.output.stdout, stdout, "{name}");
-    assert!(expected.output.debug_output.is_empty(), "{name}");
+    assert!(expected.output.debug_events.is_empty(), "{name}");
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("{name}_{release}.exe"));

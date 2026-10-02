@@ -154,7 +154,7 @@ fn readonly_projected_writes_fail_before_driver_evaluation() {
             failure.message
         );
         assert!(failure.output.stdout.is_empty(), "{name}");
-        assert!(failure.output.debug_output.is_empty(), "{name}");
+        assert!(failure.output.debug_events.is_empty(), "{name}");
         let failure = test_file(&path)
             .err()
             .expect("readonly write prevents suites");
@@ -191,7 +191,7 @@ fn projected_reads_and_reconstructed_owners_pass_reference_suites() {
         output.stdout,
         "original:1\ncopied:2\noriginal:1\nloop:3\nmatch:2:2\ntemporary:1\nfields:7:1\n"
     );
-    assert!(output.debug_output.is_empty());
+    assert!(output.debug_events.is_empty());
     let checks = test_file(&path).expect("projected read suites");
     assert_eq!(checks.total, 2);
     assert_eq!(checks.passed, 2);

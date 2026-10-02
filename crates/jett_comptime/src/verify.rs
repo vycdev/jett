@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::DebugEvent;
 use crate::interpreter::Interpreter;
 use crate::value::Value;
 
@@ -189,6 +190,9 @@ pub struct VerifyResult {
     pub iterations: Option<usize>,
     /// If this was a property block, whether it is a property (true) or verify (false).
     pub is_property: bool,
+    /// Generation and actual block/trial events in execution order, including
+    /// the original failure. Shrinking and case-collection replay remain private.
+    pub debug_events: Vec<DebugEvent>,
 }
 
 /// Inputs chosen by the existing property generator for one test iteration.
@@ -218,7 +222,7 @@ struct VerificationRun {
 ///    `assert` statements (kept for backward compatibility).
 pub fn run_verify_blocks(module: &Module) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed(module);
-    verify_results_to_diagnostics(results)
+    verify_results_to_diagnostics(&results)
 }
 
 /// Run all verify blocks with checked reflection metadata from type checking.
@@ -227,7 +231,7 @@ pub fn run_verify_blocks_with_metadata(
     metadata: Arc<ReflectionMetadata>,
 ) -> Vec<Diagnostic> {
     let results = run_verify_blocks_detailed_with_metadata(module, Some(metadata));
-    verify_results_to_diagnostics(results)
+    verify_results_to_diagnostics(&results)
 }
 
 /// Run all verify blocks with checked metadata and expression type facts from
@@ -246,7 +250,7 @@ pub fn run_verify_blocks_with_metadata_and_expression_types(
         Some(expression_types),
         Some(breakpoint_exclusions),
     );
-    verify_results_to_diagnostics(results)
+    verify_results_to_diagnostics(&results)
 }
 
 /// Execute checked tests using the same immutable values as the compiler handoff.
@@ -257,13 +261,14 @@ pub fn run_verify_blocks_with_checked_values(
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
     values: Arc<crate::ExplicitComptimeValues>,
 ) -> Vec<Diagnostic> {
-    verify_results_to_diagnostics(run_verify_blocks_detailed_with_checked_values(
+    let results = run_verify_blocks_detailed_with_checked_values(
         module,
         metadata,
         expression_types,
         breakpoint_exclusions,
         values,
-    ))
+    );
+    verify_results_to_diagnostics(&results)
 }
 
 pub fn run_verify_blocks_detailed_with_checked_values(
@@ -302,9 +307,11 @@ pub fn collect_property_cases_with_checked_values(
     .property_cases
 }
 
-fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> {
+/// Convert a captured verification pass to diagnostics without executing it again
+/// or consuming its debug events.
+pub fn verify_results_to_diagnostics(results: &[VerifyResult]) -> Vec<Diagnostic> {
     results
-        .into_iter()
+        .iter()
         .filter_map(|r| {
             if r.passed {
                 None
@@ -314,7 +321,7 @@ fn verify_results_to_diagnostics(results: Vec<VerifyResult>) -> Vec<Diagnostic> 
                     format!(
                         "comptime verify failed in '{}': {}",
                         r.name,
-                        r.error.unwrap_or_default()
+                        r.error.as_deref().unwrap_or_default()
                     ),
                     r.span,
                 ))
@@ -524,6 +531,7 @@ fn run_verify_blocks_detailed_inner(
                     error: None,
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
             Err(msg) => {
@@ -534,6 +542,7 @@ fn run_verify_blocks_detailed_inner(
                     error: Some(msg),
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
         }
@@ -555,6 +564,7 @@ fn run_verify_blocks_detailed_inner(
                     error: None,
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
             Err(msg) => {
@@ -565,6 +575,7 @@ fn run_verify_blocks_detailed_inner(
                     error: Some(msg),
                     iterations: None,
                     is_property: false,
+                    debug_events: interp.take_debug_events(),
                 });
             }
         }
@@ -985,6 +996,7 @@ fn run_property_block(
                 )),
                 iterations: Some(0),
                 is_property: true,
+                debug_events: interp.take_debug_events(),
             };
         }
     }
@@ -1021,7 +1033,11 @@ fn run_property_block(
         if let Err(msg) = exec_result {
             // Shrink the failing inputs to find a simpler counterexample.
             let failing_values: Vec<Value> = chosen.iter().map(|(_, v)| v.clone()).collect();
+            // Preserve generation and original trials before replay. Refinement
+            // checks inside shrinking are replay observations too.
+            let debug_events = interp.take_debug_events();
             let shrunk = shrink_inputs(interp, namespace, pb, failing_values);
+            let _ = interp.take_debug_events();
 
             let input_desc: Vec<String> = pb
                 .givens
@@ -1040,6 +1056,7 @@ fn run_property_block(
                 )),
                 iterations: Some(iteration + 1),
                 is_property: true,
+                debug_events,
             };
         }
     }
@@ -1051,6 +1068,7 @@ fn run_property_block(
         error: None,
         iterations: Some(iterations),
         is_property: true,
+        debug_events: interp.take_debug_events(),
     }
 }
 
@@ -2482,6 +2500,171 @@ mod tests {
     use jett_parser::ast::*;
 
     use super::*;
+
+    fn debug_capture_module(source: &str) -> Module {
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        parsed.module
+    }
+
+    #[test]
+    fn verify_capture_retains_failed_block_events_and_isolates_following_blocks() {
+        let module = debug_capture_module(
+            r#"
+verify first:
+    print("trace public")
+    assert false "first failure"
+verify second:
+    println("second")
+    assert true
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].passed);
+        assert!(results[1].passed);
+        assert_eq!(
+            results[0].debug_events,
+            vec![crate::DebugEvent {
+                kind: crate::DebugEventKind::Print,
+                text: "trace public".into(),
+            }]
+        );
+        assert_eq!(
+            results[1].debug_events,
+            vec![crate::DebugEvent {
+                kind: crate::DebugEventKind::Println,
+                text: "second\n".into(),
+            }]
+        );
+        let diagnostics = verify_results_to_diagnostics(&results);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            results[0].debug_events.len(),
+            1,
+            "diagnostic conversion does not consume capture"
+        );
+    }
+
+    #[test]
+    fn property_capture_keeps_generation_and_original_failure_while_shrinking_stays_private() {
+        let module = debug_capture_module(
+            r#"
+function positive(value: int64) returns bool:
+    println("pool", value)
+    return value > 0
+type Positive = int64 where positive(value)
+property failure:
+    given number: Positive
+    println("trial", coarsen clone number)
+    assert false "trial failure"
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert_eq!(results[0].iterations, Some(1));
+        let expected = vec![
+            "pool 0\n",
+            "pool 1\n",
+            "pool -1\n",
+            "pool 42\n",
+            "pool -42\n",
+            "pool 100\n",
+            "pool 9223372036854775807\n",
+            "pool -9223372036854775808\n",
+            "trial 1\n",
+        ];
+        assert_eq!(
+            results[0]
+                .debug_events
+                .iter()
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(
+            results[0]
+                .debug_events
+                .iter()
+                .all(|e| e.kind == crate::DebugEventKind::Println)
+        );
+        assert!(
+            results[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("counterexample: number = 1")
+        );
+    }
+
+    #[test]
+    fn empty_property_pool_retains_failed_generation_events_without_trial_events() {
+        let module = debug_capture_module(
+            r#"
+function rejected(value: int64) returns bool:
+    print("generation")
+    return false
+type Impossible = int64 where rejected(value)
+property empty:
+    given number: Impossible
+    println("unreachable trial")
+    assert true
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed);
+        assert_eq!(results[0].iterations, Some(0));
+        assert_eq!(results[0].debug_events.len(), 8);
+        assert!(
+            results[0]
+                .debug_events
+                .iter()
+                .all(|event| event.kind == crate::DebugEventKind::Print
+                    && event.text == "generation")
+        );
+    }
+
+    #[test]
+    fn passing_property_capture_retains_all_hundred_actual_trials_in_order() {
+        let module = debug_capture_module(
+            r#"
+property order:
+    given number: int64
+    println(number)
+    assert number == number
+"#,
+        );
+        let results = run_verify_blocks_detailed(&module);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed);
+        assert_eq!(results[0].iterations, Some(100));
+        assert_eq!(results[0].debug_events.len(), 100);
+        let prefix = [
+            "0\n",
+            "1\n",
+            "-1\n",
+            "42\n",
+            "-42\n",
+            "100\n",
+            "9223372036854775807\n",
+            "-9223372036854775808\n",
+            "0\n",
+        ];
+        assert_eq!(
+            results[0].debug_events[..9]
+                .iter()
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>(),
+            prefix
+        );
+        // Native-input collection runs its own verification pass. Its observations
+        // stay private rather than being appended to this already captured pass.
+        let replay = run_verification(&module, None, None, None, None, true);
+        assert_eq!(replay.property_cases.len(), 100);
+        assert_eq!(results[0].debug_events.len(), 100);
+    }
 
     #[test]
     fn native_property_cases_reuse_the_interpreter_pool_and_iteration_order() {

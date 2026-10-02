@@ -155,7 +155,11 @@ fn run_checked_call_case(
     let expected = jett_driver::run_file_capture_output(&source)
         .unwrap_or_else(|error| panic!("{name}: {error}"));
     assert_eq!(expected.stdout, expected_stdout, "{name}");
-    assert_eq!(expected.debug_output, expected_debug, "{name}");
+    assert_eq!(
+        debug_trace_lines(&expected.debug_events),
+        expected_debug,
+        "{name}"
+    );
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("{name}_{release}.exe"));
@@ -184,7 +188,7 @@ fn run_checked_call_case(
         let debug = if release || expected_debug.is_empty() {
             String::new()
         } else {
-            format!("{}\n", expected_debug.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{name}: {actual:?}");
     }

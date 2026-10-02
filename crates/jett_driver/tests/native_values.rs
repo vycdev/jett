@@ -2,6 +2,7 @@
 #![cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
 
 use jett_driver::native::{NativeLauncherBundle, build_host_executable};
+use jett_driver::{RunFailure, render_debug_events};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -88,6 +89,13 @@ fn run_bounded_input(
     }
 }
 
+fn terminal_stderr(failure: &RunFailure) -> String {
+    let mut text = render_debug_events(&failure.output.debug_events);
+    text.push_str(&failure.message);
+    text.push('\n');
+    text
+}
+
 #[test]
 fn native_string_fixtures_match_interpreter_output() {
     for name in ["hello_print", "escape_sequences"] {
@@ -102,7 +110,11 @@ fn native_string_fixtures_match_interpreter_output() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{name}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
-        assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            render_debug_events(&expected.debug_events).as_bytes(),
+            "{name}: {actual:?}"
+        );
     }
 }
 
@@ -111,14 +123,22 @@ fn native_string_search_respects_grapheme_boundaries() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/string_search.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("string search oracle");
-    assert_eq!(expected.stdout, "1 2\n-1 0\n0 0\n0 2\n");
+    assert!(expected.stdout.is_empty());
+    assert_eq!(
+        render_debug_events(&expected.debug_events),
+        "1 2\n-1 0\n0 0\n0 2\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("program");
     build_host_executable(&fixture, &launcher(), &binary).expect("compile native string search");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -133,7 +153,11 @@ fn native_remaining_string_intrinsics_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -147,7 +171,11 @@ fn native_string_scalar_iteration_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -161,7 +189,11 @@ fn native_clock_and_stdout_capabilities_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -174,7 +206,11 @@ fn native_unit_enums_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -188,7 +224,11 @@ fn native_payload_enums_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -202,7 +242,11 @@ fn native_bitfield_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 fn run_source(source: &str) -> std::process::Output {
@@ -216,7 +260,11 @@ fn run_source(source: &str) -> std::process::Output {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
     actual
 }
 
@@ -244,7 +292,11 @@ function main(stdout: Stdout) returns nothing:
     println(1.25, false, nothing)
 "#,
     );
-    assert_eq!(output.stdout, b"start->item0;item1->item:6;item:6->item3;item3 28 true 18446744073709551615\n1.25 false nothing\n");
+    assert_eq!(output.stdout, b"start->item0;item1->item:6;item:6->item3;");
+    assert_eq!(
+        output.stderr,
+        b"item3 28 true 18446744073709551615\n1.25 false nothing\n"
+    );
 }
 
 #[test]
@@ -263,7 +315,8 @@ function main() returns nothing:
     println(marked(1), marked(2), first, second)
 "#,
     );
-    assert_eq!(output.stdout, b"12v1 v2 false true\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"12v1 v2 false true\n");
 }
 
 #[test]
@@ -298,7 +351,7 @@ function main() returns nothing:
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
         assert_eq!(
             String::from_utf8(actual.stderr).unwrap(),
-            format!("{}\n", expected.message)
+            terminal_stderr(&expected)
         );
     }
 }
@@ -318,8 +371,9 @@ function main() returns nothing:
     println(string.center("hi", 7), string.zfill("-42", 6))
 "#,
     );
+    assert!(output.stdout.is_empty(), "{output:?}");
     assert!(
-        String::from_utf8(output.stdout)
+        String::from_utf8(output.stderr)
             .unwrap()
             .starts_with("3 é 🇷🇴\n")
     );
@@ -355,7 +409,11 @@ fn native_proven_fixture_outputs_remain_monotonic() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{name}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
-        assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            render_debug_events(&expected.debug_events).as_bytes(),
+            "{name}: {actual:?}"
+        );
     }
 }
 
@@ -375,8 +433,9 @@ function main() returns nothing:
     println(math.min(nan, 1.0), math.max(1.0, nan), nan == nan)
 "#,
     );
+    assert!(output.stdout.is_empty(), "{output:?}");
     assert!(
-        String::from_utf8(output.stdout)
+        String::from_utf8(output.stderr)
             .unwrap()
             .contains("-9223372036854775808 -9223372036854775808 -9223372036854775808\n")
     );
@@ -404,14 +463,17 @@ fn native_math_runtime_contract_fixtures() {
             Ok(output) => {
                 assert!(actual.status.success(), "{name}: {actual:?}");
                 assert_eq!(actual.stdout, output.stdout.as_bytes());
-                assert!(actual.stderr.is_empty());
+                assert_eq!(
+                    actual.stderr,
+                    render_debug_events(&output.debug_events).as_bytes()
+                );
             }
             Err(failure) => {
                 assert_eq!(actual.status.code(), Some(71), "{name}: {actual:?}");
                 assert_eq!(actual.stdout, failure.output.stdout.as_bytes());
                 assert_eq!(
                     String::from_utf8(actual.stderr).unwrap(),
-                    format!("{}\n", failure.message)
+                    terminal_stderr(&failure)
                 );
             }
         }
@@ -428,7 +490,8 @@ function main() returns nothing:
     println(render(7))
 "#,
     );
-    assert_eq!(output.stdout, b"777777\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"777777\n");
 }
 
 #[test]
@@ -462,7 +525,8 @@ function main() returns nothing:
         ));
     }
     expected.push_str(" 1 2 3 4 5 6 true nothing\n");
-    assert_eq!(output.stdout, expected.as_bytes());
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, expected.as_bytes());
 }
 
 #[test]
@@ -489,7 +553,8 @@ function main() returns nothing:
     println(wide)
 "#,
     );
-    assert_eq!(output.stdout, b"0.10000000149011612 0.10000000149011612\n0.20000000298023224 0.10000002384185791 0.10000000149011612\nrounded 0.10000002384185791\n0.1\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"0.10000000149011612 0.10000000149011612\n0.20000000298023224 0.10000002384185791 0.10000000149011612\nrounded 0.10000002384185791\n0.1\n");
 }
 
 #[test]
@@ -518,8 +583,9 @@ function main() returns nothing:
     );
     let value = 0.1_f32;
     let arithmetic = ((value * value + value) / 0.3_f32) as f64;
+    assert!(output.stdout.is_empty(), "{output:?}");
     assert_eq!(
-        output.stdout,
+        output.stderr,
         format!("{arithmetic} 0\n0\ninf -inf 0 -0 false\nieee\n").as_bytes()
     );
 }
@@ -534,7 +600,8 @@ function main() returns nothing:
     println(compose(1))
 "#,
     );
-    assert_eq!(output.stdout, b"123456789101112\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"123456789101112\n");
 }
 
 #[test]
@@ -542,14 +609,22 @@ fn native_owned_bytes_move_borrow_clone_and_loop() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/bytes_ownership.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("bytes oracle");
-    assert_eq!(expected.stdout.as_bytes(), b"2 486921\n787878 2\n");
+    assert!(expected.stdout.is_empty());
+    assert_eq!(
+        render_debug_events(&expected.debug_events).as_bytes(),
+        b"2 486921\n787878 2\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("program");
     build_host_executable(&fixture, &launcher(), &binary).expect("bytes native compilation");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -582,7 +657,8 @@ function main() returns nothing:
     println(bytes.to_hex(current))
 "#,
     );
-    assert_eq!(output.stdout, b"61 6221 false true\n32\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"61 6221 false true\n32\n");
 }
 
 #[test]
@@ -613,7 +689,7 @@ function main() returns nothing:
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(actual.stderr, terminal_stderr(&expected).as_bytes());
 }
 
 #[test]
@@ -634,7 +710,8 @@ function main() returns nothing:
 "#,
     );
     let actual = run_source(&source);
-    assert!(actual.stdout.starts_with(b"0 5 hello\n65 -1 -1\n"));
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert!(actual.stderr.starts_with(b"0 5 hello\n65 -1 -1\n"));
 }
 
 #[test]
@@ -659,7 +736,8 @@ function main() returns nothing:
     println(bytes.to_hex(first), bytes.to_hex(second), bytes.to_hex(failed), bytes.to_hex(absent))
 "#,
     );
-    assert_eq!(actual.stdout, b"796573 796573 626164 6e6f6e65\n");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert_eq!(actual.stderr, b"796573 796573 626164 6e6f6e65\n");
 }
 
 #[test]
@@ -691,7 +769,8 @@ function main() returns nothing:
     println(bytes.to_hex(last))
 "#,
     );
-    assert!(actual.stdout.ends_with(b"35\n33\n"));
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert!(actual.stderr.ends_with(b"35\n33\n"));
 }
 
 #[test]
@@ -710,7 +789,10 @@ fn native_numeric_result_parsing_and_original_minimum_contracts() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty());
+        assert_eq!(
+            actual.stderr,
+            render_debug_events(&expected.debug_events).as_bytes()
+        );
     }
     run_source(
         r#"
@@ -763,7 +845,7 @@ function main() returns nothing:
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(actual.stderr, terminal_stderr(&expected).as_bytes());
 }
 
 #[test]
@@ -798,7 +880,8 @@ function main() returns nothing:
     branch(true)
 "#,
     );
-    assert_eq!(actual.stdout, b"mark: 6162 ;6162 6162\nobserve: 6162 ;2 6162\nmark: 62 ;observe: 61 ;1 62\nfalse\nconsume 78\ntrue\n");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert_eq!(actual.stderr, b"mark: 6162 ;6162 6162\nobserve: 6162 ;2 6162\nmark: 62 ;observe: 61 ;1 62\nfalse\nconsume 78\ntrue\n");
 }
 
 #[test]
@@ -812,7 +895,8 @@ function main() returns nothing:
     println(explicit_last_reuses_list(), empty_first_and_last(), is_empty_outcomes_reuse_lists())
 "#);
     let actual = run_source(&source);
-    assert_eq!(actual.stdout, b"13 42 62\n33 true true\n");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert_eq!(actual.stderr, b"13 42 62\n33 true true\n");
 }
 
 #[test]
@@ -845,7 +929,8 @@ function main() returns nothing:
     println(text, list.length[string](view repeated), number)
 "#,
     );
-    assert_eq!(actual.stdout, b"79 78 2\n78 2\nheld 3 -0\n");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert_eq!(actual.stderr, b"79 78 2\n78 2\nheld 3 -0\n");
 }
 #[test]
 fn native_partial_list_construction_and_nested_owner_failure_cleanup() {
@@ -865,7 +950,7 @@ function main() returns nothing:
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(actual.stderr, terminal_stderr(&expected).as_bytes());
 }
 
 #[test]
@@ -880,7 +965,10 @@ fn native_list_sum_wrapping_contracts_and_observable_results() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty());
+        assert_eq!(
+            actual.stderr,
+            render_debug_events(&expected.debug_events).as_bytes()
+        );
     }
     let actual = run_source(
         r#"
@@ -890,8 +978,9 @@ function main() returns nothing:
     println(math.sum(list(9223372036854775807, 2)))
 "#,
     );
+    assert!(actual.stdout.is_empty(), "{actual:?}");
     assert_eq!(
-        actual.stdout,
+        actual.stderr,
         b"-9223372036854775808 2\n-9223372036854775807\n"
     );
 }
@@ -920,7 +1009,8 @@ function main() returns nothing:
     println(total, list.length[int64](view moved))
 "#,
     );
-    assert_eq!(actual.stdout, b"once;ac;\n18 3\n");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert_eq!(actual.stderr, b"once;ac;\n18 3\n");
 }
 
 #[test]
@@ -948,7 +1038,8 @@ function main() returns nothing:
         println(list.sum[int64](view inner))
 "#,
     );
-    assert_eq!(actual.stdout, b"61\n62\n3\n7\n5\n");
+    assert!(actual.stdout.is_empty(), "{actual:?}");
+    assert_eq!(actual.stderr, b"61\n62\n3\n7\n5\n");
 }
 
 #[test]
@@ -972,7 +1063,7 @@ function main() returns nothing:
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(actual.stderr, terminal_stderr(&expected).as_bytes());
 }
 
 #[test]
@@ -1042,8 +1133,9 @@ function main() returns nothing:
 "#,
     );
     let actual = run_source(&source);
+    assert!(actual.stdout.is_empty(), "{actual:?}");
     assert_eq!(
-        actual.stdout,
+        actual.stderr,
         b"9223372036854775806 -9223372036854775807\n012345310 14\n"
     );
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1056,7 +1148,7 @@ function main() returns nothing:
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(actual.stderr, terminal_stderr(&expected).as_bytes());
 }
 
 #[test]
@@ -1083,7 +1175,7 @@ function main() returns nothing:
         let actual = run_bounded(&binary, directory.path());
         assert_eq!(actual.status.code(), Some(71), "{actual:?}");
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-        assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+        assert_eq!(actual.stderr, terminal_stderr(&expected).as_bytes());
     }
 }
 
@@ -1129,7 +1221,8 @@ fn native_user_struct_generic_fixture() {
     let output = run_source(&format!(
         "{source}\nfunction main() returns nothing:\n    println(pair_first_test(), pair_second_test(), box_value_test())\n"
     ));
-    assert_eq!(output.stdout, b"42 hello 100\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"42 hello 100\n");
 }
 
 #[test]
@@ -1148,7 +1241,8 @@ function main() returns nothing:
     println(chosen, list.length[string](view moved))
 "#,
     );
-    assert_eq!(output.stdout, b"one7 2\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"one7 2\n");
 }
 
 #[test]
@@ -1157,7 +1251,8 @@ fn native_user_struct_explicit_equality_fixture() {
     let output = run_source(&format!(
         "{source}\nfunction main() returns nothing:\n    println(equality_uses_the_explicit_contract())\n"
     ));
-    assert_eq!(output.stdout, b"true\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"true\n");
 }
 
 #[test]
@@ -1197,8 +1292,9 @@ function main() returns nothing:
     read(view other)
 "#,
     );
+    assert!(output.stdout.is_empty(), "{output:?}");
     assert_eq!(
-        output.stdout,
+        output.stderr,
         b"1 ;2 ;9 ;p1 3 31\np2 6 32\n32 1\n9 ;p2 6 32\n"
     );
 }
@@ -1231,8 +1327,12 @@ function main() returns nothing:
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stdout, b"before\n");
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert!(actual.stdout.is_empty());
+    assert_eq!(
+        render_debug_events(&expected.output.debug_events),
+        "before\n"
+    );
+    assert_eq!(actual.stderr, terminal_stderr(&expected).as_bytes());
 }
 
 #[test]
@@ -1272,7 +1372,8 @@ function main() returns nothing:
     multiple_exit()
 "#,
     );
-    assert_eq!(output.stdout, b"a x7 2\nb x7 2\n2\na x8\na x8\n2 2\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"a x7 2\nb x7 2\n2\na x8\na x8\n2 2\n");
 }
 
 #[test]
@@ -1317,7 +1418,8 @@ function main() returns nothing:
     println(bytes.to_hex(view combined))
 "#,
     );
-    assert_eq!(output.stdout, b"6162\n616263\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"6162\n616263\n");
 }
 
 #[test]
@@ -1400,8 +1502,9 @@ function main() returns nothing:
     println(make(1.25).real)
 "#,
     );
+    assert!(output.stdout.is_empty(), "{output:?}");
     assert_eq!(
-        output.stdout,
+        output.stderr,
         b"-128 255 18446744073709551615\n0.10000000149011612 -0 true nothing\n1.25\n"
     );
 }
@@ -1494,8 +1597,12 @@ uint32_t jett_aot_v1_entry(void *context) {{
         let actual = run_bounded_input(&binary, directory.path(), Some(input));
         assert_eq!(actual.status.code(), Some(0), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "input {input}");
-        assert!(actual.stderr.is_empty(), "{actual:?}");
-        outputs.insert(actual.stdout);
+        assert_eq!(
+            actual.stderr,
+            render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
+        outputs.insert(actual.stderr);
     }
     assert_eq!(outputs.len(), 4);
 }
@@ -1515,5 +1622,6 @@ function main() returns nothing:
     println(first(list(Packet(number: 7, data: bytes.new()), Packet(number: 9, data: bytes.new()))))
 "#,
     );
-    assert_eq!(output.stdout, b"7\n");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"7\n");
 }

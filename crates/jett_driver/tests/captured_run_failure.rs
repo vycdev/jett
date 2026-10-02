@@ -43,7 +43,7 @@ impl Drop for TemporarySource {
 }
 
 #[test]
-fn captured_run_failure_retains_stdout_and_debug_output() {
+fn captured_run_failure_retains_stdout_and_typed_debug_events() {
     let fixture = TemporarySource::new(
         r#"namespace app
 function main(stdout: Stdout) returns nothing:
@@ -62,7 +62,13 @@ function main(stdout: Stdout) returns nothing:
     assert_eq!(failure.message, expected_message);
     assert_eq!(failure.to_string(), expected_message);
     assert_eq!(failure.output.stdout, "before failure");
-    assert_eq!(failure.output.debug_output, ["trace marker: int64 = 42"]);
+    assert_eq!(
+        failure.output.debug_events,
+        [jett_driver::DebugEvent {
+            kind: jett_driver::DebugEventKind::Trace,
+            text: "trace marker: int64 = 42\n".into(),
+        }]
+    );
 
     assert_eq!(
         run_file_capture_output(fixture.path())

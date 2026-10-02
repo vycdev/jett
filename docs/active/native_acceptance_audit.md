@@ -60,11 +60,6 @@ The following semantic and implementation gaps prevent a full parity claim:
 - [Erased interface equality](../open_design/interface_value_equality.md): explicit comparison versus a defined dynamic equality contract.
 - [Concrete-owner arguments in erased calls](../open_design/interface_same_owner_arguments.md): runtime validation versus rejecting unsafe erased calls statically.
 - [Secrets hidden in debug print values](../open_design/debug_print_hidden_secrets.md): extend redaction to erased/builder payloads versus reject potentially secret values.
-- [Debug print channel isolation](../open_design/print_debug_builtin_policy.md):
-  the channel policy is selected, but both execution paths still mix `print`
-  and `println` into application stdout. Typed, ordered observations must retain
-  exact partial text and isolate runtime, comptime, and verification events from
-  agent protocol output. Release rejection alone does not establish this gate.
 - [Projected field assignment](../open_design/projected_field_assignment.md):
   implement safe updates to owned mutable locals versus reject projected writes
   and use construction/rebinding. The checker now rejects immutable, temporary,
@@ -1221,3 +1216,49 @@ This closes the bounded recursive builtin producer gap, without selecting
 broader requested-type admission, changed nominal/callable/interface casts,
 or protected secret observation. Final frozen workspace and supported-host
 distribution gates remain required for this revision.
+
+### Selected debug-event channel isolation
+
+The decided print/println diagnostic channel is implemented across reference
+and native execution. One typed interpreter buffer preserves Trace, Breakpoint,
+Print, and Println events with exact text; no newline is inserted between events.
+Native DebugPrint emits the same staged bytes to stderr, apart from application
+Stdout. Native differential gates compare only runtime events, excluding actual
+frontend/comptime observations and private replay.
+
+Build, lowering, native artifact, test, and run outcomes retain preceding events
+on success and failure. Compiler captures keep phase and test/file association;
+baked values do not replay events and property shrinking remains private. CLI
+agent rows encode known phase and kind and escape exact text instead of
+classifying prefixes or leaking raw worker output. Human tools emit captured
+debug bytes to diagnostic stderr before later errors.
+
+Failed comptime recovery records actual span/context attempts separately from
+baked values, so repeated checked contexts and namespace initializer markers do
+not duplicate failures or events. Failed values remain unavailable. Native
+property replay errors retain the original suite streams when that attempt
+returned captured process output and suppress private replay runtime streams in
+the public error chain. Initial execution errors and timeouts retain their
+existing typed error contract rather than inventing an original-suite record;
+actual linker diagnostics remain available.
+
+Focused verification passes: 416 comptime tests, 83 driver library tests,
+144 runtime tests, all 50 CLI unit/command tests, and all five new linked native
+transport tests. The latter cover exact event boundaries and kind controls,
+frontend/runtime separation, failed argument ownership cleanup, partial-print
+terminal error adjacency, source deletion, compiled verify/property suites,
+release E0362 plus argument checking, and preservation of an existing output.
+The final focused logs are `target/native-debug-isolation-comptime-final.log`,
+`target/native-debug-isolation-driver-final.log`,
+`target/native-debug-isolation-cli-final.log`, and
+`target/native-debug-isolation-native-transport-final.log`; the unchanged runtime
+gate is in `target/native-debug-isolation-library-driver-check.log`.
+
+The prior frozen `3bc23e6a` workspace and doc-tests passed, including all 318
+native conformance tests and all fixed inventory gates, in
+`target/native-workspace-3bc23e6a.log`. That result applies to the prior revision.
+The new suite contains 323 supplemental conformance tests; its fresh full
+workspace and supported-host distribution gates remain required. Linux-only
+transport oracles are source-reviewed here and still require execution on Linux.
+The broad estimate remains about 85%; the fixed inventory denominator remains
+207. Hidden-secret policy and other semantic obligations remain independent.

@@ -147,22 +147,23 @@ fn behavior(
     if failure.is_some() != expected_failure {
         return Err("interpreter outcome contradicts manifest".into());
     }
-    let debug = if oracle.debug_output.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", oracle.debug_output.join("\n"))
-    };
-    let matched = if let Some(message) = &failure {
-        actual.status.code() == Some(71)
-            && stdout == oracle.stdout
-            && stderr.contains(message)
-            && (debug.is_empty() || stderr.contains(&debug))
-    } else {
-        actual.status.success() && stdout == oracle.stdout && stderr == debug
-    };
+    let mut expected_stderr = jett_driver::render_debug_events(&oracle.debug_events);
+    if let Some(message) = &failure {
+        expected_stderr.push_str(message);
+        expected_stderr.push('\n');
+    }
+    let expected_status = if failure.is_some() { 71 } else { 0 };
+    let matched = actual.status.code() == Some(expected_status)
+        && stdout == oracle.stdout
+        && stderr == expected_stderr;
+    let interpreter_debug = oracle
+        .debug_events
+        .iter()
+        .map(|event| json!({"kind": event.kind.as_str(), "text": &event.text}))
+        .collect::<Vec<_>>();
     Ok(
         json!({"behavior_matches":matched,"exit_code":actual.status.code(),"stdout":stdout,"stderr":stderr,
-                "interpreter_stdout":oracle.stdout,"interpreter_debug":oracle.debug_output,"interpreter_failure":failure,
+                "interpreter_stdout":oracle.stdout,"interpreter_debug":interpreter_debug,"interpreter_failure":failure,
                 // Current scalar/string ABI destruction checks its live owning-value
                 // registry. Entry-failure 71 requires successful destruction; a leak
                 // overrides it with 72. Launcher tests enforce both outcomes. Future
@@ -325,9 +326,13 @@ fn main() -> ExitCode {
             } else {
                 "program"
             });
-            match native::build_host_executable(&source, &launcher, &output) {
+            let isolated_source = directory.path().join("main.jett");
+            fs::copy(&source, &isolated_source).expect("copy inventory source");
+            match native::build_host_executable(&isolated_source, &launcher, &output) {
                 Err(error) => row["execution_error"] = json!(error.to_string()),
                 Ok(_) => {
+                    fs::remove_file(&isolated_source)
+                        .expect("remove linked source before execution");
                     row["linked"] = json!(true);
                     let failure = fixture["expected_outcome"] == "expected_failure";
                     let samples = clock_samples(fixture).expect("valid Clock sample manifest");

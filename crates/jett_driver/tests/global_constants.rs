@@ -98,7 +98,7 @@ fn assert_constant_rejected_before_execution(path: &Path, expected_message: &str
         failure.message
     );
     assert!(failure.output.stdout.is_empty());
-    assert!(failure.output.debug_output.is_empty());
+    assert!(failure.output.debug_events.is_empty());
     let failure = test_file(path)
         .err()
         .expect("test execution must reject invalid constants");
@@ -420,7 +420,7 @@ verify would_otherwise_pass:
         .expect_err("failed compile-time constants must prevent main execution");
     assert!(failure.message.contains("E9001"), "{}", failure.message);
     assert!(failure.output.stdout.is_empty());
-    assert!(failure.output.debug_output.is_empty());
+    assert!(failure.output.debug_events.is_empty());
     let failure = test_file(fixture.entry())
         .err()
         .expect("test execution must reject failed constants");

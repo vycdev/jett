@@ -685,7 +685,7 @@ fn native_pending_graphics_decoders_preserve_reference_errors_and_order_in_both_
                     case.name
                 );
                 assert_eq!(expected.output.stdout, "before\n", "{}", case.name);
-                assert!(expected.output.debug_output.is_empty(), "{}", case.name);
+                assert!(expected.output.debug_events.is_empty(), "{}", case.name);
             }
             DecoderExpectation::Handled(message) => {
                 let expected = outcome.unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
@@ -695,7 +695,7 @@ fn native_pending_graphics_decoders_preserve_reference_errors_and_order_in_both_
                     "{}",
                     case.name
                 );
-                assert!(expected.debug_output.is_empty(), "{}", case.name);
+                assert!(expected.debug_events.is_empty(), "{}", case.name);
             }
         }
     }
@@ -782,7 +782,7 @@ fn native_pending_graphics_render_failures_preserve_terminal_error_and_cleanup()
         )
         .expect_err("scene decoding must fail before presentation or further provider input");
         assert_eq!(expected.output.stdout, "before\n", "{name}");
-        assert!(expected.output.debug_output.is_empty(), "{name}");
+        assert!(expected.output.debug_events.is_empty(), "{name}");
         assert_eq!(
             expected.message, "runtime error: graphics: graphics.Text.x must be int64",
             "{name}"
@@ -892,7 +892,7 @@ fn native_joined_graphics_data_and_pending_state_match_reference_in_both_profile
             .expect("fully joined graphics data must accept a still-pending callback State");
     assert_eq!(expected.stdout, "before\nclosed\n");
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace state: int64 = pending(5)",
             "trace state: int64 = pending(5)",
@@ -919,7 +919,7 @@ fn native_joined_graphics_data_and_pending_state_match_reference_in_both_profile
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }

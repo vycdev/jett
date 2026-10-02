@@ -322,47 +322,32 @@ fn main() {
             if profile_request.is_some() {
                 let result = jett_driver::build_file(Path::new(&file));
                 if result.has_errors {
-                    if agent {
-                        print!(
-                            "{}",
-                            jett_diagnostics::toon::render_toon(
-                                &result.diagnostics,
-                                &result.source,
-                                &result.file_path
-                            )
-                        );
-                    } else {
-                        for diagnostic in &result.diagnostics {
-                            eprint!(
-                                "{}",
-                                jett_diagnostics::render::render_diagnostic(
-                                    diagnostic,
-                                    &result.source,
-                                    &result.file_path
-                                )
-                            );
-                        }
-                    }
+                    render_build_diagnostics(&result, agent);
                     process::exit(1);
                 }
                 if agent {
                     print!(
                         "{}",
-                        render_run_agent_error(&file, "profiler: backend unsupported")
+                        render_observed_agent_error(
+                            &file,
+                            "profiler: backend unsupported",
+                            &result.debug_observations,
+                        )
                     );
                 } else {
+                    emit_debug_observations(&result.debug_observations);
                     eprintln!("profiler: backend unsupported");
                 }
                 process::exit(1);
             }
             let path = Path::new(&file);
             if agent {
-                match jett_driver::run_file_capture_output(path) {
+                match jett_driver::run_file_capture_outcome(path) {
                     Ok(output) => {
                         print!("{}", render_run_agent_output(&file, &output));
                     }
                     Err(e) => {
-                        print!("{}", render_run_agent_error(&file, &e));
+                        print!("{}", render_run_agent_failure(&file, &e));
                         process::exit(1);
                     }
                 }
@@ -387,6 +372,7 @@ fn main() {
                     if agent {
                         print!("{}", render_bundle_agent_output(&result));
                     } else {
+                        emit_debug_observations(&result.debug_observations);
                         println!(
                             "bundled {} files into {}",
                             result.files.len(),
@@ -398,6 +384,7 @@ fn main() {
                     if agent {
                         print!("{}", render_bundle_agent_error(&start_path, &output, &e));
                     } else {
+                        emit_debug_observations(e.debug_observations());
                         eprintln!("bundle error: {e}");
                     }
                     process::exit(1);
@@ -649,7 +636,7 @@ fn main() {
             if let Some(f) = file {
                 // Test a single file
                 let path = Path::new(&f);
-                match jett_driver::test_file(path) {
+                match jett_driver::test_file_capture_outcome(path) {
                     Ok(result) => {
                         if agent {
                             print!("{}", render_test_agent_file_output(&result));
@@ -666,8 +653,9 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_test_agent_error(Some(&f), &e));
+                            print!("{}", render_test_agent_failure(&e));
                         } else {
+                            print_test_failure_output(&e);
                             eprintln!("error testing {f}: {e}");
                         }
                         process::exit(1);
@@ -676,7 +664,7 @@ fn main() {
             } else {
                 // Discover project and test all files
                 let cwd = std::env::current_dir().unwrap_or_default();
-                match jett_driver::test_project(&cwd) {
+                match jett_driver::test_project_capture_outcome(&cwd) {
                     Ok(result) => {
                         if agent {
                             print!("{}", render_test_agent_project_output(&result));
@@ -700,8 +688,9 @@ fn main() {
                     }
                     Err(e) => {
                         if agent {
-                            print!("{}", render_test_agent_error(None, &e));
+                            print!("{}", render_test_agent_failure(&e));
                         } else {
+                            print_test_failure_output(&e);
                             eprintln!("error: {e}");
                         }
                         process::exit(1);
@@ -713,32 +702,93 @@ fn main() {
 }
 
 fn render_run_agent_output(file: &str, output: &jett_driver::RunOutput) -> String {
-    let mut out = String::new();
-    out.push_str("status: ok\n");
+    render_run_agent_outcome(file, output, None)
+}
+
+fn render_run_agent_failure(file: &str, failure: &jett_driver::RunFailure) -> String {
+    render_run_agent_outcome(file, &failure.output, Some(&failure.message))
+}
+
+fn render_run_agent_outcome(
+    file: &str,
+    output: &jett_driver::RunOutput,
+    error: Option<&str>,
+) -> String {
+    let mut out = format!("status: {}\n", if error.is_some() { "error" } else { "ok" });
     out.push_str(&format!("file: {}\n", escape_toon_scalar(file)));
+    if let Some(error) = error {
+        out.push_str(&format!("error: {}\n", escape_toon_scalar(error)));
+    }
     out.push_str(&format!("stdout: {}\n", escape_toon_scalar(&output.stdout)));
     out.push_str(&format!(
-        "debug[{}]{{kind,message}}:\n",
-        output.debug_output.len()
+        "debug[{}]{{phase,kind,text}}:\n",
+        output.frontend_debug_observations.len() + output.debug_events.len(),
     ));
-    for line in &output.debug_output {
-        out.push_str(&format!(
-            "  {},{}\n",
-            debug_line_kind(line),
-            escape_toon_scalar(line)
-        ));
+    for observation in &output.frontend_debug_observations {
+        append_debug_agent_row(&mut out, observation.phase, &observation.event);
+    }
+    for event in &output.debug_events {
+        append_debug_agent_row(&mut out, jett_driver::DebugPhase::Runtime, event);
     }
     out
 }
 
-fn debug_line_kind(line: &str) -> &'static str {
-    if line.starts_with("trace ") {
-        "trace"
-    } else if line.starts_with("breakpoint hit") {
-        "breakpoint"
-    } else {
-        "debug"
+fn append_debug_agent_row(
+    out: &mut String,
+    phase: jett_driver::DebugPhase,
+    event: &jett_driver::DebugEvent,
+) {
+    out.push_str(&format!(
+        "  {},{},{}\n",
+        phase.as_str(),
+        event.kind.as_str(),
+        escape_toon_scalar(&event.text),
+    ));
+}
+
+fn append_debug_agent_observations(
+    out: &mut String,
+    observations: &[jett_driver::DebugObservation],
+) {
+    out.push_str(&format!(
+        "debug[{}]{{phase,kind,text}}:\n",
+        observations.len()
+    ));
+    for observation in observations {
+        append_debug_agent_row(out, observation.phase, &observation.event);
     }
+}
+
+fn render_observed_agent_error(
+    file: &str,
+    error: &str,
+    observations: &[jett_driver::DebugObservation],
+) -> String {
+    let mut out = render_run_agent_error(file, error);
+    append_debug_agent_observations(&mut out, observations);
+    out
+}
+
+fn emit_debug_observations(observations: &[jett_driver::DebugObservation]) {
+    for observation in observations {
+        eprint!("{}", observation.event.text);
+    }
+}
+
+fn emit_test_observations(result: &jett_driver::TestResult) {
+    emit_debug_observations(&result.debug_observations);
+    for block in &result.blocks {
+        eprint!("{}", jett_driver::render_debug_events(&block.debug_events));
+    }
+}
+
+fn print_test_failure_output(failure: &jett_driver::TestFailure) {
+    for result in &failure.completed_files {
+        println!("--- {} ---", result.file_path);
+        print_file_results(result);
+        println!();
+    }
+    emit_debug_observations(&failure.debug_observations);
 }
 
 fn render_format_agent_output(file: &str, mode: &str, changed: bool, errors: &[String]) -> String {
@@ -789,6 +839,7 @@ fn render_test_agent_file_output(result: &jett_driver::TestResult) -> String {
     out.push_str(&format!("passed: {}\n", result.passed));
     out.push_str(&format!("failed: {}\n", result.failed));
     append_test_agent_blocks(&mut out, std::slice::from_ref(result));
+    append_test_agent_observations(&mut out, std::slice::from_ref(result), None);
     out
 }
 
@@ -807,6 +858,7 @@ fn render_test_agent_project_output(result: &jett_driver::ProjectTestResult) -> 
     out.push_str(&format!("passed: {}\n", result.total_passed));
     out.push_str(&format!("failed: {}\n", result.total_failed));
     append_test_agent_blocks(&mut out, &result.file_results);
+    append_test_agent_observations(&mut out, &result.file_results, None);
     out
 }
 
@@ -817,6 +869,17 @@ fn render_test_agent_error(file: Option<&str>, error: &str) -> String {
         out.push_str(&format!("file: {}\n", escape_toon_scalar(file)));
     }
     out.push_str(&format!("error: {}\n", escape_toon_scalar(error)));
+    out
+}
+
+fn render_test_agent_failure(failure: &jett_driver::TestFailure) -> String {
+    let mut out = render_test_agent_error(Some(&failure.file_path), &failure.message);
+    append_test_agent_blocks(&mut out, &failure.completed_files);
+    append_test_agent_observations(
+        &mut out,
+        &failure.completed_files,
+        Some((&failure.file_path, &failure.debug_observations)),
+    );
     out
 }
 
@@ -844,6 +907,7 @@ fn render_bundle_agent_output(result: &jett_driver::BundleResult) -> String {
             file.end_line
         ));
     }
+    append_debug_agent_observations(&mut out, &result.debug_observations);
     out
 }
 
@@ -878,6 +942,7 @@ fn render_bundle_agent_error(
             escape_toon_scalar(&error.to_string())
         ));
     }
+    append_debug_agent_observations(&mut out, error.debug_observations());
     out
 }
 
@@ -1368,6 +1433,70 @@ fn append_test_agent_blocks(out: &mut String, file_results: &[jett_driver::TestR
     }
 }
 
+fn append_test_agent_observations(
+    out: &mut String,
+    file_results: &[jett_driver::TestResult],
+    fatal: Option<(&str, &[jett_driver::DebugObservation])>,
+) {
+    let count: usize = file_results
+        .iter()
+        .map(|result| {
+            result.debug_observations.len()
+                + result
+                    .blocks
+                    .iter()
+                    .map(|block| block.debug_events.len())
+                    .sum::<usize>()
+        })
+        .sum::<usize>()
+        + fatal.map_or(0, |(_, observations)| observations.len());
+    out.push_str(&format!("debug[{count}]{{file,block,phase,kind,text}}:\n"));
+    for result in file_results {
+        for observation in &result.debug_observations {
+            append_test_agent_debug_row(
+                out,
+                &result.file_path,
+                "",
+                observation.phase,
+                &observation.event,
+            );
+        }
+        for block in &result.blocks {
+            for event in &block.debug_events {
+                append_test_agent_debug_row(
+                    out,
+                    &result.file_path,
+                    &block.name,
+                    jett_driver::DebugPhase::FrontendVerify,
+                    event,
+                );
+            }
+        }
+    }
+    if let Some((file, observations)) = fatal {
+        for observation in observations {
+            append_test_agent_debug_row(out, file, "", observation.phase, &observation.event);
+        }
+    }
+}
+
+fn append_test_agent_debug_row(
+    out: &mut String,
+    file: &str,
+    block: &str,
+    phase: jett_driver::DebugPhase,
+    event: &jett_driver::DebugEvent,
+) {
+    out.push_str(&format!(
+        "  {},{},{},{},{}\n",
+        escape_toon_scalar(file),
+        escape_toon_scalar(block),
+        phase.as_str(),
+        event.kind.as_str(),
+        escape_toon_scalar(&event.text),
+    ));
+}
+
 fn escape_toon_scalar(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -1377,6 +1506,7 @@ fn escape_toon_scalar(value: &str) -> String {
 }
 
 fn print_file_results(result: &jett_driver::TestResult) {
+    emit_test_observations(result);
     for block in &result.blocks {
         let name = &block.name;
         if block.is_property {
@@ -1400,21 +1530,185 @@ fn print_file_results(result: &jett_driver::TestResult) {
 mod tests {
     use super::*;
 
+    fn event(kind: jett_driver::DebugEventKind, text: &str) -> jett_driver::DebugEvent {
+        jett_driver::DebugEvent {
+            kind,
+            text: text.into(),
+        }
+    }
+
+    fn observation(
+        phase: jett_driver::DebugPhase,
+        kind: jett_driver::DebugEventKind,
+        text: &str,
+    ) -> jett_driver::DebugObservation {
+        jett_driver::DebugObservation {
+            phase,
+            event: event(kind, text),
+        }
+    }
+
+    #[test]
+    fn run_agent_capture_preserves_phase_kind_empty_fragments_and_protocol_like_text() {
+        let output = jett_driver::RunOutput {
+            stdout: "application\n".into(),
+            frontend_debug_observations: vec![
+                observation(
+                    jett_driver::DebugPhase::Comptime,
+                    jett_driver::DebugEventKind::Print,
+                    "",
+                ),
+                observation(
+                    jett_driver::DebugPhase::FrontendVerify,
+                    jett_driver::DebugEventKind::Println,
+                    "verify\n",
+                ),
+            ],
+            debug_events: vec![
+                event(jett_driver::DebugEventKind::Print, "trace fake"),
+                event(
+                    jett_driver::DebugEventKind::Println,
+                    "status: error\nrows[1]{x}:\r\n\u{03bb},\\\n",
+                ),
+                event(jett_driver::DebugEventKind::Trace, "trace actual\n"),
+            ],
+        };
+        assert_eq!(
+            render_run_agent_output("app,one.jett", &output),
+            concat!(
+                "status: ok\nfile: app\\,one.jett\nstdout: application\\n\n",
+                "debug[5]{phase,kind,text}:\n",
+                "  comptime,print,\n",
+                "  frontend_verify,println,verify\\n\n",
+                "  runtime,print,trace fake\n",
+                "  runtime,println,status: error\\nrows[1]{x}:\\r\\n\u{03bb}\\,\\\\\\n\n",
+                "  runtime,trace,trace actual\\n\n",
+            )
+        );
+    }
+
+    #[test]
+    fn run_agent_failure_preserves_application_and_debug_output_before_terminal_error() {
+        let failure = jett_driver::RunFailure {
+            message: "runtime error: failed\nargument".into(),
+            output: jett_driver::RunOutput {
+                stdout: "before\n".into(),
+                frontend_debug_observations: vec![observation(
+                    jett_driver::DebugPhase::Comptime,
+                    jett_driver::DebugEventKind::Println,
+                    "baked\n",
+                )],
+                debug_events: vec![event(jett_driver::DebugEventKind::Print, "partial:")],
+            },
+        };
+        assert_eq!(
+            render_run_agent_failure("app.jett", &failure),
+            concat!(
+                "status: error\nfile: app.jett\nerror: runtime error: failed\\nargument\n",
+                "stdout: before\\n\ndebug[2]{phase,kind,text}:\n",
+                "  comptime,println,baked\\n\n  runtime,print,partial:\n",
+            )
+        );
+    }
+
+    #[test]
+    fn build_and_setup_reports_retain_actual_frontend_observations() {
+        let observations = vec![observation(
+            jett_driver::DebugPhase::Comptime,
+            jett_driver::DebugEventKind::Print,
+            "diagnostics[0]{fake}:\n",
+        )];
+        let report = render_build_agent_report(&[], "", "app.jett", &observations);
+        assert_eq!(
+            report,
+            concat!(
+                "status: ok\nfile: app.jett\ntotal: 0\nerrors: 0\nwarnings: 0\ninfos: 0\n",
+                "diagnostics[0]{code,severity,message,file,line,column,end_line,end_column}:\n",
+                "labels[0]{code,message,file,line,column,end_line,end_column}:\n",
+                "suggested_fixes[0]{code,file,line,column,end_line,end_column,old_text,new_text,explanation}:\n",
+                "debug[1]{phase,kind,text}:\n  comptime,print,diagnostics[0]{fake}:\\n\n",
+            )
+        );
+        assert_eq!(
+            render_observed_agent_error("app.jett", "profiler: backend unsupported", &observations),
+            concat!(
+                "status: error\nfile: app.jett\nerror: profiler: backend unsupported\n",
+                "debug[1]{phase,kind,text}:\n  comptime,print,diagnostics[0]{fake}:\\n\n",
+            )
+        );
+    }
+
+    #[test]
+    fn fatal_project_test_reports_prior_blocks_and_current_failed_comptime_capture_once() {
+        let completed = jett_driver::TestResult {
+            total: 1,
+            passed: 0,
+            failed: 1,
+            file_path: "first,one.jett".into(),
+            debug_observations: vec![observation(
+                jett_driver::DebugPhase::Comptime,
+                jett_driver::DebugEventKind::Print,
+                "first:",
+            )],
+            blocks: vec![jett_driver::TestBlockResult {
+                name: "failed,block".into(),
+                passed: false,
+                error: Some("expected".into()),
+                is_property: false,
+                iterations: None,
+                line: 1,
+                column: 1,
+                end_line: 1,
+                end_column: 2,
+                debug_events: vec![event(jett_driver::DebugEventKind::Println, "trace fake\n")],
+            }],
+        };
+        let failure = jett_driver::TestFailure {
+            message: "comptime errors:\nfailed".into(),
+            file_path: "second.jett".into(),
+            completed_files: vec![completed],
+            debug_observations: vec![observation(
+                jett_driver::DebugPhase::Comptime,
+                jett_driver::DebugEventKind::Print,
+                "last:",
+            )],
+        };
+        assert_eq!(
+            render_test_agent_failure(&failure),
+            concat!(
+                "status: error\nfile: second.jett\nerror: comptime errors:\\nfailed\n",
+                "blocks[1]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:\n",
+                "  first\\,one.jett,failed\\,block,verify,failed,,1,1,1,2,expected\n",
+                "debug[3]{file,block,phase,kind,text}:\n",
+                "  first\\,one.jett,,comptime,print,first:\n",
+                "  first\\,one.jett,failed\\,block,frontend_verify,println,trace fake\\n\n",
+                "  second.jett,,comptime,print,last:\n",
+            )
+        );
+    }
+
     #[test]
     fn run_agent_output_includes_stdout_and_debug_rows() {
         let output = jett_driver::RunOutput {
             stdout: "hello\n".to_string(),
-            debug_output: vec![
-                "trace total: int64 = 42".to_string(),
-                "breakpoint hit: total: int64 = 42".to_string(),
+            debug_events: vec![
+                event(
+                    jett_driver::DebugEventKind::Trace,
+                    "trace total: int64 = 42\n",
+                ),
+                event(
+                    jett_driver::DebugEventKind::Breakpoint,
+                    "breakpoint hit: total: int64 = 42\n",
+                ),
             ],
+            frontend_debug_observations: Vec::new(),
         };
 
         let rendered = render_run_agent_output("app.jett", &output);
 
         assert_eq!(
             rendered,
-            "status: ok\nfile: app.jett\nstdout: hello\\n\ndebug[2]{kind,message}:\n  trace,trace total: int64 = 42\n  breakpoint,breakpoint hit: total: int64 = 42\n"
+            "status: ok\nfile: app.jett\nstdout: hello\\n\ndebug[2]{phase,kind,text}:\n  runtime,trace,trace total: int64 = 42\\n\n  runtime,breakpoint,breakpoint hit: total: int64 = 42\\n\n"
         );
     }
 
@@ -1456,6 +1750,7 @@ mod tests {
             passed: 1,
             failed: 1,
             file_path: "tests/sample.jett".to_string(),
+            debug_observations: Vec::new(),
             blocks: vec![
                 jett_driver::TestBlockResult {
                     name: "adds".to_string(),
@@ -1467,6 +1762,7 @@ mod tests {
                     column: 8,
                     end_line: 3,
                     end_column: 12,
+                    debug_events: Vec::new(),
                 },
                 jett_driver::TestBlockResult {
                     name: "roundtrip".to_string(),
@@ -1478,6 +1774,7 @@ mod tests {
                     column: 10,
                     end_line: 8,
                     end_column: 19,
+                    debug_events: Vec::new(),
                 },
             ],
         };
@@ -1486,7 +1783,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: error\nfiles: 1\ntotal: 2\npassed: 1\nfailed: 1\nblocks[2]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:\n  tests/sample.jett,adds,verify,passed,,3,8,3,12,\n  tests/sample.jett,roundtrip,property,failed,42,8,10,8,19,expected ok\\, got bad\\ncase\n"
+            "status: error\nfiles: 1\ntotal: 2\npassed: 1\nfailed: 1\nblocks[2]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:\n  tests/sample.jett,adds,verify,passed,,3,8,3,12,\n  tests/sample.jett,roundtrip,property,failed,42,8,10,8,19,expected ok\\, got bad\\ncase\ndebug[0]{file,block,phase,kind,text}:\n"
         );
     }
 
@@ -1503,6 +1800,7 @@ mod tests {
                     passed: 0,
                     failed: 0,
                     file_path: "tests/empty.jett".to_string(),
+                    debug_observations: Vec::new(),
                     blocks: Vec::new(),
                 },
                 jett_driver::TestResult {
@@ -1510,6 +1808,7 @@ mod tests {
                     passed: 1,
                     failed: 0,
                     file_path: "tests/checks.jett".to_string(),
+                    debug_observations: Vec::new(),
                     blocks: vec![jett_driver::TestBlockResult {
                         name: "ok".to_string(),
                         passed: true,
@@ -1520,6 +1819,7 @@ mod tests {
                         column: 8,
                         end_line: 4,
                         end_column: 10,
+                        debug_events: Vec::new(),
                     }],
                 },
             ],
@@ -1529,7 +1829,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nfiles: 2\ntotal: 1\npassed: 1\nfailed: 0\nblocks[1]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:\n  tests/checks.jett,ok,verify,passed,,4,8,4,10,\n"
+            "status: ok\nfiles: 2\ntotal: 1\npassed: 1\nfailed: 0\nblocks[1]{file,name,kind,status,iterations,line,column,end_line,end_column,error}:\n  tests/checks.jett,ok,verify,passed,,4,8,4,10,\ndebug[0]{file,block,phase,kind,text}:\n"
         );
     }
 
@@ -1548,6 +1848,18 @@ mod tests {
         let result = jett_driver::BundleResult {
             project_root: "project".to_string(),
             output_path: "dist/lib.jett".to_string(),
+            debug_observations: vec![
+                observation(
+                    jett_driver::DebugPhase::Comptime,
+                    jett_driver::DebugEventKind::Print,
+                    "bundle:",
+                ),
+                observation(
+                    jett_driver::DebugPhase::FrontendVerify,
+                    jett_driver::DebugEventKind::Println,
+                    "trace fake\n",
+                ),
+            ],
             files: vec![jett_driver::BundleFileResult {
                 path: "src/core.jett".to_string(),
                 start_line: 4,
@@ -1559,7 +1871,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "status: ok\nproject_root: project\noutput: dist/lib.jett\nfiles: 1\nbundled_files[1]{path,start_line,end_line}:\n  src/core.jett,4,12\n"
+            "status: ok\nproject_root: project\noutput: dist/lib.jett\nfiles: 1\nbundled_files[1]{path,start_line,end_line}:\n  src/core.jett,4,12\ndebug[2]{phase,kind,text}:\n  comptime,print,bundle:\n  frontend_verify,println,trace fake\\n\n"
         );
     }
 
@@ -1945,17 +2257,30 @@ mod tests {
     }
 }
 
+fn render_build_agent_report(
+    diagnostics: &[jett_diagnostics::Diagnostic],
+    source: &str,
+    file: &str,
+    observations: &[jett_driver::DebugObservation],
+) -> String {
+    let mut out = jett_diagnostics::toon::render_toon(diagnostics, source, file);
+    append_debug_agent_observations(&mut out, observations);
+    out
+}
+
 fn render_build_diagnostics(result: &jett_driver::BuildResult, agent: bool) {
     if agent {
         print!(
             "{}",
-            jett_diagnostics::toon::render_toon(
+            render_build_agent_report(
                 &result.diagnostics,
                 &result.source,
-                &result.file_path
+                &result.file_path,
+                &result.debug_observations,
             )
         );
     } else {
+        emit_debug_observations(&result.debug_observations);
         for diagnostic in &result.diagnostics {
             eprint!(
                 "{}",
@@ -1967,6 +2292,24 @@ fn render_build_diagnostics(result: &jett_driver::BuildResult, agent: bool) {
             );
         }
     }
+}
+
+fn report_build_error(
+    file: &str,
+    message: &str,
+    agent: bool,
+    observations: &[jett_driver::DebugObservation],
+) -> bool {
+    if agent {
+        print!(
+            "{}",
+            render_observed_agent_error(file, message, observations)
+        );
+    } else {
+        emit_debug_observations(observations);
+        eprintln!("build failed: {message}");
+    }
+    false
 }
 
 fn build_command(
@@ -1986,29 +2329,21 @@ fn build_command(
         }
         return !result.has_errors;
     }
-    let report_error = |message: &str| {
-        if agent {
-            print!("{}", render_run_agent_error(file, message));
-        } else {
-            eprintln!("build failed: {message}");
-        }
-        false
-    };
     let object = match jett_driver::native::emit_host_program_object_for_file_with_options(
         Path::new(file),
         options,
     ) {
         Ok(object) => object,
         Err(error) => {
-            if let jett_driver::native::NativeBuildError::Lowering { source, .. } = &error {
-                if let jett_driver::BackendLoweringError::Build(result) = source.as_ref() {
-                    render_build_diagnostics(result, agent);
-                    return false;
-                }
+            if let Some(result) = error.build_result() {
+                render_build_diagnostics(result, agent);
+                return false;
             }
-            return report_error(&error.to_string());
+            return report_build_error(file, &error.to_string(), agent, error.debug_observations());
         }
     };
+    let report_error =
+        |message: &str| report_build_error(file, message, agent, object.debug_observations());
     if !agent {
         for diagnostic in object.diagnostics() {
             eprint!(
@@ -2071,10 +2406,11 @@ fn build_command(
             if agent {
                 print!(
                     "{}",
-                    jett_diagnostics::toon::render_toon(
+                    render_build_agent_report(
                         object.diagnostics(),
                         object.source(),
-                        file
+                        file,
+                        object.debug_observations(),
                     )
                 );
                 println!(
@@ -2083,6 +2419,7 @@ fn build_command(
                     escape_toon_scalar(&artifact.target)
                 );
             } else {
+                emit_debug_observations(object.debug_observations());
                 println!("build ok: {}", artifact.path.display());
             }
             true

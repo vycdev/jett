@@ -89,7 +89,7 @@ fn borrowed_values_cannot_escape_before_program_or_suite_execution() {
         assert!(failure.message.contains("E0401"), "{name}: {failure:?}");
         assert!(failure.output.stdout.is_empty(), "{name}: {failure:?}");
         assert!(
-            failure.output.debug_output.is_empty(),
+            failure.output.debug_events.is_empty(),
             "{name}: {failure:?}"
         );
         let failure = test_file(&path)

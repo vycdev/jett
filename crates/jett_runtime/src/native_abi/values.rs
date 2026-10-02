@@ -6082,7 +6082,7 @@ leaves! {
             { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, text.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0)
         };
     DebugPrint, jett_rt_v1_string_debug_print, false, (value: u64 => I64), u32 => I32,
-        |s| { { let mut stdout = io::stdout().lock(); write_all_bytes(&mut stdout, s.text(value)?.as_bytes()).and_then(|_| stdout.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDOUT_WRITE_MESSAGE))?; } Ok(0) };
+        |s| { { let mut stderr = io::stderr().lock(); write_all_bytes(&mut stderr, s.text(value)?.as_bytes()).and_then(|_| stderr.flush()).map_err(|_| (JettRuntimeStatusV1::IO_FAILURE, STDERR_WRITE_MESSAGE))?; } Ok(0) };
     DebugAppend, jett_rt_v1_debug_append, false, (builder: u64 => I64, label_pointer: u64 => I64, label_length: u64 => I64, bits: u64 => I64, kind: u32 => I32), u32 => I32,
         |s| { if label_pointer == 0 { return Err(INVALID_TRACE_LABEL); }
             let length = usize::try_from(label_length).map_err(|_| INVALID_TRACE_LABEL)?;
@@ -6357,6 +6357,160 @@ mod tests {
                 unsafe { jett_rt_v1_context_destroy(&mut *self.0, result.as_mut_ptr()) },
                 JettRuntimeStatusV1::OK
             );
+        }
+    }
+
+    const DEBUG_PRINT_CHANNEL_PROBE: &str = "JETT_RUNTIME_DEBUG_PRINT_CHANNEL_PROBE";
+
+    fn capture_debug_print_channel_probe(mode: &str) -> std::process::Output {
+        // A child harness isolates the actual process streams from parallel tests.
+        // The exact filter prevents the parent assertions from spawning recursively.
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_abi::values::tests::debug_print_channel_probe",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DEBUG_PRINT_CHANNEL_PROBE, mode)
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn debug_print_uses_diagnostic_stderr_and_preserves_exact_borrowed_bytes() {
+        let output = capture_debug_print_channel_probe("bytes");
+        assert!(output.status.success(), "child probe failed: {output:?}");
+        let expected = concat!(
+            "JETT-DEBUG-PARTIAL \u{03bb}\u{1f642}\0 ",
+            "trace runtime-channel: int64 = 7\n",
+            "breakpoint hit\n",
+            "JETT-DEBUG-LINE [redacted]\r\ninner\n\n",
+            "JETT-DEBUG-TAIL",
+        );
+        assert_eq!(output.stderr, expected.as_bytes());
+        // libtest owns its own stdout banner, so compare the application marker
+        // and reject diagnostic payloads rather than asserting an empty stream.
+        assert!(
+            output
+                .stdout
+                .windows(b"JETT-APPLICATION-ONLY\n".len())
+                .any(|bytes| bytes == b"JETT-APPLICATION-ONLY\n")
+        );
+        for marker in [
+            b"JETT-DEBUG-".as_slice(),
+            b"trace runtime-channel: int64 = ".as_slice(),
+            b"breakpoint hit".as_slice(),
+        ] {
+            assert!(
+                !output
+                    .stdout
+                    .windows(marker.len())
+                    .any(|bytes| bytes == marker)
+            );
+        }
+    }
+
+    #[test]
+    fn debug_print_bad_handle_emits_nothing_and_keeps_first_failure() {
+        let output = capture_debug_print_channel_probe("invalid-handle");
+        assert!(output.status.success(), "child probe failed: {output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert!(
+            !output
+                .stdout
+                .windows(b"JETT-DEBUG-SUPPRESSED".len())
+                .any(|bytes| bytes == b"JETT-DEBUG-SUPPRESSED")
+        );
+    }
+
+    fn emit_borrowed_debug_print(context: &Context, text: &str) {
+        let previous_count = context.count();
+        let value = context.text(text);
+        let expected = context.text(text);
+        assert_eq!(context.count(), previous_count + 2);
+        unsafe {
+            assert_eq!(jett_rt_v1_string_debug_print(context.pointer(), value), 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+            assert_eq!(
+                jett_rt_v1_string_equal(context.pointer(), value, expected),
+                1
+            );
+            assert_eq!(context.count(), previous_count + 2);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), value), 0);
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), expected), 0);
+        }
+        assert_eq!(context.count(), previous_count);
+    }
+
+    fn debug_print_bytes_probe() {
+        let context = Context::new();
+        // Emit without granting Stdout or Stderr: this is compiler observation.
+        emit_borrowed_debug_print(&context, "JETT-DEBUG-PARTIAL \u{03bb}\u{1f642}\0 ");
+        let prefix = b"trace runtime-channel: int64 = ";
+        unsafe {
+            assert_eq!(
+                jett_rt_v1_trace_int64(
+                    context.pointer(),
+                    prefix.as_ptr() as u64,
+                    prefix.len() as u64,
+                    7,
+                ),
+                0
+            );
+            assert_eq!(jett_rt_v1_breakpoint_empty(context.pointer(), 0), 0);
+            assert_eq!(jett_rt_v1_breakpoint_empty(context.pointer(), 1), 0);
+        }
+        emit_borrowed_debug_print(&context, "");
+        emit_borrowed_debug_print(&context, "JETT-DEBUG-LINE [redacted]\r\ninner\n\n");
+        emit_borrowed_debug_print(&context, "JETT-DEBUG-TAIL");
+        let application = context.text("JETT-APPLICATION-ONLY\n");
+        unsafe {
+            let authority = jett_rt_v1_grant_stdout(context.pointer());
+            assert_ne!(authority, 0);
+            assert_eq!(
+                jett_rt_v1_string_stdout(context.pointer(), authority, application),
+                0
+            );
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), application), 0);
+            assert_eq!(jett_rt_v1_value_status(context.pointer()), 0);
+        }
+        assert_eq!(context.count(), 0);
+    }
+
+    fn debug_print_invalid_handle_probe() {
+        let context = Context::new();
+        let suppressed = context.text("JETT-DEBUG-SUPPRESSED");
+        unsafe {
+            assert_ne!(jett_rt_v1_string_debug_print(context.pointer(), 0), 0);
+            assert_ne!(
+                jett_rt_v1_string_debug_print(context.pointer(), suppressed),
+                0
+            );
+            let mut failure = MaybeUninit::uninit();
+            assert_eq!(
+                jett_rt_v1_value_failure(context.pointer(), failure.as_mut_ptr()),
+                JettRuntimeStatusV1::INVALID_ARGUMENT
+            );
+            let failure = failure.assume_init();
+            assert_eq!(
+                slice::from_raw_parts(failure.message.data, failure.message.byte_length as usize),
+                b"invalid native string handle"
+            );
+            assert_eq!(jett_rt_v1_string_release(context.pointer(), suppressed), 0);
+        }
+        assert_eq!(context.count(), 0);
+        // A retained entry failure does not make successful cleanup fail.
+        context.destroy(JettRuntimeStatusV1::OK);
+    }
+
+    #[test]
+    fn debug_print_channel_probe() {
+        match std::env::var(DEBUG_PRINT_CHANNEL_PROBE).as_deref() {
+            Ok("bytes") => debug_print_bytes_probe(),
+            Ok("invalid-handle") => debug_print_invalid_handle_probe(),
+            Err(std::env::VarError::NotPresent) => {}
+            mode => panic!("unexpected debug-print channel probe mode: {mode:?}"),
         }
     }
 

@@ -5,15 +5,15 @@ mod native_builder_constants;
 mod native_constants;
 mod native_property_cases;
 use jett_common::{FileId, STDLIB_FILE_ID_START, Span};
-use jett_comptime::evaluate_explicit_comptime_expressions;
+use jett_comptime::evaluate_explicit_comptime_expressions_capture;
 use jett_comptime::value::Value;
 use jett_comptime::verify::{
     collect_property_cases_with_checked_values, run_verify_blocks_detailed_with_checked_values,
-    run_verify_blocks_with_checked_values,
+    verify_results_to_diagnostics,
 };
 pub use jett_comptime::{
-    ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot, EnvironmentTestText,
-    GraphicsTestEvent, GraphicsTestKey, RandomTestSample,
+    ClockTestSample, DebugEvent, DebugEventKind, EnvironmentTestEntry, EnvironmentTestSnapshot,
+    EnvironmentTestText, GraphicsTestEvent, GraphicsTestKey, RandomTestSample, render_debug_events,
 };
 use jett_diagnostics::Diagnostic;
 use jett_fmt::{FormatResult, format_source};
@@ -53,6 +53,43 @@ impl DiscoveredModules {
     }
 }
 
+/// The actual compiler or execution stage that produced an observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DebugPhase {
+    Comptime,
+    FrontendVerify,
+    Runtime,
+}
+
+impl DebugPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Comptime => "comptime",
+            Self::FrontendVerify => "frontend_verify",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
+/// One ordered observation, kept outside cached and baked language values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugObservation {
+    pub phase: DebugPhase,
+    pub event: DebugEvent,
+}
+
+fn append_debug_events(
+    observations: &mut Vec<DebugObservation>,
+    phase: DebugPhase,
+    events: impl IntoIterator<Item = DebugEvent>,
+) {
+    observations.extend(
+        events
+            .into_iter()
+            .map(|event| DebugObservation { phase, event }),
+    );
+}
+
 /// Result of compiling a single file.
 pub struct BuildResult {
     pub breakpoint_exclusions: Option<Arc<HashMap<Span, HashSet<String>>>>,
@@ -68,6 +105,7 @@ pub struct BuildResult {
     pub checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
     /// Values baked by explicit `comptime` expressions.
     pub explicit_comptime_values: Option<Arc<jett_comptime::ExplicitComptimeValues>>,
+    pub debug_observations: Vec<DebugObservation>,
 }
 
 /// Backend-neutral programs and checked data produced for a valid source file.
@@ -99,6 +137,7 @@ pub struct BackendLoweringResult {
     pub reflection_metadata: Arc<ReflectionMetadata>,
     pub checked_expression_types: Arc<CheckedExpressionTypes>,
     pub explicit_comptime_values: Arc<jett_comptime::ExplicitComptimeValues>,
+    pub debug_observations: Vec<DebugObservation>,
 }
 
 /// Failure while validating or lowering a file for a backend.
@@ -111,11 +150,48 @@ pub enum BackendLoweringError {
     Mir(Vec<jett_mir::LowerError>),
     /// MIR structural validation failed.
     MirValidation(Vec<jett_mir::ValidationError>),
+    /// A later lowering failure with observations from the completed frontend.
+    Captured {
+        source: Box<BackendLoweringError>,
+        debug_observations: Vec<DebugObservation>,
+    },
+}
+
+impl BackendLoweringError {
+    pub fn debug_observations(&self) -> &[DebugObservation] {
+        match self {
+            Self::Build(result) => &result.debug_observations,
+            Self::Captured {
+                debug_observations, ..
+            } => debug_observations,
+            _ => &[],
+        }
+    }
+
+    pub fn build_result(&self) -> Option<&BuildResult> {
+        match self {
+            Self::Build(result) => Some(result),
+            Self::Captured { source, .. } => source.build_result(),
+            _ => None,
+        }
+    }
+
+    fn with_debug_observations(self, observations: &[DebugObservation]) -> Self {
+        if observations.is_empty() || !self.debug_observations().is_empty() {
+            self
+        } else {
+            Self::Captured {
+                source: Box::new(self),
+                debug_observations: observations.to_vec(),
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for BackendLoweringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Captured { source, .. } => std::fmt::Display::fmt(source, f),
             Self::Build(result) => {
                 f.write_str("build failed before backend lowering")?;
                 for message in error_messages_from_diagnostics(&result.diagnostics) {
@@ -154,7 +230,14 @@ impl std::fmt::Debug for BackendLoweringError {
     }
 }
 
-impl std::error::Error for BackendLoweringError {}
+impl std::error::Error for BackendLoweringError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Captured { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 /// Mode-specific options for a build.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -167,13 +250,14 @@ pub struct BuildOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOutput {
     pub stdout: String,
-    pub debug_output: Vec<String>,
+    pub debug_events: Vec<DebugEvent>,
+    pub frontend_debug_observations: Vec<DebugObservation>,
 }
 
 /// A failed interpreter run together with output produced before the failure.
 ///
 /// The message uses the same text returned by the legacy `String`-based run
-/// APIs. Captured stdout and debug lines are retained so another backend can
+/// APIs. Captured application stdout and debug events are retained so another backend can
 /// compare partial observable behavior as well as terminal failure text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFailure {
@@ -187,9 +271,16 @@ impl RunFailure {
             message: message.into(),
             output: RunOutput {
                 stdout: String::new(),
-                debug_output: Vec::new(),
+                debug_events: Vec::new(),
+                frontend_debug_observations: Vec::new(),
             },
         }
+    }
+
+    fn with_frontend(message: impl Into<String>, observations: &[DebugObservation]) -> Self {
+        let mut failure = Self::without_output(message);
+        failure.output.frontend_debug_observations = observations.to_vec();
+        failure
     }
 
     fn with_output(message: impl Into<String>, output: RunOutput) -> Self {
@@ -532,6 +623,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
 
@@ -548,6 +640,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
@@ -566,6 +659,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
 
@@ -584,28 +678,43 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
     let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
-    let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
+    let evaluation = evaluate_explicit_comptime_expressions_capture(
         &parse_result.module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
     );
-    all_diagnostics.extend(comptime_diagnostics);
-    let explicit_comptime_values = Arc::new(explicit_comptime_values);
+    let mut debug_observations = Vec::new();
+    append_debug_events(
+        &mut debug_observations,
+        DebugPhase::Comptime,
+        evaluation.debug_events,
+    );
+    all_diagnostics.extend(evaluation.diagnostics);
+    let explicit_comptime_values = Arc::new(evaluation.values);
     if !has_error_diagnostics(&all_diagnostics) {
-        all_diagnostics.extend(run_verify_blocks_with_checked_values(
+        let results = run_verify_blocks_detailed_with_checked_values(
             &parse_result.module,
             check_result.reflection_metadata,
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
             explicit_comptime_values.clone(),
-        ));
+        );
+        all_diagnostics.extend(verify_results_to_diagnostics(&results));
+        for result in results {
+            append_debug_events(
+                &mut debug_observations,
+                DebugPhase::FrontendVerify,
+                result.debug_events,
+            );
+        }
     }
 
     let has_errors = has_error_diagnostics(&all_diagnostics);
@@ -619,6 +728,7 @@ pub fn build_source(source: &str, file_path: &str) -> BuildResult {
         checked_expression_types: Some(checked_expression_types),
         breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
         explicit_comptime_values: Some(explicit_comptime_values),
+        debug_observations,
     }
 }
 
@@ -2751,13 +2861,15 @@ fn lower_file_for_backend_inner(
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         })
     })?;
     let build_failure =
         |diagnostics: Vec<Diagnostic>,
          reflection_metadata: Option<Arc<ReflectionMetadata>>,
          checked_expression_types: Option<Arc<CheckedExpressionTypes>>,
-         explicit_comptime_values: Option<Arc<jett_comptime::ExplicitComptimeValues>>| {
+         explicit_comptime_values: Option<Arc<jett_comptime::ExplicitComptimeValues>>,
+         debug_observations: Vec<DebugObservation>| {
             BackendLoweringError::Build(BuildResult {
                 diagnostics,
                 has_errors: true,
@@ -2767,6 +2879,7 @@ fn lower_file_for_backend_inner(
                 checked_expression_types,
                 breakpoint_exclusions: None,
                 explicit_comptime_values,
+                debug_observations,
             })
         };
 
@@ -2779,14 +2892,14 @@ fn lower_file_for_backend_inner(
     let source_program_entry = find_main_function(&parse_result.module).map(|(_, main)| main.span);
     let mut diagnostics = parse_result.errors.clone();
     if has_error_diagnostics(&diagnostics) {
-        return Err(build_failure(diagnostics, None, None, None));
+        return Err(build_failure(diagnostics, None, None, None, Vec::new()));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
     support_modules.extend(discover_project_modules_with_diagnostics(path));
     diagnostics.extend(support_modules.diagnostics);
     if has_error_diagnostics(&diagnostics) {
-        return Err(build_failure(diagnostics, None, None, None));
+        return Err(build_failure(diagnostics, None, None, None, Vec::new()));
     }
 
     let mut source_origins = HashMap::from([(entry_file, SourceOrigin::Project)]);
@@ -2796,7 +2909,7 @@ fn lower_file_for_backend_inner(
     let resolve_result = resolve(&parse_result.module);
     diagnostics.extend(resolve_result.diagnostics.clone());
     if has_error_diagnostics(&diagnostics) {
-        return Err(build_failure(diagnostics, None, None, None));
+        return Err(build_failure(diagnostics, None, None, None, Vec::new()));
     }
 
     let check_result = check_with_options(
@@ -2808,27 +2921,41 @@ fn lower_file_for_backend_inner(
     );
     diagnostics.extend(check_result.diagnostics.clone());
     if has_error_diagnostics(&diagnostics) {
-        return Err(build_failure(diagnostics, None, None, None));
+        return Err(build_failure(diagnostics, None, None, None, Vec::new()));
     }
 
     let reflection_metadata = check_result.reflection_metadata.clone();
     let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
-    let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
+    let evaluation = evaluate_explicit_comptime_expressions_capture(
         &parse_result.module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
     );
-    diagnostics.extend(comptime_diagnostics);
-    let explicit_comptime_values = Arc::new(explicit_comptime_values);
+    let mut debug_observations = Vec::new();
+    append_debug_events(
+        &mut debug_observations,
+        DebugPhase::Comptime,
+        evaluation.debug_events,
+    );
+    diagnostics.extend(evaluation.diagnostics);
+    let explicit_comptime_values = Arc::new(evaluation.values);
     if !has_error_diagnostics(&diagnostics) {
-        diagnostics.extend(run_verify_blocks_with_checked_values(
+        let results = run_verify_blocks_detailed_with_checked_values(
             &parse_result.module,
             reflection_metadata.clone(),
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
             explicit_comptime_values.clone(),
-        ));
+        );
+        diagnostics.extend(verify_results_to_diagnostics(&results));
+        for result in results {
+            append_debug_events(
+                &mut debug_observations,
+                DebugPhase::FrontendVerify,
+                result.debug_events,
+            );
+        }
     }
     if has_error_diagnostics(&diagnostics) {
         return Err(build_failure(
@@ -2836,6 +2963,7 @@ fn lower_file_for_backend_inner(
             Some(reflection_metadata),
             Some(checked_expression_types),
             Some(explicit_comptime_values),
+            debug_observations,
         ));
     }
 
@@ -2854,7 +2982,9 @@ fn lower_file_for_backend_inner(
             &source_origins,
         )
     }
-    .map_err(BackendLoweringError::Hir)?;
+    .map_err(|errors| {
+        BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
+    })?;
     native_constants::bake_values(
         &mut hir,
         &explicit_comptime_values,
@@ -2862,9 +2992,12 @@ fn lower_file_for_backend_inner(
         &check_result.reflection_metadata,
         &check_result.method_value_definitions,
     )
-    .map_err(BackendLoweringError::Hir)?;
+    .map_err(|errors| {
+        BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
+    })?;
     let native_verify_entry = if mode == BackendLoweringMode::VerifySuite {
-        append_native_verify_suite(&mut hir, &parse_result.module, entry_file)?
+        append_native_verify_suite(&mut hir, &parse_result.module, entry_file)
+            .map_err(|error| error.with_debug_observations(&debug_observations))?
     } else {
         None
     };
@@ -2885,16 +3018,24 @@ fn lower_file_for_backend_inner(
             &check_result.reflection_metadata,
             &check_result.method_value_definitions,
         )
-        .map_err(BackendLoweringError::Hir)?
+        .map_err(|errors| {
+            BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
+        })?
     } else {
         None
     };
     let native_property_entry = native_property_plan.as_ref().map(|plan| plan.entry);
-    let program_entry = lowered_program_entry(&hir, source_program_entry)?;
-    jett_hir::complete_value_conversions(&mut hir, &check_result.interner)
-        .map_err(BackendLoweringError::Hir)?;
-    let mir = jett_mir::lower(&hir, &check_result.interner).map_err(BackendLoweringError::Mir)?;
-    jett_mir::validate(&mir).map_err(BackendLoweringError::MirValidation)?;
+    let program_entry = lowered_program_entry(&hir, source_program_entry)
+        .map_err(|error| error.with_debug_observations(&debug_observations))?;
+    jett_hir::complete_value_conversions(&mut hir, &check_result.interner).map_err(|errors| {
+        BackendLoweringError::Hir(errors).with_debug_observations(&debug_observations)
+    })?;
+    let mir = jett_mir::lower(&hir, &check_result.interner).map_err(|errors| {
+        BackendLoweringError::Mir(errors).with_debug_observations(&debug_observations)
+    })?;
+    jett_mir::validate(&mir).map_err(|errors| {
+        BackendLoweringError::MirValidation(errors).with_debug_observations(&debug_observations)
+    })?;
 
     Ok(BackendLoweringResult {
         diagnostics,
@@ -2910,6 +3051,7 @@ fn lower_file_for_backend_inner(
         reflection_metadata,
         checked_expression_types,
         explicit_comptime_values,
+        debug_observations,
     })
 }
 
@@ -2932,6 +3074,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
                 checked_expression_types: None,
                 breakpoint_exclusions: None,
                 explicit_comptime_values: None,
+                debug_observations: Vec::new(),
             };
         }
     };
@@ -2954,6 +3097,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
 
@@ -2975,6 +3119,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
@@ -2994,6 +3139,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
 
@@ -3018,28 +3164,43 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         };
     }
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
     let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
-    let (explicit_comptime_values, comptime_diagnostics) = evaluate_explicit_comptime_expressions(
+    let evaluation = evaluate_explicit_comptime_expressions_capture(
         &parse_result.module,
         reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
     );
-    all_diagnostics.extend(comptime_diagnostics);
-    let explicit_comptime_values = Arc::new(explicit_comptime_values);
+    let mut debug_observations = Vec::new();
+    append_debug_events(
+        &mut debug_observations,
+        DebugPhase::Comptime,
+        evaluation.debug_events,
+    );
+    all_diagnostics.extend(evaluation.diagnostics);
+    let explicit_comptime_values = Arc::new(evaluation.values);
     if !has_error_diagnostics(&all_diagnostics) {
-        all_diagnostics.extend(run_verify_blocks_with_checked_values(
+        let results = run_verify_blocks_detailed_with_checked_values(
             &parse_result.module,
             check_result.reflection_metadata,
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
             explicit_comptime_values.clone(),
-        ));
+        );
+        all_diagnostics.extend(verify_results_to_diagnostics(&results));
+        for result in results {
+            append_debug_events(
+                &mut debug_observations,
+                DebugPhase::FrontendVerify,
+                result.debug_events,
+            );
+        }
     }
 
     let has_errors = has_error_diagnostics(&all_diagnostics);
@@ -3053,6 +3214,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
         checked_expression_types: Some(checked_expression_types),
         breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
         explicit_comptime_values: Some(explicit_comptime_values),
+        debug_observations,
     }
 }
 
@@ -3633,8 +3795,8 @@ pub fn run_file(path: &Path) -> Result<(), String> {
     .map(|_| ())
 }
 
-/// Run a .jett file and capture runtime stdout produced by `Stdout.write`,
-/// `print`, and `println`.
+/// Run a .jett file and capture capability-backed `Stdout.write` output.
+/// This legacy helper silently discards debug observations.
 pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
     run_file_with_options(
         path,
@@ -3650,7 +3812,7 @@ pub fn run_file_capture_stdout(path: &Path) -> Result<String, String> {
     .map(|output| output.stdout)
 }
 
-/// Run a .jett file and capture stdout plus trace/breakpoint debug lines.
+/// Run a .jett file and capture application stdout and typed debug observations.
 pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
     run_file_with_options(
         path,
@@ -3668,7 +3830,7 @@ pub fn run_file_capture_output(path: &Path) -> Result<RunOutput, String> {
 /// Run a file in the reference interpreter and retain partial captured output
 /// when execution fails.
 ///
-/// Unlike the legacy run APIs, the error carries stdout and trace/breakpoint
+/// Unlike the legacy run APIs, the error carries application stdout and debug
 /// lines produced before the terminal failure. Its display text remains the
 /// exact legacy error string.
 pub fn run_file_capture_outcome(path: &Path) -> Result<RunOutput, RunFailure> {
@@ -3937,6 +4099,27 @@ fn runtime_requires_caller_thread(path: &Path, options: &RunOptions, macos: bool
 fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFailure> {
     let build = build_file(path);
 
+    if options.emit_runtime_debug {
+        use std::io::Write;
+        let mut stderr = std::io::stderr().lock();
+        for observation in &build.debug_observations {
+            stderr
+                .write_all(observation.event.text.as_bytes())
+                .map_err(|error| {
+                    RunFailure::with_frontend(
+                        format!("failed to write compiler debug output: {error}"),
+                        &build.debug_observations,
+                    )
+                })?;
+        }
+        stderr.flush().map_err(|error| {
+            RunFailure::with_frontend(
+                format!("failed to write compiler debug output: {error}"),
+                &build.debug_observations,
+            )
+        })?;
+    }
+    let frontend_failure = |message| RunFailure::with_frontend(message, &build.debug_observations);
     if build.has_errors {
         let errors: Vec<String> = build
             .diagnostics
@@ -3944,27 +4127,26 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .map(|d| format!("{}: {}", d.code, d.message))
             .collect();
-        return Err(RunFailure::without_output(format!(
+        return Err(frontend_failure(format!(
             "cannot run — compilation errors:\n{}",
             errors.join("\n")
         )));
     }
 
     // Parse again to get the module for interpretation
-    let source = fs::read_to_string(path).map_err(|error| {
-        RunFailure::without_output(format!("failed to read {}: {error}", path.display()))
-    })?;
+    let source = fs::read_to_string(path)
+        .map_err(|error| frontend_failure(format!("failed to read {}: {error}", path.display())))?;
     let file_id = FileId::new(0);
     let parse_result = parse(&source, file_id);
     let module = parse_result.module;
 
     let Some((main_namespace, main_func)) = find_main_function(&module) else {
-        return Err(RunFailure::without_output(
-            "runtime error: no `main` function found",
+        return Err(frontend_failure(
+            "runtime error: no `main` function found".to_string(),
         ));
     };
 
-    let main_args = default_runtime_args_for_main(main_func).map_err(RunFailure::without_output)?;
+    let main_args = default_runtime_args_for_main(main_func).map_err(&frontend_failure)?;
 
     use jett_comptime::interpreter::Interpreter;
     let mut interp = if options.emit_runtime_debug {
@@ -3982,7 +4164,7 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
         } else {
             interp
                 .initialize_random_provider()
-                .map_err(RunFailure::without_output)?;
+                .map_err(&frontend_failure)?;
         }
     }
     if main_func
@@ -4004,11 +4186,11 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
         if let Some(snapshot) = options.environment_test_snapshot.clone() {
             interp
                 .set_environment_test_snapshot(snapshot)
-                .map_err(|error| RunFailure::without_output(format!("runtime error: {error}")))?;
+                .map_err(|error| frontend_failure(format!("runtime error: {error}")))?;
         } else {
             interp
                 .initialize_environment_provider()
-                .map_err(|error| RunFailure::without_output(format!("runtime error: {error}")))?;
+                .map_err(|error| frontend_failure(format!("runtime error: {error}")))?;
         }
     }
     if main_func
@@ -4072,7 +4254,8 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
     };
     let output = RunOutput {
         stdout: interp.take_stdout_output(),
-        debug_output: interp.take_debug_output(),
+        debug_events: interp.take_debug_events(),
+        frontend_debug_observations: build.debug_observations,
     };
     match terminal_result {
         Ok(()) => Ok(output),
@@ -4193,12 +4376,14 @@ pub fn format_file_in_place(path: &Path) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// A single block result in a test run.
+#[derive(Debug, Clone)]
 pub struct TestBlockResult {
     pub name: String,
     pub passed: bool,
     pub error: Option<String>,
     pub is_property: bool,
     pub iterations: Option<usize>,
+    pub debug_events: Vec<DebugEvent>,
     pub line: u32,
     pub column: u32,
     pub end_line: u32,
@@ -4206,6 +4391,7 @@ pub struct TestBlockResult {
 }
 
 /// Result of running `jett test` on a single file.
+#[derive(Debug, Clone)]
 pub struct TestResult {
     pub total: usize,
     pub passed: usize,
@@ -4214,7 +4400,42 @@ pub struct TestResult {
     pub file_path: String,
     /// Per-block results.
     pub blocks: Vec<TestBlockResult>,
+    /// Explicit evaluation observations; block events live only in `blocks`.
+    pub debug_observations: Vec<DebugObservation>,
 }
+
+/// A fatal test setup/evaluation failure with actual observations retained.
+#[derive(Debug, Clone)]
+pub struct TestFailure {
+    pub message: String,
+    pub file_path: String,
+    pub debug_observations: Vec<DebugObservation>,
+    /// Earlier files, including their block outcomes, in actual execution order.
+    pub completed_files: Vec<TestResult>,
+}
+
+impl TestFailure {
+    fn new(path: &Path, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            file_path: path.display().to_string(),
+            debug_observations: Vec::new(),
+            completed_files: Vec::new(),
+        }
+    }
+
+    fn into_message(self) -> String {
+        self.message
+    }
+}
+
+impl std::fmt::Display for TestFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TestFailure {}
 
 /// Result of running `jett test` across an entire project.
 pub struct ProjectTestResult {
@@ -4238,6 +4459,7 @@ pub struct BundleResult {
     pub project_root: String,
     pub output_path: String,
     pub files: Vec<BundleFileResult>,
+    pub debug_observations: Vec<DebugObservation>,
 }
 
 /// A bundle failure, optionally retaining validation or ordering diagnostics
@@ -4245,6 +4467,7 @@ pub struct BundleResult {
 pub struct BundleError {
     message: String,
     details: Option<BundleErrorDetails>,
+    debug_observations: Vec<DebugObservation>,
 }
 
 enum BundleErrorDetails {
@@ -4253,6 +4476,20 @@ enum BundleErrorDetails {
 }
 
 impl BundleError {
+    pub fn debug_observations(&self) -> &[DebugObservation] {
+        match self.diagnostic_result() {
+            Some(result) => &result.debug_observations,
+            None => &self.debug_observations,
+        }
+    }
+
+    fn with_debug_observations(mut self, observations: &[DebugObservation]) -> Self {
+        if self.debug_observations().is_empty() {
+            self.debug_observations = observations.to_vec();
+        }
+        self
+    }
+
     fn from_validation(validation: BuildResult) -> Option<Self> {
         if !validation.has_errors {
             return None;
@@ -4261,6 +4498,7 @@ impl BundleError {
         Some(Self {
             message: format!("candidate bundle failed validation:\n{}", errors.join("\n")),
             details: Some(BundleErrorDetails::Validation(validation)),
+            debug_observations: Vec::new(),
         })
     }
 
@@ -4294,6 +4532,7 @@ impl From<String> for BundleError {
         Self {
             message,
             details: None,
+            debug_observations: Vec::new(),
         }
     }
 }
@@ -4314,8 +4553,13 @@ impl std::error::Error for BundleError {}
 
 /// Parse a .jett file and run all verify blocks, reporting per-block results.
 pub fn test_file(path: &Path) -> Result<TestResult, String> {
+    test_file_capture_outcome(path).map_err(TestFailure::into_message)
+}
+
+pub fn test_file_capture_outcome(path: &Path) -> Result<TestResult, TestFailure> {
+    let fail = |message| TestFailure::new(path, message);
     let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {}", path.display(), e))?;
+        .map_err(|e| fail(format!("failed to read {}: {}", path.display(), e)))?;
 
     let file_id = FileId::new(0);
     let mut parse_result = parse(&source, file_id);
@@ -4332,7 +4576,7 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
             .filter(|d| d.severity == jett_diagnostics::Severity::Error)
             .map(|d| format!("{}: {}", d.code, d.message))
             .collect();
-        return Err(format!("parse errors:\n{}", msgs.join("\n")));
+        return Err(fail(format!("parse errors:\n{}", msgs.join("\n"))));
     }
 
     let mut support_modules = discover_stdlib_modules_with_diagnostics();
@@ -4342,45 +4586,57 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         &project_modules.diagnostics,
     ));
     if !support_errors.is_empty() {
-        return Err(format!(
+        return Err(fail(format!(
             "support parse errors:\n{}",
             support_errors.join("\n")
-        ));
+        )));
     }
     strip_test_items_from_support_modules(&mut support_modules.modules);
     strip_test_items_from_support_modules(&mut project_modules.modules);
-    parse_result.module = assemble_test_project_module(path, parse_result.module, project_modules)?;
+    parse_result.module =
+        assemble_test_project_module(path, parse_result.module, project_modules).map_err(&fail)?;
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
     let resolve_result = resolve(&parse_result.module);
     let resolve_errors = error_messages_from_diagnostics(&resolve_result.diagnostics);
     if !resolve_errors.is_empty() {
-        return Err(format!("resolution errors:\n{}", resolve_errors.join("\n")));
+        return Err(fail(format!(
+            "resolution errors:\n{}",
+            resolve_errors.join("\n")
+        )));
     }
 
     let check_result = check(&parse_result.module, &resolve_result);
     let type_errors = error_messages_from_diagnostics(&check_result.diagnostics);
     if !type_errors.is_empty() {
-        return Err(format!("type errors:\n{}", type_errors.join("\n")));
+        return Err(fail(format!("type errors:\n{}", type_errors.join("\n"))));
     }
 
     let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
-    let (values, diagnostics) = evaluate_explicit_comptime_expressions(
+    let evaluation = evaluate_explicit_comptime_expressions_capture(
         &parse_result.module,
         check_result.reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
     );
-    let errors = error_messages_from_diagnostics(&diagnostics);
+    let mut debug_observations = Vec::new();
+    append_debug_events(
+        &mut debug_observations,
+        DebugPhase::Comptime,
+        evaluation.debug_events,
+    );
+    let errors = error_messages_from_diagnostics(&evaluation.diagnostics);
     if !errors.is_empty() {
-        return Err(format!("comptime errors:\n{}", errors.join("\n")));
+        let mut failure = fail(format!("comptime errors:\n{}", errors.join("\n")));
+        failure.debug_observations = debug_observations;
+        return Err(failure);
     }
     let results = run_verify_blocks_detailed_with_checked_values(
         &parse_result.module,
         check_result.reflection_metadata,
         checked_expression_types,
         Arc::new(check_result.breakpoint_exclusions.clone()),
-        Arc::new(values),
+        Arc::new(evaluation.values),
     );
 
     let total = results.len();
@@ -4398,6 +4654,7 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
                 error: r.error,
                 is_property: r.is_property,
                 iterations: r.iterations,
+                debug_events: r.debug_events,
                 line: line as u32,
                 column: column as u32,
                 end_line: end_line as u32,
@@ -4412,6 +4669,7 @@ pub fn test_file(path: &Path) -> Result<TestResult, String> {
         failed,
         file_path: path.display().to_string(),
         blocks,
+        debug_observations,
     })
 }
 
@@ -4589,23 +4847,34 @@ fn existing_paths_share_file_identity(_left: &Path, _right: &Path) -> bool {
 /// to find `jett.proj`, then collects all `.jett` files in the project) and
 /// run verify blocks in each one.
 pub fn test_project(start_dir: &Path) -> Result<ProjectTestResult, String> {
-    let project_dir = find_project_root(start_dir)?;
+    test_project_capture_outcome(start_dir).map_err(TestFailure::into_message)
+}
+
+pub fn test_project_capture_outcome(start_dir: &Path) -> Result<ProjectTestResult, TestFailure> {
+    let fail = |message| TestFailure::new(start_dir, message);
+    let project_dir = find_project_root(start_dir).map_err(&fail)?;
     let mut files = Vec::new();
     collect_jett_files(&project_dir, &mut files)
-        .map_err(|e| format!("error scanning project: {e}"))?;
+        .map_err(|e| fail(format!("error scanning project: {e}")))?;
 
     if files.is_empty() {
-        return Err(format!(
+        return Err(fail(format!(
             "no .jett files found in project at {}",
             project_dir.display()
-        ));
+        )));
     }
 
     files.sort();
 
     let mut file_results = Vec::new();
     for file_path in &files {
-        file_results.push(test_file(file_path)?);
+        match test_file_capture_outcome(file_path) {
+            Ok(result) => file_results.push(result),
+            Err(mut failure) => {
+                failure.completed_files = file_results;
+                return Err(failure);
+            }
+        }
     }
 
     let total_files = file_results.len();
@@ -4748,7 +5017,9 @@ fn bundle_ordering_error(
             checked_expression_types: None,
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
+            debug_observations: Vec::new(),
         })),
+        debug_observations: Vec::new(),
     }
 }
 
@@ -4932,16 +5203,21 @@ pub fn bundle_project_detailed(
     if let Some(parent) = output_abs.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create {}: {}", parent.display(), e))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            BundleError::from(format!("failed to create {}: {}", parent.display(), e))
+                .with_debug_observations(&validation.debug_observations)
+        })?;
     }
-    fs::write(&output_abs, bundled)
-        .map_err(|e| format!("failed to write {}: {}", output_abs.display(), e))?;
+    fs::write(&output_abs, bundled).map_err(|e| {
+        BundleError::from(format!("failed to write {}: {}", output_abs.display(), e))
+            .with_debug_observations(&validation.debug_observations)
+    })?;
 
     Ok(BundleResult {
         project_root: project_dir.display().to_string(),
         output_path: output_abs.display().to_string(),
         files: bundled_files,
+        debug_observations: validation.debug_observations,
     })
 }
 
@@ -4956,6 +5232,315 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("{name}_{nanos}"))
+    }
+
+    const DEBUG_PHASE_SOURCE: &str = r#"namespace app
+function observe(label: string) returns int64:
+    print(view label)
+    return 7
+int64 cached = comptime observe("constant:")
+function main(stdout: Stdout) returns nothing:
+    int64 baked = comptime observe("expression:")
+    Stdout.write(view stdout, "{cached + baked}\n")
+    print("trace public")
+    println("tail")
+verify checking:
+    print("verify:")
+    assert true
+"#;
+
+    fn observed(phase: DebugPhase, kind: DebugEventKind, text: &str) -> DebugObservation {
+        DebugObservation {
+            phase,
+            event: DebugEvent {
+                kind,
+                text: text.into(),
+            },
+        }
+    }
+
+    fn frontend_phase_oracle() -> Vec<DebugObservation> {
+        vec![
+            observed(DebugPhase::Comptime, DebugEventKind::Print, "constant:"),
+            observed(DebugPhase::Comptime, DebugEventKind::Print, "expression:"),
+            observed(DebugPhase::FrontendVerify, DebugEventKind::Print, "verify:"),
+        ]
+    }
+
+    #[test]
+    fn build_capture_keeps_comptime_and_actual_verification_once_in_phase_order() {
+        let build = build_source(DEBUG_PHASE_SOURCE, "phase.jett");
+        assert!(!build.has_errors, "{:?}", build.diagnostics);
+        assert_eq!(build.debug_observations, frontend_phase_oracle());
+        assert_eq!(DebugPhase::Comptime.as_str(), "comptime");
+        assert_eq!(DebugPhase::FrontendVerify.as_str(), "frontend_verify");
+        assert_eq!(DebugPhase::Runtime.as_str(), "runtime");
+    }
+
+    #[test]
+    fn captured_run_keeps_baked_reads_silent_and_application_output_separate() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(&path, DEBUG_PHASE_SOURCE).unwrap();
+        let output = run_file_capture_outcome(&path).unwrap();
+        assert_eq!(output.stdout, "14\n");
+        assert_eq!(output.frontend_debug_observations, frontend_phase_oracle());
+        assert_eq!(
+            output.debug_events,
+            vec![
+                DebugEvent {
+                    kind: DebugEventKind::Print,
+                    text: "trace public".into()
+                },
+                DebugEvent {
+                    kind: DebugEventKind::Println,
+                    text: "tail\n".into()
+                },
+            ]
+        );
+        assert_eq!(
+            render_debug_events(&output.debug_events),
+            "trace publictail\n"
+        );
+        assert_eq!(run_file_capture_stdout(&path).unwrap(), "14\n");
+    }
+
+    #[test]
+    fn failed_comptime_retains_events_in_build_run_and_fatal_test_results() {
+        let source = r#"namespace app
+function reject() returns int64:
+    print("before-failure")
+    string impossible = string.repeat("ab", 9223372036854775807)
+    return string.char_count(impossible)
+function main() returns nothing:
+    int64 failed = comptime reject()
+verify unreachable:
+    println("must not execute")
+"#;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(&path, source).unwrap();
+        let expected = vec![observed(
+            DebugPhase::Comptime,
+            DebugEventKind::Print,
+            "before-failure",
+        )];
+        let build = build_source(source, "main.jett");
+        assert!(build.has_errors);
+        assert_eq!(build.debug_observations, expected);
+        let failure = run_file_capture_outcome(&path).unwrap_err();
+        assert!(
+            failure
+                .message
+                .contains("string.repeat: requested output is too large"),
+            "{failure}"
+        );
+        assert!(failure.output.stdout.is_empty());
+        assert!(failure.output.debug_events.is_empty());
+        assert_eq!(failure.output.frontend_debug_observations, expected);
+        let failure = test_file_capture_outcome(&path).unwrap_err();
+        assert!(failure.message.contains("comptime errors:"), "{failure}");
+        assert_eq!(failure.file_path, path.display().to_string());
+        assert_eq!(failure.debug_observations, expected);
+        assert!(failure.completed_files.is_empty());
+    }
+
+    #[test]
+    fn failed_frontend_verify_preserves_all_actual_block_events_before_run_refusal() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(
+            &path,
+            r#"namespace app
+function main() returns nothing:
+    println("must not run")
+verify failing:
+    print("first")
+    assert false "verify failure"
+verify following:
+    println("second")
+    assert true
+"#,
+        )
+        .unwrap();
+        let failure = run_file_capture_outcome(&path).unwrap_err();
+        assert!(failure.message.contains("verify failure"), "{failure}");
+        assert!(failure.output.debug_events.is_empty());
+        assert_eq!(
+            failure.output.frontend_debug_observations,
+            vec![
+                observed(DebugPhase::FrontendVerify, DebugEventKind::Print, "first"),
+                observed(
+                    DebugPhase::FrontendVerify,
+                    DebugEventKind::Println,
+                    "second\n"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_capture_attributes_failed_blocks_and_all_property_trials_without_duplicates() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tests.jett");
+        fs::write(
+            &path,
+            r#"namespace app
+function observe() returns int64:
+    print("compile:")
+    return 7
+int64 cached = comptime observe()
+verify failing:
+    println(cached)
+    assert false "block failure"
+property complete:
+    given number: int64
+    print("trial:")
+    assert number == number
+"#,
+        )
+        .unwrap();
+        let result = test_file_capture_outcome(&path).unwrap();
+        assert_eq!((result.total, result.passed, result.failed), (2, 1, 1));
+        assert_eq!(
+            result.debug_observations,
+            vec![observed(
+                DebugPhase::Comptime,
+                DebugEventKind::Print,
+                "compile:"
+            )]
+        );
+        assert_eq!(result.blocks[0].name, "failing");
+        assert_eq!(render_debug_events(&result.blocks[0].debug_events), "7\n");
+        assert_eq!(result.blocks[1].name, "complete");
+        assert_eq!(result.blocks[1].iterations, Some(100));
+        assert_eq!(result.blocks[1].debug_events.len(), 100);
+        assert_eq!(
+            render_debug_events(&result.blocks[1].debug_events),
+            "trial:".repeat(100)
+        );
+    }
+
+    #[test]
+    fn project_fatal_capture_preserves_prior_file_blocks_and_current_file_association() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("jett.proj"),
+            "name: debug_capture\nentry: 00_first.jett\n",
+        )
+        .unwrap();
+        let first = directory.path().join("00_first.jett");
+        let second = directory.path().join("10_second.jett");
+        fs::write(
+            &first,
+            "namespace first\nverify passed:\n    print(\"first:\")\n    assert true\n",
+        )
+        .unwrap();
+        fs::write(
+            &second,
+            r#"namespace second
+function reject(label: string) returns int64:
+    println(view label)
+    string impossible = string.repeat("ab", 9223372036854775807)
+    return string.char_count(impossible)
+verify stopped:
+    int64 value = comptime reject("second")
+    assert value == 0
+"#,
+        )
+        .unwrap();
+        let failure = match test_project_capture_outcome(directory.path()) {
+            Ok(_) => panic!("second file must fail required evaluation"),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure.file_path, second.display().to_string());
+        assert_eq!(failure.completed_files.len(), 1);
+        let previous = &failure.completed_files[0];
+        assert_eq!(previous.file_path, first.display().to_string());
+        assert_eq!(
+            (previous.total, previous.passed, previous.failed),
+            (1, 1, 0)
+        );
+        assert_eq!(previous.blocks.len(), 1);
+        assert!(previous.debug_observations.is_empty());
+        assert_eq!(
+            render_debug_events(&previous.blocks[0].debug_events),
+            "first:"
+        );
+        assert_eq!(
+            failure.debug_observations,
+            vec![observed(
+                DebugPhase::Comptime,
+                DebugEventKind::Println,
+                "second\n"
+            )]
+        );
+    }
+
+    #[test]
+    fn post_frontend_hir_failure_retains_capture_and_stable_diagnostic_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(
+            &path,
+            r#"namespace app
+function observe() returns int64:
+    print("compiled:")
+    return 7
+struct Packet:
+    data: bytes
+function main() returns nothing:
+    int64 baked = comptime observe()
+    Packet item = Packet(data: bytes.new())
+    bytes borrowed = view item.data
+verify checking:
+    println("checked")
+    assert true
+"#,
+        )
+        .unwrap();
+        let failure = lower_file_for_backend(&path).unwrap_err();
+        assert_eq!(
+            failure.debug_observations(),
+            [
+                observed(DebugPhase::Comptime, DebugEventKind::Print, "compiled:"),
+                observed(
+                    DebugPhase::FrontendVerify,
+                    DebugEventKind::Println,
+                    "checked\n"
+                ),
+            ]
+        );
+        assert!(failure.build_result().is_none());
+        assert!(failure.to_string().starts_with("HIR lowering failed\n"));
+        assert!(
+            failure
+                .to_string()
+                .contains("native borrowed alias requires a stable local origin")
+        );
+        assert!(std::error::Error::source(&failure).is_some());
+    }
+
+    #[test]
+    fn bundle_validation_and_publication_failure_retain_actual_observations() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("jett.proj"), "name: bundle_capture\n").unwrap();
+        fs::write(directory.path().join("main.jett"), DEBUG_PHASE_SOURCE).unwrap();
+        let output = directory.path().join("target/program.jett");
+        let bundle = bundle_project_detailed(directory.path(), &output).unwrap();
+        assert_eq!(bundle.debug_observations, frontend_phase_oracle());
+        let sentinel = directory.path().join("blocked");
+        fs::write(&sentinel, b"preserved file").unwrap();
+        let error = match bundle_project_detailed(directory.path(), &sentinel.join("program.jett"))
+        {
+            Ok(_) => panic!("output parent is a regular file"),
+            Err(error) => error,
+        };
+        assert_eq!(error.debug_observations(), frontend_phase_oracle());
+        assert!(error.diagnostic_result().is_none());
+        assert!(error.kind_name().is_none());
+        assert!(error.to_string().starts_with("failed to create "));
+        assert_eq!(fs::read(&sentinel).unwrap(), b"preserved file");
     }
 
     #[test]

@@ -782,12 +782,19 @@ Track which capabilities flow through the program:
 - **`trace` and `breakpoint` are capability-exempt** — they produce output/open connections without requiring a `Stdout` or `Network` capability. They are compiler keywords with special treatment, compiled out in release mode.
 - **`print` and `println` are compiler-owned debug builtins, not ordinary I/O.**
   They remain secret-output boundaries and require no `Stdout` capability. The
-  current interpreter shares its stdout path with `Stdout.write`; a distinct
-  debug-event channel is pending. Mode-aware checking rejects them in release
-  builds with E0362. Future backends must either route them through a
-  debug diagnostic channel or reject them; they must never silently lower to
-  ambient process stdout. Verify/comptime entrypoints may allow them only when
-  debug text is isolated from protocol output. See the
+  interpreter keeps one canonical ordered buffer of typed debug events with
+  exact text. Runtime entrypoints emit those bytes to stderr; only `Stdout.write`
+  enters application stdout. The native DebugPrint leaf shares the diagnostic
+  stderr transport used by trace and breakpoint without changing the C ABI.
+  Driver results retain comptime and frontend verification observations apart
+  from runtime events, including observations preceding a failure. Baked values
+  contain no event replay. A separate attempted-expression/context ledger prevents
+  duplicate failed comptime recovery without caching failed values. Property
+  shrinking remains private, including replay errors. Agent output
+  serializes explicit phase and kind with escaped exact text; it never infers
+  event kinds from user text. Mode-aware checking still rejects print builtins
+  in release builds with E0362. Future backends must provide this diagnostic
+  channel or reject the calls. See the
   [decided policy](open_design/print_debug_builtin_policy.md).
 
 **Implementation:** For each function, compute the set of semantic capabilities

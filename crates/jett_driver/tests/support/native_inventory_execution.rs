@@ -58,18 +58,20 @@ fn execute_fixture(row: &Value, source: &Path) -> Result<(), String> {
         Ok(output) => (output, None),
         Err(failure) => (failure.output, Some(failure.message)),
     };
-    let mut stderr = String::new();
-    for line in &output.debug_output {
-        stderr.push_str(line);
-        stderr.push('\n');
-    }
+    // Native execution observes runtime events only, in exact diagnostic order.
+    // Compile-phase captures are retained separately by the frontend.
+    let mut stderr = jett_driver::render_debug_events(&output.debug_events);
     if let Some(message) = failure {
         stderr.push_str(&message);
         stderr.push('\n');
     }
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let binary = directory.path().join("inventory.exe");
-    build_host_executable(source, launcher(), &binary).map_err(|error| error.to_string())?;
+    let isolated_source = directory.path().join("main.jett");
+    fs::copy(source, &isolated_source).map_err(|error| error.to_string())?;
+    build_host_executable(&isolated_source, launcher(), &binary)
+        .map_err(|error| error.to_string())?;
+    fs::remove_file(&isolated_source).map_err(|error| error.to_string())?;
     let actual = run_bounded_with_env(
         &binary,
         directory.path(),

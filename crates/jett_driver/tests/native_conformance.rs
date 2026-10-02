@@ -78,9 +78,46 @@ mod suite_options;
 #[path = "native_conformance/reflected_nested_producers.rs"]
 mod reflected_nested_producers;
 
+#[path = "native_conformance/debug_event_transport.rs"]
+mod debug_event_transport;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,
+}
+
+// Literal fixture assertions retain their operation-specific bytes. Native
+// stderr comparisons always use the complete ordered event stream below.
+fn debug_print_text(events: &[jett_driver::DebugEvent]) -> String {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind,
+                jett_driver::DebugEventKind::Print | jett_driver::DebugEventKind::Println
+            )
+        })
+        .map(|event| event.text.as_str())
+        .collect()
+}
+
+fn debug_trace_lines(events: &[jett_driver::DebugEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind,
+                jett_driver::DebugEventKind::Trace | jett_driver::DebugEventKind::Breakpoint
+            )
+        })
+        .map(|event| {
+            event
+                .text
+                .strip_suffix('\n')
+                .unwrap_or(&event.text)
+                .to_owned()
+        })
+        .collect()
 }
 
 fn launcher() -> &'static NativeLauncherBundle {
@@ -200,7 +237,7 @@ fn native_comptime_reflection_callbacks_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("reflection callback oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "list:int64\nalias:int64\ntext:int64\ninteger:int64\nint64:int64\nstring:int64\nlist[int64]:int64\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -209,7 +246,11 @@ fn native_comptime_reflection_callbacks_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -219,7 +260,7 @@ fn native_comptime_reflected_callbacks_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("reflected loop callback oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         concat!(
             "plain\nnumber:int64\nplain\ntext:string\nplain\nrepeated:int64\n",
             "plain\nnumber:int64\nplain\ntext:string\nplain\nrepeated:int64\n",
@@ -232,7 +273,11 @@ fn native_comptime_reflected_callbacks_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -242,7 +287,7 @@ fn native_reflected_integer_wrapping_matches_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("scoped integer wrapping oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         concat!(
             "-128,128,-128\n-128,128,-128\n-128,128,-128\n-128,128,-128\n",
             "0,0\n0,0\n-128\n128\n-128\n-128\n128\n-128\n0\n0\n0\n0\n",
@@ -254,7 +299,11 @@ fn native_reflected_integer_wrapping_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -264,7 +313,7 @@ fn native_reflected_alias_callbacks_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("reflected alias callback oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         concat!(
             "alias:Label\nprimitive:string\nalias:Other\nalias:Label\nlist:list[Label]\nlist:list[string]\n",
             "alias:Label\nprimitive:string\nalias:Other\nalias:Label\nlist:list[Label]\nlist:list[string]\n",
@@ -281,7 +330,11 @@ fn native_reflected_alias_callbacks_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -291,7 +344,7 @@ fn native_closure_reflection_guards_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("closure reflection guard oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "0\n2\n0\n3\ntype:int64:0\ntype:list[int64]:2\n2\n3\n4\n0\n0\n0\n2\n0\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -300,7 +353,11 @@ fn native_closure_reflection_guards_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -310,7 +367,7 @@ fn native_generic_reflection_expressions_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("generic reflection oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "type:int64\n<string>\nlive:int64\nbaked:string\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -319,7 +376,11 @@ fn native_generic_reflection_expressions_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -328,7 +389,7 @@ fn native_generic_integer_wrapping_matches_interpreter() {
         .join("../../tests/native/generic_integer_wrapping.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("generic wrapping oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "-128\n128\n0\n0\n-128\n128\n-128\n128\n-128\n128\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -337,7 +398,11 @@ fn native_generic_integer_wrapping_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -356,7 +421,7 @@ fn native_primitive_list_sums_match_interpreter_in_both_profiles() {
         expected.stdout,
         format!("{nonempty}{nonempty}{empty}{empty}")
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("list_sum_{release}.exe"));
@@ -380,7 +445,11 @@ fn native_primitive_list_sums_match_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
     for suite in [verify_binary, property_binary] {
         let actual = run_bounded(&suite, directory.path());
@@ -427,7 +496,10 @@ fn native_primitive_list_sums_reject_pending_in_both_profiles() {
             let expected = jett_driver::run_file_capture_outcome(&source)
                 .expect_err("pending primitive list sum oracle");
             assert_eq!(expected.output.stdout, "before\n", "{ty}/{name}");
-            assert!(expected.output.debug_output.is_empty(), "{ty}/{name}");
+            assert!(
+                debug_trace_lines(&expected.output.debug_events).is_empty(),
+                "{ty}/{name}"
+            );
             assert_eq!(
                 expected.message,
                 format!("runtime error: {message}"),
@@ -456,7 +528,12 @@ fn native_primitive_list_sums_reject_pending_in_both_profiles() {
                 );
                 assert_eq!(
                     actual.stderr,
-                    format!("{}\n", expected.message).as_bytes(),
+                    format!(
+                        "{}{}\n",
+                        jett_driver::render_debug_events(&expected.output.debug_events),
+                        expected.message
+                    )
+                    .as_bytes(),
                     "{ty}/{name}: {actual:?}"
                 );
             }
@@ -518,7 +595,7 @@ fn native_list_sort_refinements_and_ordering_match_interpreter_in_both_profiles(
         fs::copy(&fixture, &source).unwrap();
         let expected = jett_driver::run_file_capture_output(&source).expect("list ordering oracle");
         assert_eq!(expected.stdout, stdout, "{name}");
-        assert_eq!(expected.debug_output, debug, "{name}");
+        assert_eq!(debug_trace_lines(&expected.debug_events), debug, "{name}");
         let mut binaries = Vec::new();
         for release in [false, true] {
             let binary = directory.path().join(format!("ordering_{release}.exe"));
@@ -548,7 +625,7 @@ fn native_list_sort_refinements_and_ordering_match_interpreter_in_both_profiles(
             let debug = if release {
                 String::new()
             } else {
-                format!("{}\n", expected.debug_output.join("\n"))
+                jett_driver::render_debug_events(&expected.debug_events)
             };
             assert_eq!(actual.stderr, debug.as_bytes(), "{name}: {actual:?}");
         }
@@ -578,7 +655,7 @@ fn native_pending_refined_list_sort_rejects_outer_pending_in_both_profiles() {
     .unwrap();
     let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
     assert_eq!(expected.output.stdout, "before\n");
-    assert!(expected.output.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
     assert_eq!(
         expected.message,
         "runtime error: list.__sort expects a list argument"
@@ -602,7 +679,12 @@ fn native_pending_refined_list_sort_rejects_outer_pending_in_both_profiles() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{actual:?}"
         );
     }
@@ -641,7 +723,7 @@ fn native_math_aggregate_primitives_match_interpreter_in_both_profiles() {
         "baked:ieee32:nan:true:true;infinity:inf:inf;opposite:true:true\n",
     ));
     assert_eq!(expected.stdout, stdout);
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -667,7 +749,11 @@ fn native_math_aggregate_primitives_match_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
     for suite in [verify_binary, property_binary] {
         let actual = run_bounded(&suite, directory.path());
@@ -758,7 +844,10 @@ fn native_math_aggregate_primitives_reject_empty_and_pending_in_both_profiles() 
         .unwrap();
         let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
         assert_eq!(expected.output.stdout, "before\n", "{name}");
-        assert!(expected.output.debug_output.is_empty(), "{name}");
+        assert!(
+            debug_trace_lines(&expected.output.debug_events).is_empty(),
+            "{name}"
+        );
         assert_eq!(
             expected.message,
             format!("runtime error: {message}"),
@@ -783,7 +872,12 @@ fn native_math_aggregate_primitives_reject_empty_and_pending_in_both_profiles() 
             assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
             assert_eq!(
                 actual.stderr,
-                format!("{}\n", expected.message).as_bytes(),
+                format!(
+                    "{}{}\n",
+                    jett_driver::render_debug_events(&expected.output.debug_events),
+                    expected.message
+                )
+                .as_bytes(),
                 "{name}: {actual:?}"
             );
         }
@@ -807,7 +901,7 @@ fn native_empty_collection_iteration_matches_interpreter_in_both_profiles() {
             "maps:0:context:0:0:0:0:0\nmapped:0:joined:0\n",
         )
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -833,7 +927,11 @@ fn native_empty_collection_iteration_matches_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
     for suite in [verify_binary, property_binary] {
         let actual = run_bounded(&suite, directory.path());
@@ -863,7 +961,7 @@ fn native_empty_collection_iteration_rejects_pending_in_both_profiles() {
             .unwrap();
             let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
             assert_eq!(expected.output.stdout, "before\n");
-            assert!(expected.output.debug_output.is_empty());
+            assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
             assert_eq!(
                 expected.message,
                 "runtime error: for loop requires a list, string, map, or set value"
@@ -891,7 +989,12 @@ fn native_empty_collection_iteration_rejects_pending_in_both_profiles() {
                 assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
                 assert_eq!(
                     actual.stderr,
-                    format!("{}\n", expected.message).as_bytes(),
+                    format!(
+                        "{}{}\n",
+                        jett_driver::render_debug_events(&expected.output.debug_events),
+                        expected.message
+                    )
+                    .as_bytes(),
                     "{actual:?}"
                 );
             }
@@ -966,7 +1069,7 @@ fn native_uninhabited_sum_arms_match_interpreter_in_both_profiles() {
         )
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace error: string = bad",
             "trace item: int64 = 8",
@@ -1018,7 +1121,7 @@ fn native_uninhabited_sum_arms_match_interpreter_in_both_profiles() {
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }
@@ -1080,7 +1183,10 @@ fn native_uninhabited_sum_arms_and_reverse_reject_pending_in_both_profiles() {
             .unwrap();
             let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
             assert_eq!(expected.output.stdout, "before\n", "{name}");
-            assert!(expected.output.debug_output.is_empty(), "{name}");
+            assert!(
+                debug_trace_lines(&expected.output.debug_events).is_empty(),
+                "{name}"
+            );
             assert_eq!(
                 expected.message,
                 format!("runtime error: {message}"),
@@ -1107,7 +1213,12 @@ fn native_uninhabited_sum_arms_and_reverse_reject_pending_in_both_profiles() {
                 assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
                 assert_eq!(
                     actual.stderr,
-                    format!("{}\n", expected.message).as_bytes(),
+                    format!(
+                        "{}{}\n",
+                        jett_driver::render_debug_events(&expected.output.debug_events),
+                        expected.message
+                    )
+                    .as_bytes(),
                     "{name}: {actual:?}"
                 );
             }
@@ -1226,7 +1337,10 @@ fn native_builds_reject_manufactured_never_values_before_publication() {
         let expected = jett_driver::run_file_capture_outcome(&source)
             .expect_err("invalid Never values must prevent reference execution");
         assert!(expected.output.stdout.is_empty(), "{name}");
-        assert!(expected.output.debug_output.is_empty(), "{name}");
+        assert!(
+            debug_trace_lines(&expected.output.debug_events).is_empty(),
+            "{name}"
+        );
         assert!(
             expected.message.contains(&format!("E{code:04}")),
             "{name}: {}",
@@ -1283,14 +1397,21 @@ fn native_generic_lexical_type_scope_matches_interpreter() {
         .join("../../tests/native/generic_lexical_type_scope.jett");
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("lexical type scope oracle");
-    assert_eq!(expected.stdout, "T\nT\nT\nT\nT\nint64\nstring\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "T\nT\nT\nT\nT\nint64\nstring\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("generic_lexical_type_scope.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("native lexical type scope");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -1300,7 +1421,7 @@ fn native_generic_interface_identity_matches_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("generic interface oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "integer:17\ntext:hello\nsecret\ninteger:23\nsecret\ninteger:31\ninteger:31\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -1310,7 +1431,11 @@ fn native_generic_interface_identity_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -1320,10 +1445,10 @@ fn native_interface_refined_interfaces_match_interpreter() {
     let expected = jett_driver::run_file_capture_outcome(&fixture)
         .unwrap_or_else(|error| panic!("refined interface oracle: {error:?}"));
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "selected:text:plain\nselected:small:7\nselected:record:kept\nagain:selected:text:plain\ntext:plain\nselected:text:plain\nselected:result-ok:9\nselected:result-fail:bad\nselected:optional-none\nselected:text:plain\nselected:small:7\nselected:record:kept\nagain:selected:text:plain\ntext:plain\nselected:text:plain\nselected:result-ok:9\nselected:result-fail:bad\nselected:optional-none\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:direct\nselected:text:callback\nselected:text:callback\nselected:text:direct\nrefinement type constraint failed for 'app.Selected'\nrefinement type constraint failed for 'app.Selected'\nselected:text:fresh\nselected:text:fresh\nrefinement type constraint failed for 'app.Rejected'\n"
     );
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     assert!(debug.contains("[redacted]"));
     assert!(!debug.contains("hidden-refined-interface"));
     let directory = tempfile::tempdir().unwrap();
@@ -1342,7 +1467,7 @@ fn native_interface_method_returns_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("interface method return oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "number:7\nnumber:7\nnumber:8\nnumber:7\ntext:hello\ntext:hello\ntext:hello!\ntext:hello\ntiny:127\ntiny:127\ntiny:-128\ntiny:127\nnumber:13\ntext:baked\ntiny:127\nnumber:13\ntext:baked\ntiny:127\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -1351,7 +1476,11 @@ fn native_interface_method_returns_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -1361,7 +1490,7 @@ fn native_interface_display_contexts_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("interface display context oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "erased:number:7\nconcrete:Ada\nerased:record:Ada\nconcrete:Ada\nerased:number:7\nerased:record:Ada\nfield:erased:record:Ada\ncall:erased:record:returned\nevaluated\nonce:erased:record:returned\nerased:record:returned\nerased:record:returned\nscoped:erased:record:returned\nnumber:7 Ada\nenabled\ndisabled\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -1370,7 +1499,11 @@ fn native_interface_display_contexts_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -1379,8 +1512,8 @@ fn native_interface_display_failure_matches_interpreter() {
         .join("../../tests/native/interface_display_failure.jett");
     let expected = jett_driver::run_file_capture_outcome(&fixture)
         .expect_err("pending interface display must fail");
-    assert_eq!(expected.output.stdout, "prefix\n");
-    assert!(expected.output.debug_output.is_empty());
+    assert_eq!(debug_print_text(&expected.output.debug_events), "prefix\n");
+    assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
     assert_eq!(
         expected.message,
         "runtime error: undefined function 'app.Named.name'"
@@ -1391,7 +1524,15 @@ fn native_interface_display_failure_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!(
+            "{}{}\n",
+            jett_driver::render_debug_events(&expected.output.debug_events),
+            expected.message
+        )
+        .as_bytes()
+    );
 }
 
 #[test]
@@ -1407,7 +1548,7 @@ fn native_enum_struct_equality_matches_interpreter_in_both_profiles() {
         expected.stdout,
         "true true true true true true true true true true\n"
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("enum_structs_{release}.exe"));
@@ -1425,7 +1566,11 @@ fn native_enum_struct_equality_matches_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
 }
 
@@ -1453,7 +1598,7 @@ fn native_enum_struct_equality_failure_cleans_cursor_in_both_profiles() {
             .unwrap();
             let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
             assert_eq!(expected.output.stdout, "true\nleft\nright\n");
-            assert!(expected.output.debug_output.is_empty());
+            assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
             assert_eq!(expected.message, message);
             let mut binaries = Vec::new();
             for release in [false, true] {
@@ -1472,7 +1617,15 @@ fn native_enum_struct_equality_failure_cleans_cursor_in_both_profiles() {
                 let actual = run_bounded(&binary, directory.path());
                 assert_eq!(actual.status.code(), Some(71), "{actual:?}");
                 assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-                assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+                assert_eq!(
+                    actual.stderr,
+                    format!(
+                        "{}{}\n",
+                        jett_driver::render_debug_events(&expected.output.debug_events),
+                        expected.message
+                    )
+                    .as_bytes()
+                );
             }
         }
     }
@@ -1491,7 +1644,7 @@ fn native_interface_refined_small_values_match_interpreter_in_both_profiles() {
         expected.stdout,
         "nothing\nunit\nagain\nbool:false\nenabled:true\nbytes:6f6b\ndata:6f6b\nnothing\nunit\nagain\nbool:false\nenabled:true\nbytes:6f6b\ndata:6f6b\nunit\nunit\n6f6b:6f6b:7368:7368:7368:2:data:6f6b:2:2\n6f6b:6f6b:7368:7368:7368:2:data:6f6b:2:2\n"
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("small_values_{release}.exe"));
@@ -1509,7 +1662,11 @@ fn native_interface_refined_small_values_match_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
 }
 
@@ -1526,7 +1683,10 @@ fn native_transparent_borrow_argument_failure_cleans_owners_in_both_profiles() {
             fs::write(&source, format!("{declarations}function failed() returns int64:\n    string rejected = string.repeat(\"ab\", 9223372036854775807)\n    return string.char_count(rejected)\nfunction main(stdout: Stdout) returns nothing:\n    Packet packet = Packet(data: bytes.from_string(\"ok\"), hidden: bytes.from_string(\"sh\")) handle error:\n        Stdout.write(view stdout, error)\n        return nothing\n    function(view bytes, int64) returns string callback = sized\n    Stdout.write(view stdout, {callee}({borrowed}, failed()))\n")).unwrap();
             let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
             assert!(expected.output.stdout.is_empty(), "{expected:?}");
-            assert!(expected.output.debug_output.is_empty(), "{expected:?}");
+            assert!(
+                debug_trace_lines(&expected.output.debug_events).is_empty(),
+                "{expected:?}"
+            );
             assert_eq!(
                 expected.message,
                 "runtime error: string.repeat: requested output is too large"
@@ -1554,7 +1714,15 @@ fn native_transparent_borrow_argument_failure_cleans_owners_in_both_profiles() {
                     "{callee}({borrowed}): {actual:?}"
                 );
                 assert!(actual.stdout.is_empty(), "{actual:?}");
-                assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+                assert_eq!(
+                    actual.stderr,
+                    format!(
+                        "{}{}\n",
+                        jett_driver::render_debug_events(&expected.output.debug_events),
+                        expected.message
+                    )
+                    .as_bytes()
+                );
             }
         }
     }
@@ -1567,13 +1735,16 @@ fn native_interface_refined_actors_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("refined actor interface oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "counter selected again\n3\n3\nselected 5\ncounter\nselected\nagain\nselected\n7\n7\nselected\nrefinement type constraint failed for 'app.Rejected'\n3 3\n"
     );
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     assert_eq!(
-        debug,
-        "trace copied: app.Holder = app.Holder(worker: pending(pending(actor#0)))\ntrace later: app.Named = pending(pending(actor#0))\n"
+        debug_trace_lines(&expected.debug_events),
+        [
+            "trace copied: app.Holder = app.Holder(worker: pending(pending(actor#0)))",
+            "trace later: app.Named = pending(pending(actor#0))",
+        ]
     );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("interface_refined_actors.exe");
@@ -1591,7 +1762,7 @@ fn native_refinement_declaration_contexts_match_interpreter() {
     let expected = jett_driver::run_file_capture_output(&fixture)
         .expect("refinement declaration context oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "selected:text:value\nselected:text:value\nagain:selected:text:value\ndecoy:alias\nstring list[string] 7 false\n7\nbigger:7:string\nrejected:int8:list[int8]:refinement type constraint failed for 'domain.Positive'\nfalse\nbool list[bool] 2 false\n2\nbigger-rejected:bool:list[bool]:refinement type constraint failed for 'domain.Bigger'\nfalse\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -1601,7 +1772,11 @@ fn native_refinement_declaration_contexts_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -1611,7 +1786,7 @@ fn native_contextual_comptime_values_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("contextual comptime oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "int64:primitive\nstring:primitive\napp.Label:alias\nint8\napp.Label\nint8\nstring\napp.Label\n0\n0\nint8\nlist[int8]\napp.Label\nlist[app.Label]\nstring\nlist[string]\nint8\napp.Label\nint8\nstring\nint8\noff\napp.T\napp.T\napp.T\nint16\nstring:primitive\napp.Label:alias\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -1620,7 +1795,11 @@ fn native_contextual_comptime_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -1629,7 +1808,11 @@ fn native_reflected_opaque_fields_match_interpreter() {
         .join("../../tests/native/reflected_opaque_fields.jett");
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("reflected opaque field oracle");
-    assert_eq!(expected.stdout, "plain:5\nready\npending:5\nready\n");
+    assert_eq!(expected.stdout, "ready\nready\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "plain:5\npending:5\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("reflected_opaque_fields.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("native reflected opaque fields");
@@ -1638,7 +1821,7 @@ fn native_reflected_opaque_fields_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -1648,7 +1831,10 @@ fn native_comptime_actor_computation_matches_interpreter() {
         .join("../../tests/native/comptime_actor_computation.jett");
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("comptime actor computation oracle");
-    assert_eq!(expected.stdout, "live:5\nbaked:5\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "live:5\nbaked:5\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("comptime_actor_computation.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -1656,7 +1842,11 @@ fn native_comptime_actor_computation_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -1683,11 +1873,11 @@ fn native_indirect_owned_results_match_interpreter_in_both_profiles() {
             let expected = interpreted.unwrap_err();
             assert_eq!(expected.message, message);
             assert_eq!(expected.output.stdout, stdout);
-            assert!(expected.output.debug_output.is_empty());
+            assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
         } else {
             let expected = interpreted.unwrap();
             assert_eq!(expected.stdout, stdout);
-            assert!(expected.debug_output.is_empty());
+            assert!(debug_trace_lines(&expected.debug_events).is_empty());
         }
         let mut binaries = Vec::new();
         for release in [false, true] {
@@ -1734,14 +1924,14 @@ fn native_global_constants_match_interpreter_without_source_in_both_profiles() {
         format!("{}hello:42:42:42\n", line.repeat(3))
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace minimum: app.Count = -128",
             "trace label: string = hello:42",
             "trace unit: nothing = nothing",
         ]
     );
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("constants_{release}.exe"));
@@ -1848,7 +2038,7 @@ property namespace_constant_reads:
     let expected =
         jett_driver::run_file_capture_output(&source).expect("namespace constant oracle");
     assert_eq!(expected.stdout, "11:29:80:120\n");
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -1894,7 +2084,7 @@ fn native_wrapped_enum_equality_matches_interpreter_in_both_profiles() {
         expected.stdout,
         "true true true true true true true true true true true true\ntrue true true true true true\n"
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("wrapped_enum_{release}.exe"));
@@ -1912,7 +2102,11 @@ fn native_wrapped_enum_equality_matches_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
 }
 
@@ -1968,7 +2162,7 @@ fn native_pending_sum_handles_fail_before_extraction_in_both_profiles() {
                 "runtime error: handle block requires a result or optional value, got pending(pending({rendered}))"
             )
         );
-        assert!(expected.output.debug_output.is_empty());
+        assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
         let mut binaries = Vec::new();
         for release in [false, true] {
             let binary = directory.path().join(format!("pending_sum_{release}.exe"));
@@ -1988,7 +2182,12 @@ fn native_pending_sum_handles_fail_before_extraction_in_both_profiles() {
             assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
             assert_eq!(
                 actual.stderr,
-                format!("{}\n", expected.message).as_bytes(),
+                format!(
+                    "{}{}\n",
+                    jett_driver::render_debug_events(&expected.output.debug_events),
+                    expected.message
+                )
+                .as_bytes(),
                 "{actual:?}"
             );
         }
@@ -2061,17 +2260,17 @@ fn native_pending_aggregate_access_fails_before_observation_in_both_profiles() {
         );
         let debug = if scenario == "enum_payload_failure" {
             assert_eq!(
-                expected.output.debug_output,
+                debug_trace_lines(&expected.output.debug_events),
                 [
                     "trace value: int64 = pending(pending(7))",
                     "trace joined: int64 = pending(7)",
                 ],
                 "{scenario}"
             );
-            format!("{}\n", expected.output.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.output.debug_events)
         } else {
             assert!(
-                expected.output.debug_output.is_empty(),
+                debug_trace_lines(&expected.output.debug_events).is_empty(),
                 "{scenario}: {expected:?}"
             );
             String::new()
@@ -2122,7 +2321,7 @@ fn native_ready_and_joined_aggregate_access_preserves_owners_in_both_profiles() 
         "record:Ada:1\nrecord:Ada:1\nrecord:Ada:1\n7\ntrue:Ada:7\ntrue:Ada:7\n1:1\n1:1\n7\nint8:8\nfloat32:1.5\nbool:false\nnothing joined\n"
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace value: int8 = pending(pending(7))",
             "trace once: int8 = pending(7)",
@@ -2160,7 +2359,7 @@ fn native_ready_and_joined_aggregate_access_preserves_owners_in_both_profiles() 
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }
@@ -2178,7 +2377,7 @@ fn native_projected_reads_and_reconstructed_owners_match_interpreter_in_both_pro
         expected.stdout,
         "original:1\ncopied:2\noriginal:1\nloop:3\nmatch:2:2\ntemporary:1\nfields:7:1\n"
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -2204,7 +2403,11 @@ fn native_projected_reads_and_reconstructed_owners_match_interpreter_in_both_pro
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
     for suite in [verify_binary, property_binary] {
         let actual = run_bounded(&suite, directory.path());
@@ -2230,7 +2433,7 @@ fn native_interface_refined_sums_match_interpreter_in_both_profiles() {
             "{values}{values}choice rejected\nchoice rejected\noutcome rejected\noutcome rejected\nchoice:small:11;choice:small:11;\nchoice:small:11\nabsent rejected\nabsent rejected\npending rejected\nchoice:small:11\n17:true\n17:true\n"
         )
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("refined_sums_{release}.exe"));
@@ -2248,7 +2451,11 @@ fn native_interface_refined_sums_match_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
 }
 
@@ -2268,7 +2475,7 @@ fn native_interface_math_facade_contexts_match_interpreter_in_both_profiles() {
         expected.stdout,
         format!("{primitives}{hidden}{callbacks}{primitives}{hidden}{callbacks}{callbacks}")
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("math_facades_{release}.exe"));
@@ -2286,7 +2493,11 @@ fn native_interface_math_facade_contexts_match_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
 }
 
@@ -2297,16 +2508,17 @@ fn native_interface_facade_results_match_interpreter() {
     let expected = jett_driver::run_file_capture_output(&fixture).expect("facade result oracle");
     let typed = "small:ok\nsmall:fail:expected int8 in range -128..127\nwide:ok\nwide:fail:expected int64, got null\nfloat32:ok\nfloat32:fail:expected float64, got bool\npositive:ok\npositive:fail:refinement type constraint failed for 'app.Positive'\nrecord:ok\nrecord:fail:count: expected int8 in range -128..127\nrecord:fail:unknown field 'extra' for app.Record\n";
     let raw = "tree:fail:unterminated JSON array\nwide:fail:expected int64, got string\ntree:fail:missing array item 0\nmaybe-tree:ok\nmaybe-tree:fail:expected object, got array\n";
-    assert_eq!(expected.stdout, format!("{typed}{typed}{raw}{raw}"));
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        format!("{typed}{typed}{raw}{raw}")
+    );
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("[redacted]"))
     );
     assert!(
-        !expected
-            .debug_output
+        !debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("hidden-facade-result"))
     );
@@ -2318,7 +2530,7 @@ fn native_interface_facade_results_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2329,7 +2541,7 @@ fn native_interface_refined_containers_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("refined container oracle");
     let mixed = "mapping:1\nmembers:1\nsome:9\nnone\nok:11\nfail:problem\ncallback:5\ncallback:7\ncallback:7\nfunction:5\n";
-    assert_eq!(expected.stdout, mixed.repeat(2));
+    assert_eq!(debug_print_text(&expected.debug_events), mixed.repeat(2));
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("interface_refined_containers.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("native refined containers");
@@ -2338,7 +2550,7 @@ fn native_interface_refined_containers_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2349,18 +2561,16 @@ fn native_interface_reflected_fields_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("reflected interface oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "small:7\nsmall:7\nwide:9\nsecret\n".repeat(9)
     );
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("[redacted]"))
     );
     assert!(
-        !expected
-            .debug_output
+        !debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("hidden-reflected-interface"))
     );
@@ -2372,7 +2582,7 @@ fn native_interface_reflected_fields_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2382,16 +2592,21 @@ fn native_interface_opaque_identity_matches_interpreter() {
         .join("../../tests/native/interface_opaque_identity.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("opaque interface oracle");
     assert_eq!(
-        expected.stdout,
-        "first\n5\nfirst\n5\nfirst\n7\n2\nfirst\nsecond\nfirst\nchecked-builder\nchecked-builder\nrecord:7\nrecord:9\nbuilder\nchecked-builder\nrecord:9\nchecked-builder\nrecord:9\nchecked-builder\nchecked-builder\nbuilder\nchecked-builder\nbuilder\noutput\noutput\nreadyoutput\noutput\nstdout\n"
+        debug_print_text(&expected.debug_events),
+        "first\n5\nfirst\n5\nfirst\n7\n2\nfirst\nsecond\nfirst\nchecked-builder\nchecked-builder\nrecord:7\nrecord:9\nbuilder\nchecked-builder\nrecord:9\nchecked-builder\nrecord:9\nchecked-builder\nchecked-builder\nbuilder\nchecked-builder\nbuilder\noutput\noutput\noutput\noutput\nstdout\n"
     );
+    assert_eq!(expected.stdout, "ready");
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("interface_opaque_identity.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("native opaque interfaces");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -2402,18 +2617,16 @@ fn native_interface_facade_identity_matches_interpreter() {
     let mixed = "small:7\nwide:7\nfloat32:1.5\nfloat64:1.5\nsmall-list:2\nwide-list:2\npositive:9\nsmall-box:11\nsecret-box\nevent:13\nheader:15\nsession:17\nactive:19\n";
     let math = "wide:3\nfloat64:3.5\nwide:5\nfloat64:6\n";
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         format!("{mixed}{mixed}small:21\nsmall:23\n{math}{math}")
     );
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("[redacted]"))
     );
     assert!(
-        !expected
-            .debug_output
+        !debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("hidden-json-interface"))
     );
@@ -2425,7 +2638,7 @@ fn native_interface_facade_identity_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2437,20 +2650,18 @@ fn native_interface_nominal_identity_matches_interpreter() {
         jett_driver::run_file_capture_output(&fixture).expect("nominal interface oracle");
     let mixed = "active:7\nsession:7\nempty-state\nrefined-session:7\nidle\nevent:normal\ntagged:chosen\nheader:2\nnonzero-header:3\n";
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         format!(
             "{mixed}{mixed}empty-state\nactive:9\nsession:9\nactive:9\nactive:7\nactive:7\nactive:7\nactive:7\n"
         )
     );
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("[redacted]"))
     );
     assert!(
-        !expected
-            .debug_output
+        !debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("hidden-nominal-secret"))
     );
@@ -2462,7 +2673,7 @@ fn native_interface_nominal_identity_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2474,7 +2685,7 @@ fn native_interface_function_identity_matches_interpreter() {
         jett_driver::run_file_capture_output(&fixture).expect("function interface oracle");
     let mixed = "reader:7\nreader:11\nwords:hello\nitems:3\nborrowed\nowned\nnested:8\nsmall:17\nreader:19\n";
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         format!(
             "{mixed}{mixed}reader:11\n11\n11\nreader:11\nreader:11\nreader:11\nbroad:13\nnarrow:13\nnarrow:13\ncalled:13\ncalled:13\nnarrow:13\nlabel-factory:made\nnamed-factory:made\nnamed-factory:made\nnamed-factory:made\nmade\n"
         )
@@ -2487,7 +2698,7 @@ fn native_interface_function_identity_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2499,20 +2710,18 @@ fn native_interface_collection_identity_matches_interpreter() {
         jett_driver::run_file_capture_output(&fixture).expect("collection interface oracle");
     let mixed = "numbers:2\nwords:2\nsecrets:1\nnonempty:3\nnumber-map:1\nword-map:2\nnumber-set:1\nword-set:1\nmaybe-number:7\nmaybe-word:hello\nno-number\nno-word\nnumber-ok:9\nword-ok:yes\nnumber-fail:bad\nword-fail:11\n";
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         format!(
             "{mixed}{mixed}numbers:2\nnumbers:2\nnumbers:2\nnumbers:2\nnumbers:2\ninterfaces:3\nnumbers:1\nnumbers:2\nwords:1\ninterfaces:3\ncounted:4\ncounted:4\nnumbers:3\nnumbers:3\nnumbers:4\nnumbers:4\n6\n2\n9\n17\n"
         )
     );
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("[redacted]"))
     );
     assert!(
-        !expected
-            .debug_output
+        !debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("hidden-collection-secret"))
     );
@@ -2524,7 +2733,7 @@ fn native_interface_collection_identity_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2536,7 +2745,7 @@ fn native_interface_primitive_identity_matches_interpreter() {
         jett_driver::run_file_capture_output(&fixture).expect("primitive interface oracle");
     let mixed = "int8:7\nint64:7\nuint8:9\nuint64:9\nfloat32\nfloat64\nint16:15\nint32:31\nuint16:16\nuint32:32\npositive:7\nnonempty:yes\nstring:yes\n";
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         format!(
             "{mixed}{mixed}int8:7\nint8:7\npositive:7\nint8:8\nint8:8\nint8:7\nint8:7\nint8:11\nint8:11\nint8:11\nint8:11\nint8:12\nint8:13\nint8:7\nint8:7\n"
         )
@@ -2549,7 +2758,7 @@ fn native_interface_primitive_identity_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2560,22 +2769,19 @@ fn native_interface_values_match_interpreter() {
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("interface interpreter oracle");
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("[redacted]"))
     );
     assert!(
-        !expected
-            .debug_output
+        !debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("hidden-interface-token")
                 || line.contains("hidden-generic-interface")
                 || line.contains("reflection-failed"))
     );
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("visible-generic-interface"))
     );
@@ -2587,7 +2793,7 @@ fn native_interface_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -2606,8 +2812,8 @@ fn native_interface_pending_failure_matches_interpreter() {
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
         format!(
-            "{}\n{}\n",
-            expected.output.debug_output.join("\n"),
+            "{}{}\n",
+            jett_driver::render_debug_events(&expected.output.debug_events),
             expected.message
         )
     );
@@ -2884,9 +3090,12 @@ function main(authority: {capability}) returns nothing:
         )
         .unwrap();
         let expected = jett_driver::run_file_capture_output(&source).unwrap();
-        assert_eq!(expected.stdout, "task was cancelled\n");
         assert_eq!(
-            expected.debug_output,
+            debug_print_text(&expected.debug_events),
+            "task was cancelled\n"
+        );
+        assert_eq!(
+            debug_trace_lines(&expected.debug_events),
             [
                 format!("trace value: {capability} = nothing"),
                 format!("trace nested: {capability} = pending(pending(nothing))"),
@@ -2901,7 +3110,7 @@ function main(authority: {capability}) returns nothing:
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{capability}");
         assert_eq!(
             String::from_utf8_lossy(&actual.stderr),
-            format!("{}\n", expected.debug_output.join("\n")),
+            jett_driver::render_debug_events(&expected.debug_events),
             "{capability}"
         );
     }
@@ -3089,7 +3298,7 @@ fn native_scripted_capabilities_match_interpreter() {
     ];
     let clock_fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/clock_scripted.jett");
-    let clock_expected = jett_driver::run_file_capture_stdout_with_clock_test_samples(
+    let clock_expected = jett_driver::run_file_capture_outcome_with_clock_test_samples(
         &clock_fixture,
         clock_samples.clone(),
     )
@@ -3117,7 +3326,7 @@ fn native_scripted_capabilities_match_interpreter() {
     ];
     let random_fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/run_pass/random_scripted.jett");
-    let random_expected = jett_driver::run_file_capture_stdout_with_random_test_samples(
+    let random_expected = jett_driver::run_file_capture_outcome_with_random_test_samples(
         &random_fixture,
         random_samples.clone(),
     )
@@ -3158,11 +3367,12 @@ fn native_scripted_capabilities_match_interpreter() {
     };
     let environment_fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/run_pass/environment_snapshot.jett");
-    let environment_expected = jett_driver::run_file_capture_stdout_with_environment_test_snapshot(
-        &environment_fixture,
-        environment_snapshot.clone(),
-    )
-    .expect("injected Environment interpreter oracle");
+    let environment_expected =
+        jett_driver::run_file_capture_outcome_with_environment_test_snapshot(
+            &environment_fixture,
+            environment_snapshot.clone(),
+        )
+        .expect("injected Environment interpreter oracle");
     let environment_script = environment::encode_test_snapshot(&environment_snapshot);
     assert_scripted_fixture(
         &environment_fixture,
@@ -3172,15 +3382,26 @@ fn native_scripted_capabilities_match_interpreter() {
     );
 }
 
-fn assert_scripted_fixture(fixture: &Path, env: &str, script: &str, expected: &str) {
+fn assert_scripted_fixture(
+    fixture: &Path,
+    env: &str,
+    script: &str,
+    expected: &jett_driver::RunOutput,
+) {
     let directory = tempfile::tempdir().expect("isolated execution directory");
     let binary = directory.path().join("program.exe");
     build_host_executable(fixture, launcher(), &binary).expect("compile scripted fixture");
     let actual = run_bounded_with_env(&binary, directory.path(), Some((env, script)));
     assert!(actual.status.success(), "{}: {actual:?}", fixture.display());
-    assert_eq!(actual.stdout, expected.as_bytes(), "{}", fixture.display());
-    assert!(
-        actual.stderr.is_empty(),
+    assert_eq!(
+        actual.stdout,
+        expected.stdout.as_bytes(),
+        "{}",
+        fixture.display()
+    );
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
         "{}: {actual:?}",
         fixture.display()
     );
@@ -3237,7 +3458,12 @@ fn native_success_rejects_unconsumed_scripted_provider_inputs() {
         );
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{environment}"
         );
     }
@@ -3443,16 +3669,22 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
         let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
         if name == "uuid_values" {
-            assert_eq!(expected.stdout, "true true true true\n");
+            assert_eq!(
+                debug_print_text(&expected.debug_events),
+                "true true true true\n"
+            );
         }
         if name == "function_values" {
-            assert_eq!(expected.stdout, "8 14 4 3 z a b\n");
+            assert_eq!(debug_print_text(&expected.debug_events), "8 14 4 3 z a b\n");
         }
         if name == "function_descriptor_ownership" {
-            assert_eq!(expected.stdout, "5 8\n10\n12\n");
+            assert_eq!(debug_print_text(&expected.debug_events), "5 8\n10\n12\n");
         }
         if name == "list_source_values" {
-            assert_eq!(expected.stdout, "a true true true true 2 true true true\n");
+            assert_eq!(
+                debug_print_text(&expected.debug_events),
+                "a true true true true 2 true true true\n"
+            );
         }
         let directory = tempfile::tempdir().expect("isolated execution directory");
         let binary = directory.path().join("program.exe");
@@ -3465,7 +3697,11 @@ fn native_scalar_stdout_and_owned_bytes_match_interpreter() {
             expected.stdout.as_bytes(),
             "{name}: {actual:?}"
         );
-        assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{name}: {actual:?}"
+        );
     }
 }
 
@@ -3485,7 +3721,12 @@ fn native_list_invalid_indices_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -3495,14 +3736,18 @@ fn native_list_invalid_indices_match_interpreter_errors() {
 fn native_actor_spawn_releases_state_with_context() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/actor_spawn.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "spawned\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "spawned\n");
     let directory = tempfile::tempdir().expect("isolated execution directory");
     let binary = directory.path().join("program.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("compile actor spawn");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -3510,14 +3755,18 @@ fn native_actor_messages_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/actor_messages.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "hits: 5\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "hits: 5\n");
     let directory = tempfile::tempdir().expect("isolated execution directory");
     let binary = directory.path().join("program.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("compile actor messages");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -3525,14 +3774,21 @@ fn native_graphics_authority_reaches_main() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/graphics_authority.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "graphics authority granted\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "graphics authority granted\n"
+    );
     let directory = tempfile::tempdir().expect("isolated execution directory");
     let binary = directory.path().join("program.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("compile Graphics entry");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -3568,12 +3824,7 @@ fn native_scripted_graphics_matches_interpreter() {
         )
         .expect("scripted Graphics interpreter oracle");
         let script = graphics::encode_test_script(&events);
-        assert_scripted_fixture(
-            &fixture,
-            graphics::TEST_SCRIPT_ENV,
-            &script,
-            &expected.stdout,
-        );
+        assert_scripted_fixture(&fixture, graphics::TEST_SCRIPT_ENV, &script, &expected);
     }
 }
 
@@ -3620,7 +3871,7 @@ fn native_graphics_pending_scalar_state_matches_interpreter() {
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.debug_output.join("\n")).as_bytes(),
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
             "{name}"
         );
     }
@@ -3688,7 +3939,7 @@ fn native_graphics_handled_failures_match_interpreter() {
             jett_driver::run_file_capture_output_with_graphics_test_events(&path, events.clone())
                 .expect("Graphics interpreter oracle");
         let script = graphics::encode_test_script(&events);
-        assert_scripted_fixture(&path, graphics::TEST_SCRIPT_ENV, &script, &expected.stdout);
+        assert_scripted_fixture(&path, graphics::TEST_SCRIPT_ENV, &script, &expected);
     }
 }
 
@@ -3734,7 +3985,11 @@ fn native_actor_fixture_bodies_match_interpreter() {
             expected.stdout.as_bytes(),
             "{fixture}: {actual:?}"
         );
-        assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{fixture}: {actual:?}"
+        );
     }
 }
 
@@ -3743,14 +3998,21 @@ fn native_structured_concurrency_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/structured_concurrency.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "hello:ready:failed\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "hello:ready:failed\n"
+    );
     let directory = tempfile::tempdir().expect("isolated execution directory");
     let binary = directory.path().join("program.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("compile structured concurrency");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -3766,7 +4028,7 @@ fn native_pending_nothing_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -3783,7 +4045,7 @@ fn native_pending_string_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -3800,7 +4062,7 @@ fn native_pending_bytes_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -3817,7 +4079,7 @@ fn native_pending_list_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -3849,7 +4111,12 @@ fn native_pending_list_intrinsics_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -3886,7 +4153,12 @@ fn native_pending_index_and_count_intrinsics_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -3930,7 +4202,12 @@ fn native_pending_math_intrinsics_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -3967,7 +4244,12 @@ fn native_pending_conversion_intrinsics_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -3999,7 +4281,12 @@ fn native_pending_string_and_bytes_intrinsics_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4036,7 +4323,12 @@ fn native_pending_encoding_csv_and_crypto_intrinsics_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4052,7 +4344,7 @@ fn native_pending_encoding_csv_and_crypto_intrinsics_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4067,7 +4359,11 @@ fn native_pending_secret_task_join_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -4094,7 +4390,12 @@ fn native_pending_capability_intrinsics_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4108,7 +4409,11 @@ fn native_pending_capability_intrinsics_match_interpreter() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{name}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
-        assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{name}: {actual:?}"
+        );
     }
 }
 
@@ -4137,7 +4442,12 @@ fn native_pending_secret_and_bitfield_intrinsics_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4150,7 +4460,11 @@ fn native_pending_secret_and_bitfield_intrinsics_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -4170,7 +4484,7 @@ fn native_pending_actor_scalar_state_matches_interpreter() {
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.debug_output.join("\n")).as_bytes(),
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
             "{name}"
         );
     }
@@ -4190,7 +4504,7 @@ fn native_pending_set_map_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4207,7 +4521,7 @@ fn native_pending_record_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4224,7 +4538,7 @@ fn native_pending_sum_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4241,7 +4555,7 @@ fn native_pending_function_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4258,7 +4572,15 @@ fn native_pending_function_call_matches_interpreter_error() {
     let actual = run_bounded(&binary, directory.path());
     assert!(!actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!(
+            "{}{}\n",
+            jett_driver::render_debug_events(&expected.output.debug_events),
+            expected.message
+        )
+        .as_bytes()
+    );
 }
 
 #[test]
@@ -4274,7 +4596,7 @@ fn native_pending_type_construction_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4291,7 +4613,7 @@ fn native_pending_reflected_construction_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4308,7 +4630,7 @@ fn native_pending_reflected_scalar_fields_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4325,7 +4647,7 @@ fn native_pending_reflected_owned_fields_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4343,7 +4665,7 @@ fn native_pending_reflected_collections_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4360,7 +4682,7 @@ fn native_pending_reflected_sums_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4380,7 +4702,7 @@ fn native_pending_contextual_empty_collections_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4398,7 +4720,7 @@ fn native_pending_reflection_metadata_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4429,7 +4751,12 @@ fn native_pending_reflected_owner_errors_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4468,7 +4795,12 @@ fn native_secret_debug_failure_messages_are_redacted() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4485,8 +4817,11 @@ fn native_json_nested_secrets_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(expected.debug_output.is_empty());
-    assert!(actual.stderr.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -4500,8 +4835,11 @@ fn native_json_recursive_enum_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(expected.debug_output.is_empty());
-    assert!(actual.stderr.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -4522,7 +4860,12 @@ fn native_pending_json_inputs_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4541,7 +4884,7 @@ fn native_pending_scalar_formatting_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4565,7 +4908,12 @@ fn native_pending_reflected_field_error_matches_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4582,8 +4930,11 @@ fn native_pending_builder_field_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(expected.debug_output.is_empty());
-    assert!(actual.stderr.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -4598,8 +4949,11 @@ fn native_pending_builder_member_metadata_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(expected.debug_output.is_empty());
-    assert!(actual.stderr.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
+    );
 }
 
 #[test]
@@ -4623,7 +4977,12 @@ fn native_reflected_foreign_field_errors_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4649,7 +5008,12 @@ fn native_reflected_requested_type_errors_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4677,7 +5041,12 @@ fn native_reflected_missing_candidate_owner_errors_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4704,7 +5073,12 @@ fn native_type_arg_index_errors_match_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4729,7 +5103,12 @@ fn native_pending_type_construction_invalid_use_matches_interpreter() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4748,7 +5127,7 @@ fn native_pending_actor_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4764,7 +5143,15 @@ fn native_pending_actor_send_matches_interpreter_error() {
     let actual = run_bounded(&binary, directory.path());
     assert!(!actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!(
+            "{}{}\n",
+            jett_driver::render_debug_events(&expected.output.debug_events),
+            expected.message
+        )
+        .as_bytes()
+    );
 }
 
 #[test]
@@ -4784,11 +5171,7 @@ fn native_pending_capability_values_match_interpreter() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{name}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
-        let expected_debug = if expected.debug_output.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", expected.debug_output.join("\n"))
-        };
+        let expected_debug = jett_driver::render_debug_events(&expected.debug_events);
         assert_eq!(actual.stderr, expected_debug.as_bytes(), "{name}");
     }
 }
@@ -4806,7 +5189,7 @@ fn native_pending_scalar_values_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4823,7 +5206,7 @@ fn native_pending_narrow_integers_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4838,7 +5221,11 @@ fn native_pending_refined_narrow_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -4854,7 +5241,11 @@ fn native_refinement_pending_predicate_result_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -4865,7 +5256,7 @@ fn native_refinement_pending_aggregate_builders_match_interpreter() {
     let message = "refinement constraint for 'app.Positive' must return bool, got pending(true)";
     let evaluation_error = "error evaluating refinement constraint for 'app.StrictPositive': unsupported binary operation: pending(7) Gt 0";
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         format!("{message}\n{message}\n{evaluation_error}\n{message}\n{message}\n")
     );
     let directory = tempfile::tempdir().expect("isolated aggregate refinement directory");
@@ -4877,7 +5268,11 @@ fn native_refinement_pending_aggregate_builders_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -4894,7 +5289,7 @@ fn native_pending_scalar_aggregates_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4929,7 +5324,12 @@ fn native_pending_scalar_operations_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4959,7 +5359,12 @@ fn native_pending_numeric_aggregates_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -4978,7 +5383,7 @@ fn native_pending_set_elements_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -4995,7 +5400,7 @@ fn native_pending_map_entries_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -5022,7 +5427,12 @@ fn native_pending_map_intrinsics_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -5049,7 +5459,12 @@ fn native_pending_set_intrinsics_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -5075,7 +5490,12 @@ fn native_pending_sequence_iteration_matches_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -5095,7 +5515,7 @@ fn native_pending_scalar_short_circuit_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -5118,7 +5538,12 @@ fn native_pending_enum_comparisons_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -5143,7 +5568,12 @@ fn native_pending_string_comparisons_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -5168,7 +5598,12 @@ fn native_pending_nothing_comparisons_match_interpreter_errors() {
         assert_eq!(actual.stdout, expected.output.stdout.as_bytes(), "{name}");
         assert_eq!(
             actual.stderr,
-            format!("{}\n", expected.message).as_bytes(),
+            format!(
+                "{}{}\n",
+                jett_driver::render_debug_events(&expected.output.debug_events),
+                expected.message
+            )
+            .as_bytes(),
             "{name}"
         );
     }
@@ -5209,7 +5644,11 @@ fn native_captured_closures_match_interpreter() {
             expected.stdout.as_bytes(),
             "{fixture}: {actual:?}"
         );
-        assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{fixture}: {actual:?}"
+        );
     }
 }
 
@@ -5251,7 +5690,11 @@ fn native_nested_json_shapes_match_interpreter() {
             expected.stdout.as_bytes(),
             "{fixture}: {actual:?}"
         );
-        assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{fixture}: {actual:?}"
+        );
     }
 }
 
@@ -5284,7 +5727,11 @@ fn native_nested_json_public_serializer_omits_secret_collections() {
         expected.stdout.as_bytes(),
         "{fixture}: {actual:?}"
     );
-    assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{fixture}: {actual:?}"
+    );
 }
 
 #[test]
@@ -5316,7 +5763,11 @@ fn native_nested_json_decoder_matches_interpreter() {
         expected.stdout.as_bytes(),
         "{fixture}: {actual:?}"
     );
-    assert!(actual.stderr.is_empty(), "{fixture}: {actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{fixture}: {actual:?}"
+    );
 }
 
 #[test]
@@ -5339,7 +5790,11 @@ fn native_generic_struct_fields_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5353,7 +5808,11 @@ fn native_alias_construction_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5375,7 +5834,11 @@ fn native_refined_struct_builder_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5384,7 +5847,7 @@ fn native_reflected_struct_base_values_match_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/refined_builder_base.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "Ada\nrefinement type constraint failed for 'app.NonEmpty'\nrefinement type constraint failed for 'app.Long'\n"
     );
     let directory = tempfile::tempdir().expect("isolated execution directory");
@@ -5394,7 +5857,11 @@ fn native_reflected_struct_base_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5403,7 +5870,7 @@ fn native_reflected_enum_base_values_match_interpreter() {
         .join("../../tests/native/refined_enum_builder_base.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "idle\nAda:Agent:ready\nrefinement type constraint failed for 'app.NonEmpty'\nrefinement type constraint failed for 'app.Long'\n"
     );
     let directory = tempfile::tempdir().expect("isolated execution directory");
@@ -5413,7 +5880,11 @@ fn native_reflected_enum_base_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5422,7 +5893,7 @@ fn native_reflected_machine_base_values_match_interpreter() {
         .join("../../tests/native/refined_machine_builder_base.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "Ada:Agent:ready\nrefinement type constraint failed for 'app.NonEmpty'\nrefinement type constraint failed for 'app.Long'\nNia\nrefinement type constraint failed for 'app.NonEmpty'\nfilled\nrefinement type constraint failed for 'app.Positive'\nempty\n"
     );
     let directory = tempfile::tempdir().expect("isolated execution directory");
@@ -5432,7 +5903,11 @@ fn native_reflected_machine_base_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5441,7 +5916,7 @@ fn native_refined_struct_base_values_match_interpreter() {
         .join("../../tests/native/refined_struct_base_values.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "Ada:Agent\nrefinement type constraint failed for 'test.NonEmpty'\nrefinement type constraint failed for 'test.Long'\nAda\nrefinement type constraint failed for 'test.NonEmpty'\n7\nrefinement type constraint failed for 'test.Positive'\n"
     );
     let directory = tempfile::tempdir().expect("isolated execution directory");
@@ -5451,7 +5926,11 @@ fn native_refined_struct_base_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5460,7 +5939,7 @@ fn native_refined_struct_derived_inputs_match_interpreter() {
         .join("../../tests/native/refined_struct_derived_inputs.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "Agent\nrefinement type constraint failed for 'test.Long'\naccepted\nrefinement type constraint failed for 'test.SecretPositive'\nAgent\nrefinement type constraint failed for 'test.Long'\naccepted\nrefinement type constraint failed for 'test.SecretPositive'\nAgent\nrefinement type constraint failed for 'test.SecretLong'\nrefinement type constraint failed for 'test.SecretNonEmpty'\n"
     );
     let directory = tempfile::tempdir().expect("isolated execution directory");
@@ -5470,7 +5949,11 @@ fn native_refined_struct_derived_inputs_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5484,7 +5967,11 @@ fn native_json_narrow_integers_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5498,7 +5985,11 @@ fn native_json_float32_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5512,7 +6003,11 @@ fn native_json_set_serialize_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5526,7 +6021,11 @@ fn native_json_extended_set_parse_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5547,7 +6046,11 @@ fn native_alias_json_parse_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5564,7 +6067,7 @@ fn native_recursive_struct_json_matches_interpreter() {
     .expect("write recursive JSON executable");
     let expected = jett_driver::run_file_capture_output(&source_path).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "2:1:{\"value\":2,\"next\":{\"value\":1,\"next\":null}}\n"
     );
     let binary = directory.path().join("program.exe");
@@ -5572,7 +6075,11 @@ fn native_recursive_struct_json_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5595,7 +6102,11 @@ fn native_uint64_checked_expression_dispatch_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5617,7 +6128,11 @@ fn native_math_aggregates_preserve_interpreter_extremes() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5638,7 +6153,7 @@ fn native_debug_statements_match_interpreter_output() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{relative_path}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{relative_path}");
-        let debug = format!("{}\n", expected.debug_output.join("\n"));
+        let debug = jett_driver::render_debug_events(&expected.debug_events);
         assert_eq!(
             String::from_utf8_lossy(&actual.stderr),
             debug,
@@ -5652,9 +6167,9 @@ fn native_breakpoints_preserve_lexical_frames_and_capture_types() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/breakpoint_lexical_frames.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
-    assert_eq!(expected.debug_output.len(), 13);
+    assert_eq!(debug_trace_lines(&expected.debug_events).len(), 13);
     assert_eq!(
-        &expected.debug_output[..3],
+        &debug_trace_lines(&expected.debug_events)[..3],
         [
             "breakpoint hit: value: int64 = 1",
             "breakpoint hit: nested: string = leaf, value: int64 = 1",
@@ -5662,13 +6177,15 @@ fn native_breakpoints_preserve_lexical_frames_and_capture_types() {
         ]
     );
     assert_eq!(
-        expected.debug_output[7],
+        debug_trace_lines(&expected.debug_events)[7],
         "breakpoint hit: label: string = captured, seed: uint8 = 7, value: int64 = 3"
     );
-    assert_eq!(expected.debug_output[11], expected.debug_output[7]);
     assert_eq!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)[11],
+        debug_trace_lines(&expected.debug_events)[7]
+    );
+    assert_eq!(
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .filter(|line| line.contains("caller:"))
             .count(),
@@ -5682,7 +6199,7 @@ fn native_breakpoints_preserve_lexical_frames_and_capture_types() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -5710,7 +6227,7 @@ fn native_release_strips_debug_observations_and_their_conditions() {
             assert_eq!(actual.stdout, expected.stdout.as_bytes());
             assert_eq!(
                 String::from_utf8_lossy(&actual.stderr),
-                format!("{}\n", expected.debug_output.join("\n"))
+                jett_driver::render_debug_events(&expected.debug_events)
             );
         }
     }
@@ -5737,7 +6254,7 @@ fn native_breakpoints_omit_consumed_bindings() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/breakpoint_consumed_bindings.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     assert!(!debug.contains("initial:"), "{debug}");
     assert!(debug.contains("original_count: app.Count = 7"), "{debug}");
     assert!(debug.contains("copied_count: app.Count = 7"), "{debug}");
@@ -5757,7 +6274,7 @@ fn native_secret_debug_values_are_recursively_redacted() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_secret_values.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).unwrap();
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     assert!(debug.contains("[redacted]"), "{debug}");
     for secret in ["hidden-", "4321", "7654"] {
         assert!(!debug.contains(secret), "secret leaked: {debug}");
@@ -5785,8 +6302,11 @@ fn native_type_construction_debug_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/debug_type_construction.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "Ada:7\n4\n3:4\nlogged_in\n");
-    assert_eq!(expected.debug_output.len(), 9);
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "Ada:7\n4\n3:4\nlogged_in\n"
+    );
+    assert_eq!(debug_trace_lines(&expected.debug_events).len(), 9);
     let directory = tempfile::tempdir().expect("isolated builder debug directory");
     let binary = directory.path().join("debug_type_construction.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -5796,7 +6316,7 @@ fn native_type_construction_debug_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -5805,8 +6325,14 @@ fn native_collection_callbacks_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/collection_callbacks.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "44:14:true:true:2\nscore-2:score-4\n1:2\n");
-    assert_eq!(expected.debug_output, ["trace value: int64 = 2"]);
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "44:14:true:true:2\nscore-2:score-4\n1:2\n"
+    );
+    assert_eq!(
+        debug_trace_lines(&expected.debug_events),
+        ["trace value: int64 = 2"]
+    );
     let directory = tempfile::tempdir().expect("isolated collection callback directory");
     let binary = directory.path().join("collection_callbacks.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -5816,7 +6342,7 @@ fn native_collection_callbacks_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        "trace value: int64 = 2\n"
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -5825,7 +6351,10 @@ fn native_collection_shapes_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/collection_shapes.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "2:1:one:1:1:b:3\n2:2\n2:a:1\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "2:1:one:1:1:b:3\n2:2\n2:a:1\n"
+    );
     let directory = tempfile::tempdir().expect("isolated collection shape directory");
     let binary = directory.path().join("collection_shapes.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -5833,7 +6362,11 @@ fn native_collection_shapes_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5842,7 +6375,7 @@ fn native_json_refined_aggregates_match_interpreter() {
         .join("../../tests/native/json_refined_aggregates.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "Ada\nactive.name: refinement type constraint failed for 'app.NonEmpty'\nLin\nnamed.name: refinement type constraint failed for 'app.NonEmpty'\nAda:ready\nLin:ready\nTao\nactive.profile: refinement type constraint failed for 'app.NamedProfile'\nMira\nNia\n"
     );
     let directory = tempfile::tempdir().expect("isolated refined aggregate directory");
@@ -5852,7 +6385,11 @@ fn native_json_refined_aggregates_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -5860,8 +6397,11 @@ fn native_function_debug_values_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/debug_functions.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "3 5 9 5 5 9\n3 9 9 9\n4 6 10\n12 kept\n");
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "3 5 9 5 5 9\n3 9 9 9\n4 6 10\n12 kept\n"
+    );
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     assert!(debug.contains("function(callback_library.increment)"));
     assert!(debug.contains("function(left, right)"));
     assert!(debug.contains("trace baked_inline: function(int64) returns int64 = function(source)"));
@@ -5907,7 +6447,7 @@ fn native_actor_debug_values_match_interpreter() {
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert!(expected.stdout.is_empty());
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace first: test.Holder = actor#0",
             "trace second: test.Holder = actor#1",
@@ -5924,7 +6464,7 @@ fn native_actor_debug_values_match_interpreter() {
     assert!(actual.stdout.is_empty(), "{actual:?}");
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -5933,7 +6473,7 @@ fn native_comptime_namespace_aliases_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/comptime_namespace_aliases.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "6 6\n105\n6\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "6 6\n105\n6\n");
     let directory = tempfile::tempdir().expect("isolated comptime namespace alias directory");
     let binary = directory.path().join("comptime_namespace_aliases.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -5941,7 +6481,11 @@ fn native_comptime_namespace_aliases_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 
     let verify_binary = directory
         .path()
@@ -5970,10 +6514,10 @@ fn native_method_function_values_match_interpreter() {
         .join("../../tests/native/method_function_values.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "10 24 105\n10 10 10 10\n10 10 10\n10 24 10 10\n10 10 12 13\n1010\n"
     );
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     assert!(debug.contains("function(method_library.Point.amount)"));
     assert!(debug.contains("function(method_library.Counter.amount)"));
     assert!(debug.contains("function(alternate_library.Point.amount)"));
@@ -6010,7 +6554,7 @@ fn native_function_debug_values_clean_up_after_failure() {
         .join("../../tests/native/debug_functions_failure.jett");
     let expected = jett_driver::run_file_capture_outcome(&fixture)
         .expect_err("failure after tracing owned function descriptors");
-    let debug = format!("{}\n", expected.output.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.output.debug_events);
     let directory = tempfile::tempdir().expect("isolated function debug failure directory");
     let binary = directory.path().join("debug_functions_failure.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6058,7 +6602,7 @@ fn native_enum_struct_payload_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -6087,7 +6631,7 @@ fn native_deep_interface_conversion_matches_interpreter_in_both_profiles() {
             let actual = run_bounded(&binary, directory.path());
             assert!(actual.status.success(), "{actual:?}");
             assert_eq!(actual.stdout, expected.stdout.as_bytes());
-            assert!(actual.stderr.is_empty(), "{actual:?}");
+            assert_eq!(actual.stderr, jett_driver::render_debug_events(&expected.debug_events).as_bytes(), "{actual:?}");
         }
     }).unwrap().join().unwrap();
 }
@@ -6125,7 +6669,7 @@ fn native_deep_reflection_dispatch_matches_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(actual.stderr, jett_driver::render_debug_events(&expected.debug_events).as_bytes(), "{actual:?}");
     }
         })
         .unwrap()
@@ -6159,7 +6703,11 @@ fn native_enum_deep_equality_matches_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
 }
 
@@ -6174,7 +6722,11 @@ fn native_enum_aggregate_equality_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6189,7 +6741,11 @@ fn native_binary_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6198,7 +6754,7 @@ fn native_field_receiver_nested_handle_matches_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_field_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "Ada\nfallback\nAda\nmissing\nLin\noptional fallback\nKai\nnested fallback\n"
     );
     let directory = tempfile::tempdir().expect("isolated field receiver directory");
@@ -6208,7 +6764,11 @@ fn native_field_receiver_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6216,7 +6776,10 @@ fn native_state_condition_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_state_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "active\nguest\n2\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "active\nguest\n2\n"
+    );
     let directory = tempfile::tempdir().expect("isolated state condition directory");
     let binary = directory.path().join("nested_state_handle.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6224,7 +6787,11 @@ fn native_state_condition_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6233,7 +6800,7 @@ fn native_for_iterable_nested_handle_matches_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_for_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "source\nAda\nLin\nsource\nfallback\nsource\nmissing\n"
     );
     let directory = tempfile::tempdir().expect("isolated for iterable directory");
@@ -6243,7 +6810,11 @@ fn native_for_iterable_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6251,8 +6822,11 @@ fn native_debug_conditions_nested_handle_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_debug_condition_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "after\n");
-    assert_eq!(expected.debug_output, ["breakpoint hit"]);
+    assert_eq!(debug_print_text(&expected.debug_events), "after\n");
+    assert_eq!(
+        debug_trace_lines(&expected.debug_events),
+        ["breakpoint hit"]
+    );
     let directory = tempfile::tempdir().expect("isolated debug condition directory");
     let binary = directory.path().join("nested_debug_condition_handle.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6260,7 +6834,10 @@ fn native_debug_conditions_nested_handle_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert_eq!(String::from_utf8_lossy(&actual.stderr), "breakpoint hit\n");
+    assert_eq!(
+        String::from_utf8_lossy(&actual.stderr),
+        jett_driver::render_debug_events(&expected.debug_events)
+    );
 
     let verify_binary = directory.path().join("nested_debug_condition_verify.exe");
     let artifact = build_host_verify_suite_executable(&fixture, launcher(), &verify_binary)
@@ -6277,7 +6854,7 @@ fn native_machine_transition_nested_handlers_match_interpreter() {
         .join("../../tests/native/nested_transition_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "source\npayload\nBefore\nBefore:Ada\nsource\npayload\nChanged\nBefore:Fallback\n"
     );
     let directory = tempfile::tempdir().expect("isolated machine transition directory");
@@ -6287,7 +6864,11 @@ fn native_machine_transition_nested_handlers_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6296,7 +6877,7 @@ fn native_task_operands_nested_handlers_match_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_task_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "Ada\nFallback\nsource\nLin\nsource\nFallback\njoined\njoined\n"
     );
     let directory = tempfile::tempdir().expect("isolated task operand directory");
@@ -6306,7 +6887,11 @@ fn native_task_operands_nested_handlers_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6315,7 +6900,7 @@ fn native_actor_spawn_arguments_nested_handlers_match_interpreter() {
         .join("../../tests/native/nested_actor_spawn_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "count\nseed\n7\nAda:3\ncount\nseed\n9\nFallback:7\n"
     );
     let directory = tempfile::tempdir().expect("isolated actor spawn directory");
@@ -6325,7 +6910,11 @@ fn native_actor_spawn_arguments_nested_handlers_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6334,7 +6923,7 @@ fn native_actor_message_arguments_nested_handlers_match_interpreter() {
         .join("../../tests/native/nested_actor_message_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "text\ntext\nBefore\nBefore:Ada:Ada\nAda\ntext\ntext\nChanged\nBefore:Fallback:Fallback\nFallback\nAda\nFallback\n"
     );
     let directory = tempfile::tempdir().expect("isolated actor message directory");
@@ -6344,7 +6933,11 @@ fn native_actor_message_arguments_nested_handlers_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6355,8 +6948,8 @@ fn native_deep_debug_values_match_interpreter_without_a_fixed_depth_limit() {
     let source = directory.path().join("deep.jett");
     fs::copy(&fixture, &source).unwrap();
     let expected = jett_driver::run_file_capture_output(&source).unwrap();
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
-    assert!(expected.stdout.contains("app.Chain.end"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
+    assert!(debug_print_text(&expected.debug_events).contains("app.Chain.end"));
     assert!(debug.contains("[redacted]"));
     assert!(!debug.contains("deep-secret-token"));
     let binary = directory.path().join("deep.exe");
@@ -6375,6 +6968,7 @@ fn native_debug_print_argument_failure_produces_no_partial_output() {
     fs::write(&source, "namespace app\nfunction failed() returns int64:\n    string rejected = string.repeat(\"ab\", 9223372036854775807)\n    return string.char_count(rejected)\nfunction main() returns nothing:\n    println(list(\"held\"), failed())\n").unwrap();
     let expected = jett_driver::run_file_capture_outcome(&source).unwrap_err();
     assert!(expected.output.stdout.is_empty());
+    assert!(expected.output.debug_events.is_empty());
     assert!(expected.message.contains("string.repeat"), "{expected:?}");
     let binary = directory.path().join("print_failure.exe");
     build_host_executable(&source, launcher(), &binary).unwrap();
@@ -6382,7 +6976,15 @@ fn native_debug_print_argument_failure_produces_no_partial_output() {
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert!(actual.stdout.is_empty());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!(
+            "{}{}\n",
+            jett_driver::render_debug_events(&expected.output.debug_events),
+            expected.message
+        )
+        .as_bytes()
+    );
 }
 
 #[test]
@@ -6418,15 +7020,33 @@ fn native_debug_prints_aggregate_values_without_consuming_views() {
         let source = directory.path().join(format!("{name}.jett"));
         fs::write(&source, format!("{source_text}\n")).unwrap();
         let expected = jett_driver::run_file_capture_output(&source).unwrap();
-        assert!(!expected.stdout.is_empty(), "{name}");
-        assert!(expected.debug_output.is_empty(), "{name}");
+        assert!(expected.stdout.is_empty(), "{name}");
+        assert!(
+            !debug_print_text(&expected.debug_events).is_empty(),
+            "{name}"
+        );
+        assert!(
+            expected.debug_events.iter().all(|event| matches!(
+                event.kind,
+                jett_driver::DebugEventKind::Print | jett_driver::DebugEventKind::Println
+            )),
+            "{name}"
+        );
+        assert!(
+            debug_trace_lines(&expected.debug_events).is_empty(),
+            "{name}"
+        );
         let binary = directory.path().join("print.exe");
         build_host_executable(&source, launcher(), &binary).unwrap();
         fs::remove_file(&source).unwrap();
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{name}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
-        assert!(actual.stderr.is_empty(), "{name}: {actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{name}: {actual:?}"
+        );
     }
 }
 
@@ -6465,7 +7085,11 @@ fn native_float_remainder_matches_interpreter_in_both_profiles() {
         let actual = run_bounded(&executable, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
 }
 
@@ -6496,7 +7120,15 @@ fn native_float_remainder_rejects_pending_operands_and_cleans_owners() {
                 let actual = run_bounded(&binary, directory.path());
                 assert_eq!(actual.status.code(), Some(71), "{actual:?}");
                 assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-                assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+                assert_eq!(
+                    actual.stderr,
+                    format!(
+                        "{}{}\n",
+                        jett_driver::render_debug_events(&expected.output.debug_events),
+                        expected.message
+                    )
+                    .as_bytes()
+                );
             }
         }
     }
@@ -6508,7 +7140,7 @@ fn native_arithmetic_width_matrix_matches_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/arithmetic_matrix.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         concat!(
             "i8 -128 127 -2 -128 0 true\n",
             "i16 -32768 32767 -2 -32768 0 true\n",
@@ -6528,7 +7160,11 @@ fn native_arithmetic_width_matrix_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6537,7 +7173,7 @@ fn native_nested_json_enums_match_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_nested_enum.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "[\"north\",\"south\"]\n[{\"point\":[1,2]},\"empty\"]\n{\"a\":\"north\",\"b\":\"south\"}\n[{\"recorded\":[{\"name\":\"Ada\"}]},\"idle\"]\n"
     );
     let directory = tempfile::tempdir().expect("isolated nested JSON enum directory");
@@ -6546,7 +7182,11 @@ fn native_nested_json_enums_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6555,7 +7195,7 @@ fn native_nested_json_bitfields_match_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/json_nested_bitfield.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "{\"title\":\"packet\",\"header\":{\"version\":4,\"flags\":2,\"protocol\":\"tcp\",\"payload\":[1,255]}}\nheader: protocol: expected enum string or object, got number\nheader: payload: 0: expected uint8 in range 0..255\n"
     );
     let directory = tempfile::tempdir().expect("isolated nested bitfield directory");
@@ -6564,7 +7204,11 @@ fn native_nested_json_bitfields_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6578,7 +7222,11 @@ fn native_nested_json_machines_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6586,7 +7234,10 @@ fn native_projected_machine_sequences_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_machine_sequences.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "a 5\nb 7\n30 2 2 2\n30 30\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "a 5\nb 7\n30 2 2 2\n30 30\n"
+    );
     let directory = tempfile::tempdir().expect("isolated machine projection directory");
     let binary = directory.path().join("projected_machine_sequences.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6594,7 +7245,11 @@ fn native_projected_machine_sequences_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6603,7 +7258,7 @@ fn native_temporary_projected_views_match_interpreter() {
         .join("../../tests/native/temporary_projected_views.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("temporary view oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "make:list\nAda\nLin\nmake:set\ntag\nmake:map\nrow owned 7\nmake:string\n🚀\ne\n\u{301}\nmake:record\nAda\nLin\nrow owned\n11\nmake:direct\nmissing:direct\nAda:fallback:2\nmake:indirect\nmissing:indirect\nAda:fallback:2\nmake:early\nmissing:early\nreturned\nmake:break\nAda\nmake:continue\nLin\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -6612,7 +7267,11 @@ fn native_temporary_projected_views_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6621,7 +7280,10 @@ fn native_temporary_projected_view_failure_cleans_owners() {
         .join("../../tests/native/temporary_projected_view_failure.jett");
     let expected = jett_driver::run_file_capture_outcome(&fixture)
         .expect_err("later argument fails after borrowing the temporary owner");
-    assert_eq!(expected.output.stdout, "owner\nargument\n");
+    assert_eq!(
+        debug_print_text(&expected.output.debug_events),
+        "owner\nargument\n"
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory
         .path()
@@ -6630,7 +7292,15 @@ fn native_temporary_projected_view_failure_cleans_owners() {
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!(
+            "{}{}\n",
+            jett_driver::render_debug_events(&expected.output.debug_events),
+            expected.message
+        )
+        .as_bytes()
+    );
 }
 
 #[test]
@@ -6645,7 +7315,11 @@ fn native_projected_nested_collections_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6653,7 +7327,7 @@ fn native_nested_handle_projected_view_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_handle_projected_view.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "3 8\n10 13\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "3 8\n10 13\n");
     let directory = tempfile::tempdir().expect("isolated projected handler directory");
     let binary = directory.path().join("nested_handle_projected_view.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6661,7 +7335,11 @@ fn native_nested_handle_projected_view_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6669,14 +7347,21 @@ fn native_reused_handle_locals_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/reused_handle_locals.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "1 2\n7 7\n5 5\n4\n2 2\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "1 2\n7 7\n5 5\n4\n2 2\n"
+    );
     let directory = tempfile::tempdir().expect("isolated reused handle directory");
     let binary = directory.path().join("reused_handle_locals.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("compile reused local handles");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6684,14 +7369,18 @@ fn native_projected_sum_handles_match_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/projected_sum_handles.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "18 18\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "18 18\n");
     let directory = tempfile::tempdir().expect("isolated projected sum directory");
     let binary = directory.path().join("projected_sum_handles.exe");
     build_host_executable(&fixture, launcher(), &binary).expect("compile projected sum handles");
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6707,7 +7396,7 @@ fn native_join_local_reuse_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -6724,7 +7413,7 @@ fn native_run_local_aggregate_reuse_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -6741,7 +7430,7 @@ fn native_run_local_builder_reuse_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -6761,11 +7450,7 @@ fn native_transparent_local_reuse_matches_interpreter() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{name}: {actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes(), "{name}");
-        let debug = if expected.debug_output.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", expected.debug_output.join("\n"))
-        };
+        let debug = jett_driver::render_debug_events(&expected.debug_events);
         assert_eq!(actual.stderr, debug.as_bytes(), "{name}");
     }
 }
@@ -6775,7 +7460,7 @@ fn native_projected_string_iteration_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/projected_string_iteration.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "4 4\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "4 4\n");
     let directory = tempfile::tempdir().expect("isolated projected string directory");
     let binary = directory.path().join("projected_string_iteration.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6783,7 +7468,11 @@ fn native_projected_string_iteration_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6791,7 +7480,10 @@ fn native_nested_borrowed_collections_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_borrowed_collections.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert!(expected.stdout.ends_with("11 11\n2 2\n"), "{expected:?}");
+    assert!(
+        debug_print_text(&expected.debug_events).ends_with("11 11\n2 2\n"),
+        "{expected:?}"
+    );
     let directory = tempfile::tempdir().expect("isolated nested collection directory");
     let binary = directory.path().join("nested_borrowed_collections.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6799,7 +7491,11 @@ fn native_nested_borrowed_collections_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6807,7 +7503,10 @@ fn native_nested_machine_borrowed_collections_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_machine_borrowed_collections.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert!(expected.stdout.ends_with("6 6\n"), "{expected:?}");
+    assert!(
+        debug_print_text(&expected.debug_events).ends_with("6 6\n"),
+        "{expected:?}"
+    );
     let directory = tempfile::tempdir().expect("isolated nested machine collection directory");
     let binary = directory
         .path()
@@ -6817,7 +7516,11 @@ fn native_nested_machine_borrowed_collections_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6825,7 +7528,10 @@ fn native_generic_empty_collections_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_empty_collections.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "0 0 0\n0 0\n1 1\nAda true\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "0 0 0\n0 0\n1 1\nAda true\n"
+    );
     let directory = tempfile::tempdir().expect("isolated generic collection directory");
     let binary = directory.path().join("generic_empty_collections.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6833,7 +7539,11 @@ fn native_generic_empty_collections_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6841,7 +7551,10 @@ fn native_generic_map_aggregates_match_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/generic_map_aggregates.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "0 0\nAda true 2\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "0 0\nAda true 2\n"
+    );
     let directory = tempfile::tempdir().expect("isolated generic map directory");
     let binary = directory.path().join("generic_map_aggregates.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6849,7 +7562,11 @@ fn native_generic_map_aggregates_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6857,7 +7574,10 @@ fn native_displayable_interpolation_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/displayable_interpolation.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "Hello user:Ada!\nResult user:Grace\n");
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "Hello user:Ada!\nResult user:Grace\n"
+    );
     let directory = tempfile::tempdir().expect("isolated displayable directory");
     let binary = directory.path().join("displayable_interpolation.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6865,7 +7585,11 @@ fn native_displayable_interpolation_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6874,7 +7598,7 @@ fn native_handled_interpolation_matches_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/handled_interpolation.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "value 3\nfirst\nfallback\nlast\nordered first 7 last\n"
     );
     let directory = tempfile::tempdir().expect("isolated handled interpolation directory");
@@ -6883,7 +7607,11 @@ fn native_handled_interpolation_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6891,7 +7619,7 @@ fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_match_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "hello\nempty\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "hello\nempty\n");
     let directory = tempfile::tempdir().expect("isolated match scrutinee directory");
     let binary = directory.path().join("nested_match_handle.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6899,7 +7627,11 @@ fn native_match_scrutinee_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6907,7 +7639,7 @@ fn native_clone_operand_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_clone_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "Ada\nfallback\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "Ada\nfallback\n");
     let directory = tempfile::tempdir().expect("isolated clone operand directory");
     let binary = directory.path().join("nested_clone_handle.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6915,7 +7647,11 @@ fn native_clone_operand_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6923,7 +7659,7 @@ fn native_coarsen_operand_nested_handle_matches_interpreter() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/nested_coarsen_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "Ada\nFallback\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "Ada\nFallback\n");
     let directory = tempfile::tempdir().expect("isolated coarsen operand directory");
     let binary = directory.path().join("nested_coarsen_handle.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6931,7 +7667,11 @@ fn native_coarsen_operand_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6939,7 +7679,7 @@ fn native_declassify_operand_nested_handle_matches_interpreter() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/native/nested_declassify_handle.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
-    assert_eq!(expected.stdout, "Ada\nFallback\n");
+    assert_eq!(debug_print_text(&expected.debug_events), "Ada\nFallback\n");
     let directory = tempfile::tempdir().expect("isolated declassify operand directory");
     let binary = directory.path().join("nested_declassify_handle.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -6947,7 +7687,11 @@ fn native_declassify_operand_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6962,7 +7706,11 @@ fn native_enum_binary_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -6979,7 +7727,7 @@ fn native_refinement_local_source_reuse_matches_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         actual.stderr,
-        format!("{}\n", expected.debug_output.join("\n")).as_bytes()
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes()
     );
 }
 
@@ -6995,7 +7743,11 @@ fn native_nested_refinement_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7010,7 +7762,11 @@ fn native_refined_binary_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7019,7 +7775,10 @@ fn native_comptime_machine_values_can_be_evaluated_repeatedly() {
         .join("../../tests/native/comptime_machine_reuse.jett");
     let expected =
         jett_driver::run_file_capture_output(&fixture).expect("repeated comptime oracle");
-    assert_eq!(expected.stdout, "active:7\n".repeat(12));
+    assert_eq!(
+        debug_print_text(&expected.debug_events),
+        "active:7\n".repeat(12)
+    );
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("comptime_machine_reuse.exe");
     build_host_executable(&fixture, launcher(), &binary)
@@ -7027,7 +7786,11 @@ fn native_comptime_machine_values_can_be_evaluated_repeatedly() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7036,7 +7799,7 @@ fn native_comptime_builders_match_interpreter() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/comptime_builders.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("comptime builder oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         concat!(
             "type.construct_finish: 'app.Record' is missing required field 'count'\n",
             "record:5:runtime\n",
@@ -7048,14 +7811,12 @@ fn native_comptime_builders_match_interpreter() {
         )
     );
     assert!(
-        expected
-            .debug_output
+        debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("[redacted]"))
     );
     assert!(
-        !expected
-            .debug_output
+        !debug_trace_lines(&expected.debug_events)
             .iter()
             .any(|line| line.contains("hidden-baked-builder"))
     );
@@ -7067,7 +7828,7 @@ fn native_comptime_builders_match_interpreter() {
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
     assert_eq!(
         String::from_utf8_lossy(&actual.stderr),
-        format!("{}\n", expected.debug_output.join("\n"))
+        jett_driver::render_debug_events(&expected.debug_events)
     );
 }
 
@@ -7083,7 +7844,11 @@ fn native_comptime_composites_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7092,7 +7857,7 @@ fn native_comptime_generic_closures_match_interpreter() {
         .join("../../tests/native/comptime_generic_closures.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("generic closure oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "7:2\nname:3\nalias:4\n17\nkept\n29\nnested:5\n23:6\nint64\nLabel\n"
     );
     let directory = tempfile::tempdir().unwrap();
@@ -7101,7 +7866,11 @@ fn native_comptime_generic_closures_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7116,7 +7885,11 @@ fn native_comptime_function_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7131,7 +7904,11 @@ fn native_comptime_captured_functions_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7160,7 +7937,11 @@ fn native_view_function_values_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7177,7 +7958,11 @@ fn native_source_function_named_like_builtin_prefix_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7192,7 +7977,11 @@ fn native_function_expression_calls_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7209,7 +7998,15 @@ fn native_function_expression_callee_failure_cleans_owned_arguments() {
     let actual = run_bounded(&binary, directory.path());
     assert_eq!(actual.status.code(), Some(71), "{actual:?}");
     assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
-    assert_eq!(actual.stderr, format!("{}\n", expected.message).as_bytes());
+    assert_eq!(
+        actual.stderr,
+        format!(
+            "{}{}\n",
+            jett_driver::render_debug_events(&expected.output.debug_events),
+            expected.message
+        )
+        .as_bytes()
+    );
 }
 
 #[test]
@@ -7218,7 +8015,7 @@ fn native_named_enum_arguments_preserve_source_order() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/native/named_enum_arguments.jett");
     let expected = jett_driver::run_file_capture_output(&fixture).expect("interpreter oracle");
     assert_eq!(
-        expected.stdout,
+        debug_print_text(&expected.debug_events),
         "amount\nlabel\nnumbers\nlabel 2 7\nfirst\nhandler\nafter\nafter 2 9\nallocated\nreturned 1 11\npiped\npiped amount\npiped numbers\npiped 2 12\nbaked 3 8\nmixed amount\nmixed label\nmixed numbers\nmixed label 2 13\nmixed piped\nmixed piped amount\nmixed piped numbers\nmixed piped 2 14\nmixed baked 1 15\nmixed function 2 16\nmixed function piped 1 17\n"
     );
     let directory = tempfile::tempdir().expect("isolated named enum directory");
@@ -7227,7 +8024,11 @@ fn native_named_enum_arguments_preserve_source_order() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7242,7 +8043,7 @@ fn native_constructor_nested_handles_match_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    let debug = format!("{}\n", expected.debug_output.join("\n"));
+    let debug = jett_driver::render_debug_events(&expected.debug_events);
     assert_eq!(String::from_utf8_lossy(&actual.stderr), debug);
 }
 
@@ -7258,7 +8059,11 @@ fn native_indirect_call_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7273,7 +8078,11 @@ fn native_indirect_view_argument_before_handler_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7288,7 +8097,11 @@ fn native_intrinsic_nested_handle_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7305,7 +8118,11 @@ fn native_indirect_aggregate_view_before_handler_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7322,7 +8139,11 @@ fn native_borrowed_stdlib_call_before_handler_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7337,7 +8158,11 @@ fn native_capability_view_before_handler_matches_interpreter() {
     let actual = run_bounded(&binary, directory.path());
     assert!(actual.status.success(), "{actual:?}");
     assert_eq!(actual.stdout, expected.stdout.as_bytes());
-    assert!(actual.stderr.is_empty(), "{actual:?}");
+    assert_eq!(
+        actual.stderr,
+        jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+        "{actual:?}"
+    );
 }
 
 #[test]
@@ -7374,7 +8199,7 @@ fn native_reflected_interface_field_owners_match_interpreter_in_both_profiles() 
         )
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         [
             "trace copied: app.Named = pending(pending(7))",
             "trace once: app.Named = pending(7)",
@@ -7412,7 +8237,7 @@ fn native_reflected_interface_field_owners_match_interpreter_in_both_profiles() 
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }
@@ -7465,7 +8290,10 @@ fn native_reflected_interface_field_failures_match_interpreter_in_both_profiles(
         let expected = jett_driver::run_file_capture_outcome(&source)
             .expect_err("invalid reflected request or metadata must fail before dispatch");
         assert_eq!(expected.output.stdout, "before\n", "{operation}");
-        assert!(expected.output.debug_output.is_empty(), "{operation}");
+        assert!(
+            debug_trace_lines(&expected.output.debug_events).is_empty(),
+            "{operation}"
+        );
         assert_eq!(expected.message, format!("runtime error: {message}"));
         let mut binaries = Vec::new();
         for release in [false, true] {
@@ -7488,7 +8316,12 @@ fn native_reflected_interface_field_failures_match_interpreter_in_both_profiles(
             assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
             assert_eq!(
                 actual.stderr,
-                format!("{}\n", expected.message).as_bytes(),
+                format!(
+                    "{}{}\n",
+                    jett_driver::render_debug_events(&expected.output.debug_events),
+                    expected.message
+                )
+                .as_bytes(),
                 "{operation}: {actual:?}"
             );
         }
@@ -7520,8 +8353,8 @@ fn native_interface_method_values_match_interpreter_in_both_profiles() {
             "collision:8:8:8\n",
         )
     );
-    assert_eq!(expected.debug_output.len(), 4);
-    for (event, method) in expected.debug_output.iter().zip([
+    assert_eq!(debug_trace_lines(&expected.debug_events).len(), 4);
+    for (event, method) in debug_trace_lines(&expected.debug_events).iter().zip([
         "callback_library.Reader.read",
         "callback_library.Reader.offset",
         "callback_library.Reader.read",
@@ -7557,7 +8390,7 @@ fn native_interface_method_values_match_interpreter_in_both_profiles() {
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }
@@ -7588,7 +8421,7 @@ fn native_interface_method_value_pending_receiver_matches_qualified_call() {
         let expected = jett_driver::run_file_capture_outcome(&source)
             .expect_err("pending receiver must fail before implementation dispatch");
         assert_eq!(expected.output.stdout, "before\n");
-        assert!(expected.output.debug_output.is_empty());
+        assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
         assert_eq!(
             expected.message,
             "runtime error: undefined function 'callback_library.Reader.read'"
@@ -7614,7 +8447,12 @@ fn native_interface_method_value_pending_receiver_matches_qualified_call() {
             assert_eq!(actual.stdout, expected.output.stdout.as_bytes());
             assert_eq!(
                 actual.stderr,
-                format!("{}\n", expected.message).as_bytes(),
+                format!(
+                    "{}{}\n",
+                    jett_driver::render_debug_events(&expected.output.debug_events),
+                    expected.message
+                )
+                .as_bytes(),
                 "{callee}: {actual:?}"
             );
         }
@@ -7640,7 +8478,7 @@ fn native_borrowed_return_clone_controls_match_interpreter_in_both_profiles() {
             "baked:3:3:3:3:3:4:3:7:seed\n",
         )
     );
-    assert!(expected.debug_output.is_empty());
+    assert!(debug_trace_lines(&expected.debug_events).is_empty());
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -7666,7 +8504,11 @@ fn native_borrowed_return_clone_controls_match_interpreter_in_both_profiles() {
         let actual = run_bounded(&binary, directory.path());
         assert!(actual.status.success(), "{actual:?}");
         assert_eq!(actual.stdout, expected.stdout.as_bytes());
-        assert!(actual.stderr.is_empty(), "{actual:?}");
+        assert_eq!(
+            actual.stderr,
+            jett_driver::render_debug_events(&expected.debug_events).as_bytes(),
+            "{actual:?}"
+        );
     }
     for binary in [verify_binary, property_binary] {
         let actual = run_bounded(&binary, directory.path());
@@ -7730,7 +8572,7 @@ function failing(view stdout: Stdout) returns list[string]:
         let expected = jett_driver::run_file_capture_outcome(&source)
             .expect_err("payload fails before the secret constructor completes");
         assert_eq!(expected.output.stdout, output, "{name}: {expected:?}");
-        assert!(expected.output.debug_output.is_empty());
+        assert!(debug_trace_lines(&expected.output.debug_events).is_empty());
         let mut binaries = Vec::new();
         for release in [false, true] {
             let binary = directory
@@ -7752,7 +8594,12 @@ function failing(view stdout: Stdout) returns list[string]:
             assert_eq!(actual.stdout, output.as_bytes(), "{name}: {actual:?}");
             assert_eq!(
                 actual.stderr,
-                format!("{}\n", expected.message).as_bytes(),
+                format!(
+                    "{}{}\n",
+                    jett_driver::render_debug_events(&expected.output.debug_events),
+                    expected.message
+                )
+                .as_bytes(),
                 "{name}: {actual:?}"
             );
         }
@@ -7783,7 +8630,7 @@ fn native_contextual_secret_constructors_match_interpreter_in_both_profiles() {
         )
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         ["trace observed: secret[list[int8]] = [redacted]"]
     );
     let mut binaries = Vec::new();
@@ -7814,7 +8661,7 @@ fn native_contextual_secret_constructors_match_interpreter_in_both_profiles() {
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes());
     }
@@ -7911,7 +8758,7 @@ fn native_whole_machine_rebinding_preserves_owned_payloads_pending_depth_and_sou
     let expected =
         jett_driver::run_file_capture_outcome(&source).expect("selected whole-machine moves");
     assert_eq!(expected.stdout, stdout);
-    assert_eq!(expected.debug_output, debug);
+    assert_eq!(debug_trace_lines(&expected.debug_events), debug);
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory

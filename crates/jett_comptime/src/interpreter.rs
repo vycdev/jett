@@ -39,6 +39,7 @@ use jett_types::{
     ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
 
+use crate::debug::{DebugEvent, DebugEventKind};
 use crate::value::{ClosureScopedTypeBinding, ClosureTypeArgument, ClosureTypeContext, Value};
 
 mod debug;
@@ -680,9 +681,9 @@ pub struct Interpreter {
     actor_instances: HashMap<u64, ActorInstance>,
     /// Next actor instance ID.
     next_actor_id: u64,
-    /// Recorded debug output lines (`trace`, `breakpoint`).
-    debug_output: Vec<String>,
-    /// Whether debug output should print as the program runs.
+    /// Ordered compiler-owned debug events, separate from application stdout.
+    debug_events: Vec<DebugEvent>,
+    /// Whether captured events should also emit to diagnostic stderr.
     emit_runtime_debug: bool,
     /// Optional captured stdout for driver tests.
     stdout_capture: Option<String>,
@@ -752,7 +753,7 @@ impl Interpreter {
             constant_types: HashMap::new(),
             actor_instances: HashMap::new(),
             next_actor_id: 0,
-            debug_output: Vec::new(),
+            debug_events: Vec::new(),
             emit_runtime_debug: false,
             stdout_capture: None,
             random_provider: None,
@@ -763,7 +764,7 @@ impl Interpreter {
         }
     }
 
-    /// Create an interpreter that emits debug output during execution.
+    /// Create an interpreter that captures events and also emits them to stderr.
     pub fn new_runtime() -> Self {
         let mut interp = Self::new();
         interp.emit_runtime_debug = true;
@@ -836,9 +837,31 @@ impl Interpreter {
         self.explicit_comptime_values = Some(values);
     }
 
-    /// Drain any debug lines recorded so far.
+    /// Drain every debug event in its original execution order.
+    pub fn take_debug_events(&mut self) -> Vec<DebugEvent> {
+        std::mem::take(&mut self.debug_events)
+    }
+
+    /// Legacy trace/breakpoint line drain.
+    ///
+    /// This drains the canonical event buffer and discards Print/Println
+    /// events. Capture entrypoints must use `take_debug_events` instead.
+    /// Embedded newlines remain intact; only the observation's final
+    /// intentional newline is removed from each legacy line.
     pub fn take_debug_output(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.debug_output)
+        self.take_debug_events()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                DebugEventKind::Trace | DebugEventKind::Breakpoint => {
+                    let mut text = event.text;
+                    if text.ends_with('\n') {
+                        text.pop();
+                    }
+                    Some(text)
+                }
+                DebugEventKind::Print | DebugEventKind::Println => None,
+            })
+            .collect()
     }
 
     /// Capture runtime stdout writes instead of printing them directly.
@@ -947,10 +970,12 @@ impl Interpreter {
         Err(format!("undefined variable '{name}'"))
     }
 
-    fn emit_debug_line(&mut self, line: String) {
-        self.debug_output.push(line.clone());
-        if self.emit_runtime_debug {
-            println!("{line}");
+    fn emit_debug_event(&mut self, kind: DebugEventKind, text: String) {
+        self.debug_events.push(DebugEvent { kind, text });
+        if self.emit_runtime_debug
+            && let Some(event) = self.debug_events.last()
+        {
+            eprint!("{}", event.text);
         }
     }
 
@@ -962,22 +987,13 @@ impl Interpreter {
         }
     }
 
-    fn write_stdout_line(&mut self, text: &str) {
-        if let Some(capture) = self.stdout_capture.as_mut() {
-            capture.push_str(text);
-            capture.push('\n');
-        } else {
-            println!("{text}");
-        }
-    }
-
     fn trace_variable(&mut self, name: &str) -> Result<(), String> {
         let value = self
             .get_variable(name)
             .cloned()
             .ok_or_else(|| format!("undefined variable '{name}'"))?;
         let label = self.debug_binding_label(name, &value);
-        self.emit_debug_line(format!("trace {label}"));
+        self.emit_debug_event(DebugEventKind::Trace, format!("trace {label}\n"));
         Ok(())
     }
 
@@ -1145,7 +1161,7 @@ impl Interpreter {
             bindings.retain(|name, _| !excluded.contains(name));
         }
         if bindings.is_empty() {
-            self.emit_debug_line("breakpoint hit".to_string());
+            self.emit_debug_event(DebugEventKind::Breakpoint, "breakpoint hit\n".into());
             return;
         }
 
@@ -1157,7 +1173,10 @@ impl Interpreter {
                     .unwrap_or_else(|| format!("{name} = {value}"))
             })
             .collect();
-        self.emit_debug_line(format!("breakpoint hit: {}", fields.join(", ")));
+        self.emit_debug_event(
+            DebugEventKind::Breakpoint,
+            format!("breakpoint hit: {}\n", fields.join(", ")),
+        );
     }
 
     // -- Public scope management (for property-based testing) ---------------
@@ -10785,12 +10804,14 @@ impl Interpreter {
             // -- print (debugging helper) -------------------------------------
             IntrinsicId::Print => {
                 let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                self.write_stdout(&output.join(" "));
+                self.emit_debug_event(DebugEventKind::Print, output.join(" "));
                 Some(Ok(Value::Nothing))
             }
             IntrinsicId::Println => {
                 let output: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
-                self.write_stdout_line(&output.join(" "));
+                let mut text = output.join(" ");
+                text.push('\n');
+                self.emit_debug_event(DebugEventKind::Println, text);
                 Some(Ok(Value::Nothing))
             }
 
@@ -23741,7 +23762,11 @@ function make() returns Triple:
                     fields: vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)],
                 })
             );
-            assert_eq!(interp.take_stdout_output(), "input\nthird\nsecond\n");
+            assert!(interp.take_stdout_output().is_empty());
+            assert_eq!(
+                crate::render_debug_events(&interp.take_debug_events()),
+                "input\nthird\nsecond\n",
+            );
         }
     }
 
@@ -23780,7 +23805,7 @@ function make() returns int64:
                     "{call}"
                 );
                 assert_eq!(
-                    interp.take_stdout_output(),
+                    crate::render_debug_events(&interp.take_debug_events()),
                     if piped {
                         "first\nthird\nsecond\n"
                     } else {
@@ -23788,6 +23813,7 @@ function make() returns int64:
                     },
                     "{call}"
                 );
+                assert!(interp.take_stdout_output().is_empty());
             }
         }
     }
@@ -23831,7 +23857,7 @@ function make() returns Triple:
                     "{call}"
                 );
                 assert_eq!(
-                    interp.take_stdout_output(),
+                    crate::render_debug_events(&interp.take_debug_events()),
                     if piped {
                         "first\nthird\nsecond\n"
                     } else {
@@ -23839,6 +23865,7 @@ function make() returns Triple:
                     },
                     "{call}"
                 );
+                assert!(interp.take_stdout_output().is_empty());
             }
         }
     }
@@ -25672,8 +25699,212 @@ mod builtin_tests {
         assert_eq!(result, Value::Nothing);
     }
 
+    fn expected_debug_event(kind: DebugEventKind, text: &str) -> DebugEvent {
+        DebugEvent {
+            kind,
+            text: text.to_owned(),
+        }
+    }
+
+    fn debug_call(name: &str, arguments: Vec<Expr>) -> Expr {
+        Expr::Call(
+            Box::new(var(name)),
+            arguments
+                .into_iter()
+                .map(|value| CallArg {
+                    name: None,
+                    value,
+                    span: sp(),
+                })
+                .collect(),
+            sp(),
+        )
+    }
+
     #[test]
-    fn stdout_output_can_be_captured() {
+    fn debug_prints_capture_partial_empty_multiline_and_spoofed_text() {
+        let mut interp = Interpreter::new();
+        interp.enable_stdout_capture();
+        for (name, arguments) in [
+            ("print", vec![]),
+            ("print", vec![Value::String("head:".into())]),
+            (
+                "print",
+                vec![Value::Int64(7), Value::String("λ\n🙂,\\\r".into())],
+            ),
+            ("println", vec![]),
+            (
+                "println",
+                vec![Value::String("trace fake\nbreakpoint hit".into())],
+            ),
+        ] {
+            assert_eq!(
+                interp.call_builtin(name, &arguments),
+                Some(Ok(Value::Nothing)),
+            );
+        }
+
+        let events = interp.take_debug_events();
+        assert_eq!(
+            events,
+            [
+                expected_debug_event(DebugEventKind::Print, ""),
+                expected_debug_event(DebugEventKind::Print, "head:"),
+                expected_debug_event(DebugEventKind::Print, "7 λ\n🙂,\\\r"),
+                expected_debug_event(DebugEventKind::Println, "\n"),
+                expected_debug_event(DebugEventKind::Println, "trace fake\nbreakpoint hit\n"),
+            ],
+        );
+        assert_eq!(
+            crate::render_debug_events(&events),
+            "head:7 λ\n🙂,\\\r\ntrace fake\nbreakpoint hit\n",
+        );
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn debug_print_trace_and_breakpoint_preserve_one_ordered_stream() {
+        let mut interp = Interpreter::new();
+        interp.enable_stdout_capture();
+        interp.set_variable_with_type("total", Value::Int64(42), TypeExpr::Named(ident("int64")));
+        assert_eq!(
+            interp.call_builtin("print", &[Value::String("partial:".into())]),
+            Some(Ok(Value::Nothing)),
+        );
+        interp
+            .exec_stmt(&Stmt::Trace(TraceStmt {
+                name: ident("total"),
+                span: sp(),
+            }))
+            .unwrap();
+        assert_eq!(
+            interp.call_builtin(
+                "Stdout.write",
+                &[Value::Nothing, Value::String("application".into())],
+            ),
+            Some(Ok(Value::Nothing)),
+        );
+        interp
+            .exec_stmt(&Stmt::Breakpoint(BreakpointStmt {
+                condition: Some(Expr::BoolLiteral(true, sp())),
+                span: sp(),
+            }))
+            .unwrap();
+        assert_eq!(
+            interp.call_builtin("println", &[Value::String("done".into())]),
+            Some(Ok(Value::Nothing)),
+        );
+
+        let events = interp.take_debug_events();
+        assert_eq!(
+            events,
+            [
+                expected_debug_event(DebugEventKind::Print, "partial:"),
+                expected_debug_event(DebugEventKind::Trace, "trace total: int64 = 42\n"),
+                expected_debug_event(
+                    DebugEventKind::Breakpoint,
+                    "breakpoint hit: total: int64 = 42\n",
+                ),
+                expected_debug_event(DebugEventKind::Println, "done\n"),
+            ],
+        );
+        assert_eq!(
+            crate::render_debug_events(&events),
+            "partial:trace total: int64 = 42\nbreakpoint hit: total: int64 = 42\ndone\n",
+        );
+        assert_eq!(interp.take_stdout_output(), "application");
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn debug_print_argument_failure_retains_prior_events_without_outer_output() {
+        let source = r#"namespace app
+function argument() returns list[string]:
+    print("argument:")
+    return list("held")
+function failed() returns int64:
+    println("failing")
+    list[int64] rejected = range(0, 9223372036854775807)
+    return 0
+function main() returns nothing:
+    print("before:")
+    println(argument(), failed())
+    println("unreachable")
+"#;
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.register_module(&parsed.module);
+        interp.enable_stdout_capture();
+        assert_eq!(
+            interp.call_function("app.main", vec![]),
+            Err("range: requested output is too large".into()),
+        );
+        let events = interp.take_debug_events();
+        assert_eq!(
+            events,
+            [
+                expected_debug_event(DebugEventKind::Print, "before:"),
+                expected_debug_event(DebugEventKind::Print, "argument:"),
+                expected_debug_event(DebugEventKind::Println, "failing\n"),
+            ],
+        );
+        assert_eq!(
+            crate::render_debug_events(&events),
+            "before:argument:failing\n",
+        );
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn debug_print_view_preserves_the_source_and_existing_public_display() {
+        let mut interp = Interpreter::new();
+        interp.enable_stdout_capture();
+        let values = Value::List(vec![Value::String("a".into()), Value::String("b".into())]);
+        interp.set_variable("values", values.clone());
+        let expression = debug_call("println", vec![Expr::View(Box::new(var("values")), sp())]);
+        assert_eq!(interp.eval_expr(&expression), Ok(Value::Nothing));
+        assert_eq!(interp.get_variable("values"), Some(&values));
+        assert_eq!(
+            interp.take_debug_events(),
+            [expected_debug_event(
+                DebugEventKind::Println,
+                "list(a, b)\n"
+            )],
+        );
+        assert!(interp.take_stdout_output().is_empty());
+    }
+
+    #[test]
+    fn legacy_debug_line_drain_discards_print_events_without_splitting_trace_text() {
+        let mut interp = Interpreter::new();
+        interp.set_variable_with_type(
+            "message",
+            Value::String("line\ntrace fake".into()),
+            TypeExpr::Named(ident("string")),
+        );
+        assert_eq!(
+            interp.call_builtin("println", &[Value::String("trace forged".into())]),
+            Some(Ok(Value::Nothing)),
+        );
+        interp
+            .exec_stmt(&Stmt::Trace(TraceStmt {
+                name: ident("message"),
+                span: sp(),
+            }))
+            .unwrap();
+        assert_eq!(
+            interp.take_debug_output(),
+            ["trace message: string = line\ntrace fake"],
+        );
+        assert!(interp.take_debug_events().is_empty());
+    }
+
+    #[test]
+    fn stdout_and_debug_events_have_independent_capture() {
         let mut interp = Interpreter::new();
         interp.enable_stdout_capture();
 
@@ -25705,8 +25936,16 @@ mod builtin_tests {
             Value::Nothing
         );
 
-        assert_eq!(interp.take_stdout_output(), "hello score 7true\n");
-        assert_eq!(interp.take_stdout_output(), "");
+        assert_eq!(interp.take_stdout_output(), "hello ");
+        assert_eq!(
+            interp.take_debug_events(),
+            [
+                expected_debug_event(DebugEventKind::Print, "score 7"),
+                expected_debug_event(DebugEventKind::Println, "true\n"),
+            ],
+        );
+        assert!(interp.take_stdout_output().is_empty());
+        assert!(interp.take_debug_events().is_empty());
     }
 
     #[test]

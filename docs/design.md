@@ -3579,15 +3579,32 @@ past a fixed implementation depth must not turn valid observation into a runtime
 error. This also applies to trace and breakpoint snapshots, preserving pending
 wrappers, field order, and recursive secret redaction.
 
-The current interpreter shares their path with `Stdout.write`; separating debug
-events is pending. When the release/backend boundary is implemented, release
-builds must reject `print` and `println` with guidance to use `Stdout.write`;
-they must not silently strip calls or lower them to ambient process stdout.
-Future native or bytecode backends may support the calls only through an
-explicit debug diagnostic channel, and must otherwise reject them. `verify`
-and comptime execution may use the helpers only when tooling isolates their
-debug events from protocol output. Production output always requires
-`Stdout`, while structured debugging should prefer `trace` or `breakpoint`.
+Tooling captures `print`, `println`, `trace`, and `breakpoint` in one ordered
+debug-event stream, separate from capability-backed application stdout. Each
+event retains its known kind and exact text: `print` adds no terminator,
+`println` adds one newline, and embedded newlines remain part of the original
+event. Human runtime entrypoints and native executables emit debug bytes to
+diagnostic stderr. Agent entrypoints escape event text in structured rows;
+printed text resembling a trace or protocol header does not change its kind.
+
+Compiler observations retain their phase: explicit comptime evaluation,
+frontend verification, or runtime execution. Comptime events stay separate from
+baked values, so reading a baked value does not replay its observations.
+Verification captures each block and its actual property trials; shrinking and
+private replay do not become additional observations of the original failure.
+Successful and failed tools retain events already produced before a later
+failure. They do not rerun evaluation to recover those events.
+
+Comptime error recovery also records attempted expression/context pairs apart
+from successful baked values. Repeated checked contexts and namespace initializer
+markers therefore do not repeat a failed evaluation, its diagnostic, or its debug
+events. A failed value remains unavailable; distinct contexts still evaluate.
+
+Release builds reject `print` and `println` with E0362 and guidance to use
+`Stdout.write`; calls are never silently stripped. Future backends must provide
+an explicit debug diagnostic channel or reject the calls. Production output
+always requires `Stdout`, while structured debugging should prefer `trace` or
+`breakpoint`.
 
 This exception does not grant user code an output capability. A
 capability-free function remains free of semantic I/O: debug observations are

@@ -167,7 +167,7 @@ fn native_secret_validating_struct_results_match_reference_in_both_profiles() {
             "baked:12:Agent:2:-128|12:Agent:2:-128|refinement type constraint failed for 'models.AboveTen'\n",
         )
     );
-    assert!(expected.debug_output.is_empty(), "{expected:?}");
+    assert!(expected.debug_events.is_empty(), "{expected:?}");
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -279,21 +279,31 @@ fn execute_effect_case(
         ),
     )
     .unwrap();
-    match (
+    let runtime_debug_events = match (
         jett_driver::run_file_capture_outcome(&source),
         terminal_error,
     ) {
         (Ok(expected), None) => {
             assert_eq!(expected.stdout, expected_stdout, "{name}");
-            assert_eq!(expected.debug_output, expected_debug, "{name}");
+            assert_eq!(
+                debug_trace_lines(&expected.debug_events),
+                expected_debug,
+                "{name}"
+            );
+            expected.debug_events
         }
         (Err(expected), Some(message)) => {
             assert_eq!(expected.message, message, "{name}");
             assert_eq!(expected.output.stdout, expected_stdout, "{name}");
-            assert_eq!(expected.output.debug_output, expected_debug, "{name}");
+            assert_eq!(
+                debug_trace_lines(&expected.output.debug_events),
+                expected_debug,
+                "{name}"
+            );
+            expected.output.debug_events
         }
         (expected, error) => panic!("{name}: expected error {error:?}, got {expected:?}"),
-    }
+    };
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("{name}_{release}.exe"));
@@ -315,13 +325,11 @@ fn execute_effect_case(
             "{name}: {actual:?}"
         );
         assert_eq!(actual.stdout, expected_stdout.as_bytes(), "{name}");
-        let mut stderr = String::new();
-        if !release {
-            for line in expected_debug {
-                stderr.push_str(line);
-                stderr.push('\n');
-            }
-        }
+        let mut stderr = if release {
+            String::new()
+        } else {
+            jett_driver::render_debug_events(&runtime_debug_events)
+        };
         if let Some(error) = terminal_error {
             stderr.push_str(error);
             stderr.push('\n');

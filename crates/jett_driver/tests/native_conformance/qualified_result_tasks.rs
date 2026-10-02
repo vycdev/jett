@@ -160,7 +160,7 @@ fn native_qualified_result_tasks_preserve_inner_results_and_pending_depth() {
         )
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         ["trace partial: result[list[string], string] = pending(ok(list(Ada-λ🙂, kept)))"]
     );
     let mut binaries = Vec::new();
@@ -191,7 +191,7 @@ fn native_qualified_result_tasks_preserve_inner_results_and_pending_depth() {
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }
@@ -244,7 +244,7 @@ fn native_qualified_result_join_keeps_inner_failure_for_its_handler_and_cleanup(
         expected.output.stdout,
         "before\noperand\ninner:inner-error\nhandler\n"
     );
-    assert!(expected.output.debug_output.is_empty(), "{expected:?}");
+    assert!(expected.output.debug_events.is_empty(), "{expected:?}");
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -415,7 +415,7 @@ fn native_qualified_result_joins_preserve_views_and_scalar_payload_depth() {
         "trace error_ready: int64 = 9",
     ];
     assert_eq!(expected.stdout, stdout);
-    assert_eq!(expected.debug_output, debug);
+    assert_eq!(debug_trace_lines(&expected.debug_events), debug);
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -444,7 +444,7 @@ fn native_qualified_result_joins_preserve_views_and_scalar_payload_depth() {
         let stderr = if release {
             String::new()
         } else {
-            format!("{}\n", debug.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, stderr.as_bytes(), "{actual:?}");
     }

@@ -204,7 +204,7 @@ fn native_secret_bitfield_and_machine_constructors_match_reference_in_both_profi
             "comptime:15:255|15:255|Baked:2:record:7:11\n",
         )
     );
-    assert!(expected.debug_output.is_empty(), "{expected:?}");
+    assert!(expected.debug_events.is_empty(), "{expected:?}");
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory
@@ -296,12 +296,12 @@ fn execute_effect_case(
     match (expected, terminal_error) {
         (Ok(expected), None) => {
             assert_eq!(expected.stdout, expected_stdout, "{name}");
-            assert!(expected.debug_output.is_empty(), "{name}");
+            assert!(expected.debug_events.is_empty(), "{name}");
         }
         (Err(expected), Some(message)) => {
             assert_eq!(expected.message, message, "{name}");
             assert_eq!(expected.output.stdout, expected_stdout, "{name}");
-            assert!(expected.output.debug_output.is_empty(), "{name}");
+            assert!(expected.output.debug_events.is_empty(), "{name}");
         }
         (expected, error) => panic!("{name}: expected error {error:?}, got {expected:?}"),
     }

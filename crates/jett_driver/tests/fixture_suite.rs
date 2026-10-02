@@ -6,10 +6,11 @@ use jett_diagnostics::Severity;
 use jett_driver::{
     BuildOptions, ClockTestSample, EnvironmentTestEntry, EnvironmentTestSnapshot,
     EnvironmentTestText, RandomTestSample, build_file, build_file_with_options, build_source,
-    completions, completions_at, hover_type, run_file, run_file_capture_output,
-    run_file_capture_stdout, run_file_capture_stdout_with_clock_test_samples,
-    run_file_capture_stdout_with_environment_test_snapshot,
-    run_file_capture_stdout_with_random_test_samples, run_file_with_clock_test_samples,
+    completions, completions_at, hover_type, run_file,
+    run_file_capture_outcome_with_clock_test_samples,
+    run_file_capture_outcome_with_environment_test_snapshot,
+    run_file_capture_outcome_with_random_test_samples, run_file_capture_output,
+    run_file_capture_stdout, run_file_with_clock_test_samples,
     run_file_with_environment_test_snapshot, run_file_with_random_test_samples, test_file,
 };
 use jett_parser::ast::Item;
@@ -673,11 +674,19 @@ fn run_file_capture_stdout_captures_json_runtime_output() {
 #[test]
 fn run_file_capture_output_captures_debug_lines() {
     let cases = [
-        ("trace_basic.jett", "trace total: int64 = 42"),
-        ("breakpoint_basic.jett", "breakpoint hit: total: int64 = 42"),
+        (
+            "trace_basic.jett",
+            jett_driver::DebugEventKind::Trace,
+            "trace total: int64 = 42\n",
+        ),
+        (
+            "breakpoint_basic.jett",
+            jett_driver::DebugEventKind::Breakpoint,
+            "breakpoint hit: total: int64 = 42\n",
+        ),
     ];
 
-    for (name, expected) in cases {
+    for (name, kind, expected) in cases {
         let path = fixture_path("run_pass", name);
         let output = run_file_capture_output(&path).unwrap_or_else(|err| {
             panic!(
@@ -686,7 +695,13 @@ fn run_file_capture_output_captures_debug_lines() {
             )
         });
         assert_eq!(output.stdout, "");
-        assert_eq!(output.debug_output, vec![expected]);
+        assert_eq!(
+            output.debug_events,
+            vec![jett_driver::DebugEvent {
+                kind,
+                text: expected.into()
+            }]
+        );
     }
 }
 
@@ -1608,7 +1623,7 @@ fn compile_fail_bytes_concat_consumes_both_inputs() {
 #[test]
 fn run_pass_random_scripted_contract() {
     let path = fixture_path("run_pass", "random_scripted.jett");
-    let output = run_file_capture_stdout_with_random_test_samples(
+    let output = run_file_capture_outcome_with_random_test_samples(
         &path,
         vec![
             RandomTestSample::Bounded(0),
@@ -1625,8 +1640,10 @@ fn run_pass_random_scripted_contract() {
         ],
     )
     .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
+    assert!(output.stdout.is_empty());
+    assert!(output.frontend_debug_observations.is_empty());
     assert_eq!(
-        output,
+        jett_driver::render_debug_events(&output.debug_events),
         concat!(
             "5:random.int64: lower bound must be less than upper bound:-1:1:0:9\n",
             "-9223372036854775808:9223372036854775806:0:0.9999999999999999:false:true\n",
@@ -1674,7 +1691,7 @@ fn runtime_fail_random_invalid_test_sample() {
 #[test]
 fn run_pass_clock_scripted_contract() {
     let path = fixture_path("run_pass", "clock_scripted.jett");
-    let output = run_file_capture_stdout_with_clock_test_samples(
+    let output = run_file_capture_outcome_with_clock_test_samples(
         &path,
         vec![
             ClockTestSample::Wall {
@@ -1700,7 +1717,12 @@ fn run_pass_clock_scripted_contract() {
         ],
     )
     .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
-    assert_eq!(output, "0:0:-1:42123:40000\n");
+    assert!(output.stdout.is_empty());
+    assert!(output.frontend_debug_observations.is_empty());
+    assert_eq!(
+        jett_driver::render_debug_events(&output.debug_events),
+        "0:0:-1:42123:40000\n"
+    );
 }
 
 #[test]
@@ -1782,7 +1804,7 @@ fn runtime_fail_clock_invalid_test_sample() {
 fn run_pass_environment_injected_snapshot_contract() {
     let path = fixture_path("run_pass", "environment_snapshot.jett");
     let text = |value: &str| EnvironmentTestText::Unicode(value.to_string());
-    let output = run_file_capture_stdout_with_environment_test_snapshot(
+    let output = run_file_capture_outcome_with_environment_test_snapshot(
         &path,
         EnvironmentTestSnapshot {
             arguments: vec![text("first"), text(""), text("third")],
@@ -1811,8 +1833,10 @@ fn run_pass_environment_injected_snapshot_contract() {
         },
     )
     .unwrap_or_else(|err| panic!("expected {} to run successfully: {err}", path.display()));
+    assert!(output.stdout.is_empty());
+    assert!(output.frontend_debug_observations.is_empty());
     assert_eq!(
-        output,
+        jett_driver::render_debug_events(&output.debug_events),
         concat!(
             "4:3:first:[]:third\n",
             "value:none:first:Environment.get: value is not valid Unicode:Environment.get: invalid variable name\n"

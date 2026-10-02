@@ -150,7 +150,7 @@ fn native_secret_struct_constructors_match_reference_in_both_profiles() {
         )
     );
     assert_eq!(
-        expected.debug_output,
+        debug_trace_lines(&expected.debug_events),
         ["trace observed: secret[models.Item] = [redacted]"]
     );
     let mut binaries = Vec::new();
@@ -181,7 +181,7 @@ fn native_secret_struct_constructors_match_reference_in_both_profiles() {
         let debug = if release {
             String::new()
         } else {
-            format!("{}\n", expected.debug_output.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, debug.as_bytes(), "{actual:?}");
     }
@@ -245,7 +245,7 @@ fn native_secret_struct_field_failures_preserve_order_and_cleanup_in_both_profil
         let expected = jett_driver::run_file_capture_outcome(&source)
             .expect_err("later field failure prevents secret record construction");
         assert_eq!(expected.output.stdout, "before\nfirst\nfailure\n", "{name}");
-        assert!(expected.output.debug_output.is_empty(), "{name}");
+        assert!(expected.output.debug_events.is_empty(), "{name}");
         assert_eq!(
             expected.message, "runtime error: list.__remove_at: index -1 out of bounds",
             "{name}"

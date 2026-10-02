@@ -8,7 +8,7 @@ use jett_parser::ast::{Block, Expr, Item, Module, Stmt, StringPart};
 use jett_types::{ReflectionMetadata, ReflectionTypeInfo};
 
 use crate::value::ClosureScopedTypeBinding;
-use crate::{Interpreter, Value};
+use crate::{DebugEvent, Interpreter, Value};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct ComptimeContext {
@@ -71,6 +71,15 @@ impl ExplicitComptimeValues {
     }
 }
 
+/// Actual required-evaluation observations, separate from the reusable baked values.
+/// Reading a baked value must never replay these events.
+#[derive(Debug, Clone, Default)]
+pub struct ExplicitComptimeEvaluation {
+    pub values: ExplicitComptimeValues,
+    pub diagnostics: Vec<Diagnostic>,
+    pub debug_events: Vec<DebugEvent>,
+}
+
 struct CollectedExpression<'a> {
     namespace: Option<String>,
     aliases: HashMap<String, String>,
@@ -107,6 +116,24 @@ pub fn evaluate_explicit_comptime_expressions(
     checked_expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
 ) -> (ExplicitComptimeValues, Vec<Diagnostic>) {
+    let captured = evaluate_explicit_comptime_expressions_capture(
+        module,
+        reflection_metadata,
+        checked_expression_types,
+        breakpoint_exclusions,
+    );
+    (captured.values, captured.diagnostics)
+}
+
+/// Evaluate required values once and retain ordered debug observations, including
+/// events emitted before a failed expression or namespace constant initializer.
+/// The worker records silently; callers select whether and how to render events.
+pub fn evaluate_explicit_comptime_expressions_capture(
+    module: &Module,
+    reflection_metadata: Arc<ReflectionMetadata>,
+    checked_expression_types: Arc<CheckedExpressionTypes>,
+    breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
+) -> ExplicitComptimeEvaluation {
     let mut expressions = Vec::new();
     collect_module_expressions(module, &mut expressions);
     let span = expressions
@@ -122,7 +149,7 @@ pub fn evaluate_explicit_comptime_expressions(
             })
         });
     let Some(span) = span else {
-        return (ExplicitComptimeValues::default(), Vec::new());
+        return ExplicitComptimeEvaluation::default();
     };
     // Compiler callers may have a smaller stack than reference execution.
     // Keep required comptime evaluation on the same fixed interpreter budget.
@@ -143,14 +170,14 @@ pub fn evaluate_explicit_comptime_expressions(
                 Ok(result) => result,
                 Err(payload) => std::panic::resume_unwind(payload),
             },
-            Err(error) => (
-                ExplicitComptimeValues::default(),
-                vec![Diagnostic::error(
+            Err(error) => ExplicitComptimeEvaluation {
+                diagnostics: vec![Diagnostic::error(
                     9001,
                     format!("cannot create comptime evaluation worker: {error}"),
                     span,
                 )],
-            ),
+                ..ExplicitComptimeEvaluation::default()
+            },
         }
     })
 }
@@ -161,7 +188,7 @@ fn evaluate_collected_expressions(
     reflection_metadata: Arc<ReflectionMetadata>,
     checked_expression_types: Arc<CheckedExpressionTypes>,
     breakpoint_exclusions: Arc<HashMap<Span, HashSet<String>>>,
-) -> (ExplicitComptimeValues, Vec<Diagnostic>) {
+) -> ExplicitComptimeEvaluation {
     let mut interpreter = Interpreter::new();
     interpreter.set_reflection_metadata(reflection_metadata);
     interpreter.set_checked_expression_types(checked_expression_types.clone());
@@ -170,7 +197,7 @@ fn evaluate_collected_expressions(
 
     let mut values = ExplicitComptimeValues::default();
     let mut diagnostics = Vec::new();
-    evaluate_constants(
+    let mut attempted_expressions = evaluate_constants(
         module,
         &checked_expression_types,
         &mut interpreter,
@@ -186,6 +213,11 @@ fn evaluate_collected_expressions(
         for context in contexts {
             let key = context.key();
             if values.get(collected.span, &key).is_some() {
+                continue;
+            }
+            // Identical checked contexts also share a failed attempt, without
+            // inventing a baked value or suppressing independent contexts.
+            if !attempted_expressions.insert((collected.span, key.clone())) {
                 continue;
             }
             match interpreter.eval_closed_comptime_expression(
@@ -206,7 +238,11 @@ fn evaluate_collected_expressions(
             }
         }
     }
-    (values, diagnostics)
+    ExplicitComptimeEvaluation {
+        values,
+        diagnostics,
+        debug_events: interpreter.take_debug_events(),
+    }
 }
 
 fn evaluate_constants(
@@ -215,7 +251,8 @@ fn evaluate_constants(
     interpreter: &mut Interpreter,
     values: &mut ExplicitComptimeValues,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> HashSet<(Span, ComptimeContext)> {
+    let mut attempted = HashSet::new();
     let mut current_file = None;
     let mut namespace = None;
     for item in &module.items {
@@ -260,6 +297,12 @@ fn evaluate_constants(
             Expr::Comptime(inner, _) => inner.as_ref(),
             expression => expression,
         };
+        // The same explicit root is also in the collected-expression pass.
+        // Record an actual attempt independently of whether it yields a value,
+        // so error recovery does not rerun it or repeat its observations.
+        if let Expr::Comptime(_, span) = &declaration.value {
+            attempted.insert((*span, ComptimeContext::default()));
+        }
         match interpreter.eval_closed_comptime_expression(
             namespace.as_deref(),
             &HashMap::new(),
@@ -295,6 +338,7 @@ fn evaluate_constants(
             )),
         }
     }
+    attempted
 }
 
 fn constant_value_matches_type(value: &Value, ty: Option<&str>) -> bool {
@@ -679,5 +723,257 @@ fn collect_expr<'a>(
         | Expr::None(_)
         | Expr::EnumVariant(_, _, _)
         | Expr::Error(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod debug_capture_tests {
+    use super::*;
+    use crate::DebugEventKind;
+
+    fn parse(source: &str) -> Module {
+        let parsed = jett_parser::parse(source, FileId::new(0));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        parsed.module
+    }
+
+    fn capture(module: &Module, checked: CheckedExpressionTypes) -> ExplicitComptimeEvaluation {
+        evaluate_explicit_comptime_expressions_capture(
+            module,
+            Arc::new(ReflectionMetadata::new()),
+            Arc::new(checked),
+            Arc::new(HashMap::new()),
+        )
+    }
+
+    fn primitive_constants(module: &Module) -> CheckedExpressionTypes {
+        let mut checked = CheckedExpressionTypes::default();
+        for item in &module.items {
+            if let Item::VarDecl(declaration) = item {
+                checked
+                    .expressions
+                    .insert(declaration.name.span, "int64".into());
+            }
+        }
+        checked
+    }
+
+    #[test]
+    fn required_evaluation_captures_constants_and_expressions_once_without_baked_replay() {
+        let module = parse(
+            r#"
+function observe(label: string) returns int64:
+    print(view label)
+    println("!", view label)
+    return 7
+int64 cached = comptime observe("constant")
+function main() returns int64:
+    int64 first = comptime observe("expression")
+    return cached + first
+"#,
+        );
+        let captured = capture(&module, primitive_constants(&module));
+        assert!(
+            captured.diagnostics.is_empty(),
+            "{:?}",
+            captured.diagnostics
+        );
+        assert_eq!(captured.values.len(), 3);
+        assert_eq!(
+            captured.debug_events,
+            vec![
+                DebugEvent {
+                    kind: DebugEventKind::Print,
+                    text: "constant".into()
+                },
+                DebugEvent {
+                    kind: DebugEventKind::Println,
+                    text: "! constant\n".into()
+                },
+                DebugEvent {
+                    kind: DebugEventKind::Print,
+                    text: "expression".into()
+                },
+                DebugEvent {
+                    kind: DebugEventKind::Println,
+                    text: "! expression\n".into()
+                },
+            ]
+        );
+        let mut interpreter = Interpreter::new();
+        interpreter.enable_stdout_capture();
+        interpreter.set_explicit_comptime_values(Arc::new(captured.values));
+        interpreter.register_module(&module);
+        assert_eq!(
+            interpreter.call_function("main", vec![]).unwrap(),
+            Value::Int64(14)
+        );
+        assert!(interpreter.take_debug_events().is_empty());
+        assert!(interpreter.take_stdout_output().is_empty());
+    }
+
+    #[test]
+    fn failed_required_expressions_and_constants_retain_prior_events_in_actual_order() {
+        let module = parse(
+            r#"
+function reject(label: string) returns int64:
+    println(view label)
+    list[int64] rejected = range(0, 9223372036854775807)
+    return 0
+function accept() returns int64:
+    print("last")
+    return 1
+int64 failed = comptime reject("constant failure")
+function main() returns nothing:
+    int64 first = comptime reject("expression failure")
+    int64 second = comptime accept()
+    return nothing
+"#,
+        );
+        let captured = capture(&module, primitive_constants(&module));
+        assert_eq!(captured.diagnostics.len(), 2);
+        assert!(
+            captured
+                .diagnostics
+                .iter()
+                .all(|d| d.message.contains("range: requested output is too large"))
+        );
+        assert_eq!(captured.values.len(), 1);
+        let failed = module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::VarDecl(declaration) if declaration.name.name == "failed" => {
+                    Some(declaration)
+                }
+                _ => None,
+            })
+            .expect("failed namespace declaration");
+        let Expr::Comptime(_, span) = &failed.value else {
+            panic!("explicit namespace initializer")
+        };
+        assert!(captured.values.constant(failed.name.span).is_none());
+        assert!(
+            captured
+                .values
+                .get(*span, &ComptimeContext::default())
+                .is_none()
+        );
+        assert_eq!(
+            captured.debug_events,
+            vec![
+                DebugEvent {
+                    kind: DebugEventKind::Println,
+                    text: "constant failure\n".into()
+                },
+                DebugEvent {
+                    kind: DebugEventKind::Println,
+                    text: "expression failure\n".into()
+                },
+                DebugEvent {
+                    kind: DebugEventKind::Print,
+                    text: "last".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn duplicate_checked_contexts_reuse_only_values_and_do_not_repeat_events() {
+        let module = parse(
+            r#"
+function observe() returns int64:
+    println("once")
+    return 7
+function main() returns int64:
+    int64 value = comptime observe()
+    return value
+"#,
+        );
+        let Item::Function(function) = &module.items[1] else {
+            panic!("main")
+        };
+        let Stmt::VarDecl(declaration) = &function.body.stmts[0] else {
+            panic!("local")
+        };
+        let Expr::Comptime(_, span) = &declaration.value else {
+            panic!("comptime")
+        };
+        let instance = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(*span, "int64".into())])),
+            ..CheckedFunctionTypes::default()
+        });
+        let mut checked = CheckedExpressionTypes::default();
+        checked
+            .functions
+            .insert(function.name.span, vec![instance.clone(), instance]);
+        let captured = capture(&module, checked);
+        assert!(
+            captured.diagnostics.is_empty(),
+            "{:?}",
+            captured.diagnostics
+        );
+        assert_eq!(captured.values.len(), 1);
+        assert_eq!(
+            captured.debug_events,
+            vec![DebugEvent {
+                kind: DebugEventKind::Println,
+                text: "once\n".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn duplicate_failed_checked_contexts_evaluate_once_without_baked_values() {
+        let module = parse(
+            r#"
+function reject() returns int64:
+    println("failed once")
+    list[int64] rejected = range(0, 9223372036854775807)
+    return 0
+function main() returns int64:
+    int64 value = comptime reject()
+    return value
+"#,
+        );
+        let Item::Function(function) = &module.items[1] else {
+            panic!("main")
+        };
+        let Stmt::VarDecl(declaration) = &function.body.stmts[0] else {
+            panic!("local")
+        };
+        let Expr::Comptime(_, span) = &declaration.value else {
+            panic!("comptime")
+        };
+        let instance = Arc::new(CheckedFunctionTypes {
+            expressions: Arc::new(HashMap::from([(*span, "int64".into())])),
+            ..CheckedFunctionTypes::default()
+        });
+        let mut checked = CheckedExpressionTypes::default();
+        checked
+            .functions
+            .insert(function.name.span, vec![instance.clone(), instance]);
+        let captured = capture(&module, checked);
+        assert_eq!(captured.diagnostics.len(), 1);
+        assert_eq!(captured.diagnostics[0].code.code(), 9001);
+        assert_eq!(captured.diagnostics[0].span, *span);
+        assert_eq!(
+            captured.diagnostics[0].message,
+            "`comptime` expression must be closed and evaluable during compilation: range: requested output is too large"
+        );
+        assert!(captured.values.is_empty());
+        assert!(
+            captured
+                .values
+                .get(*span, &ComptimeContext::default())
+                .is_none()
+        );
+        assert_eq!(
+            captured.debug_events,
+            vec![DebugEvent {
+                kind: DebugEventKind::Println,
+                text: "failed once\n".into(),
+            }]
+        );
     }
 }

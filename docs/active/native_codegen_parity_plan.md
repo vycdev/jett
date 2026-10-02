@@ -1782,3 +1782,26 @@ verify/property suites with 100 trials. Library, object, runtime, and frontend
 checks pass; supplemental conformance now contains 318 tests. The fixed inventory
 and broad 85% estimate are unchanged. Broader reflected admission, open semantic
 rules, and final workspace/distribution acceptance retain their separate gates.
+
+### Selected debug-event isolation
+
+Print/println now join trace and breakpoint in a typed, ordered compiler debug
+capture. Application stdout remains capability-backed; native debug transport
+uses exact stderr bytes, including partial print fragments and terminal-error
+adjacency. Driver and CLI retain actual comptime, frontend verification, and
+runtime observations separately, escape agent rows, and preserve preceding
+events on failure. Comptime baked values contain no events, and property
+shrinking does not duplicate original observations.
+
+Recovery tracks attempted comptime span/context pairs without caching failed
+values. Native replay failures preserve the completed original suite's streams
+separately from private replay output; initial process errors retain their
+existing typed contract.
+
+Release E0362 and current value-formatting/secrecy restrictions remain unchanged.
+The independent hidden-secret print choice is still open. Its dedicated phase,
+transport, and protocol gates now pass: 416 comptime, 83 driver library, 144
+runtime, 50 CLI, and five new linked native transport tests. This closes the
+selected channel implementation obligation. The conformance suite now contains
+323 tests; fresh full workspace and supported-host acceptance remain separate.
+The fixed inventory denominator and broad 85% estimate are unchanged.

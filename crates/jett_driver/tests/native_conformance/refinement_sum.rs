@@ -41,7 +41,7 @@ fn refined_sum_results_validate_in_reference_and_preserve_native_refusal() {
     );
     assert_eq!(failure.output.stdout, "before\n");
     assert_eq!(
-        failure.output.debug_output,
+        debug_trace_lines(&failure.output.debug_events),
         ["trace marker: string = positive"]
     );
 

@@ -154,16 +154,38 @@ fn run_form(
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("main.jett");
     fs::write(&source, source_text).unwrap();
-    let debug: Vec<String> = debug_text.lines().map(str::to_owned).collect();
     match (jett_driver::run_file_capture_outcome(&source), message) {
         (Ok(actual), None) => {
             assert_eq!(actual.stdout, stdout, "{name}");
-            assert_eq!(actual.debug_output, debug, "{name}");
+            assert_eq!(
+                jett_driver::render_debug_events(&actual.debug_events),
+                debug_text,
+                "{name}"
+            );
+            assert!(
+                actual
+                    .debug_events
+                    .iter()
+                    .all(|event| event.kind == jett_driver::DebugEventKind::Trace),
+                "{name}"
+            );
         }
         (Err(actual), Some(message)) => {
             assert_eq!(actual.message, message, "{name}");
             assert_eq!(actual.output.stdout, stdout, "{name}");
-            assert_eq!(actual.output.debug_output, debug, "{name}");
+            assert_eq!(
+                jett_driver::render_debug_events(&actual.output.debug_events),
+                debug_text,
+                "{name}"
+            );
+            assert!(
+                actual
+                    .output
+                    .debug_events
+                    .iter()
+                    .all(|event| event.kind == jett_driver::DebugEventKind::Trace),
+                "{name}"
+            );
         }
         (actual, expected) => panic!("{name}: {actual:?}; expected terminal message {expected:?}"),
     }

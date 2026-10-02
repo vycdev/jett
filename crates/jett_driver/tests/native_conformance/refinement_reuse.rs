@@ -142,7 +142,7 @@ fn execute_reuse_case(
     let expected = jett_driver::run_file_capture_output(&source)
         .unwrap_or_else(|error| panic!("{name}: {error}"));
     assert_eq!(expected.stdout, stdout, "{name}");
-    assert_eq!(expected.debug_output, debug, "{name}");
+    assert_eq!(debug_trace_lines(&expected.debug_events), debug, "{name}");
     let mut programs = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("{name}_{release}.exe"));
@@ -171,7 +171,7 @@ fn execute_reuse_case(
         let stderr = if release || debug.is_empty() {
             String::new()
         } else {
-            format!("{}\n", debug.join("\n"))
+            jett_driver::render_debug_events(&expected.debug_events)
         };
         assert_eq!(actual.stderr, stderr.as_bytes(), "{name}: {actual:?}");
     }

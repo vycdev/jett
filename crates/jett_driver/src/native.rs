@@ -228,9 +228,14 @@ pub struct NativeObjectArtifact {
     target: String,
     symbols: Vec<String>,
     bytes: Vec<u8>,
+    debug_observations: Vec<crate::DebugObservation>,
 }
 
 impl NativeObjectArtifact {
+    pub fn debug_observations(&self) -> &[crate::DebugObservation] {
+        &self.debug_observations
+    }
+
     pub fn target(&self) -> &str {
         &self.target
     }
@@ -254,6 +259,10 @@ pub struct NativeProgramObjectArtifact {
 }
 
 impl NativeProgramObjectArtifact {
+    pub fn debug_observations(&self) -> &[crate::DebugObservation] {
+        self.object.debug_observations()
+    }
+
     pub fn diagnostics(&self) -> &[jett_diagnostics::Diagnostic] {
         &self.diagnostics
     }
@@ -286,6 +295,7 @@ pub struct NativeExecutableArtifact {
     pub target: String,
     pub program_entry: FunctionId,
     pub symbols: Vec<String>,
+    pub debug_observations: Vec<crate::DebugObservation>,
 }
 
 /// Filesystem role used in actionable native-build diagnostics.
@@ -317,6 +327,11 @@ impl fmt::Display for NativePathRole {
 /// Failure while emitting, linking, or publishing a native executable.
 #[derive(Debug)]
 pub enum NativeBuildError {
+    /// A later backend/link failure with the actual frontend observations.
+    Captured {
+        source: Box<NativeBuildError>,
+        debug_observations: Vec<crate::DebugObservation>,
+    },
     InspectPath {
         role: NativePathRole,
         path: PathBuf,
@@ -436,9 +451,41 @@ pub enum NativeBuildError {
     },
 }
 
+impl NativeBuildError {
+    pub fn debug_observations(&self) -> &[crate::DebugObservation] {
+        match self {
+            Self::Captured {
+                debug_observations, ..
+            } => debug_observations,
+            Self::Lowering { source, .. } => source.debug_observations(),
+            _ => &[],
+        }
+    }
+
+    pub fn build_result(&self) -> Option<&crate::BuildResult> {
+        match self {
+            Self::Captured { source, .. } => source.build_result(),
+            Self::Lowering { source, .. } => source.build_result(),
+            _ => None,
+        }
+    }
+
+    fn with_debug_observations(self, observations: &[crate::DebugObservation]) -> Self {
+        if observations.is_empty() || !self.debug_observations().is_empty() {
+            self
+        } else {
+            Self::Captured {
+                source: Box::new(self),
+                debug_observations: observations.to_vec(),
+            }
+        }
+    }
+}
+
 impl fmt::Display for NativeBuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Captured { source, .. } => fmt::Display::fmt(source, formatter),
             Self::InspectPath { role, path, source } => {
                 write!(
                     formatter,
@@ -629,6 +676,7 @@ impl std::error::Error for NativeBuildError {
             | Self::PublishExecutable { source, .. } => Some(source),
             Self::ResolveCurrentDirectory(source) => Some(source),
             Self::Lowering { source, .. } => Some(source),
+            Self::Captured { source, .. } => Some(source.as_ref()),
             Self::Codegen { source, .. } => Some(source),
             _ => None,
         }
@@ -660,8 +708,12 @@ pub fn emit_host_object_for_file(
             source_path: source_path.to_path_buf(),
             source,
         }
+        .with_debug_observations(&lowered.debug_observations)
     })?;
-    native_object(object.target, object.symbols, object.bytes)
+    let mut object = native_object(object.target, object.symbols, object.bytes)
+        .map_err(|error| error.with_debug_observations(&lowered.debug_observations))?;
+    object.debug_observations = lowered.debug_observations;
+    Ok(object)
 }
 
 /// Lower a source file and emit a host object using its exact checked entry ID.
@@ -683,12 +735,12 @@ pub fn emit_host_program_object_for_file_with_options(
                 source: Box::new(source),
             }
         })?;
-    let program_entry =
-        lowered
-            .program_entry
-            .ok_or_else(|| NativeBuildError::MissingProgramEntry {
-                source_path: source_path.to_path_buf(),
-            })?;
+    let program_entry = lowered.program_entry.ok_or_else(|| {
+        NativeBuildError::MissingProgramEntry {
+            source_path: source_path.to_path_buf(),
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
     emit_program_object_from_lowering(source_path, lowered, program_entry, options.release)
 }
 
@@ -712,12 +764,12 @@ pub fn emit_host_verify_suite_object_for_file_with_options(
             source: Box::new(source),
         },
     )?;
-    let entry =
-        lowered
-            .native_verify_entry
-            .ok_or_else(|| NativeBuildError::MissingVerifyBodies {
-                source_path: source_path.to_path_buf(),
-            })?;
+    let entry = lowered.native_verify_entry.ok_or_else(|| {
+        NativeBuildError::MissingVerifyBodies {
+            source_path: source_path.to_path_buf(),
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
     emit_program_object_from_lowering(source_path, lowered, entry, options.release)
 }
 
@@ -744,12 +796,12 @@ pub fn emit_host_property_suite_object_for_file_with_options(
             source: Box::new(source),
         },
     )?;
-    let entry =
-        lowered
-            .native_property_entry
-            .ok_or_else(|| NativeBuildError::MissingPropertyBodies {
-                source_path: source_path.to_path_buf(),
-            })?;
+    let entry = lowered.native_property_entry.ok_or_else(|| {
+        NativeBuildError::MissingPropertyBodies {
+            source_path: source_path.to_path_buf(),
+        }
+        .with_debug_observations(&lowered.debug_observations)
+    })?;
     emit_program_object_from_lowering(source_path, lowered, entry, options.release)
 }
 
@@ -765,12 +817,18 @@ fn emit_program_object_from_lowering(
         program_entry,
         jett_codegen_cranelift::CodegenOptions { optimize },
     )
-    .map_err(|source| NativeBuildError::Codegen {
-        source_path: source_path.to_path_buf(),
-        source,
+    .map_err(|source| {
+        NativeBuildError::Codegen {
+            source_path: source_path.to_path_buf(),
+            source,
+        }
+        .with_debug_observations(&lowered.debug_observations)
     })?;
+    let mut object = native_object(object.target, object.symbols, object.bytes)
+        .map_err(|error| error.with_debug_observations(&lowered.debug_observations))?;
+    object.debug_observations = lowered.debug_observations;
     Ok(NativeProgramObjectArtifact {
-        object: native_object(object.target, object.symbols, object.bytes)?,
+        object,
         program_entry,
         diagnostics: lowered.diagnostics,
         source: lowered.source,
@@ -789,6 +847,7 @@ fn native_object(
         target,
         symbols,
         bytes,
+        debug_observations: Vec::new(),
     })
 }
 
@@ -886,6 +945,16 @@ fn link_host_object_with_timeout(
     output_path: &Path,
     timeout: Duration,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    link_host_object_inner(object, launcher, output_path, timeout)
+        .map_err(|error| error.with_debug_observations(object.debug_observations()))
+}
+
+fn link_host_object_inner(
+    object: &NativeProgramObjectArtifact,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    timeout: Duration,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
     validate_link_host(object)?;
     validate_host_launcher(launcher)?;
     validate_regular_file(
@@ -970,6 +1039,7 @@ fn link_host_object_with_timeout(
         target: object.target().to_string(),
         program_entry: object.program_entry,
         symbols: object.symbols().to_vec(),
+        debug_observations: object.debug_observations().to_vec(),
     })
 }
 
@@ -1461,6 +1531,114 @@ fn publish_executable(from: &Path, to: &Path) -> Result<(), NativeBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compile_observer_source(body: &str) -> String {
+        format!(
+            "namespace app\nfunction observe() returns int64:\n    print(\"compile:\")\n    return 7\n{body}\nverify checking:\n    println(\"verify\")\n    assert true\n"
+        )
+    }
+
+    fn compile_observer_oracle() -> Vec<crate::DebugObservation> {
+        vec![
+            crate::DebugObservation {
+                phase: crate::DebugPhase::Comptime,
+                event: crate::DebugEvent {
+                    kind: crate::DebugEventKind::Print,
+                    text: "compile:".into(),
+                },
+            },
+            crate::DebugObservation {
+                phase: crate::DebugPhase::FrontendVerify,
+                event: crate::DebugEvent {
+                    kind: crate::DebugEventKind::Println,
+                    text: "verify\n".into(),
+                },
+            },
+        ]
+    }
+
+    #[test]
+    fn native_object_and_link_setup_failure_retain_completed_frontend_events() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            compile_observer_source(
+                "function main() returns nothing:\n    int64 baked = comptime observe()",
+            ),
+        )
+        .unwrap();
+        let object = emit_host_program_object_for_file(&source).unwrap();
+        assert_eq!(object.debug_observations(), compile_observer_oracle());
+        let ordinary = emit_host_object_for_file(&source).unwrap();
+        assert_eq!(ordinary.debug_observations(), compile_observer_oracle());
+        let launcher = match host_target().as_str() {
+            WINDOWS_MSVC_NATIVE_TARGET => {
+                NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("missing.lib"))
+            }
+            LINUX_GNU_NATIVE_TARGET => {
+                NativeLauncherBundle::linux_gnu_v1(directory.path().join("missing.a"))
+            }
+            _ => return,
+        };
+        let output = directory.path().join("preserved.exe");
+        fs::write(&output, b"existing publication").unwrap();
+        let error = link_host_object(&object, &launcher, &output).unwrap_err();
+        assert_eq!(error.debug_observations(), compile_observer_oracle());
+        assert!(error.to_string().contains("missing."), "{error}");
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(fs::read(&output).unwrap(), b"existing publication");
+    }
+
+    #[test]
+    fn native_entry_refusal_and_codegen_refusal_preserve_frontend_events() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.jett");
+        fs::write(
+            &source,
+            compile_observer_source("int64 baked = comptime observe()"),
+        )
+        .unwrap();
+        let error = emit_host_program_object_for_file(&source).unwrap_err();
+        assert_eq!(error.debug_observations(), compile_observer_oracle());
+        let NativeBuildError::Captured { source: inner, .. } = error else {
+            panic!("entry refusal should retain captures");
+        };
+        assert!(matches!(
+            *inner,
+            NativeBuildError::MissingProgramEntry { .. }
+        ));
+        fs::write(
+            &source,
+            r#"namespace app
+function observe() returns int64:
+    print("compile:")
+    return 7
+type Positive = int64 where value > 0
+function main() returns nothing:
+    int64 baked = comptime observe()
+    list[Positive] values = list()
+    Positive total = list.sum[Positive](view values)
+verify checking:
+    println("verify")
+    assert true
+"#,
+        )
+        .unwrap();
+        let error = emit_host_program_object_for_file(&source).unwrap_err();
+        assert_eq!(error.debug_observations(), compile_observer_oracle());
+        let NativeBuildError::Captured { source: inner, .. } = error else {
+            panic!("codegen refusal should retain captures");
+        };
+        let NativeBuildError::Codegen { source, .. } = *inner else {
+            panic!("expected selected refined-sum codegen boundary");
+        };
+        let jett_codegen_cranelift::CodegenError::InvalidMirContract { message, .. } = source
+        else {
+            panic!("expected invalid native sum contract");
+        };
+        assert_eq!(message, "invalid native list signature for list.__sum");
+    }
 
     #[test]
     fn installed_launcher_manifest_validates_identity_profile_and_archive_location() {

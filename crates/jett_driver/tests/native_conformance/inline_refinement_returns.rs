@@ -107,18 +107,24 @@ fn run_inline_refinement_case(
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("main.jett");
     fs::write(&source, text).unwrap();
-    match (jett_driver::run_file_capture_outcome(&source), message) {
+    let runtime_debug_events = match (jett_driver::run_file_capture_outcome(&source), message) {
         (Ok(expected), None) => {
             assert_eq!(expected.stdout, stdout, "{name}");
-            assert_eq!(expected.debug_output, debug, "{name}");
+            assert_eq!(debug_trace_lines(&expected.debug_events), debug, "{name}");
+            expected.debug_events
         }
         (Err(expected), Some(message)) => {
             assert_eq!(expected.message, message, "{name}");
             assert_eq!(expected.output.stdout, stdout, "{name}");
-            assert_eq!(expected.output.debug_output, debug, "{name}");
+            assert_eq!(
+                debug_trace_lines(&expected.output.debug_events),
+                debug,
+                "{name}"
+            );
+            expected.output.debug_events
         }
         (actual, message) => panic!("{name}: outcome {actual:?}, error {message:?}"),
-    }
+    };
     let mut binaries = Vec::new();
     for release in [false, true] {
         let binary = directory.path().join(format!("inline_{release}.exe"));
@@ -151,7 +157,7 @@ fn run_inline_refinement_case(
         let mut stderr = if release || debug.is_empty() {
             String::new()
         } else {
-            format!("{}\n", debug.join("\n"))
+            jett_driver::render_debug_events(&runtime_debug_events)
         };
         if let Some(message) = message {
             stderr.push_str(message);
