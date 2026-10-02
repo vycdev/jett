@@ -1,0 +1,26 @@
+namespace app
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+struct Envelope:
+    packet: Packet
+    stamp: int64
+function payload_count(view values: list[uint8]) returns int64:
+    return list.length(view values)
+function describe(view source: Envelope) returns string:
+    Packet projected = view source.packet
+    list[uint8] borrowed = view projected.payload
+    list[uint8] forwarded = borrowed
+    list[uint8] mixed = view source.packet.payload
+    bytes encoded = Packet.to_bytes(clone projected)
+    return "{payload_count(view forwarded)}:{payload_count(view mixed)}:{list.length(view source.packet.payload)}:{projected.version}:{source.stamp}:{bytes.to_hex(view encoded)}"
+function main(stdout: Stdout) returns nothing:
+    uint8 first = 7
+    uint8 second = 255
+    Packet packet = Packet(version: 4, flags: 0, payload: list(first, second))
+    Envelope envelope = Envelope(packet: packet, stamp: 23)
+    string observed = describe(view envelope)
+    Stdout.write(view stdout, "path:{observed}\n")
+    Stdout.write(view stdout, "owner:{envelope.packet.version}:{list.length(view envelope.packet.payload)}:{envelope.stamp}\n")
+    return nothing

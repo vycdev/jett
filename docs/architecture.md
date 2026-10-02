@@ -697,8 +697,8 @@ declaration identity in each ordinary, generic, and reflected body. HIR records
 an alias's immediate backing `LocalId`; native admission requires an immutable
 chain to an immutable owner or view parameter. A direct initializer preserves
 the same carrier and interface erasure. A projected initializer uses its existing
-finite typed `Field` nodes to prove each ordinary-struct or exact declared
-`MachineState` owner, canonical field index, intermediate type, endpoint type,
+finite typed `Field` nodes to prove each ordinary-struct, bitfield or exact
+declared `MachineState` owner, canonical field index, intermediate type, endpoint type,
 and terminating local identity. A qualified-machine step resolves the exact
 machine/state definition before indexing that state's fields. A stale state,
 foreign owner, invalid index, or different endpoint cannot supply a proof.
@@ -716,9 +716,13 @@ unreachable blocks. Generated snapshots and captured copies remain owned;
 origins from another body cannot survive as borrowed captures. MIR retains and
 remaps the backing chain, expands alias reads into whole-owner liveness, and
 excludes aliases from cleanup slots. Pending checks remain at each field access.
-The canonical machine FieldId is zero-based within the declared payload.
-Native emission adds the existing tag-slot offset when reading the payload;
-that physical offset is not stored in checked path metadata. Borrowed linear
+Bitfield steps resolve their exact declaration and read the selected
+`BitfieldFieldDef.ty` from borrowed metadata, preserving the declared semantic
+type without copying a field table. Their canonical FieldId is zero-based
+and needs no physical tag offset. The canonical machine FieldId is also
+zero-based within its declared payload; native emission alone adds the
+existing machine tag-slot offset. Neither path duplicates physical indexes
+in alias metadata. Borrowed linear
 field reads keep the existing handle, while ordinary owned reads clone it.
 Concrete generic contexts preserve their checked endpoint types and binding
 modes: implicitly copyable endpoints remain copies, while move-only aliases

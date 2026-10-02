@@ -597,6 +597,190 @@ fn local_views_validate_origins_types_and_conversion_rebuilding() {
 }
 
 #[test]
+fn bitfield_local_views_compose_with_struct_fields_and_keep_owned_controls() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+struct Envelope:
+    packet: Packet
+function inspect(view source: Packet, view envelope: Envelope) returns nothing:
+    list[uint8] direct = view source.payload
+    list[uint8] forwarded = direct
+    Packet projected_packet = view envelope.packet
+    list[uint8] projected_payload = view projected_packet.payload
+    list[uint8] mixed = view envelope.packet.payload
+    list[uint8] copied = source.payload
+    list[uint8] cloned = clone forwarded
+    int64 scalar = view source.version
+    return nothing
+function owned() returns nothing:
+    uint8 first = 7
+    uint8 second = 255
+    Packet packet = Packet(version: 4, flags: 0, payload: list(first, second))
+    list[uint8] borrowed = view packet.payload
+    list[uint8] forwarded = borrowed
+    list[uint8] independent = clone forwarded
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let inspect = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let source = local(inspect, "source");
+    let envelope = local(inspect, "envelope");
+    assert!(matches!(
+        checked.interner.resolve(source.ty),
+        Type::Bitfield(_)
+    ));
+    assert_eq!(local(inspect, "direct").view_source, Some(source.id));
+    assert_eq!(
+        local(inspect, "forwarded").view_source,
+        Some(local(inspect, "direct").id)
+    );
+    for name in ["projected_packet", "mixed"] {
+        assert_eq!(
+            local(inspect, name).view_source,
+            Some(envelope.id),
+            "{name}"
+        );
+    }
+    assert_eq!(local(inspect, "projected_packet").ty, source.ty);
+    assert_eq!(
+        local(inspect, "projected_payload").view_source,
+        Some(local(inspect, "projected_packet").id)
+    );
+    assert_eq!(
+        local_view_root(&inspect.locals, local(inspect, "projected_payload").id),
+        Some(envelope.id)
+    );
+    for name in ["copied", "cloned", "scalar"] {
+        assert_eq!(local(inspect, name).view_source, None, "{name}");
+    }
+    let owned = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "owned")
+        .unwrap();
+    assert_eq!(
+        local(owned, "borrowed").view_source,
+        Some(local(owned, "packet").id)
+    );
+    assert_eq!(
+        local(owned, "forwarded").view_source,
+        Some(local(owned, "borrowed").id)
+    );
+    assert_eq!(local(owned, "independent").view_source, None);
+}
+
+#[test]
+fn unused_bitfield_local_views_require_exact_field_and_root_proofs() {
+    let (program, mut checked) = checked_source(
+        r#"namespace app
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+bitfield network Other:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+function inspect(view source: Packet, view other: Packet, view foreign: Other) returns nothing:
+    list[uint8] unused_alias = view source.payload
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let function = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let source = local(function, "source").id;
+    let other = local(function, "other").id;
+    let foreign_type = local(function, "foreign").ty;
+    let alias = local(function, "unused_alias").id;
+    let different_items = checked.interner.intern(Type::List(TypeInterner::STRING));
+    for (invalid, expected) in [
+        ("field index", "invalid field index"),
+        ("numeric field", "invalid field endpoint type"),
+        ("field endpoint", "invalid field endpoint type"),
+        ("field owner", "invalid field owner"),
+        ("source identity", "stable backing local"),
+        ("source type", "stable backing local"),
+        ("foreign bitfield", "stable backing local"),
+        ("orphan", "no validated initializer"),
+    ] {
+        let mut forged = program.clone();
+        let function = forged
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        if invalid == "orphan" {
+            function.body.statements.remove(0);
+        } else {
+            if invalid == "source type" {
+                function.locals[source.index() as usize].ty = foreign_type;
+            }
+            if invalid == "field endpoint" {
+                function.locals[alias.index() as usize].ty = different_items;
+            }
+            let StatementKind::Let { value, .. } = &mut function.body.statements[0].kind else {
+                panic!("unused bitfield alias initializer");
+            };
+            if invalid == "field endpoint" {
+                value.ty = different_items;
+            }
+            let ExpressionKind::View(projection) = &mut value.kind else {
+                panic!("explicit field view");
+            };
+            if invalid == "field endpoint" {
+                projection.ty = different_items;
+            }
+            let ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } = &mut projection.kind
+            else {
+                panic!("checked bitfield field projection");
+            };
+            if invalid == "field owner" {
+                *owner_type = foreign_type;
+            }
+            if invalid == "foreign bitfield" {
+                *owner_type = foreign_type;
+                base.ty = foreign_type;
+            }
+            if invalid == "field index" {
+                *field = FieldId(u32::MAX);
+            }
+            if invalid == "numeric field" {
+                *field = FieldId(0);
+            }
+            if invalid == "source identity" {
+                base.kind = ExpressionKind::Local(other);
+            }
+        }
+        let errors = validate_backend_types(&forged, &checked.interner).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "{invalid}: {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn qualified_machine_local_views_compose_with_struct_fields_and_exact_qualifications() {
     let (program, checked) = checked_source(
         r#"namespace app

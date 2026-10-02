@@ -1,0 +1,15 @@
+namespace app
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+function main(stdout: Stdout) returns nothing:
+    uint8 first = 7
+    uint8 second = 255
+    Packet packet = run run Packet(version: 4, flags: 0, payload: list(first, second))
+    Stdout.write(view stdout, "before:whole\n")
+    list[uint8] borrowed = view packet.payload
+    Stdout.write(view stdout, "after:borrow\n")
+    list[uint8] forwarded = borrowed
+    Stdout.write(view stdout, "after:length:{list.length[uint8](view forwarded)}\n")
+    return nothing

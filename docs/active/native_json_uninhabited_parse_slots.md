@@ -124,10 +124,12 @@ the real trusted stdlib decoder, separately from the metadata unit's stub.
 All 19 new Jett format checks pass in the structured
 `target/native-json-inferred-parse-format.log`; Rust format and diff checks also
 pass. The corpus now registers 425 supplemental tests; this is separate from
-the executed 19-test focused gate. The coherent 425-test frozen workspace,
-final object obligations and all four supported-host jobs remain pending.
-Do not substitute the accepted 05494ed4 serializer revision or registered
-counts for current-head workspace/platform evidence.
+the executed 19-test focused gate. The coherent 08f9f7e7 parser workspace
+subsequently passes all 425 native tests, 182 object obligations and remaining
+workspace/doc-tests with unchanged source and clean start/end. Exact logs and
+counts are centralized in [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
+Its all-four-job supported-host result remains pending. This local parser
+acceptance does not establish later bitfield workspace/platform acceptance.
 
 The initial focused-unit log selected zero tests and is not accepted evidence;
 the applied-unit log above records the actual pass. The source application

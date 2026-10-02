@@ -206,24 +206,33 @@ pub fn validate_local_view_initializer(
                 if owner_type.index() as usize >= types.len() || base.ty != *owner_type {
                     return Err("native borrowed projection has an invalid field owner");
                 }
-                let fields = match types.resolve(*owner_type) {
-                    Type::Struct(struct_id) => &types.resolve_struct(*struct_id).fields,
+                let field_type = match types.resolve(*owner_type) {
+                    Type::Struct(struct_id) => types
+                        .resolve_struct(*struct_id)
+                        .fields
+                        .get(field.index() as usize)
+                        .map(|(_, ty)| *ty),
+                    Type::Bitfield(bitfield_id) => types
+                        .resolve_bitfield(*bitfield_id)
+                        .fields
+                        .get(field.index() as usize)
+                        .map(|field| field.ty),
                     Type::MachineState { machine, state } => {
                         let Some(state) = types.resolve_machine(*machine).state(*state) else {
                             return Err("native borrowed projection has an invalid machine state");
                         };
-                        &state.fields
+                        state.fields.get(field.index() as usize).map(|(_, ty)| *ty)
                     }
                     _ => {
                         return Err(
-                            "native borrowed projection requires ordinary struct or state-qualified machine fields",
+                            "native borrowed projection requires ordinary struct, bitfield or state-qualified machine fields",
                         );
                     }
                 };
-                let Some((_, field_type)) = fields.get(field.index() as usize) else {
+                let Some(field_type) = field_type else {
                     return Err("native borrowed projection has an invalid field index");
                 };
-                if value.ty != *field_type {
+                if value.ty != field_type {
                     return Err("native borrowed projection has an invalid field endpoint type");
                 }
                 value = base;

@@ -2018,10 +2018,32 @@ linked cases now pass together in both profiles after source removal; the
 crossed compiler gate passes 949 tests, followed by 83 driver library tests,
 all 598 frontend fixtures and all 19 new source format checks. The corpus
 registers 425 supplemental tests, separate from this executed focused gate.
-Current-head complete workspace/object and supported-host acceptance remain
-pending. The scoped
+The parser revision 08f9f7e7 subsequently passes its complete frozen
+425-test workspace and all 182 object obligations; its supported-host workflow
+still requires a terminal all-four-job result. Exact accepted-head evidence is
+centralized in [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up). The scoped
 evidence and acceptance requirements are in
 [the parser contract](native_json_uninhabited_parse_slots.md). This follow-up
 does not increase the broad about-85% estimate, change the fixed 207 inventory,
-or narrow the whole-language 100% objective. The bitfield alias candidate remains
-an independent later change.
+or narrow the whole-language 100% objective.
+
+
+### Bitfield field local views: bounded follow-up
+
+The existing readonly field rule now has a declaration-backed Bitfield step in
+the native initializer proof. Exact field identity/type, source/owner anchoring,
+qualification, immutable loans and non-owning cleanup remain unchanged. Existing
+numeric copies, owned field copies, explicit clones and pending checks retain
+their behavior; no new ABI, payload shape or lifetime rule is introduced.
+
+Both focused HIR tests and all seven new linked cases pass. The latter execute
+both matching runtime profiles after source deletion and preserve exact output,
+owner rereads, empty payloads, pending-owner failure and ordered copy-join traces.
+The crossed compiler gate passes 951 library tests, followed by all 83 driver
+library tests, 598 frontend fixtures and seven source-format checks. The corpus
+registers 432 tests. Complete new-head workspace/object obligations and
+supported-host acceptance remain pending. Required proof, pre-change captures and exact executed logs are
+in [the bitfield contract](native_bitfield_projected_local_views.md) and
+[the acceptance audit](native_acceptance_audit.md#bitfield-field-local-views-focused-acceptance).
+The broad estimate stays about 85%, the fixed inventory stays 207, and the
+whole-language objective remains 100%.

@@ -236,6 +236,31 @@ acceptance does not validate later inferred JSON changes or establish full-langu
 planning estimate and fixed 207-fixture denominator remain unchanged.
 
 
+## Bitfield field follow-up
+
+The exact declared Bitfield owner now participates in the existing finite Field
+initializer proof. Canonical zero-based identity and declared field type are
+checked alongside the unchanged source, owner and endpoint proof. Struct-to-
+bitfield paths, whole-bitfield aliases, view parameters and forwarding retain
+the same immutable backing chain. Pending field checks, numeric copies, owned
+field copies, explicit clones and non-owning alias cleanup remain unchanged.
+
+Both focused HIR tests pass, including unused forged owner/index/endpoint/root
+and orphan metadata. All seven linked cases pass together (3.89 seconds, 425
+filtered), executing matching debug/release profiles after source removal.
+These include exact no-LF output, owner rereads, empty payloads, whole pending
+owner failure and five ordered payload-copy traces. The current corpus registers
+432 tests. The crossed compiler gate passes 951 library tests, followed by all
+83 driver library tests, 598 frontend fixtures and seven source-format checks.
+New full-workspace and supported-host acceptance remain pending.
+
+The accepted 08f9f7e7 parser predecessor and the bounded bitfield evidence are
+recorded in [the acceptance audit](native_acceptance_audit.md#bitfield-field-local-views-focused-acceptance)
+and [the bitfield contract](native_bitfield_projected_local_views.md). This
+repair selects no mutable or temporary view, owner-change, capture-escape,
+projected-write or loan-expiry policy and makes no claim for later repairs.
+
+
 ## Boundaries requiring a contract
 
 The existing [projected assignment note](../open_design/projected_field_assignment.md)

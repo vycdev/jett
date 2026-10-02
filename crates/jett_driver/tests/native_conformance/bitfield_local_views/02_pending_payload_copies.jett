@@ -1,0 +1,31 @@
+namespace app
+bitfield network Packet:
+    version: 4 bits
+    flags: 4 bits
+    payload: list[uint8]
+function ready_payload(view packet: Packet) returns result[list[uint8], string]:
+    list[uint8] borrowed = view packet.payload
+    list[uint8] forwarded = borrowed
+    trace forwarded
+    list[uint8] once = join clone forwarded handle error:
+        return fail(error)
+    trace once
+    list[uint8] ready = join once handle error:
+        return fail(error)
+    return ok(ready)
+function main(stdout: Stdout) returns nothing:
+    uint8 first = 7
+    uint8 second = 255
+    uint8 added = 9
+    Packet packet = Packet(version: 4, flags: 0, payload: run run list(first, second))
+    Stdout.write(view stdout, "before:payload\n")
+    list[uint8] ready_copy = ready_payload(view packet) handle error:
+        Stdout.write(view stdout, "join-error:{error}\n")
+        return nothing
+    list[uint8] original_again = ready_payload(view packet) handle error:
+        Stdout.write(view stdout, "join-error:{error}\n")
+        return nothing
+    list[uint8] expanded = list.append[uint8](ready_copy, added)
+    trace packet
+    Stdout.write(view stdout, "items:{list.length[uint8](view expanded)}:{list.length[uint8](view original_again)}\n")
+    return nothing

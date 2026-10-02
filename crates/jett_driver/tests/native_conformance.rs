@@ -90,6 +90,9 @@ mod json_inferred_slots;
 #[path = "native_conformance/json_inferred_parse_slots.rs"]
 mod json_inferred_parse_slots;
 
+#[path = "native_conformance/bitfield_local_views.rs"]
+mod bitfield_local_views;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

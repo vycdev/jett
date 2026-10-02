@@ -1536,10 +1536,48 @@ valid, occupied-slot and malformed-input lines in both profiles after source
 removal. The metadata unit passes once; the crossed library gate passes 949
 tests, followed by 83 driver library tests, all 598 frontend fixtures and all
 19 new source format checks.
-The corpus now registers 425 supplemental tests. The current-head complete
-frozen workspace/object obligations and all four
-supported-host jobs remain pending; earlier serializer acceptance does not
-validate this revision. Exact source behavior, logs and remaining gates are in
-[the parser contract](native_json_uninhabited_parse_slots.md). The unchanged objective
-is whole-language native parity; the about-85% planning estimate and fixed
-207-fixture denominator do not measure completion of these focused slices.
+The parser revision `08f9f7e7` passes its complete frozen workspace with
+unchanged head, clean start/end and exit zero at
+`2026-10-02T19:49:44.2598850Z`, recorded in
+`target/native-workspace-08f9f7e7.log` and its JSON summary: all 425 native
+tests (878.50 seconds), all 182 object obligations (four-test manifest gate,
+506.38 seconds), 83 driver library tests (70.43 seconds), all 598 frontend
+fixtures (21.95 seconds), remaining workspace targets and doc-tests. Its
+[workflow 37053539878](https://github.com/vycdev/jett/actions/runs/37053539878)
+still requires a terminal all-four-job result. This accepted local predecessor
+does not validate the later bitfield source changes. Exact parser behavior
+and focused logs are in [the parser contract](native_json_uninhabited_parse_slots.md).
+The objective remains whole-language native parity; the about-85% planning
+estimate and fixed 207-fixture denominator do not measure completion of
+these focused slices.
+
+
+### Bitfield field local views: focused acceptance
+
+The declaration-backed Bitfield Field step now preserves exact semantic field
+type, canonical zero-based identity and the existing immutable root/path proof.
+No MIR, runtime ABI, payload schema or lifetime policy changes are required.
+Both focused HIR tests pass (134 filtered) in
+`target/native-bitfield-local-view-hir.log`. All seven new linked cases pass
+together in 3.89 seconds (425 filtered) in
+`target/native-bitfield-local-view-linked.log`, using matching profiles and
+source removal with exact application bytes, status, stderr and typed traces.
+Pending whole-owner access fails before the after-binding marker with status
+71; cleanup status 72 cannot pass. Explicit payload-copy joins preserve the
+original depth-two payload, and release omits trace events.
+
+The crossed compiler gate passes 951 library tests (41 codegen, 416 comptime,
+136 HIR, 86 MIR, 48 resolve and 224 typecheck) in
+`target/native-bitfield-local-view-phases.log`. All 83 driver library tests pass
+(86.96 seconds) in `target/native-bitfield-local-view-driver.log`, and all 598
+frontend fixtures pass (21.88 seconds) in
+`target/native-bitfield-local-view-frontend.log`. All seven new source-format
+checks pass in `target/native-bitfield-local-view-format.json`; Rust formatting
+and diff checks pass.
+
+The corpus registers 432 supplemental tests. New complete-workspace acceptance,
+182 object obligations and supported-host jobs remain pending. Initial source characterization,
+exact qualification/ownership limits and required gates are in
+[the bitfield contract](native_bitfield_projected_local_views.md). The accepted
+08f9f7e7 result above is predecessor evidence, not new-head acceptance. The
+about-85% coarse estimate and fixed 207 inventory remain unchanged.

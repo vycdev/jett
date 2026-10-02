@@ -5816,9 +5816,9 @@ use an explicit clone to acquire ownership. Copyable values retain implicit
 copying.
 
 Native lowering supports direct and forwarded immutable local views with a
-stable immutable local or view-parameter origin, including finite ordinary-struct
-and exactly state-qualified machine field paths rooted in that origin. Each
-field step preserves its checked owner,
+stable immutable local or view-parameter origin, including finite ordinary-struct,
+bitfield and exactly state-qualified machine field paths rooted in that origin.
+Each field step preserves its checked owner,
 field identity, and endpoint type. The endpoint's existing secret, refinement,
 or interface identity is not erased to establish the path. Bytes and lists are
 examples of this rule, not an endpoint-type allowlist.
@@ -5835,6 +5835,14 @@ The bounded native proof continues to refuse transition, consumption, or
 rebinding of an owner after a reachable alias has been created. Nominal
 refinement and secrecy qualification retain the same proof requirements
 as ordinary-struct views.
+
+A declared bitfield participates in the same read-only path rule. Its native
+proof resolves the exact bitfield declaration and canonical zero-based field
+identity, then preserves the declared semantic field type. This includes the
+existing final `list[uint8]` payload; numeric fields retain their implicit-copy
+behavior. Ordinary structs, bitfields and exact-state machines can be
+intermediate owners. This adds no payload shape, hidden owner, implicit clone
+or lifetime rule; see the [bitfield contract](active/native_bitfield_projected_local_views.md).
 
 The original owner remains live for dependent reads; projected and forwarded
 aliases are non-owning and carry no cleanup obligation. Explicit clones acquire
