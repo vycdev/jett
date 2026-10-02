@@ -1918,3 +1918,24 @@ workspace checkpoint above contains 346. Wrong-state wrapper diagnostics,
 deeper combinations, aliases, secrets, pending values, and independent language
 contracts remain open audit work. The broad 85% estimate and 207-fixture
 inventory denominator remain unchanged.
+
+### Stable ordinary-struct field local views
+
+Immutable local/view-parameter field aliases now preserve the checked immediate
+binding origin. Their existing typed initializer proves each ordinary-struct
+owner, field, endpoint, and source-local identity before native compaction.
+Owner liveness and non-owning cleanup storage remain unchanged. Conversion
+proofs preserve nominal refinements, allowing only existing explicit ancestors,
+exact secret declassification, and harmless outer secret promotion.
+
+All 896 compiler-phase library tests and all 12 local-alias driver tests pass
+on the final integrated source. The latter include eight new linked cases with
+matching debug/release archives, source removal, independent clones, and later
+argument-failure cleanup; the corpus registers 378 tests. Exact logs and scope
+are in [the local-view note](native_local_view_aliases.md). These focused gates
+do not replace complete frozen workspace and supported-host acceptance.
+
+A qualified-machine field alias independently passes frontend/reference
+execution and fails the ordinary-struct native origin proof. Mutable/temporary
+roots and unresolved lifetime decisions also remain separate obligations. The
+broad estimate stays about 85%; the fixed inventory remains 207 fixtures.

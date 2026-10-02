@@ -6,12 +6,14 @@ use crate::{
     FunctionId, FunctionIdentity, Local, LocalId, Param, ParamMode, StatementKind, StringSegment,
 };
 use jett_types::{Type, TypeInterner};
+use std::collections::HashSet;
 
 pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &TypeInterner) {
     let mut extractor = Extractor {
         types,
         next_id: functions.len() as u32,
         pending: Vec::new(),
+        detached_aliases: HashSet::new(),
     };
     let mut index = 0;
     while index < functions.len() {
@@ -20,7 +22,15 @@ pub(super) fn extract_inline_functions(functions: &mut Vec<Function>, types: &Ty
             identity: &function.identity,
             locals: &function.locals,
         };
+        extractor.detached_aliases.clear();
         extractor.block(&mut function.body, &parent);
+        // Only bodies actually transferred into extracted functions can leave
+        // stale origins here. Arbitrary orphan metadata must remain an error.
+        for &alias in &extractor.detached_aliases {
+            if !block_mentions_local(&function.body, alias.index(), true) {
+                function.locals[alias.index() as usize].view_source = None;
+            }
+        }
         functions.append(&mut extractor.pending);
         index += 1;
     }
@@ -35,6 +45,7 @@ struct Extractor<'a> {
     types: &'a TypeInterner,
     next_id: u32,
     pending: Vec<Function>,
+    detached_aliases: HashSet<LocalId>,
 }
 
 impl Extractor<'_> {
@@ -180,10 +191,26 @@ impl Extractor<'_> {
                 parent.identity.declaration.name, expression.span.start, expression.span.end
             );
             let mut locals = parent.locals.to_vec();
+            self.detached_aliases
+                .extend(parent.locals.iter().filter_map(|local| {
+                    (local.view_source.is_some()
+                        && local.id.index() >= *local_floor
+                        && block_mentions_local(body, local.id.index(), true))
+                    .then_some(local.id)
+                }));
             // Captures are independent owned environment entries. Their local
             // metadata must not retain an origin in the enclosing function.
             for capture in &captures {
                 locals[capture.index() as usize].view_source = None;
+            }
+            // The copied dense table includes parent and sibling bodies. Their
+            // origins do not belong to this newly created function context.
+            for local in &mut locals {
+                if local.view_source.is_some()
+                    && !block_mentions_local(body, local.id.index(), true)
+                {
+                    local.view_source = None;
+                }
             }
             self.pending.push(Function {
                 id,
@@ -329,72 +356,90 @@ impl Extractor<'_> {
 }
 
 fn block_uses_local(block: &Block, target: u32) -> bool {
+    block_mentions_local(block, target, false)
+}
+
+fn block_mentions_local(block: &Block, target: u32, include_bindings: bool) -> bool {
     block
         .statements
         .iter()
         .any(|statement| match &statement.kind {
-            StatementKind::Let { value, .. }
-            | StatementKind::HandleDefault(value)
+            StatementKind::Let { local, value } => {
+                (include_bindings && local.index() == target)
+                    || expression_mentions_local(value, target, include_bindings)
+            }
+            StatementKind::HandleDefault(value)
             | StatementKind::Expression(value)
-            | StatementKind::Respond(value) => expression_uses_local(value, target),
+            | StatementKind::Respond(value) => {
+                expression_mentions_local(value, target, include_bindings)
+            }
             StatementKind::Assign {
                 target: place,
                 value,
-            } => expression_uses_local(place, target) || expression_uses_local(value, target),
+            } => {
+                expression_mentions_local(place, target, include_bindings)
+                    || expression_mentions_local(value, target, include_bindings)
+            }
             StatementKind::Return(value) => value
                 .as_ref()
-                .is_some_and(|value| expression_uses_local(value, target)),
+                .is_some_and(|value| expression_mentions_local(value, target, include_bindings)),
             StatementKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                expression_uses_local(condition, target)
-                    || block_uses_local(then_block, target)
+                expression_mentions_local(condition, target, include_bindings)
+                    || block_mentions_local(then_block, target, include_bindings)
                     || else_block
                         .as_ref()
-                        .is_some_and(|block| block_uses_local(block, target))
+                        .is_some_and(|block| block_mentions_local(block, target, include_bindings))
             }
             StatementKind::While { condition, body } => {
-                expression_uses_local(condition, target) || block_uses_local(body, target)
+                expression_mentions_local(condition, target, include_bindings)
+                    || block_mentions_local(body, target, include_bindings)
             }
             StatementKind::For { iterable, body, .. } => {
-                expression_uses_local(iterable, target) || block_uses_local(body, target)
+                expression_mentions_local(iterable, target, include_bindings)
+                    || block_mentions_local(body, target, include_bindings)
             }
             StatementKind::Match { scrutinee, arms } => {
-                expression_uses_local(scrutinee, target)
-                    || arms.iter().any(|arm| block_uses_local(&arm.body, target))
+                expression_mentions_local(scrutinee, target, include_bindings)
+                    || arms
+                        .iter()
+                        .any(|arm| block_mentions_local(&arm.body, target, include_bindings))
             }
             StatementKind::Assert { condition, message } => {
-                expression_uses_local(condition, target)
-                    || message
-                        .as_ref()
-                        .is_some_and(|message| expression_uses_local(message, target))
+                expression_mentions_local(condition, target, include_bindings)
+                    || message.as_ref().is_some_and(|message| {
+                        expression_mentions_local(message, target, include_bindings)
+                    })
             }
             StatementKind::Trace(local) => local.index() == target,
             StatementKind::Breakpoint {
                 condition,
                 bindings,
             } => {
-                condition
-                    .as_ref()
-                    .is_some_and(|condition| expression_uses_local(condition, target))
-                    || bindings.iter().any(|binding| binding.index() == target)
+                condition.as_ref().is_some_and(|condition| {
+                    expression_mentions_local(condition, target, include_bindings)
+                }) || bindings.iter().any(|binding| binding.index() == target)
             }
-            StatementKind::Scope(body) => block_uses_local(body, target),
+            StatementKind::Scope(body) => block_mentions_local(body, target, include_bindings),
             StatementKind::ReflectedTypeDispatch { type_info, arms } => {
-                expression_uses_local(type_info, target)
-                    || arms.iter().any(|arm| block_uses_local(&arm.body, target))
+                expression_mentions_local(type_info, target, include_bindings)
+                    || arms
+                        .iter()
+                        .any(|arm| block_mentions_local(&arm.body, target, include_bindings))
             }
             StatementKind::Break | StatementKind::Continue => false,
         })
 }
 
-fn expression_uses_local(expression: &Expression, target: u32) -> bool {
+fn expression_mentions_local(expression: &Expression, target: u32, include_bindings: bool) -> bool {
     match &expression.kind {
         ExpressionKind::Local(local) => local.index() == target,
         ExpressionKind::Binary { left, right, .. } => {
-            expression_uses_local(left, target) || expression_uses_local(right, target)
+            expression_mentions_local(left, target, include_bindings)
+                || expression_mentions_local(right, target, include_bindings)
         }
         ExpressionKind::Unary { value, .. }
         | ExpressionKind::ResultOk(value)
@@ -416,54 +461,68 @@ fn expression_uses_local(expression: &Expression, target: u32) -> bool {
         | ExpressionKind::Cancel(value)
         | ExpressionKind::Field { base: value, .. }
         | ExpressionKind::View(value)
-        | ExpressionKind::Clone(value) => expression_uses_local(value, target),
+        | ExpressionKind::Clone(value) => {
+            expression_mentions_local(value, target, include_bindings)
+        }
         ExpressionKind::Call { args, .. }
         | ExpressionKind::Intrinsic { args, .. }
-        | ExpressionKind::ActorSpawn { args, .. } => {
-            args.iter().any(|arg| expression_uses_local(arg, target))
-        }
+        | ExpressionKind::ActorSpawn { args, .. } => args
+            .iter()
+            .any(|arg| expression_mentions_local(arg, target, include_bindings)),
         ExpressionKind::IndirectCall { callee, args, .. } => {
-            expression_uses_local(callee, target)
-                || args.iter().any(|arg| expression_uses_local(arg, target))
+            expression_mentions_local(callee, target, include_bindings)
+                || args
+                    .iter()
+                    .any(|arg| expression_mentions_local(arg, target, include_bindings))
         }
         ExpressionKind::StructConstruct { fields, .. }
         | ExpressionKind::BitfieldConstruct { fields, .. } => fields
             .iter()
-            .any(|field| expression_uses_local(field, target)),
+            .any(|field| expression_mentions_local(field, target, include_bindings)),
         ExpressionKind::MachineConstruct { payloads, .. }
         | ExpressionKind::EnumConstruct { payloads, .. } => payloads
             .iter()
-            .any(|payload| expression_uses_local(payload, target)),
+            .any(|payload| expression_mentions_local(payload, target, include_bindings)),
         ExpressionKind::MachineTransition {
             source, payloads, ..
         } => {
-            expression_uses_local(source, target)
+            expression_mentions_local(source, target, include_bindings)
                 || payloads
                     .iter()
-                    .any(|payload| expression_uses_local(payload, target))
+                    .any(|payload| expression_mentions_local(payload, target, include_bindings))
         }
         ExpressionKind::ListConstruct { elements } => elements
             .iter()
-            .any(|element| expression_uses_local(element, target)),
+            .any(|element| expression_mentions_local(element, target, include_bindings)),
         ExpressionKind::MapConstruct { entries } => entries.iter().any(|entry| {
-            expression_uses_local(&entry.key, target) || expression_uses_local(&entry.value, target)
+            expression_mentions_local(&entry.key, target, include_bindings)
+                || expression_mentions_local(&entry.value, target, include_bindings)
         }),
         ExpressionKind::Handle {
             target: handled,
             failure,
             ..
-        } => expression_uses_local(handled, target) || block_uses_local(failure, target),
+        } => {
+            expression_mentions_local(handled, target, include_bindings)
+                || block_mentions_local(failure, target, include_bindings)
+        }
         ExpressionKind::StringInterpolation(parts) => parts.iter().any(|part| match part {
             StringSegment::Text(_) => false,
-            StringSegment::Value(value) => expression_uses_local(value, target),
+            StringSegment::Value(value) => {
+                expression_mentions_local(value, target, include_bindings)
+            }
         }),
-        ExpressionKind::InlineFunction { body, .. } => block_uses_local(body, target),
+        ExpressionKind::InlineFunction { body, .. } => {
+            block_mentions_local(body, target, include_bindings)
+        }
         ExpressionKind::ClosureRef { captures, .. } => {
             captures.iter().any(|local| local.index() == target)
         }
         ExpressionKind::ActorMessage { actor, args, .. } => {
-            expression_uses_local(actor, target)
-                || args.iter().any(|arg| expression_uses_local(arg, target))
+            expression_mentions_local(actor, target, include_bindings)
+                || args
+                    .iter()
+                    .any(|arg| expression_mentions_local(arg, target, include_bindings))
         }
         ExpressionKind::Int(_)
         | ExpressionKind::Constant { .. }

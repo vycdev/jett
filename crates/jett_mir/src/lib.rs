@@ -1178,8 +1178,18 @@ impl<'a> Builder<'a> {
             hir::StatementKind::Let { local, value } => {
                 let value = if let Some(metadata) = self.locals.get(local.index() as usize)
                     && let Some(source) = metadata.view_source
-                    && hir::validate_local_view_initializer(value, source, metadata.ty, self.types)
-                        .is_ok()
+                    && let Some(origin) = self
+                        .locals
+                        .get(source.index() as usize)
+                        .filter(|origin| origin.id == source)
+                    && hir::validate_local_view_initializer(
+                        value,
+                        source,
+                        origin.ty,
+                        metadata.ty,
+                        self.types,
+                    )
+                    .is_ok()
                 {
                     // Stable aliases contain only transparent reads. Taking an
                     // owned snapshot would replace their checked backing local.

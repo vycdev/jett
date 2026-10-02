@@ -75,8 +75,10 @@ pub(super) fn validate_structure(function: &Function) -> Vec<ValidationError> {
     errors
 }
 
-/// Validate alias metadata after transformations or LocalId remapping. Full
-/// backend type validation additionally checks each alias initializer.
+/// Validate dependency metadata after transformations or LocalId remapping.
+/// Full backend validation proves each alias's typed initializer and rejects
+/// borrowed metadata without an initializer. A projected endpoint can differ
+/// from the type of its whole backing local.
 pub fn validate_local_views(
     program: &Program,
     types: &TypeInterner,
@@ -92,19 +94,6 @@ pub fn validate_local_views(
                 errors.push(ValidationError {
                     span: local.span,
                     message: "implicitly copyable locals cannot carry a borrowed alias origin"
-                        .into(),
-                });
-            }
-            let Some(source) = local
-                .view_source
-                .and_then(|source| function.locals.get(source.index() as usize))
-            else {
-                continue;
-            };
-            if !same_backing_type(types, local.ty, source.ty) {
-                errors.push(ValidationError {
-                    span: local.span,
-                    message: "native borrowed alias cannot change its backing representation"
                         .into(),
                 });
             }
@@ -152,24 +141,115 @@ fn same_backing_type(types: &TypeInterner, left: TypeId, right: TypeId) -> bool 
         && erased_interface(types, left) == erased_interface(types, right)
 }
 
+/// Secrecy can be added without acquiring a new nominal predicate proof.
+fn secret_promotion(types: &TypeInterner, source: TypeId, mut target: TypeId) -> bool {
+    if source.index() as usize >= types.len() {
+        return false;
+    }
+    for _ in 0..types.len() {
+        if target.index() as usize >= types.len() {
+            return false;
+        }
+        if source == target {
+            return true;
+        }
+        let Type::Secret(inner) = types.resolve(target) else {
+            return false;
+        };
+        target = *inner;
+    }
+    false
+}
+
+fn refinement_ancestor(types: &TypeInterner, mut source: TypeId, target: TypeId) -> bool {
+    for _ in 0..types.len() {
+        if source.index() as usize >= types.len() {
+            return false;
+        }
+        let Type::Refinement { base, .. } = types.resolve(source) else {
+            return false;
+        };
+        source = *base;
+        if source == target {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn validate_local_view_initializer(
     value: &Expression,
     source: LocalId,
+    source_type: TypeId,
     target: TypeId,
     types: &TypeInterner,
 ) -> Result<(), &'static str> {
     if !same_backing_type(types, value.ty, target) {
         return Err("native borrowed alias cannot change its backing representation");
     }
+    if !secret_promotion(types, value.ty, target) {
+        return Err("native borrowed alias cannot introduce or discard a nominal refinement");
+    }
     let mut value = value;
     loop {
         match &value.kind {
-            ExpressionKind::Local(id) if *id == source => return Ok(()),
-            ExpressionKind::View(inner)
-            | ExpressionKind::Coarsen(inner)
-            | ExpressionKind::Declassify(inner) => {
+            ExpressionKind::Local(id)
+                if *id == source && secret_promotion(types, source_type, value.ty) =>
+            {
+                return Ok(());
+            }
+            ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } => {
+                if owner_type.index() as usize >= types.len() || base.ty != *owner_type {
+                    return Err("native borrowed projection has an invalid field owner");
+                }
+                let Type::Struct(struct_id) = types.resolve(*owner_type) else {
+                    return Err("native borrowed projection requires ordinary struct fields");
+                };
+                let Some((_, field_type)) = types
+                    .resolve_struct(*struct_id)
+                    .fields
+                    .get(field.index() as usize)
+                else {
+                    return Err("native borrowed projection has an invalid field index");
+                };
+                if value.ty != *field_type {
+                    return Err("native borrowed projection has an invalid field endpoint type");
+                }
+                value = base;
+            }
+            ExpressionKind::View(inner) => {
                 if !same_backing_type(types, value.ty, inner.ty) {
                     return Err("native borrowed alias cannot change its backing representation");
+                }
+                if !secret_promotion(types, inner.ty, value.ty) {
+                    return Err(
+                        "native borrowed alias cannot introduce or discard a nominal refinement",
+                    );
+                }
+                value = inner;
+            }
+            ExpressionKind::Coarsen(inner) => {
+                if !same_backing_type(types, value.ty, inner.ty)
+                    || !refinement_ancestor(types, inner.ty, value.ty)
+                {
+                    return Err(
+                        "native borrowed alias coarsen requires an existing refinement ancestor",
+                    );
+                }
+                value = inner;
+            }
+            ExpressionKind::Declassify(inner) => {
+                if !same_backing_type(types, value.ty, inner.ty)
+                    || inner.ty.index() as usize >= types.len()
+                    || !matches!(types.resolve(inner.ty), Type::Secret(payload) if *payload == value.ty)
+                {
+                    return Err(
+                        "native borrowed alias declassification requires the exact secret inner type",
+                    );
                 }
                 value = inner;
             }
@@ -180,6 +260,11 @@ pub fn validate_local_view_initializer(
                 if !same_backing_type(types, value.ty, inner.ty) {
                     return Err(
                         "native borrowed alias cannot allocate an interface or container conversion",
+                    );
+                }
+                if !secret_promotion(types, inner.ty, value.ty) {
+                    return Err(
+                        "native borrowed alias conversion cannot introduce or discard a nominal refinement",
                     );
                 }
                 value = inner;

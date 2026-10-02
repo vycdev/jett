@@ -145,9 +145,10 @@ pub enum CheckedBindingMode {
 /// Immediate source of a checked borrowed initializer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckedViewSource {
-    /// Session-local resolver identity; forwarded aliases are not flattened.
+    /// Session-local backing binding; forwarded aliases are not flattened.
+    /// A projected initializer retains its typed field path in HIR.
     Binding(DefId),
-    /// A temporary, projection, or another expression without a direct binding.
+    /// A temporary or another expression without a stable binding root.
     Other,
 }
 
@@ -9363,13 +9364,10 @@ impl<'a> TypeChecker<'a> {
         if !explicit_view && matches!(value, Expr::Clone(_, _) | Expr::FieldAccess(_, _, _)) {
             return CheckedBindingMode::Owned;
         }
-        let source = match value {
-            Expr::Ident(ident) => self
-                .ident_def_id(ident)
-                .map(CheckedViewSource::Binding)
-                .unwrap_or(CheckedViewSource::Other),
-            _ => CheckedViewSource::Other,
-        };
+        let source = Self::assignment_root(value)
+            .and_then(|ident| self.ident_def_id(ident))
+            .map(CheckedViewSource::Binding)
+            .unwrap_or(CheckedViewSource::Other);
         CheckedBindingMode::View { source }
     }
 
@@ -16268,6 +16266,8 @@ function preserve(raw: string) returns string:
     fn checked_binding_modes_keep_immediate_sources_and_owned_copies() {
         let source = r#"struct Holder:
     items: list[int64]
+function temporary_holder() returns Holder:
+    return Holder(items: list(1))
 function inspect(view values: list[int64], view holder: Holder) returns nothing:
     list[int64] borrowed = view values
     list[int64] forwarded = ((borrowed))
@@ -16275,6 +16275,7 @@ function inspect(view values: list[int64], view holder: Holder) returns nothing:
     list[int64] projected = holder.items
     list[int64] projected_view = view holder.items
     list[int64] temporary = view list(1)
+    list[int64] temporary_projection = view temporary_holder().items
     return nothing
 "#;
         let parsed = parse(source, FileId::new(0));
@@ -16297,7 +16298,7 @@ function inspect(view values: list[int64], view holder: Holder) returns nothing:
             "{:?}",
             checked.diagnostics
         );
-        assert_eq!(checked.binding_modes.len(), 6);
+        assert_eq!(checked.binding_modes.len(), 7);
         let (borrowed_span, borrowed) =
             binding_mode_named(&checked.binding_modes, source, "borrowed");
         let CheckedBindingMode::View {
@@ -16327,7 +16328,18 @@ function inspect(view values: list[int64], view holder: Holder) returns nothing:
                 "{name}"
             );
         }
-        for name in ["projected_view", "temporary"] {
+        let CheckedBindingMode::View {
+            source: CheckedViewSource::Binding(projected_root),
+        } = binding_mode_named(&checked.binding_modes, source, "projected_view").1
+        else {
+            panic!("expected a stable projected binding view");
+        };
+        assert_eq!(resolved.scope_table.def(projected_root).name, "holder");
+        assert_eq!(
+            resolved.scope_table.def(projected_root).kind,
+            DefKind::Param
+        );
+        for name in ["temporary", "temporary_projection"] {
             assert_eq!(
                 binding_mode_named(&checked.binding_modes, source, name).1,
                 CheckedBindingMode::View {
@@ -16336,6 +16348,22 @@ function inspect(view values: list[int64], view holder: Holder) returns nothing:
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn projected_local_view_aliases_remain_ineligible_for_closure_capture() {
+        let errors = check_source_errors(
+            r#"struct Packet:
+    data: list[int64]
+function inspect(view source: Packet) returns nothing:
+    list[int64] borrowed = view source.data
+    function() returns list[int64] callback = function() returns list[int64]: return clone borrowed
+    return nothing
+"#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].code.code(), 402);
+        assert!(errors[0].message.contains("borrowed"));
     }
 
     #[test]

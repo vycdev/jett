@@ -5793,15 +5793,24 @@ Rebinding an owned mutable value from a known move-only view reports E0401;
 use an explicit clone to acquire ownership. Copyable values retain implicit
 copying.
 
-Native lowering currently supports direct and forwarded immutable local views
-with a stable immutable local or view-parameter origin. Explicit clones acquire
-ownership; aliases carry no cleanup obligation. Temporary-backed views, mutable
-chains, and owner consumption or rebinding after alias creation remain native
-implementation limits. Carrier-preserving `coarsen` and `declassify` aliases
-retain the same backing owner; ordinary owned expressions retain their copy
-behavior. These limits do not settle source loan expiry or change
-the checker rules above; see the
-[local view implementation note](active/native_local_view_aliases.md).
+Native lowering supports direct and forwarded immutable local views with a
+stable immutable local or view-parameter origin, including finite ordinary-struct
+field paths rooted in that origin. Each field step preserves its checked owner,
+field identity, and endpoint type. The endpoint's existing secret, refinement,
+or interface identity is not erased to establish the path. Bytes and lists are
+examples of this rule, not an endpoint-type allowlist.
+
+The original owner remains live for dependent reads; projected and forwarded
+aliases are non-owning and carry no cleanup obligation. Explicit clones acquire
+independent ownership, and ordinary owned field initializers retain their copy
+behavior. Carrier-preserving `coarsen` and `declassify` aliases retain the same
+backing owner and existing representation checks. Temporary-backed views,
+mutable backing chains, projected mutation, allocating conversions, and owner
+consumption or rebinding after alias creation remain native implementation
+limits. These limits do not select loan expiry or lifetime extension, change
+the checker rules above, or claim every projected owner kind is supported; see
+the [local view implementation note](active/native_local_view_aliases.md) and
+[typed stable-field contract](active/native_stable_projected_local_views.md).
 
 **Rule 2: A view cannot be sent to another thread.**
 

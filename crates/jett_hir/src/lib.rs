@@ -221,6 +221,7 @@ pub struct Local {
     pub mutable: bool,
     /// Immediate stable backing local for a checked borrowed alias. Parameters
     /// use `ParamMode`; owned locals and generated snapshots have no source.
+    /// Projected aliases keep their canonical typed path in the initializer.
     pub view_source: Option<LocalId>,
     pub span: Span,
 }
@@ -2664,7 +2665,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             return Some(None);
         };
         let CheckedViewSource::Binding(definition) = source else {
-            self.parent.error(declaration.value.span(), "native borrowed alias requires a stable local origin; temporary and projected views remain unsupported");
+            self.parent.error(declaration.value.span(), "native borrowed alias requires a stable local origin; temporary views remain unsupported");
             return None;
         };
         let Some(source) = self.local_ids.get(&definition).copied() else {
@@ -2684,6 +2685,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
         if let Err(message) = local_views::validate_local_view_initializer(
             value,
             source,
+            self.locals[source.index() as usize].ty,
             ty,
             &self.parent.check.interner,
         ) {

@@ -1415,3 +1415,38 @@ a complete 370-test workspace and supported-host run have not yet been accepted.
 Wrong-state wrapper errors, deeper wrapper combinations, aliases, secrets, and
 pending values retain their independent audit obligations. The broad estimate
 remains about 85%, and the fixed inventory remains 207 fixtures.
+
+### Stable ordinary-struct field local-view checkpoint
+
+The typed borrowed initializer now proves ordinary-struct field paths rather
+than requiring the selected endpoint to equal its whole owner's type. Exact
+source identity, field types, nominal refinement qualification, initializer
+coverage, and original-function validation before native compaction remain
+required. Alias storage is non-owning; dependent reads retain the real owner.
+Copied inline-function tables discard origins belonging to another body.
+
+`target/native-stable-projected-view-final-phases.log` passes all 896 library
+tests across codegen/comptime/HIR/MIR/typechecking. The final native alias gate
+passes all 12 tests (366 filtered, 11.78 seconds) in
+`target/native-stable-projected-view-final-linked.log`: eight linked cases,
+mutable/temporary publication boundaries, and three existing broad alias tests.
+Both runtime profiles execute after source deletion with exact output/status,
+independent clone ownership, and later-failure cleanup. The initial unused-type
+negative-test lookup was corrected to the actual type interner before the final
+passing phase batch; it did not require a compiler behavior change.
+
+The final driver/frontend batch passes all 83 driver library tests and all 598
+frontend fixtures in `target/native-stable-projected-view-final-driver-frontend.log`.
+The stale capture test now uses the existing mutable-root HIR boundary. The
+Linux-only projection-loan gate now checks owner consumption after creating a
+valid field alias; its zero-test Windows target is not an executed pass. Linux
+CI remains required, and the matching Windows CLI source independently refuses
+the owner change before archive lookup.
+
+The supplemental corpus registers 378 tests. A complete frozen workspace and
+supported-host gate for this change remain required. Qualified-machine payload
+field aliases have a fresh frontend/reference success and native refusal in
+`target/native-next-after-projected-view/root_machine_field_alias.preflight.json`.
+Neither these focused passes nor the fixed inventory establish full-language
+parity. The planning estimate remains about 85% and the inventory denominator
+remains 207.

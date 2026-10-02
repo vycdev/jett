@@ -167,6 +167,7 @@ impl MoveValuePlan {
         function: &Function,
         types: &TypeInterner,
     ) -> Result<CopyValuePlan, String> {
+        validate_local_view_initializers(function, types)?;
         let mut plan = CopyValuePlan::analyze_storage(function, types, Some(program))?;
         if function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler {
             // Captured state is written back after a return/respond terminator.
@@ -291,6 +292,38 @@ impl MoveValuePlan {
         Ok(plan)
     }
 }
+
+/// Every borrowed slot needs a typed origin proof, even when its definition is
+/// unused or lies in a block outside the reachable ownership fixed point.
+pub fn validate_local_view_initializers(
+    function: &Function,
+    types: &TypeInterner,
+) -> Result<(), String> {
+    let mut initialized = Set::new();
+    for statement in function.blocks.iter().flat_map(|block| &block.statements) {
+        let StatementKind::Let { local, value } = &statement.kind else {
+            continue;
+        };
+        let Some(definition) = function.local(*local) else {
+            continue;
+        };
+        let Some(source) = definition.view_source else {
+            continue;
+        };
+        let origin = function
+            .local(source)
+            .ok_or("borrowed local initializer source is outside its function")?;
+        jett_hir::validate_local_view_initializer(value, source, origin.ty, definition.ty, types)?;
+        initialized.insert(local.index() as usize);
+    }
+    for local in &function.locals {
+        if local.view_source.is_some() && !initialized.contains(&(local.id.index() as usize)) {
+            return Err("native borrowed alias has no validated initializer".into());
+        }
+    }
+    Ok(())
+}
+
 struct Flow<'a> {
     program: &'a Program,
     function: &'a Function,
@@ -371,9 +404,14 @@ impl Flow<'_> {
                         .local(*local)
                         .ok_or("native local definition is outside its function")?;
                     if let Some(source) = definition.view_source {
+                        let origin = self
+                            .function
+                            .local(source)
+                            .ok_or("borrowed local initializer source is outside its function")?;
                         jett_hir::validate_local_view_initializer(
                             value,
                             source,
+                            origin.ty,
                             definition.ty,
                             self.types,
                         )?;
@@ -829,6 +867,20 @@ mod tests {
     return clone forwarded
 "#;
 
+    const PROJECTED_ALIASES: &str = r#"struct Packet:
+    items: list[int64]
+struct Envelope:
+    packet: Packet
+function inspect(flag: bool) returns list[int64]:
+    Envelope source = Envelope(packet: Packet(items: list(1, 2)))
+    Envelope duplicate = clone source
+    list[int64] borrowed = view source.packet.items
+    list[int64] forwarded = borrowed
+    if flag:
+        trace forwarded
+    return clone forwarded
+"#;
+
     fn lower_source(source: &str) -> (Program, TypeInterner) {
         let file = FileId::new(0);
         let parsed = jett_parser::parse(source, file);
@@ -886,6 +938,42 @@ mod tests {
                 block.terminator.kind = TerminatorKind::Return(Some(value.clone()));
             }
         }
+    }
+
+    fn alias_initializer_mut(function: &mut Function, local: LocalId) -> &mut Expression {
+        function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.kind {
+                StatementKind::Let {
+                    local: target,
+                    value,
+                } if *target == local => Some(value),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    fn projection_field_mut(value: &mut Expression) -> &mut Expression {
+        if matches!(value.kind, ExpressionKind::Field { .. }) {
+            return value;
+        }
+        let ExpressionKind::View(inner) = &mut value.kind else {
+            panic!("projected alias has an explicit view of its field");
+        };
+        projection_field_mut(inner)
+    }
+
+    fn projection_root_mut(value: &mut Expression) -> &mut Expression {
+        if matches!(value.kind, ExpressionKind::Local(_)) {
+            return value;
+        }
+        let inner = match &mut value.kind {
+            ExpressionKind::View(inner) | ExpressionKind::Field { base: inner, .. } => inner,
+            _ => panic!("projection is a transparent field path to a local"),
+        };
+        projection_root_mut(inner)
     }
 
     #[test]
@@ -1070,6 +1158,339 @@ function inspect(source: result[int8, int64]) returns nothing:
             }
         }
         assert!(observed);
+    }
+
+    #[test]
+    fn projected_local_views_keep_nested_owner_live_without_owning_payload_slots() {
+        let (program, types) = lower_source(PROJECTED_ALIASES);
+        crate::validate(&program).unwrap();
+        let function = &program.functions[inspected(&program)];
+        let source = local_named(function, "source");
+        let borrowed = local_named(function, "borrowed");
+        let forwarded = local_named(function, "forwarded");
+        assert_eq!(function.local(borrowed).unwrap().view_source, Some(source));
+        assert_eq!(
+            function.local(forwarded).unwrap().view_source,
+            Some(borrowed)
+        );
+        assert_ne!(
+            function.local(source).unwrap().ty,
+            function.local(borrowed).unwrap().ty
+        );
+        let plan = MoveValuePlan::analyze(&program, function, &types).unwrap();
+        assert!(plan.owned_locals.contains(&(source.index() as usize)));
+        for alias in [borrowed, forwarded] {
+            assert!(!plan.owned_locals.contains(&(alias.index() as usize)));
+        }
+        let mut observed = false;
+        for live in plan.live_in.iter().chain(&plan.live_out).chain(
+            plan.live_after_statement
+                .iter()
+                .flat_map(|block| block.iter()),
+        ) {
+            if live.contains(&(forwarded.index() as usize)) {
+                observed = true;
+                assert!(live.contains(&(borrowed.index() as usize)));
+                assert!(live.contains(&(source.index() as usize)));
+            }
+        }
+        assert!(observed);
+    }
+
+    #[test]
+    fn projected_local_views_validate_path_against_declared_mir_origin() {
+        for invalid in [
+            "owner",
+            "index",
+            "endpoint",
+            "root type",
+            "root identity",
+            "clone",
+            "forwarded source",
+        ] {
+            let (mut program, types) = lower_source(PROJECTED_ALIASES);
+            let index = inspected(&program);
+            let function = &mut program.functions[index];
+            let source = local_named(function, "source");
+            let duplicate = local_named(function, "duplicate");
+            let borrowed = local_named(function, "borrowed");
+            let forwarded = local_named(function, "forwarded");
+            let owner_type = function.local(source).unwrap().ty;
+            if invalid == "forwarded source" {
+                function.locals[forwarded.index() as usize].view_source = Some(source);
+            } else {
+                let value = alias_initializer_mut(function, borrowed);
+                match invalid {
+                    "owner" | "index" => {
+                        let field = projection_field_mut(value);
+                        let ExpressionKind::Field {
+                            owner_type: owner,
+                            field,
+                            ..
+                        } = &mut field.kind
+                        else {
+                            unreachable!();
+                        };
+                        if invalid == "owner" {
+                            *owner = owner_type;
+                        } else {
+                            *field = jett_hir::FieldId::new(u32::MAX);
+                        }
+                    }
+                    "endpoint" => projection_field_mut(value).ty = TypeInterner::STRING,
+                    "root type" => projection_root_mut(value).ty = TypeInterner::STRING,
+                    "root identity" => {
+                        projection_root_mut(value).kind = ExpressionKind::Local(duplicate)
+                    }
+                    "clone" => {
+                        *value = Expression {
+                            kind: ExpressionKind::Clone(Box::new(value.clone())),
+                            ty: value.ty,
+                            span: value.span,
+                        };
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            // Every forged ID remains structurally in range. Typed ownership
+            // validation must still reject a path or origin that was laundered.
+            crate::validate(&program).unwrap();
+            let error =
+                MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap_err();
+            assert!(
+                error.contains("borrowed alias") || error.contains("borrowed projection"),
+                "{invalid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn projected_local_views_do_not_invent_nominal_refinement_proofs() {
+        let source = r#"type Unproven = list[int64] where false
+struct Packet:
+    items: list[int64]
+function inspect(view source: Packet) returns nothing:
+    list[int64] borrowed = view source.items
+    return nothing
+"#;
+        for invalid in ["target", "view", "conversion", "coarsen", "declassify"] {
+            let (mut program, types) = lower_source(source);
+            let index = inspected(&program);
+            let unproven = types.type_ids().find(|ty| matches!(types.resolve(*ty), Type::Refinement { name, .. } if name.ends_with("Unproven"))).unwrap();
+            let function = &mut program.functions[index];
+            let borrowed = local_named(function, "borrowed");
+            if matches!(invalid, "target" | "view" | "conversion") {
+                function.locals[borrowed.index() as usize].ty = unproven;
+            }
+            let value = alias_initializer_mut(function, borrowed);
+            match invalid {
+                "target" => {}
+                "view" => value.ty = unproven,
+                "conversion" | "coarsen" | "declassify" => {
+                    let inner = Box::new(value.clone());
+                    let ty = if invalid == "conversion" {
+                        unproven
+                    } else {
+                        value.ty
+                    };
+                    let kind = match invalid {
+                        "conversion" => ExpressionKind::InterfaceCoerce {
+                            value: inner,
+                            adapters: Vec::new(),
+                        },
+                        "coarsen" => ExpressionKind::Coarsen(inner),
+                        "declassify" => ExpressionKind::Declassify(inner),
+                        _ => unreachable!(),
+                    };
+                    *value = Expression {
+                        kind,
+                        ty,
+                        span: value.span,
+                    };
+                }
+                _ => unreachable!(),
+            }
+            // The field endpoint, root ID/type and dense local table remain
+            // valid. The missing nominal/conversion proof is the defect.
+            crate::validate(&program).unwrap();
+            let error =
+                validate_local_view_initializers(&program.functions[index], &types).unwrap_err();
+            assert!(error.contains("borrowed"), "{invalid}: {error}");
+        }
+        let sibling_source = r#"type Established = list[int64] where true
+type Unproven = list[int64] where false
+struct Packet:
+    items: Established
+function inspect(view source: Packet) returns nothing:
+    Established borrowed = view source.items
+    return nothing
+"#;
+        let (mut program, types) = lower_source(sibling_source);
+        let index = inspected(&program);
+        let unproven = types.type_ids().find(|ty| matches!(types.resolve(*ty), Type::Refinement { name, .. } if name.ends_with("Unproven"))).unwrap();
+        let function = &mut program.functions[index];
+        let borrowed = local_named(function, "borrowed");
+        function.locals[borrowed.index() as usize].ty = unproven;
+        let value = alias_initializer_mut(function, borrowed);
+        *value = Expression {
+            kind: ExpressionKind::InterfaceCoerce {
+                value: Box::new(value.clone()),
+                adapters: Vec::new(),
+            },
+            ty: unproven,
+            span: value.span,
+        };
+        crate::validate(&program).unwrap();
+        let error =
+            validate_local_view_initializers(&program.functions[index], &types).unwrap_err();
+        assert!(error.contains("borrowed"), "sibling refinement: {error}");
+    }
+
+    #[test]
+    fn projected_local_views_preserve_immutable_chains_and_persistent_root_loans() {
+        for mutable in ["source", "borrowed", "forwarded"] {
+            let (mut program, _) = lower_source(PROJECTED_ALIASES);
+            let index = inspected(&program);
+            let local = local_named(&program.functions[index], mutable);
+            program.functions[index].locals[local.index() as usize].mutable = true;
+            let errors = crate::validate(&program).unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.message.contains("immutable")),
+                "{mutable}: {errors:?}"
+            );
+        }
+        for invalid in ["root consume", "root rebind", "payload escape"] {
+            let (mut program, types) = lower_source(PROJECTED_ALIASES);
+            let index = inspected(&program);
+            let function = &mut program.functions[index];
+            let source = local_named(function, "source");
+            let duplicate = local_named(function, "duplicate");
+            let forwarded = local_named(function, "forwarded");
+            if invalid == "root rebind" {
+                let target = local_expression(function, source);
+                let replacement = local_expression(function, duplicate);
+                let exit = function
+                    .blocks
+                    .iter_mut()
+                    .find(|block| matches!(block.terminator.kind, TerminatorKind::Return(Some(_))))
+                    .unwrap();
+                exit.statements.push(crate::Statement {
+                    span: target.span,
+                    kind: StatementKind::Assign {
+                        target,
+                        value: replacement,
+                    },
+                });
+            } else {
+                let local = if invalid == "root consume" {
+                    source
+                } else {
+                    forwarded
+                };
+                let value = local_expression(function, local);
+                replace_return(function, value);
+            }
+            let error =
+                MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap_err();
+            let expected = if invalid == "payload escape" {
+                "cannot move borrowed native place"
+            } else {
+                "after creating a local view alias is not implemented"
+            };
+            assert!(error.contains(expected), "{invalid}: {error}");
+        }
+    }
+
+    #[test]
+    fn projected_local_views_preserve_generic_field_facts_and_view_parameter_storage() {
+        for target in ["bytes", "list[int64]"] {
+            let source = format!(
+                "struct Carrier[T]:\n    value: T\nfunction inspect(view source: Carrier[{target}]) returns {target}:\n    {target} borrowed = view source.value\n    {target} forwarded = borrowed\n    return clone forwarded\n"
+            );
+            let (program, types) = lower_source(&source);
+            crate::validate(&program).unwrap();
+            let function = &program.functions[inspected(&program)];
+            let plan = MoveValuePlan::analyze(&program, function, &types).unwrap();
+            for name in ["source", "borrowed", "forwarded"] {
+                let local = local_named(function, name);
+                assert!(
+                    !plan.owned_locals.contains(&(local.index() as usize)),
+                    "{target}: {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn projected_local_views_remap_initializer_root_and_immediate_alias_chain() {
+        let source = PROJECTED_ALIASES.replace(
+            "    Envelope source =",
+            "    for element in list():\n        trace element\n    Envelope source =",
+        );
+        let (mut program, types) = lower_source(&source);
+        let index = inspected(&program);
+        let before = local_named(&program.functions[index], "source");
+        crate::prepare_native_sequences(&mut program, &types);
+        crate::validate(&program).unwrap();
+        let function = &mut program.functions[index];
+        let source = local_named(function, "source");
+        let borrowed = local_named(function, "borrowed");
+        let forwarded = local_named(function, "forwarded");
+        assert!(source.index() < before.index());
+        assert_eq!(function.local(borrowed).unwrap().view_source, Some(source));
+        assert_eq!(
+            function.local(forwarded).unwrap().view_source,
+            Some(borrowed)
+        );
+        assert_eq!(function.view_root(forwarded), Some(source));
+        let source_type = function.local(source).unwrap().ty;
+        let root = projection_root_mut(alias_initializer_mut(function, borrowed));
+        assert_eq!(root.kind, ExpressionKind::Local(source));
+        assert_eq!(root.ty, source_type);
+        MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap();
+    }
+
+    #[test]
+    fn projected_local_views_require_initializer_proof_even_outside_reachable_cfg() {
+        for invalid in ["orphan", "unreachable path"] {
+            let (mut program, types) = lower_source(PROJECTED_ALIASES);
+            let index = inspected(&program);
+            let function = &mut program.functions[index];
+            let borrowed = local_named(function, "borrowed");
+            if invalid == "orphan" {
+                for block in &mut function.blocks {
+                    block.statements.retain(|statement| !matches!(statement.kind, StatementKind::Let { local, .. } if local == borrowed));
+                }
+            } else {
+                let mut value = alias_initializer_mut(function, borrowed).clone();
+                projection_root_mut(&mut value).ty = TypeInterner::STRING;
+                let span = value.span;
+                let id = crate::BlockId(function.blocks.len() as u32);
+                function.blocks.push(crate::BasicBlock {
+                    id,
+                    statements: vec![crate::Statement {
+                        kind: StatementKind::Let {
+                            local: borrowed,
+                            value,
+                        },
+                        span,
+                    }],
+                    terminator: crate::Terminator {
+                        kind: TerminatorKind::Unreachable,
+                        span,
+                    },
+                });
+            }
+            crate::validate(&program).unwrap();
+            let error =
+                MoveValuePlan::analyze(&program, &program.functions[index], &types).unwrap_err();
+            assert!(
+                error.contains("borrowed alias") || error.contains("borrowed projection"),
+                "{invalid}: {error}"
+            );
+        }
     }
 
     #[test]

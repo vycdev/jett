@@ -1,0 +1,19 @@
+namespace app
+struct Packet:
+    items: list[string]
+function first(view stdout: Stdout, view source: list[string]) returns int64:
+    Stdout.write(view stdout, "borrowed:{list.length(view source)}\n")
+    return list.length(view source)
+function failing(view stdout: Stdout) returns list[string]:
+    Stdout.write(view stdout, "failure\n")
+    return list.remove_at[string](list("owned", "other"), -1)
+function consume(amount: int64, values: list[string]) returns nothing:
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    Packet packet = Packet(items: list("keep", "source"))
+    bytes payload = bytes.from_string("cleanup")
+    list[string] borrowed = view packet.items
+    list[string] forwarded = borrowed
+    Stdout.write(view stdout, "before\n")
+    consume(first(view stdout, view forwarded), failing(view stdout))
+    Stdout.write(view stdout, "must not run")

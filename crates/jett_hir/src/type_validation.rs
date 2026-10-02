@@ -27,6 +27,7 @@ pub fn validate_backend_types(
         visited_definitions: HashSet::new(),
         local_views: Vec::new(),
         local_types: Vec::new(),
+        local_view_initializers: HashSet::new(),
         borrowed_parameters: HashSet::new(),
         errors: Vec::new(),
     };
@@ -86,6 +87,7 @@ struct BackendTypeValidator<'a> {
     visited_definitions: HashSet<DefinitionKey>,
     local_views: Vec<Option<crate::LocalId>>,
     local_types: Vec<TypeId>,
+    local_view_initializers: HashSet<crate::LocalId>,
     borrowed_parameters: HashSet<crate::LocalId>,
     errors: Vec<ValidationError>,
 }
@@ -105,6 +107,7 @@ impl BackendTypeValidator<'_> {
             .map(|local| local.view_source)
             .collect();
         self.local_types = function.locals.iter().map(|local| local.ty).collect();
+        self.local_view_initializers.clear();
         self.borrowed_parameters = function
             .params
             .iter()
@@ -146,6 +149,11 @@ impl BackendTypeValidator<'_> {
             );
         }
         self.block(&function.body, function_name);
+        for local in &function.locals {
+            if local.view_source.is_some() && !self.local_view_initializers.contains(&local.id) {
+                self.error(local.span, "borrowed local has no validated initializer");
+            }
+        }
     }
 
     fn block(&mut self, block: &Block, function_name: &str) {
@@ -159,14 +167,27 @@ impl BackendTypeValidator<'_> {
             StatementKind::Let { local, value } => {
                 if let Some(Some(source)) = self.local_views.get(local.index() as usize)
                     && let Some(&ty) = self.local_types.get(local.index() as usize)
-                    && let Err(message) = crate::local_views::validate_local_view_initializer(
-                        value,
-                        *source,
-                        ty,
-                        self.interner,
-                    )
                 {
-                    self.error(value.span, message);
+                    let source = *source;
+                    let validation = self
+                        .local_types
+                        .get(source.index() as usize)
+                        .ok_or("borrowed local origin is outside its function")
+                        .and_then(|&source_type| {
+                            crate::local_views::validate_local_view_initializer(
+                                value,
+                                source,
+                                source_type,
+                                ty,
+                                self.interner,
+                            )
+                        });
+                    match validation {
+                        Ok(()) => {
+                            self.local_view_initializers.insert(*local);
+                        }
+                        Err(message) => self.error(value.span, message),
+                    }
                 }
                 self.expression(value, function_name);
             }

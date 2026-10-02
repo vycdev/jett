@@ -1,0 +1,11 @@
+namespace app
+struct Packet:
+    data: bytes
+function duplicate_data(view packet: Packet) returns bytes:
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    return clone forwarded
+function main(stdout: Stdout) returns nothing:
+    Packet packet = Packet(data: bytes.from_string("AB"))
+    bytes duplicate = duplicate_data(view packet)
+    Stdout.write(view stdout, "{bytes.to_hex(view duplicate)}:{bytes.to_hex(view packet.data)}\n")

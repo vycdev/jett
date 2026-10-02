@@ -1,0 +1,7 @@
+namespace app
+struct Packet:
+    data: bytes
+function make_packet() returns Packet:
+    return Packet(data: bytes.from_string("AB"))
+function main() returns nothing:
+    bytes borrowed = view make_packet().data

@@ -1,56 +1,207 @@
 use super::*;
 
+use super::suite_options::launcher_for_options;
+
+#[derive(Clone, Copy)]
+enum ProjectedOutcome {
+    Success(&'static str),
+    RuntimeFailure {
+        stdout: &'static str,
+        message: &'static str,
+    },
+}
+
+fn run_case(name: &str, source_text: &str, expected: ProjectedOutcome) {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join(format!("{name}.jett"));
+    fs::write(&source, source_text).unwrap();
+    let (reference, status, stderr) = match expected {
+        ProjectedOutcome::Success(stdout) => {
+            let output = jett_driver::run_file_capture_outcome(&source)
+                .unwrap_or_else(|error| panic!("{name}: checked reference fixture: {error:?}"));
+            assert_eq!(output.stdout, stdout, "{name}");
+            (output, 0, String::new())
+        }
+        ProjectedOutcome::RuntimeFailure { stdout, message } => {
+            let failure = jett_driver::run_file_capture_outcome(&source)
+                .expect_err("later owned argument fails after projected alias observation");
+            assert_eq!(failure.output.stdout, stdout, "{name}");
+            assert_eq!(failure.message, message, "{name}");
+            (failure.output, 71, format!("{message}\n"))
+        }
+    };
+    assert!(reference.debug_events.is_empty(), "{name}: {reference:?}");
+    assert!(
+        reference.frontend_debug_observations.is_empty(),
+        "{name}: {reference:?}"
+    );
+    let mut binaries = Vec::new();
+    for release in [false, true] {
+        let binary = directory.path().join(format!("{name}_{release}.exe"));
+        let artifact = jett_driver::native::build_host_executable_with_options(
+            &source,
+            launcher_for_options(release),
+            &binary,
+            jett_driver::BuildOptions { release },
+        )
+        .unwrap_or_else(|error| panic!("{name}, release={release}: native build: {error}"));
+        assert!(
+            artifact.debug_observations.is_empty(),
+            "{name}: {artifact:?}"
+        );
+        binaries.push((binary, release));
+    }
+    fs::remove_file(&source).unwrap();
+    assert!(!source.exists());
+    for (binary, release) in binaries {
+        let actual = run_bounded(&binary, directory.path());
+        assert_eq!(
+            actual.status.code(),
+            Some(status),
+            "{name}, release={release}: {actual:?}"
+        );
+        assert_eq!(
+            actual.stdout,
+            reference.stdout.as_bytes(),
+            "{name}, release={release}"
+        );
+        assert_eq!(
+            actual.stderr,
+            stderr.as_bytes(),
+            "{name}, release={release}: {actual:?}"
+        );
+    }
+}
+
 #[test]
-fn native_projected_local_view_aliases_reject_before_publication() {
+fn native_stable_projected_local_view_exact_packet_matches_reference_without_source() {
+    run_case(
+        "01_exact_packet",
+        include_str!("local_view_aliases/01_exact_packet.jett"),
+        ProjectedOutcome::Success(""),
+    );
+}
+
+#[test]
+fn native_stable_projected_local_view_owned_bytes_and_forwarding_preserve_original_owner() {
+    run_case(
+        "02_owned_bytes_forwarded",
+        include_str!("local_view_aliases/02_owned_bytes_forwarded.jett"),
+        ProjectedOutcome::Success("4142:4142:414243:4142\n"),
+    );
+}
+
+#[test]
+fn native_stable_projected_local_view_parameter_clone_preserves_callers_owner() {
+    run_case(
+        "03_view_parameter",
+        include_str!("local_view_aliases/03_view_parameter.jett"),
+        ProjectedOutcome::Success("4142:4142\n"),
+    );
+}
+
+#[test]
+fn native_stable_projected_local_view_nested_field_path_preserves_owner() {
+    run_case(
+        "04_nested_local",
+        include_str!("local_view_aliases/04_nested_local.jett"),
+        ProjectedOutcome::Success("4344:4344:4344\n"),
+    );
+}
+
+#[test]
+fn native_stable_projected_local_view_failure_preserves_argument_order_and_cleanup() {
+    run_case(
+        "05_projected_list_failure",
+        include_str!("local_view_aliases/05_projected_list_failure.jett"),
+        ProjectedOutcome::RuntimeFailure {
+            stdout: "before\nborrowed:2\nfailure\n",
+            message: "runtime error: list.__remove_at: index -1 out of bounds",
+        },
+    );
+}
+
+#[test]
+fn native_stable_projected_local_view_direct_alias_control_remains_supported() {
+    run_case(
+        "06_direct_alias_control",
+        include_str!("local_view_aliases/06_direct_alias_control.jett"),
+        ProjectedOutcome::Success("4142:4142\n"),
+    );
+}
+
+#[test]
+fn native_stable_projected_local_view_owned_field_copy_remains_independent() {
+    run_case(
+        "07_owned_field_copy_control",
+        include_str!("local_view_aliases/07_owned_field_copy_control.jett"),
+        ProjectedOutcome::Success("414243:4142\n"),
+    );
+}
+
+#[test]
+fn native_stable_projected_local_view_struct_generic_and_qualified_endpoints_keep_checked_types() {
+    run_case(
+        "10_typed_endpoints",
+        include_str!("local_view_aliases/10_typed_endpoints.jett"),
+        ProjectedOutcome::Success(
+            "nested:4142:4142:4142\ngeneric:7:7:4344:434445:4344\nqualified:2:2:3:2:2:3\n",
+        ),
+    );
+}
+
+#[test]
+fn native_unstable_projected_local_view_aliases_reject_before_publication() {
     use jett_driver::native::{NativeBuildError, build_host_executable_with_options};
     use jett_driver::{BackendLoweringError, BuildOptions, build_file_with_options};
 
-    let directory = tempfile::tempdir().unwrap();
-    let source = directory.path().join("main.jett");
-    fs::write(
-        &source,
-        r#"namespace app
-struct Packet:
-    data: bytes
-function main() returns nothing:
-    Packet item = Packet(data: bytes.new())
-    bytes borrowed = view item.data
-"#,
-    )
-    .unwrap();
-    let output = directory.path().join("preserved.exe");
-    let sentinel = b"existing native publication";
-    fs::write(&output, sentinel).unwrap();
-    let launcher = if cfg!(windows) {
-        NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("unused.lib"))
-    } else {
-        NativeLauncherBundle::linux_gnu_v1(directory.path().join("unused.a"))
-    };
-    assert!(!launcher.archive_path.exists());
+    let cases = [
+        (
+            "mutable_root",
+            include_str!("local_view_aliases/08_mutable_root_boundary.jett"),
+            "native borrowed alias requires immutable bindings along its stable origin",
+        ),
+        (
+            "temporary_root",
+            include_str!("local_view_aliases/09_temporary_root_boundary.jett"),
+            "native borrowed alias requires a stable local origin; temporary views remain unsupported",
+        ),
+    ];
+    for (name, source_text, expected_message) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join(format!("{name}.jett"));
+        fs::write(&source, source_text).unwrap();
+        let output = directory.path().join("preserved.exe");
+        let sentinel = b"existing native publication";
+        fs::write(&output, sentinel).unwrap();
+        let launcher = if cfg!(windows) {
+            NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("unused.lib"))
+        } else {
+            NativeLauncherBundle::linux_gnu_v1(directory.path().join("unused.a"))
+        };
+        assert!(!launcher.archive_path.exists());
 
-    for release in [false, true] {
-        let options = BuildOptions { release };
-        let checked = build_file_with_options(&source, options);
-        assert!(
-            !checked.has_errors,
-            "projected local views remain frontend-valid: {:?}",
-            checked.diagnostics
-        );
-        let error = build_host_executable_with_options(&source, &launcher, &output, options)
-            .expect_err("unsupported native origin must fail before emission or archive lookup");
-        let NativeBuildError::Lowering { source, .. } = error else {
-            panic!("expected HIR admission failure: {error}");
-        };
-        let errors = match *source {
-            BackendLoweringError::Hir(errors) => errors,
-            error => panic!("expected HIR admission failure: {error}"),
-        };
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert_eq!(
-            errors[0].message,
-            "native borrowed alias requires a stable local origin; temporary and projected views remain unsupported"
-        );
-        assert_eq!(fs::read(&output).unwrap(), sentinel);
+        for release in [false, true] {
+            let options = BuildOptions { release };
+            let checked = build_file_with_options(&source, options);
+            assert!(
+                !checked.has_errors,
+                "{name}: excluded views remain frontend-valid: {:?}",
+                checked.diagnostics
+            );
+            let error = build_host_executable_with_options(&source, &launcher, &output, options)
+                .expect_err("unstable origin must fail before emission or archive lookup");
+            let NativeBuildError::Lowering { source, .. } = error else {
+                panic!("{name}: expected HIR admission failure: {error}");
+            };
+            let errors = match *source {
+                BackendLoweringError::Hir(errors) => errors,
+                error => panic!("{name}: expected HIR admission failure: {error}"),
+            };
+            assert_eq!(errors.len(), 1, "{name}: {errors:?}");
+            assert_eq!(errors[0].message, expected_message, "{name}: {errors:?}");
+            assert_eq!(fs::read(&output).unwrap(), sentinel);
+        }
     }
 }
 

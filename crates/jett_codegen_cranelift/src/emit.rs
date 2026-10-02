@@ -216,6 +216,15 @@ fn emit_for_triple(
         validate_program_entry_contract(program, types, entry)?;
     }
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    for function in &program.functions {
+        jett_mir::move_values::validate_local_view_initializers(function, types).map_err(
+            |message| CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message,
+            },
+        )?;
+    }
     let mut prepared = program.clone();
     jett_mir::prepare_native_sequences(&mut prepared, types);
     jett_mir::prepare_native_uninhabited_sums(&mut prepared, types);
@@ -4022,6 +4031,86 @@ function selected_entry() returns string:
             error.to_string().contains("definite initialization"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn native_projected_aliases_preserve_typed_path_proof_before_compaction() {
+        let source = r#"struct Packet:
+    items: list[int64]
+struct Envelope:
+    packet: Packet
+function selected_entry(view source: Envelope) returns list[int64]:
+    list[int64] borrowed = view source.packet.items
+    list[int64] forwarded = borrowed
+    for element in list():
+        trace forwarded
+    return clone forwarded
+"#;
+        let (program, types) = lower_source(source);
+        emit_host_object(&program, &types)
+            .expect("immutable struct projection has a native object");
+        for invalid in ["orphan", "unreachable path"] {
+            let (mut program, types) = lower_source(source);
+            let function = &mut program.functions[0];
+            let borrowed = function
+                .locals
+                .iter()
+                .find(|local| local.name == "borrowed")
+                .unwrap()
+                .id;
+            if invalid == "orphan" {
+                for block in &mut function.blocks {
+                    block.statements.retain(|statement| !matches!(statement.kind, StatementKind::Let { local, .. } if local == borrowed));
+                }
+            } else {
+                let mut value = function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .find_map(|statement| match &statement.kind {
+                        StatementKind::Let { local, value } if *local == borrowed => {
+                            Some(value.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let ExpressionKind::View(field) = &mut value.kind else {
+                    panic!("explicit projected view");
+                };
+                let ExpressionKind::Field { owner_type, .. } = &mut field.kind else {
+                    panic!("nested projected field");
+                };
+                *owner_type = TypeInterner::STRING;
+                let span = value.span;
+                let body = function
+                    .blocks
+                    .iter()
+                    .find_map(|block| match block.terminator.kind {
+                        TerminatorKind::ForEach { body, .. } => Some(body),
+                        _ => None,
+                    })
+                    .unwrap();
+                // The empty-list body is removed by native preparation. Its
+                // forged typed path must fail before that removal occurs.
+                function.blocks[body.index() as usize]
+                    .statements
+                    .push(jett_mir::Statement {
+                        kind: StatementKind::Let {
+                            local: borrowed,
+                            value,
+                        },
+                        span,
+                    });
+            }
+            jett_mir::validate(&program).expect("forged path uses valid structural IDs");
+            let error = emit_host_object(&program, &types)
+                .expect_err("unproven projected alias must not be emitted");
+            assert!(
+                error.to_string().contains("borrowed alias")
+                    || error.to_string().contains("borrowed projection"),
+                "{invalid}: {error}"
+            );
+        }
     }
 
     #[test]

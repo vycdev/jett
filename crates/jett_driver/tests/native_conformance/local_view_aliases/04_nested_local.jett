@@ -1,0 +1,10 @@
+namespace app
+struct Packet:
+    data: bytes
+struct Envelope:
+    packet: Packet
+function main(stdout: Stdout) returns nothing:
+    Envelope envelope = Envelope(packet: Packet(data: bytes.from_string("CD")))
+    bytes borrowed = view envelope.packet.data
+    bytes copied = clone borrowed
+    Stdout.write(view stdout, "{bytes.to_hex(view borrowed)}:{bytes.to_hex(view copied)}:{bytes.to_hex(view envelope.packet.data)}\n")

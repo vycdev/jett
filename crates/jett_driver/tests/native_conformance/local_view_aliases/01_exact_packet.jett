@@ -1,0 +1,6 @@
+namespace app
+struct Packet:
+    data: bytes
+function main() returns nothing:
+    Packet item = Packet(data: bytes.new())
+    bytes borrowed = view item.data

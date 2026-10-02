@@ -5491,7 +5491,7 @@ struct Packet:
     data: bytes
 function main() returns nothing:
     int64 baked = comptime observe()
-    Packet item = Packet(data: bytes.new())
+    mutable Packet item = Packet(data: bytes.new())
     bytes borrowed = view item.data
 verify checking:
     println("checked")
@@ -5499,7 +5499,10 @@ verify checking:
 "#,
         )
         .unwrap();
-        let failure = lower_file_for_backend(&path).unwrap_err();
+        let failure = match lower_file_for_backend(&path) {
+            Err(failure) => failure,
+            Ok(_) => panic!("mutable borrowed origin must fail after frontend observations"),
+        };
         assert_eq!(
             failure.debug_observations(),
             [
@@ -5516,7 +5519,7 @@ verify checking:
         assert!(
             failure
                 .to_string()
-                .contains("native borrowed alias requires a stable local origin")
+                .contains("native borrowed alias requires immutable bindings")
         );
         assert!(std::error::Error::source(&failure).is_some());
     }

@@ -103,7 +103,9 @@ fn local_views_preserve_secret_wrapper_origins_and_reject_allocating_coercions()
     let StatementKind::Let { value, .. } = &function.body.statements[0].kind else {
         panic!("alias initializer");
     };
-    validate_local_view_initializer(value, source, alias.ty, &checked.interner).unwrap();
+    let source_type = function.locals[source.index() as usize].ty;
+    validate_local_view_initializer(value, source, source_type, alias.ty, &checked.interner)
+        .unwrap();
     let changed = checked.interner.intern(Type::List(TypeInterner::STRING));
     let conversion = Expression {
         kind: ExpressionKind::interface_coerce(Box::new(value.clone())),
@@ -111,9 +113,15 @@ fn local_views_preserve_secret_wrapper_origins_and_reject_allocating_coercions()
         span: value.span,
     };
     assert!(
-        validate_local_view_initializer(&conversion, source, changed, &checked.interner)
-            .unwrap_err()
-            .contains("allocate")
+        validate_local_view_initializer(
+            &conversion,
+            source,
+            source_type,
+            changed,
+            &checked.interner
+        )
+        .unwrap_err()
+        .contains("allocate")
     );
 }
 
@@ -227,11 +235,196 @@ function main() returns nothing:
 }
 
 #[test]
+fn projected_local_views_keep_typed_endpoints_and_immediate_owner_dependencies() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+struct Packet:
+    data: bytes
+    items: list[int64]
+    hidden: secret[list[int64]]
+    number: int64
+struct Envelope:
+    packet: Packet
+function inspect(view source: Envelope) returns nothing:
+    Packet projected_record = view source.packet
+    bytes projected_bytes = view source.packet.data
+    list[int64] projected_items = view projected_record.items
+    list[int64] forwarded = projected_items
+    list[int64] revealed = declassify view source.packet.hidden
+    list[int64] copied = source.packet.items
+    list[int64] cloned = clone forwarded
+    int64 scalar = view source.packet.number
+    trace forwarded
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let function = &program.functions[0];
+    let source = local(function, "source");
+    for name in ["projected_record", "projected_bytes", "revealed"] {
+        let alias = local(function, name);
+        assert_eq!(alias.view_source, Some(source.id), "{name}");
+        assert_ne!(
+            alias.ty, source.ty,
+            "field endpoint is distinct from its owner"
+        );
+        assert_eq!(local_view_root(&function.locals, alias.id), Some(source.id));
+    }
+    assert_eq!(
+        local(function, "projected_items").view_source,
+        Some(local(function, "projected_record").id)
+    );
+    assert_eq!(
+        local(function, "forwarded").view_source,
+        Some(local(function, "projected_items").id)
+    );
+    for name in ["copied", "cloned", "scalar"] {
+        assert_eq!(local(function, name).view_source, None, "{name}");
+    }
+}
+
+#[test]
+fn projected_local_views_transport_generic_and_reflected_binding_contexts() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+struct Holder[T]:
+    value: T
+struct Metadata:
+    number: int64
+function inspect[T](view source: Holder[T]) returns nothing:
+    T alias = view source.value
+    trace alias
+    return nothing
+function reflected[T](view metadata: T, view source: Holder[list[int64]]) returns nothing:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            list[int64] reflected_alias = view source.value
+            trace reflected_alias
+    list[int64] after_alias = view source.value
+    trace after_alias
+    return nothing
+function main() returns nothing:
+    inspect[int64](view Holder[int64](value: 7))
+    inspect[list[int64]](view Holder[list[int64]](value: list(2, 3)))
+    reflected[Metadata](view Metadata(number: 1), view Holder[list[int64]](value: list(5)))
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let inspect = program
+        .functions
+        .iter()
+        .filter(|function| function.identity.declaration.name == "inspect")
+        .collect::<Vec<_>>();
+    assert_eq!(inspect.len(), 2);
+    for function in inspect {
+        let alias = local(function, "alias");
+        if alias.ty == TypeInterner::INT64 {
+            assert_eq!(alias.view_source, None);
+        } else {
+            assert_eq!(alias.view_source, Some(local(function, "source").id));
+        }
+    }
+    let reflected = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "reflected")
+        .unwrap();
+    for name in ["reflected_alias", "after_alias"] {
+        assert_eq!(
+            local(reflected, name).view_source,
+            Some(local(reflected, "source").id)
+        );
+    }
+}
+
+#[test]
+fn projected_local_views_require_initializer_proofs_even_when_unused() {
+    let (program, checked) = checked_source(
+        "namespace app\nstruct Packet:\n    data: bytes\nfunction inspect(view source: Packet) returns nothing:\n    bytes unused_alias = view source.data\n    return nothing\n",
+        false,
+    ).unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let mut orphan = program.clone();
+    orphan.functions[0].body.statements.remove(0);
+    assert!(
+        validate_backend_types(&orphan, &checked.interner)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("no validated initializer"))
+    );
+    inline_functions::extract_inline_functions(&mut orphan.functions, &checked.interner);
+    assert!(
+        complete_value_conversions(&mut orphan, &checked.interner)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("no validated initializer"))
+    );
+    let mut forged = program;
+    let StatementKind::Let { value, .. } = &mut forged.functions[0].body.statements[0].kind else {
+        panic!("unused projected initializer");
+    };
+    let ExpressionKind::View(field) = &mut value.kind else {
+        panic!("explicit projected view");
+    };
+    let ExpressionKind::Field { field, .. } = &mut field.kind else {
+        panic!("typed projection");
+    };
+    *field = FieldId(u32::MAX);
+    assert!(
+        validate_backend_types(&forged, &checked.interner)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("invalid field index"))
+    );
+}
+
+#[test]
+fn projected_local_views_keep_unused_inline_bindings_and_clear_copied_origins() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+struct Packet:
+    data: bytes
+function inspect(view source: Packet) returns nothing:
+    bytes outer_alias = view source.data
+    function(view Packet) returns nothing callback = function(view packet: Packet) returns nothing:
+        bytes inner_alias = view packet.data
+        return nothing
+    bytes later_alias = view source.data
+    callback(view source)
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let outer = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    assert!(local(outer, "outer_alias").view_source.is_some());
+    assert!(local(outer, "later_alias").view_source.is_some());
+    assert!(local(outer, "inner_alias").view_source.is_none());
+    let inline = program
+        .functions
+        .iter()
+        .find(|function| function.debug_kind == FunctionDebugKind::Inline)
+        .unwrap();
+    assert!(local(inline, "inner_alias").view_source.is_some());
+    assert!(local(inline, "outer_alias").view_source.is_none());
+    assert!(local(inline, "later_alias").view_source.is_none());
+}
+
+#[test]
 fn local_views_reject_unstable_native_origins_without_changing_checking() {
     for body in [
         "mutable list[int64] source = list(1)\n    list[int64] alias = view source",
         "list[int64] alias = view list(1)",
-        "Record source = Record(values: list(1))\n    list[int64] alias = view source.values",
+        "mutable Record source = Record(values: list(1))\n    list[int64] alias = view source.values",
         "list[int64] source = list(1)\n    mutable list[int64] alias = view source",
     ] {
         let source = format!(
@@ -244,6 +437,127 @@ fn local_views_reject_unstable_native_origins_without_changing_checking() {
                 .iter()
                 .any(|error| error.message.contains("native borrowed alias")),
             "{body}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn projected_local_views_preserve_existing_refinement_ancestors_and_secret_promotions() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+type Values = list[int64] where true
+type NarrowValues = Values where true
+struct Packet:
+    plain: list[int64]
+    refined: NarrowValues
+    hidden: secret[NarrowValues]
+function inspect(view source: Packet, view values: list[int64]) returns nothing:
+    NarrowValues direct = view source.refined
+    Values ancestor = coarsen view source.refined
+    list[int64] base = coarsen view source.refined
+    NarrowValues revealed = declassify view source.hidden
+    secret[list[int64]] promoted_field = view source.plain
+    secret[list[int64]] promoted_local = view values
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let function = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let source = local(function, "source");
+    for name in ["direct", "ancestor", "base", "revealed", "promoted_field"] {
+        assert_eq!(local(function, name).view_source, Some(source.id), "{name}");
+    }
+    assert_eq!(
+        local(function, "promoted_local").view_source,
+        Some(local(function, "values").id)
+    );
+    let direct = local(function, "direct").ty;
+    let ancestor = local(function, "ancestor").ty;
+    let base = local(function, "base").ty;
+    assert!(
+        matches!(checked.interner.resolve(direct), Type::Refinement { base: inner, .. } if *inner == ancestor)
+    );
+    assert!(
+        matches!(checked.interner.resolve(ancestor), Type::Refinement { base: inner, .. } if *inner == base)
+    );
+    assert_eq!(local(function, "revealed").ty, direct);
+    for name in ["promoted_field", "promoted_local"] {
+        assert!(
+            matches!(checked.interner.resolve(local(function, name).ty), Type::Secret(inner) if *inner == base),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn unused_projected_local_views_cannot_invent_or_discard_nominal_refinement_proofs() {
+    let source = r#"namespace app
+type Proven = list[int64] where true
+type Rejected = list[int64] where false
+struct Packet:
+    items: Proven
+function inspect(view source: Packet) returns nothing:
+    Proven borrowed = view source.items
+    return nothing
+"#;
+    for invalid in [
+        "target",
+        "discard target",
+        "view",
+        "conversion",
+        "discard conversion",
+        "coarsen",
+        "declassify",
+    ] {
+        let (mut program, checked) = checked_source(source, false).unwrap();
+        let rejected = checked.interner.type_ids().find(|ty| {
+            matches!(checked.interner.resolve(*ty), Type::Refinement { name, .. } if name == "app.Rejected")
+        }).expect("declared Rejected refinement is interned");
+        let function = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        let borrowed = local(function, "borrowed").id;
+        let proven = function.locals[borrowed.index() as usize].ty;
+        let Type::Refinement { base, .. } = checked.interner.resolve(proven) else {
+            panic!("declared predicate-bearing endpoint");
+        };
+        let target = if invalid.starts_with("discard") {
+            *base
+        } else {
+            rejected
+        };
+        function.locals[borrowed.index() as usize].ty = target;
+        let StatementKind::Let { value, .. } = &mut function.body.statements[0].kind else {
+            panic!("unused projected alias still has an initializer");
+        };
+        if !matches!(invalid, "target" | "discard target") {
+            let inner = Box::new(value.clone());
+            value.kind = match invalid {
+                "view" => ExpressionKind::View(inner),
+                "conversion" | "discard conversion" => ExpressionKind::interface_coerce(inner),
+                "coarsen" => ExpressionKind::Coarsen(inner),
+                "declassify" => ExpressionKind::Declassify(inner),
+                _ => unreachable!(),
+            };
+            value.ty = target;
+        }
+        // The owning Packet, field index/type and source identity remain valid.
+        // Only the alleged nominal predicate proof was changed.
+        validate(&program).unwrap();
+        let errors = validate_backend_types(&program, &checked.interner).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("native borrowed alias")),
+            "{invalid}: {errors:?}"
         );
     }
 }

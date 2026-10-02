@@ -3114,7 +3114,14 @@ function inspect(view refined: Numbers, view hidden: secret[list[int64]]) return
                 })
                 .unwrap();
             assert_eq!(lowered, value, "{} initializer was changed", metadata.name);
-            hir::validate_local_view_initializer(lowered, source, metadata.ty, &types).unwrap();
+            hir::validate_local_view_initializer(
+                lowered,
+                source,
+                function.local(source).unwrap().ty,
+                metadata.ty,
+                &types,
+            )
+            .unwrap();
             assert!(!plan.owned_locals.contains(&(local.index() as usize)));
             if metadata.name == "forwarded" || metadata.name == "exposed_alias" {
                 assert!(function.local(source).unwrap().view_source.is_some());

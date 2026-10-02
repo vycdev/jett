@@ -24,7 +24,7 @@ initializer alone would transfer or drop a borrowed handle incorrectly.
 Implicitly copyable results, explicit clones, and ordinary owned field copies
 retain their existing behavior.
 
-## First implementation domain
+## Immutable local alias domain
 
 The implementation admits direct aliases and forwarded aliases rooted in an
 immutable owner or immutable view parameter, used for borrowed reads, view
@@ -72,6 +72,87 @@ own retained or cloned handles. Ordinary copy-owned alias expressions also
 acquire ownership before entering a list, sum, or record, while borrowed
 arguments keep raw handles. Plain string view expressions preserve existing
 copy semantics in owning contexts.
+
+## Stable immutable ordinary-struct field paths
+
+The [typed stable-field contract](native_stable_projected_local_views.md) records
+this bounded extension before compiler integration. Rule Set 24 already permits
+readonly field views, forwarded aliases, and explicit clones. A field of an
+immutable owner is a stable selected payload even though the payload type differs
+from the whole owner's type; incidental reference cloning is not its ownership
+contract. This extension transports and validates the existing borrow rather
+than selecting a new lifetime rule.
+
+An immutable local or immutable view parameter may back a finite field path.
+The existing immediate binding dependency remains the source of owner liveness;
+the initializer's typed `Field` nodes prove the path. Each step checks the exact
+ordinary-struct owner, canonical field index, declared intermediate/endpoint
+type, and terminating source-local identity. Forwarding from a projected alias
+keeps that immediate alias dependency and its original owner chain. The checked
+endpoint retains its type, including secret/refinement qualifications and
+existing interface erasure. Bytes and lists are concrete witnesses, not an
+endpoint allowlist; other endpoint operations retain their existing admission.
+
+Only borrowed field access initializes this non-owning storage. Ordinary field
+copies and explicit clones remain independently owned. No implicit clone, new
+runtime symbol, hidden temporary owner, or duplicate path metadata is needed.
+The whole owner stays initialized/live for all dependent aliases, including
+across CFG edges, while aliases receive no owning cleanup slot. Existing field
+access preserves pending checks on every ancestor and endpoint. Transparent
+`coarsen`/`declassify` bindings retain the existing carrier/erasure restrictions.
+
+Removing the old whole-owner/endpoint equality check requires typed validation
+of every alias initializer before optimization or compaction, including unused
+locals and unreachable blocks. Source facts must belong to their concrete
+ordinary, generic, reflected, or generated body; copied origins from another
+function cannot become borrowed captures. Invalid fields, types, unavailable
+roots, or broken local chains remain handoff failures.
+
+The initial source package has six successful candidates/controls, one terminal
+argument-failure cleanup case, and two frontend-valid boundaries. Its reference
+records are `target/native-stable-projected-view-preflight/results.json`; the
+five projected candidates failed native HIR before this repair, independently
+of the two already supported ownership controls.
+
+An additional frontend/reference-checked fixture covers a borrowed struct field
+followed by its own bytes field, scalar versus move-only `Carrier[T]` bodies,
+and explicit `declassify`/`coarsen` operations on secret/refinement field aliases.
+Its exact three-line source oracle passes in
+`target/native-stable-projected-view-driver-draft/10_typed_endpoints.preflight.json`.
+After integration and nominal-proof review, all 12 local-alias driver tests pass
+(366 filtered, 11.78 seconds) in
+`target/native-stable-projected-view-final-linked.log`. This includes eight
+linked cases with matching debug/release runtime archives and source removal,
+the mutable/temporary publication-sentinel group, and the three existing broad
+alias tests. Successful clones retain independent ownership; later argument
+failure preserves exact output, status 71, and cleanup.
+
+All 896 compiler-phase library tests pass in
+`target/native-stable-projected-view-final-phases.log`: 41 codegen, 416 comptime,
+131 HIR, 86 MIR, and 222 typechecker tests. The nominal guard additionally rejects
+invented or discarded refinement proofs while retaining explicit existing
+ancestors, exact secret declassification, and outer secret promotion. An initial
+negative-test lookup used the exported definition map for an unused type; the
+corrected test reads its actual interned type and passes in the final batch.
+
+The final driver/frontend batch passes all 83 driver library tests (79.46
+seconds) and all 598 frontend fixtures (22.80 seconds) in
+`target/native-stable-projected-view-final-driver-frontend.log`. The diagnostic
+capture regression previously used a now-supported stable field alias as its
+HIR failure trigger; it now uses the already excluded mutable-root case while
+preserving exact comptime/verify observations and diagnostic transport.
+The Linux-only projection-loan regression now tests real owner consumption
+after alias creation instead of rejecting the alias declaration itself. Its
+Windows target discovers zero tests, so Linux CI still must execute that gate;
+the same source has an actual Windows native-object refusal in
+`target/native-stable-projected-view-owner-conflict.json`.
+
+The supplemental native corpus registers 378 tests. These focused results do
+not establish a complete frozen 378-test workspace or supported-host acceptance,
+or every projected owner/endpoint combination. A state-qualified machine-field
+alias is independently frontend/reference-valid but still fails this ordinary-
+struct path proof; its actual characterization is
+`target/native-next-after-projected-view/root_machine_field_alias.preflight.json`.
 
 ## Boundaries requiring a contract
 
