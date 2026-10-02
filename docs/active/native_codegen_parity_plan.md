@@ -1962,23 +1962,40 @@ field identities are pinned. Exact logs and initial source-only preflight
 distinctions are recorded in
 [the local-view note](native_local_view_aliases.md#exact-state-qualified-machine-field-follow-up).
 
-The previous frozen a0bf12df workspace passed with unchanged head/worktree
-and exit zero at 16:01:32 UTC in `target/native-workspace-a0bf12df.log`: all 378
-native tests (785.23 seconds), all 182 object obligations (491.87 seconds), 598
-frontend fixtures (20.05 seconds), 83 driver library tests (75.05 seconds), and
-the remaining workspace/doc-tests. That prior result does not validate later
-machine source/test additions. A complete frozen 392-test workspace and all
-four supported-host jobs for the new source remain required.
+The accepted a0bf12df workspace and all four supported-host jobs are recorded
+in [the acceptance audit](native_acceptance_audit.md#exact-qualified-machine-field-local-view-focused-acceptance).
+The `774b13e7` complete frozen workspace now passes, including all 392 native
+tests and 182 object obligations; its supported-host workflow remains in
+progress. Exact logs and acceptance boundaries are in the audit. This accepted
+local revision predates the inferred JSON repair below.
 
-The earlier a0f0c982 workflow
-[37019114837](https://github.com/vycdev/jett/actions/runs/37019114837) passed all
-four jobs. The latest a0bf12df workflow
-[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) is still in
-progress at this checkpoint: Linux GNU build passed, Windows MSVC build remains
-in progress, and installed-package jobs are pending. Neither earlier revision
-establishes new-source platform acceptance. The about-85% planning estimate and
-fixed 207-fixture denominator remain unchanged; full-language parity is not claimed.
-
-The new corpus registers 392 tests. The estimate remains about 85%; broader
-view/endpoint shapes, open semantics and independent language rows remain
+At that machine checkpoint the corpus registered 392 tests. The estimate
+remains about 85%; broader view/endpoint shapes, open semantics and independent language rows remain
 audit work toward the unchanged whole-language objective.
+
+### Inferred uninhabited JSON serializer slots: focused acceptance
+
+Public JSON policy and actual reference execution admit inferred empty lists,
+absent optionals, one-sided results, string-keyed empty maps, and nested
+record/collection carriers. The characterized native selector omitted their
+Never slot and retained an unsupported generic intrinsic. The applied repair
+selects the existing checked source serializer without changing inference,
+public type policy, or runtime representation. Parse eligibility remains its
+own characterization and implementation obligation.
+
+Actual pre-change captures, the pending-carrier failure boundary, and the
+executed linked/compiler gates are in
+[the scoped contract](native_json_uninhabited_slots.md). Source-body checking,
+carrier evaluation and cleanup cannot be replaced by optimizer folding or an
+empty-value exemption for unsupported inhabited targets. These evidence and
+implementation states do not raise the broad estimate or change the fixed
+inventory; the full 100% language objective remains intact.
+
+The further actual pure/comptime/reference-suite and public-policy controls are
+recorded in that note along with the separate projected-owner reread witness.
+All 14 new driver tests pass together, covering the original carriers, pure
+native suites, public projection, grouped negative publication controls and
+owner rereads. The crossed compiler gate passes 948 library tests, followed
+by 83 driver library tests, all 598 frontend fixtures and 17 Jett format checks.
+The supplemental corpus registers 406 tests; a complete frozen workspace and
+all four supported-host jobs for the final JSON revision remain required.

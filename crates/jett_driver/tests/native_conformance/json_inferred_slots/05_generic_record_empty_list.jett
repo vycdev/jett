@@ -1,0 +1,10 @@
+namespace app
+struct Envelope[T]:
+    items: list[T]
+function encode[T](view values: list[T]) returns string:
+    use json
+    Envelope[T] envelope = Envelope[T](items: clone values)
+    return json.serialize[Envelope[T]](view envelope)
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{encode(view list())}\n")
+    return nothing

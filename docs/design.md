@@ -3957,6 +3957,18 @@ Typed JSON parser calls also use ordinary pipeline semantics:
 same target type, compiler-owned JSON policy, and step-local error handling
 as their direct-call forms.
 
+JSON policy preserves the uninhabited type inferred for unconstrained empty
+collections or absent sum slots. An admitted empty list, absent optional,
+one-sided result, or string-keyed map does not need a default element or
+payload type merely to serialize it. The ordinary rules still check every
+inhabited slot, including nested fields and secret projection; an empty value
+does not exempt function, actor, interface, capability, resource, or other
+unsupported targets from public JSON policy. There is no inhabited `never`
+value or new source spelling. Generic source bodies remain checked before
+impossible iteration or sum extraction is omitted. Carrier evaluation,
+ownership, pending-state errors and cleanup remain observable even when no
+payload can be read.
+
 **Using auto-generated serialization:**
 
 ```

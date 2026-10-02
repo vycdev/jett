@@ -79,6 +79,11 @@ The following semantic and implementation gaps prevent a full parity claim:
   current checks admit some refinement/base requests with matching carriers and
   secrecy. Preserving the actual owner on an admitted interface read does not
   select the broader requested-type contract or authorize arbitrary nominal casts.
+- [Inferred uninhabited JSON slots](native_json_uninhabited_slots.md): the
+  characterized serializer selector omitted an already-admitted Never slot.
+  The applied source repair passes 14 linked/publication gates and the affected
+  compiler/frontend checks. Complete 406-test workspace and supported-host
+  acceptance remain required; parser eligibility is a separate open gap.
 
 The [interface audit](native_interface_values.md) also retains the remaining
 facade, refinement-composition, and comptime combinations that need scrutiny.
@@ -1487,17 +1492,36 @@ and exit zero at 16:01:32 UTC in `target/native-workspace-a0bf12df.log`: all 378
 native tests (785.23 seconds), all 182 object obligations (491.87 seconds), 598
 frontend fixtures (20.05 seconds), 83 driver library tests (75.05 seconds), and
 the remaining workspace/doc-tests. That prior result does not validate later
-machine source/test additions. A complete frozen 392-test workspace and all
-four supported-host jobs for the new source remain required.
+machine source/test additions.
 
 The earlier a0f0c982 workflow
 [37019114837](https://github.com/vycdev/jett/actions/runs/37019114837) passed all
-four jobs. The latest a0bf12df workflow
-[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) is still in
-progress at this checkpoint: Linux GNU build passed, Windows MSVC build remains
-in progress, and installed-package jobs are pending. Neither earlier revision
-establishes new-source platform acceptance. The about-85% planning estimate and
-fixed 207-fixture denominator remain unchanged; full-language parity is not claimed.
+four jobs. The a0bf12df workflow
+[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) also passes
+all four Linux GNU/Windows MSVC build/package and clean installed-package jobs.
+These accepted predecessor revisions do not establish new-source platform
+acceptance.
 
-The current corpus registers 392 tests. Broader owner/endpoint combinations
-and independent language surfaces remain audit obligations.
+### Current frozen revision and inferred JSON follow-up
+
+The exact-state machine repair is committed as `774b13e7`. Its complete frozen
+workspace passes with unchanged source and exit zero at 17:12:39 UTC in
+`target/native-workspace-774b13e7.log`, including all 392 native tests (858.92
+seconds), all 182 object obligations (the four-test object manifest gate passes
+in 505.90 seconds), the remaining workspace targets and doc-tests. Its
+[workflow 37035818971](https://github.com/vycdev/jett/actions/runs/37035818971)
+was still in progress at this checkpoint; supported-host acceptance remains
+pending. Broader owner/endpoint
+combinations and independent language surfaces remain audit obligations.
+
+The applied inferred JSON serializer repair passes 14 new linked/publication
+tests (8.09 seconds), 948 crossed compiler library tests, 83 driver library
+tests, all 598 frontend fixtures, and 17 Jett format checks. Both profiles pin
+source-deleted execution, pending failure/cleanup, pure/comptime/verify/property,
+public policy and owner rereads. Its actual captures, exact logs and boundaries
+are centralized in [the scoped note](native_json_uninhabited_slots.md).
+The supplemental corpus registers 406 tests; a fresh complete workspace and
+all four supported-host jobs for the JSON revision remain required. The
+unchanged objective
+is whole-language native parity; the about-85% planning estimate and fixed
+207-fixture denominator do not measure completion of these focused slices.

@@ -1,0 +1,18 @@
+namespace app
+struct Envelope[T]:
+    items: list[T]
+function encode[T](view values: list[T]) returns string:
+    use json
+    Envelope[T] owner = Envelope[T](items: clone values)
+    list[T] observed = view owner.items
+    string direct = json.serialize[list[T]](view observed)
+    string public_encoded = view observed into json.serialize_public[list[T]]()
+    Envelope[T] duplicate = clone owner
+    string copied = json.serialize[Envelope[T]](view duplicate)
+    int64 observed_count = list.length[T](view observed)
+    int64 owner_count = list.length[T](view owner.items)
+    int64 original_count = list.length[T](view values)
+    return "{direct}:{public_encoded}:{copied}:{observed_count}:{owner_count}:{original_count}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "{encode(view list())}\n")
+    return nothing

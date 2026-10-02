@@ -84,6 +84,9 @@ mod debug_event_transport;
 #[path = "native_conformance/json_qualified_machines.rs"]
 mod json_qualified_machines;
 
+#[path = "native_conformance/json_inferred_slots.rs"]
+mod json_inferred_slots;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

@@ -3396,6 +3396,9 @@ impl<'a> TypeChecker<'a> {
             | Type::Uint64
             | Type::Float32
             | Type::Float64 => true,
+            // Inferred empty carriers have no Never payload to serialize.
+            // Their checked source bodies still precede uninhabited lowering.
+            Type::Never => true,
             Type::List(element) => self.native_json_source_supported(*element, visiting),
             Type::Set(element) => {
                 self.is_primitive_hashable_type(*element)
@@ -16037,6 +16040,120 @@ struct Snapshot:
             2,
             "qualification does not filter declared machine metadata"
         );
+    }
+
+    #[test]
+    fn native_json_serializers_keep_inferred_uninhabited_slots_in_source_targets() {
+        for serializer in ["serialize", "serialize_public"] {
+            // These minimal trusted declarations isolate source-facade facts.
+            // Linked driver gates must exercise the actual reflected bodies.
+            let source = format!(
+                r#"namespace json
+export function serialize[T](view value: T) returns string:
+    return ""
+export function serialize_public[T](view value: T) returns string:
+    return ""
+namespace app
+function direct[T](view values: list[T]) returns string:
+    return json.{serializer}[list[T]](view values)
+function piped[T](view values: list[T]) returns string:
+    return view values into json.{serializer}[list[T]]()
+function main() returns nothing:
+    string inferred = direct(view list())
+    string pipeline = piped(view list())
+    string concrete = direct[int64](view list())
+    return nothing
+"#
+            );
+            let parsed = parse(&source, FileId::new(STDLIB_FILE_ID_START));
+            assert!(
+                parsed.errors.is_empty(),
+                "{serializer}: {:?}",
+                parsed.errors
+            );
+            let resolved = jett_resolve::resolve(&parsed.module);
+            assert!(
+                resolved
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{serializer}: {:?}",
+                resolved.diagnostics
+            );
+            let checked = check(&parsed.module, &resolved);
+            assert!(
+                checked
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+                "{serializer}: {:?}",
+                checked.diagnostics
+            );
+            let mut targets = Vec::new();
+            for instance in &checked.generic_function_instantiations {
+                let name = resolved.scope_table.def(instance.definition).name.as_str();
+                if !matches!(name, "app.direct" | "app.piped") {
+                    continue;
+                }
+                let [element] = instance.concrete_args.as_slice() else {
+                    panic!("one inferred or declared element argument");
+                };
+                assert!(matches!(
+                    *element,
+                    TypeInterner::NEVER | TypeInterner::INT64
+                ));
+                let calls = instance
+                    .generic_calls
+                    .values()
+                    .filter(|call| {
+                        resolved.scope_table.def(call.definition).name
+                            == format!("json.{serializer}")
+                    })
+                    .collect::<Vec<_>>();
+                let [call] = calls.as_slice() else {
+                    panic!("{name}[{element:?}] selects exactly one checked JSON source facade");
+                };
+                let [target] = call.concrete_args.as_slice() else {
+                    panic!("one exact JSON target");
+                };
+                assert!(
+                    matches!(checked.interner.resolve(*target), Type::List(inner) if inner == element)
+                );
+                assert_eq!(instance.parameter_types, [*target]);
+                assert_eq!(instance.return_type, TypeInterner::STRING);
+                assert!(instance.intrinsic_ids.values().any(|id| {
+                    *id == if serializer == "serialize" {
+                        IntrinsicId::JsonSerialize
+                    } else {
+                        IntrinsicId::JsonSerializePublic
+                    }
+                }));
+                targets.push((name, *element));
+            }
+            assert_eq!(targets.len(), 3, "{serializer}: {targets:?}");
+            assert!(targets.contains(&("app.direct", TypeInterner::NEVER)));
+            assert!(targets.contains(&("app.piped", TypeInterner::NEVER)));
+            assert!(targets.contains(&("app.direct", TypeInterner::INT64)));
+
+            let unsupported = format!(
+                "namespace app\nfunction encode(view values: list[function() returns int64]) returns string:\n    return json.{serializer}[list[function() returns int64]](view values)\n"
+            );
+            let errors = check_source_errors(&unsupported);
+            assert!(
+                errors.iter().any(|error| error.code.code() == 347),
+                "{errors:?}"
+            );
+
+            // An empty iteration still cannot fabricate an inhabited Never.
+            let invalid_body = format!(
+                "namespace app\nfunction encode[T](view values: list[T]) returns string:\n    for item in view values:\n        T fabricated = 7\n    return json.{serializer}[list[T]](view values)\nfunction main() returns nothing:\n    string outcome = encode(view list())\n    return nothing\n"
+            );
+            let errors = check_source_errors(&invalid_body);
+            assert!(
+                errors.iter().any(|error| error.message.contains("<never>")),
+                "empty source bodies remain checked: {errors:?}"
+            );
+        }
     }
 
     #[test]

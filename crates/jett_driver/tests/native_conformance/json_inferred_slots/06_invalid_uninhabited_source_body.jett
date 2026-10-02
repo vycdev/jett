@@ -1,0 +1,10 @@
+namespace app
+function encode[T](view values: list[T]) returns string:
+    use json
+    for item in view values:
+        T fabricated = 7
+    return json.serialize[list[T]](view values)
+function main(stdout: Stdout) returns nothing:
+    string encoded = encode(view list())
+    Stdout.write(view stdout, "unexpected:{encoded}\n")
+    return nothing

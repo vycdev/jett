@@ -227,22 +227,13 @@ The actual owner-change group reaches the existing typed ownership refusal
 before archive lookup and preserves the output sentinel in both profiles.
 No source loan-expiry or temporary-lifetime contract is selected.
 
-The previous frozen a0bf12df workspace passed with unchanged head/worktree
-and exit zero at 16:01:32 UTC in `target/native-workspace-a0bf12df.log`: all 378
-native tests (785.23 seconds), all 182 object obligations (491.87 seconds), 598
-frontend fixtures (20.05 seconds), 83 driver library tests (75.05 seconds), and
-the remaining workspace/doc-tests. That prior result does not validate later
-machine source/test additions. A complete frozen 392-test workspace and all
-four supported-host jobs for the new source remain required.
-
-The earlier a0f0c982 workflow
-[37019114837](https://github.com/vycdev/jett/actions/runs/37019114837) passed all
-four jobs. The latest a0bf12df workflow
-[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) is still in
-progress at this checkpoint: Linux GNU build passed, Windows MSVC build remains
-in progress, and installed-package jobs are pending. Neither earlier revision
-establishes new-source platform acceptance. The about-85% planning estimate and
-fixed 207-fixture denominator remain unchanged; full-language parity is not claimed.
+The accepted a0bf12df frozen workspace and all four supported-host jobs are
+centralized in
+[the acceptance audit](native_acceptance_audit.md#exact-qualified-machine-field-local-view-focused-acceptance).
+The `774b13e7` complete frozen workspace now passes; its supported-host workflow
+remains in progress. The audit records exact final logs and counts. This local
+acceptance does not validate later inferred JSON changes or establish full-language parity. The about-85%
+planning estimate and fixed 207-fixture denominator remain unchanged.
 
 
 ## Boundaries requiring a contract

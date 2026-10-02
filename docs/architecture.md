@@ -1385,6 +1385,21 @@ other concrete generic JSON bodies are staged for native specialization.
 Structs, lists, string-keyed maps, optionals, and results composed of supported
 primitive values now run the checked reflected stdlib serializer. The
 compiler-owned public policy gates still run first.
+Those gates already admit inferred uninhabited slots. Serializer source
+eligibility must retain `Type::Never` in an otherwise supported empty or
+absent carrier, without choosing a default element type or introducing a
+runtime Never representation. The same recursive checks still reject every
+unsupported inhabited slot; runtime emptiness is not a policy exception.
+The frontend checks the selected reflected source bodies before HIR/MIR omit
+impossible payload operations. Existing uninhabited preparation retains
+carrier evaluation, length or sum-tag observation, pending checks, and cleanup
+before normal native verification, independently of optimization.
+The selector repair, executed focused gates and remaining release gates are
+recorded in
+[the inferred JSON slot note](active/native_json_uninhabited_slots.md).
+Parser eligibility is a separate follow-up requiring actual empty/nonempty
+input and failure-order characterization; this serializer work does not
+change it.
 The checker also records a source parser facade for `json.parse[T]` and
 `json.parse_exact[T]` pipeline steps from the checked result's success type.
 It uses the existing direct-call facade mechanism after public JSON policy

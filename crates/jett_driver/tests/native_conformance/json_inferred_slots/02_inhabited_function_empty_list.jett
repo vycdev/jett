@@ -1,0 +1,8 @@
+namespace app
+function encode(view callbacks: list[function() returns int64]) returns string:
+    use json
+    return json.serialize[list[function() returns int64]](view callbacks)
+function main(stdout: Stdout) returns nothing:
+    string encoded = encode(view list())
+    Stdout.write(view stdout, "unexpected:{encoded}\n")
+    return nothing
