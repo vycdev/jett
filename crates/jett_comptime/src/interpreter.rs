@@ -7304,23 +7304,24 @@ impl Interpreter {
             return type_name.to_string();
         }
 
-        if let Some(base_ty) = self.type_alias_bases.get(type_name) {
+        let compared = if let Some(base_ty) = self.type_alias_bases.get(type_name) {
             let namespace =
                 Self::type_name_namespace(type_name).or(self.current_namespace.as_deref());
             let base_ty = self.substitute_type_expr_in_namespace(base_ty, namespace);
-            return self.reflection_compare_type_expr_inner(&base_ty, visited);
-        }
-
-        if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
+            self.reflection_compare_type_expr_inner(&base_ty, visited)
+        } else if let Some((owner, args)) = Self::split_generic_type_display(type_name) {
             let owner = self.reflection_compare_type_name_inner(owner, visited);
             let args = Self::split_type_display_args(args)
                 .into_iter()
                 .map(|arg| self.reflection_compare_type_name_inner(arg.trim(), visited))
                 .collect::<Vec<_>>();
-            return format!("{owner}[{}]", args.join(", "));
-        }
-
-        type_name.to_string()
+            format!("{owner}[{}]", args.join(", "))
+        } else {
+            type_name.to_string()
+        };
+        // Only an active expansion is a cycle; sibling arguments are independent.
+        visited.remove(type_name);
+        compared
     }
 
     fn reflection_compare_type_expr(&self, ty: &TypeExpr) -> String {
@@ -14082,6 +14083,302 @@ mod tests {
     use jett_parser::ast::*;
 
     use super::*;
+
+    #[test]
+    fn reflected_comparison_normalizes_repeated_aliases_without_erasing_boundaries() {
+        let mut interpreter = reuse_interpreter();
+        interpreter.register_type_alias(&type_alias("IntegerAlias", "int64", None));
+        for (actual, requested) in [
+            ("map[int64, int64]", "map[IntegerAlias, IntegerAlias]"),
+            ("map[int64, int64]", "map[models.Positive, models.Positive]"),
+            (
+                "result[int64, int64]",
+                "result[models.Positive, models.Positive]",
+            ),
+            (
+                "map[list[int64], list[int64]]",
+                "map[list[models.Positive], list[models.Positive]]",
+            ),
+            ("Box[int64, int64]", "Box[models.Positive, models.Positive]"),
+            (
+                "secret[map[int64, int64]]",
+                "secret[map[models.Positive, models.Positive]]",
+            ),
+        ] {
+            let requested_ty = Interpreter::simple_type_expr_from_name(requested, sp()).unwrap();
+            assert!(interpreter.reflection_type_names_match(actual, requested));
+            assert!(interpreter.reflection_type_name_matches_expr(actual, &requested_ty));
+        }
+        for (actual, requested) in [
+            ("map[int64, int64]", "map[models.Positive, bool]"),
+            (
+                "Box[int64, int64]",
+                "OtherBox[models.Positive, models.Positive]",
+            ),
+            (
+                "map[int64, int64]",
+                "secret[map[models.Positive, models.Positive]]",
+            ),
+            (
+                "secret[map[int64, int64]]",
+                "map[models.Positive, models.Positive]",
+            ),
+        ] {
+            let requested_ty = Interpreter::simple_type_expr_from_name(requested, sp()).unwrap();
+            assert!(!interpreter.reflection_type_names_match(actual, requested));
+            assert!(!interpreter.reflection_type_name_matches_expr(actual, &requested_ty));
+        }
+        let repeated =
+            Interpreter::simple_type_expr_from_name("map[models.Positive, models.Positive]", sp())
+                .unwrap();
+        assert_eq!(
+            interpreter
+                .reflection_compare_type_expr(&TypeExpr::View(Box::new(repeated.clone()), sp(),)),
+            "view map[int64, int64]"
+        );
+        assert_eq!(
+            interpreter.reflection_compare_type_expr(&TypeExpr::StateQualified(
+                Box::new(repeated),
+                ident("active"),
+                sp(),
+            )),
+            "map[int64, int64] at active"
+        );
+        assert_eq!(
+            interpreter.reflection_compare_type_expr(&TypeExpr::Function(
+                vec![type_named("models.Positive"), type_named("models.Positive")],
+                Box::new(type_named("models.Positive")),
+                sp(),
+            )),
+            "function(int64, int64) returns int64"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn reflected_comparison_retains_declaration_context_and_cycle_stopping() {
+        let mut interpreter = reuse_interpreter();
+        interpreter
+            .register_type_alias_in_namespace(Some("models"), &type_alias("Local", "int64", None));
+        interpreter
+            .register_type_alias_in_namespace(Some("shadow"), &type_alias("Local", "bool", None));
+        let mut pair = type_alias("Pair", "int64", None);
+        pair.base_type =
+            Interpreter::simple_type_expr_from_name("map[Local, Local]", sp()).unwrap();
+        interpreter.register_type_alias_in_namespace(Some("models"), &pair);
+        interpreter.current_namespace = Some("shadow".into());
+        assert_eq!(
+            interpreter.reflection_compare_type_name("models.Pair"),
+            "map[int64, int64]"
+        );
+        assert!(
+            !interpreter
+                .reflection_type_names_match("map[int64, int64]", "map[models.Pair, models.Pair]")
+        );
+        assert!(interpreter.reflection_type_names_match(
+            "map[map[int64, int64], map[int64, int64]]",
+            "map[models.Pair, models.Pair]"
+        ));
+
+        // Malformed metadata-free alias graphs remain bounded and do not become integers.
+        for (name, base) in [
+            ("SelfCycle", "SelfCycle"),
+            ("CycleA", "CycleB"),
+            ("CycleB", "CycleA"),
+            ("GenericCycle", "list[GenericCycle]"),
+        ] {
+            let mut alias = type_alias(name, "int64", None);
+            alias.base_type = Interpreter::simple_type_expr_from_name(base, sp()).unwrap();
+            interpreter.register_type_alias(&alias);
+        }
+        for (name, expected) in [
+            ("SelfCycle", "SelfCycle"),
+            ("CycleA", "CycleA"),
+            ("CycleB", "CycleB"),
+            ("GenericCycle", "list[GenericCycle]"),
+        ] {
+            assert_eq!(interpreter.reflection_compare_type_name(name), expected);
+            assert!(!interpreter.reflection_type_names_match("int64", name));
+        }
+        assert_eq!(
+            interpreter.reflection_compare_type_name("map[CycleA, models.Positive]"),
+            "map[CycleA, int64]"
+        );
+        assert!(reuse_markers(&mut interpreter).is_empty());
+    }
+
+    #[test]
+    fn repeated_reflected_leaf_requests_validate_map_slots_and_occupied_result_arms() {
+        for shape in ["record", "enum", "machine"] {
+            for (actual, requested, payload, expected_markers) in [
+                (
+                    "map[int64, int64]",
+                    "map[models.Positive, models.Positive]",
+                    Value::Map(vec![
+                        (Value::Int64(1), Value::Int64(7)),
+                        (Value::Int64(2), Value::Int64(9)),
+                    ]),
+                    vec!["trace positive"; 4],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[models.Positive, models.Positive]",
+                    Value::ResultOk(Box::new(Value::Int64(7))),
+                    vec!["trace positive"],
+                ),
+                (
+                    "result[int64, int64]",
+                    "result[models.Positive, models.Positive]",
+                    Value::ResultFail(Box::new(Value::Int64(9))),
+                    vec!["trace positive"],
+                ),
+            ] {
+                let (mut interpreter, expression) =
+                    nested_reflected_case(shape, actual, requested, payload.clone());
+                let source = interpreter.get_variable("input").unwrap().clone();
+                assert_eq!(
+                    interpreter.eval_expr(&expression).unwrap().payload(),
+                    &payload,
+                    "{shape}/{requested}"
+                );
+                assert_eq!(reuse_markers(&mut interpreter), expected_markers);
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    format!("{source:?}"),
+                );
+                assert!(interpreter.allow_checked_refinement_proofs);
+            }
+            let (mut interpreter, expression) = nested_reflected_case(
+                shape,
+                "map[int64, int64]",
+                "map[models.Positive, models.Positive]",
+                Value::Map(vec![
+                    (Value::Int64(1), Value::Int64(-2)),
+                    (Value::Int64(3), Value::Int64(4)),
+                ]),
+            );
+            let source = interpreter.get_variable("input").unwrap().clone();
+            assert_eq!(
+                interpreter.eval_expr(&expression),
+                Err("refinement type constraint failed for 'models.Positive'".into())
+            );
+            assert_eq!(reuse_markers(&mut interpreter), ["trace positive"; 2]);
+            assert_eq!(
+                format!("{:?}", interpreter.get_variable("input").unwrap()),
+                format!("{source:?}"),
+            );
+
+            for depth in [0, 1, 2] {
+                let mut pending = Value::Map(vec![(Value::Int64(1), Value::Int64(7))]);
+                for _ in 0..depth {
+                    pending = Value::Pending(Box::new(pending));
+                }
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "map[models.Positive, models.Positive]",
+                    "map[models.Positive, models.Positive]",
+                    pending.clone(),
+                );
+                assert_eq!(interpreter.eval_expr(&expression), Ok(pending.clone()));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                if depth != 0 {
+                    let (mut interpreter, expression) = nested_reflected_case(
+                        shape,
+                        "map[int64, int64]",
+                        "map[models.Positive, models.Positive]",
+                        pending,
+                    );
+                    let source = interpreter.get_variable("input").unwrap().clone();
+                    assert_eq!(
+                        interpreter.eval_expr(&expression),
+                        Err("reflected field refinement: expected a ready map value".into())
+                    );
+                    assert!(reuse_markers(&mut interpreter).is_empty());
+                    assert_eq!(
+                        format!("{:?}", interpreter.get_variable("input").unwrap()),
+                        format!("{source:?}"),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_reflected_requests_keep_selector_precedence_and_protected_refusals() {
+        for shape in ["record", "enum", "machine"] {
+            for (name, replacement, error_fragment) in [
+                (
+                    "owner_type",
+                    Value::String("Other".into()),
+                    "field metadata belongs to",
+                ),
+                (
+                    "owner_member",
+                    Value::OptionalSome(Box::new(Value::String("other".into()))),
+                    "field metadata belongs to",
+                ),
+                ("index", Value::Int64(9), "at index 9"),
+                ("name", Value::String("other".into()), "does not match"),
+                ("type_name", Value::String("bool".into()), "has type 'bool'"),
+            ] {
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    "map[int64, int64]",
+                    "map[models.Positive, models.Positive]",
+                    Value::Map(vec![(Value::Int64(-1), Value::Int64(-2))]),
+                );
+                let source = interpreter.get_variable("input").unwrap().clone();
+                let mut selector = interpreter.get_variable("selector").unwrap().clone();
+                let Value::Struct { fields, .. } = &mut selector else {
+                    unreachable!()
+                };
+                fields
+                    .iter_mut()
+                    .find(|(field, _)| field == name)
+                    .unwrap()
+                    .1 = replacement;
+                interpreter.set_variable("selector", selector.clone());
+                let error = interpreter.eval_expr(&expression).unwrap_err();
+                assert!(error.contains(error_fragment), "{shape}/{name}: {error}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                interpreter.checked_expression_types = None;
+                assert_eq!(interpreter.eval_expr(&expression), Err(error));
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    format!("{source:?}"),
+                );
+                assert_eq!(interpreter.get_variable("selector"), Some(&selector));
+            }
+            for (actual, requested, expected) in [
+                (
+                    "secret[map[int64, int64]]",
+                    "secret[map[models.Positive, models.Positive]]",
+                    "reflected field refinement: cannot establish new invariants beneath secret",
+                ),
+                (
+                    "Box[int64, int64]",
+                    "Box[models.Positive, models.Positive]",
+                    "reflected field refinement: unsupported callable or nominal refinement conversion",
+                ),
+            ] {
+                let (mut interpreter, expression) = nested_reflected_case(
+                    shape,
+                    actual,
+                    requested,
+                    Value::Map(vec![(Value::Int64(-913), Value::Int64(-914))]),
+                );
+                let source = interpreter.get_variable("input").unwrap().clone();
+                let error = interpreter.eval_expr(&expression).unwrap_err();
+                assert_eq!(error, expected, "{shape}/{requested}");
+                assert!(reuse_markers(&mut interpreter).is_empty());
+                assert_eq!(
+                    format!("{:?}", interpreter.get_variable("input").unwrap()),
+                    format!("{source:?}"),
+                );
+            }
+        }
+    }
 
     fn nested_reflected_case(
         shape: &str,

@@ -559,6 +559,8 @@ its result type supplies proof. The field's actual declared root refinement
 chain proves its established ancestors; a requested annotation alone does not.
 Existing selector checks run before new predicates. Requested-type admission
 and unresolved qualified or nested conversions retain their separate contract.
+Within admitted generic requests, each type argument compares independently.
+Repeating an alias or refinement does not itself imply recursive expansion.
 
 Generic struct fields use the constructor's selected concrete type arguments,
 resolved in the caller. Field declarations then resolve in the struct's own

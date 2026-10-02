@@ -60,6 +60,13 @@ ancestor prefix. Visit occupied optional/result arms and collection members in
 their existing order, preserve the source, and leave inactive arms alone.
 Runtime type labels are not evidence for a replaced payload.
 
+Repeated alias or refinement arguments normalize independently within this
+existing relation. The reference comparator now tracks only the active expansion
+path; a completed sibling is not a recursive re-entry. This repairs repeated
+map/result slot comparison without selecting broader admission or converting
+nominal owners. Native raw compatibility still keeps exact child TypeIds, so new
+nested container requests remain a separate native parity obligation.
+
 Pending containers require a separate conversion contract. An exact
 actual/requested schema preserves pending values unchanged. Establishing a
 changed nested invariant must not implicitly join the container or inspect its

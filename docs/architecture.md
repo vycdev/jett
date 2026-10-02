@@ -1033,6 +1033,9 @@ containers, secret qualifiers, callable signatures, or nominal generic instances
 fail conservatively where conversion or observer contracts remain unresolved.
 These safeguards preserve selector checks and source ownership without selecting
 the broader reflected requested-type admission rule.
+Reference reflected-name normalization tracks only the active alias-expansion
+path. Completed sibling arguments leave that path, so repeated aliases and
+refinements compare independently while actual recursive re-entry remains bounded.
 Native root-refinement reads carry complete per-declared-slot validation plans
 in HIR. Direct and piped getters share the canonical hidden field-metadata tail,
 appended after the original source and selector operands. Narrowed machines keep

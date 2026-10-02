@@ -1113,6 +1113,17 @@ outside these observer tests. Native conformance now has 304 supplemental tests;
 the fixed inventory denominator is unchanged. Full workspace and supported-host
 distribution validation remain obligations for this later revision.
 
+Reference reflected-type comparison now removes completed aliases/refinements
+from its active expansion path. Repeated map/result arguments therefore normalize
+independently, while actual recursive re-entry remains bounded. Four regressions
+cover all three selectors, map key/value and occupied-arm order, exact pending
+depths 0/1/2, changed-pending refusal, unchanged source, selector precedence,
+declaration namespace, cycles, and protected conversion refusals. All 403
+interpreter tests and all 598 frontend fixtures pass. Fresh CLI map and result
+controls pass through all three getters with the expected predicate traces and
+unchanged sources. This reference repair does not widen the native raw getter's
+currently narrower nested-type compatibility gate.
+
 The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).
 Supplemental cases do not change the inventory denominator. Full workspace and
