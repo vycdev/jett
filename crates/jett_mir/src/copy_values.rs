@@ -646,7 +646,9 @@ fn visit(
         | ExpressionKind::Unary { value, .. } => {
             visit(value, reads, temporaries, types, program, false)?
         }
-        ExpressionKind::View(value) | ExpressionKind::Clone(value) => {
+        ExpressionKind::View(value)
+        | ExpressionKind::Clone(value)
+        | ExpressionKind::RuntimeFailureMessage(value) => {
             visit(value, reads, temporaries, types, program, true)?
         }
         ExpressionKind::Call { function, args, .. } => {

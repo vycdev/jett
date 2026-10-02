@@ -575,7 +575,14 @@ Reference inline closures retain their declared return annotations and validate
 parameters and results inside their captured context before exposing a typed
 call result. Fresh private sum fallback results also validate before checked
 proof reuse; refined summation remains outside native admission. Native checks
-for newly refined returns remain separate implementation work.
+for newly refined root returns now use the existing staged refinement machinery.
+Checked concrete function and inline signatures select the destination. Exact
+sources skip predicates; ancestor sources check only their missing suffix. The
+candidate is evaluated once, and the original string error reaches the existing
+borrowed `RuntimeFailMessage` leaf before owned locals are unwound. The private
+HIR `RuntimeFailureMessage` boundary requires exact string input and nothing
+output; it introduces no source spelling or ABI operation. Outer secret or
+container return conversion admission is not broadened.
 Reference reflected reads also establish new requested invariants in ready
 builtin containers before exposing checked result proof. Exact declared schemas
 preserve pending values; unsupported changed pending, secret, callable, or nominal

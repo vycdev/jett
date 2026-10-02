@@ -1008,6 +1008,14 @@ Inline closures retain their declared return annotation in the captured lexical
 context. Parameter and return normalization and refinement validation run before
 that context is restored; actual return-expression facts supply the same proof
 as named calls. Host-generated callbacks retain their separate forced-call path.
+Native returns into a root refinement validate the original checked expression
+before representation coercion. The selected concrete function signature supplies
+the destination, including generic methods and scoped inline functions. Exact
+sources retain their proof; ancestor sources skip their established predicate
+prefix. MIR stages the candidate once and uses its existing refinement checks.
+A compiler-owned `RuntimeFailureMessage` borrows the captured string error and
+terminates through the existing runtime failure leaf, preserving cleanup and
+the first predicate error. It has no source spelling and adds no ABI operation.
 Fresh private sum fallback results validate their selected actual type before
 checked source execution can reuse it as a proof. Raw and metadata-free calls
 keep the existing forced facade return boundary. This does not select a broader

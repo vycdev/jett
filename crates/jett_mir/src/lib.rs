@@ -755,6 +755,7 @@ impl FunctionValidator<'_, '_> {
             | hir::ExpressionKind::RefinementValidated(value)
             | hir::ExpressionKind::DisplayResult(value)
             | hir::ExpressionKind::EquatableResult(value)
+            | hir::ExpressionKind::RuntimeFailureMessage(value)
             | hir::ExpressionKind::InterfaceType(value)
             | hir::ExpressionKind::Run(value)
             | hir::ExpressionKind::Join(value)

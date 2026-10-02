@@ -260,6 +260,15 @@ impl BackendTypeValidator<'_> {
                 self.expression(left, function_name);
                 self.expression(right, function_name);
             }
+            ExpressionKind::RuntimeFailureMessage(value) => {
+                self.expression(value, function_name);
+                if value.ty != TypeInterner::STRING || expression.ty != TypeInterner::NOTHING {
+                    self.error(
+                        expression.span,
+                        "dynamic runtime failure requires exact string input and nothing output",
+                    );
+                }
+            }
             ExpressionKind::DisplayResult(value) => {
                 self.expression(value, function_name);
                 if expression.ty != TypeInterner::STRING || value.ty != TypeInterner::STRING {
@@ -876,6 +885,46 @@ mod tests {
                 let errors = result.expect_err("invalid equality boundary type");
                 assert!(errors.iter().any(|error| error.message ==
                     "equality result boundary requires the same bool type with only outer secret qualification"));
+            }
+        }
+    }
+
+    #[test]
+    fn native_return_dynamic_failure_requires_exact_string_and_nothing() {
+        let mut interner = TypeInterner::new();
+        let secret_string = interner.intern(Type::Secret(TypeInterner::STRING));
+        for (input, output, valid) in [
+            (TypeInterner::STRING, TypeInterner::NOTHING, true),
+            (TypeInterner::INT64, TypeInterner::NOTHING, false),
+            (secret_string, TypeInterner::NOTHING, false),
+            (TypeInterner::STRING, TypeInterner::STRING, false),
+        ] {
+            let boundary = Expression {
+                kind: ExpressionKind::RuntimeFailureMessage(Box::new(Expression {
+                    kind: if input == TypeInterner::INT64 {
+                        ExpressionKind::Int(7)
+                    } else {
+                        ExpressionKind::String("error".into())
+                    },
+                    ty: input,
+                    span: test_span(),
+                })),
+                ty: output,
+                span: test_span(),
+            };
+            let program = program_with(
+                TypeInterner::NOTHING,
+                vec![Statement {
+                    kind: StatementKind::Expression(boundary),
+                    span: test_span(),
+                }],
+            );
+            let result = validate_backend_types(&program, &interner);
+            if valid {
+                result.expect("exact borrowed error boundary");
+            } else {
+                assert!(result.expect_err("malformed dynamic error").iter().any(|error|
+                    error.message == "dynamic runtime failure requires exact string input and nothing output"));
             }
         }
     }

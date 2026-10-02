@@ -60,6 +60,12 @@ mod refinement_reuse;
 #[path = "native_conformance/refinement_calls.rs"]
 mod refinement_calls;
 
+#[path = "native_conformance/refinement_returns.rs"]
+mod refinement_returns;
+
+#[path = "native_conformance/inline_refinement_returns.rs"]
+mod inline_refinement_returns;
+
 #[path = "native_conformance/refinement_sum.rs"]
 mod refinement_sum;
 

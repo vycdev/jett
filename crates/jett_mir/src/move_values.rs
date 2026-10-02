@@ -685,7 +685,9 @@ impl Flow<'_> {
             | ExpressionKind::ResultOk(value)
             | ExpressionKind::ResultFail(value)
             | ExpressionKind::OptionalSome(value) => self.expr(value, false)?,
-            ExpressionKind::InterfaceType(value) => self.expr(value, true)?,
+            ExpressionKind::InterfaceType(value) | ExpressionKind::RuntimeFailureMessage(value) => {
+                self.expr(value, true)?
+            }
             ExpressionKind::FunctionAdapter { value, .. } => self.expr(value, false)?,
             ExpressionKind::InterfaceCoerce { value: inner, .. } => {
                 let unbox = is_erased_interface(self.types, inner.ty)

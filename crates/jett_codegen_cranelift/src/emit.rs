@@ -2112,6 +2112,12 @@ impl Translator<'_, '_> {
                 }
                 Ok(self.nothing())
             }
+            ExpressionKind::RuntimeFailureMessage(message) => {
+                let lowered = self.argument(message, true)?;
+                let handle = self.scalar(lowered, message.span)?;
+                self.leaf(NativeLeaf::RuntimeFailMessage, &[handle], true)?;
+                Ok(self.nothing())
+            }
             ExpressionKind::RuntimeFailure(message) => {
                 let lowered = self.literal(message)?;
                 let handle = self.scalar(lowered, expression.span)?;

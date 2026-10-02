@@ -2571,6 +2571,14 @@ impl Verifier<'_> {
                     Err(self.expression_kind_error(function, expression, "interface type identity"))
                 }
             }
+            ExpressionKind::RuntimeFailureMessage(value) => {
+                self.expression(function, value)?;
+                if value.ty == TypeInterner::STRING && expression.ty == TypeInterner::NOTHING {
+                    Ok(())
+                } else {
+                    Err(self.expression_kind_error(function, expression, "dynamic runtime failure"))
+                }
+            }
             ExpressionKind::RuntimeFailure(_) => Ok(()),
             ExpressionKind::PropertyCaseContext(case) => {
                 if expression.ty == TypeInterner::NOTHING

@@ -52,6 +52,142 @@ fn lower_source_with_equatable(source: &str, include_equatable: bool) -> (Progra
 }
 
 #[test]
+fn native_return_refinement_rejections_use_the_existing_borrowed_failure_leaf() {
+    let (program, types) = lower_source(
+        r#"namespace app
+type Positive = int64 where value > 0
+type Higher = Positive where value > 10
+function source(raw: int64) returns int64:
+    return run raw
+function main(raw: int64) returns Higher:
+    return source(raw)
+"#,
+    );
+    let main = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "main")
+        .unwrap();
+    let checks = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| {
+            if let jett_mir::StatementKind::CheckRefinement { type_name, .. } = &statement.kind {
+                Some(type_name.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(checks, ["app.Positive", "app.Higher"]);
+    let artifact = emit_host_object(&program, &types).expect("return predicate object");
+    let object = object::File::parse(artifact.bytes.as_slice()).unwrap();
+    let leaf = jett_runtime::native_abi::values::NativeLeaf::RuntimeFailMessage;
+    assert!(
+        object
+            .symbols()
+            .any(|symbol| symbol.name().ok() == Some(leaf.symbol()))
+    );
+    assert_eq!(
+        leaf.parameters(),
+        &[
+            jett_runtime::native_abi::values::AbiScalar::Pointer,
+            jett_runtime::native_abi::values::AbiScalar::I64
+        ]
+    );
+    assert_eq!(
+        leaf.result(),
+        jett_runtime::native_abi::values::AbiScalar::I32
+    );
+}
+
+#[test]
+fn native_return_dynamic_failure_keeps_its_message_producer_reachable() {
+    let (mut program, types) = lower_source(
+        "namespace app\nfunction message() returns string:\n    return \"dynamic error\"\nfunction main() returns nothing:\n    return nothing\n",
+    );
+    let message = program
+        .functions
+        .iter_mut()
+        .find(|function| function.identity.declaration.name == "message")
+        .unwrap();
+    message.identity.declaration.origin = SourceOrigin::Stdlib;
+    let message_id = message.id;
+    let message_symbol = symbol_name(&message.identity, &types).unwrap();
+    let main = program
+        .functions
+        .iter_mut()
+        .find(|function| function.identity.declaration.name == "main")
+        .unwrap();
+    let span = main.span;
+    main.blocks[main.entry.index() as usize]
+        .statements
+        .push(jett_mir::Statement {
+            kind: jett_mir::StatementKind::Evaluate(jett_hir::Expression {
+                kind: jett_hir::ExpressionKind::RuntimeFailureMessage(Box::new(
+                    jett_hir::Expression {
+                        kind: jett_hir::ExpressionKind::Call {
+                            function: message_id,
+                            args: Vec::new(),
+                            evaluation_order: Vec::new(),
+                        },
+                        ty: TypeInterner::STRING,
+                        span,
+                    },
+                )),
+                ty: TypeInterner::NOTHING,
+                span,
+            }),
+            span,
+        });
+    let artifact = emit_host_object(&program, &types).expect("dynamic message producer");
+    assert!(artifact.symbols.contains(&message_symbol));
+}
+
+#[test]
+fn native_return_dynamic_failure_rejects_malformed_types_before_emission() {
+    for (input, output) in [
+        (TypeInterner::INT64, TypeInterner::NOTHING),
+        (TypeInterner::STRING, TypeInterner::STRING),
+    ] {
+        let (mut program, types) =
+            lower_source("function main() returns nothing:\n    return nothing\n");
+        let function = &mut program.functions[0];
+        let span = function.span;
+        function.blocks[function.entry.index() as usize]
+            .statements
+            .insert(
+                0,
+                jett_mir::Statement {
+                    kind: jett_mir::StatementKind::Evaluate(jett_hir::Expression {
+                        kind: jett_hir::ExpressionKind::RuntimeFailureMessage(Box::new(
+                            jett_hir::Expression {
+                                kind: if input == TypeInterner::STRING {
+                                    jett_hir::ExpressionKind::String("error".into())
+                                } else {
+                                    jett_hir::ExpressionKind::Int(7)
+                                },
+                                ty: input,
+                                span,
+                            },
+                        )),
+                        ty: output,
+                        span,
+                    }),
+                    span,
+                },
+            );
+        let error = emit_host_object(&program, &types).expect_err("invalid dynamic failure");
+        assert!(
+            matches!(error, CodegenError::InvalidMirContract { ref message, .. }
+            if message.contains("dynamic runtime failure")),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn display_result_checks_retain_the_selected_method_and_borrowed_runtime_leaf() {
     let (mut program, types) = lower_source(
         r#"interface Displayable:

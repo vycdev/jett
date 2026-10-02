@@ -318,6 +318,7 @@ fn collect_expression_references(expression: &Expression, references: &mut Refer
         | ExpressionKind::Comptime { value, .. }
         | ExpressionKind::DisplayResult(value)
         | ExpressionKind::EquatableResult(value)
+        | ExpressionKind::RuntimeFailureMessage(value)
         | ExpressionKind::Declassify(value)
         | ExpressionKind::Coarsen(value)
         | ExpressionKind::RefinementValidated(value)

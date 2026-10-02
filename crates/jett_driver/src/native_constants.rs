@@ -232,6 +232,7 @@ impl Baker<'_> {
             | E::RefinementValidated(value)
             | E::DisplayResult(value)
             | E::EquatableResult(value)
+            | E::RuntimeFailureMessage(value)
             | E::FunctionAdapter { value, .. }
             | E::InterfaceCoerce { value, .. }
             | E::InterfaceType(value)

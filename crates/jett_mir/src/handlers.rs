@@ -16,6 +16,7 @@ fn has_extractable_handle(expression: &Expression) -> bool {
         | ExpressionKind::RefinementValidated(value)
         | ExpressionKind::DisplayResult(value)
         | ExpressionKind::EquatableResult(value)
+    | ExpressionKind::RuntimeFailureMessage(value)
         | ExpressionKind::InterfaceCoerce { value, .. } | ExpressionKind::InterfaceType(value) => {
             has_extractable_handle(value)
         }
@@ -383,6 +384,11 @@ impl Builder<'_> {
         if let ExpressionKind::EquatableResult(value) = &expression.kind {
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::EquatableResult(Box::new(self.lower_value(value)));
+            return lowered;
+        }
+        if let ExpressionKind::RuntimeFailureMessage(value) = &expression.kind {
+            let mut lowered = expression.clone();
+            lowered.kind = ExpressionKind::RuntimeFailureMessage(Box::new(self.lower_value(value)));
             return lowered;
         }
         if let ExpressionKind::View(value) = &expression.kind {
@@ -2031,6 +2037,203 @@ mod tests {
             .iter()
             .find(|function| function.identity.declaration.name == "inspect")
             .unwrap()
+    }
+
+    #[test]
+    fn native_return_refinement_stages_once_and_forwards_the_original_error() {
+        let (program, types) = lower_handler_source(
+            r#"namespace app
+type Positive = int64 where value > 0
+type Higher = Positive where value > 10
+function source(raw: int64) returns int64:
+    return run raw
+function inspect(raw: int64) returns Higher:
+    return source(raw)
+"#,
+        );
+        validate(&program).unwrap();
+        let function = inspected_handler_function(&program);
+        let checks = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| {
+                if let StatementKind::CheckRefinement { type_name, .. } = &statement.kind {
+                    Some(type_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(checks, ["app.Positive", "app.Higher"]);
+        let candidate_calls = function.blocks.iter().flat_map(|block| &block.statements).filter(|statement|
+            matches!(&statement.kind, StatementKind::Let { value: Expression { kind: ExpressionKind::Call { function: target, .. }, .. }, .. }
+                if program.functions[target.index() as usize].identity.declaration.name == "source")
+        ).count();
+        assert_eq!(candidate_calls, 1, "return candidate evaluated once");
+        let errors = function
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                let message =
+                    block
+                        .statements
+                        .iter()
+                        .find_map(|statement| match &statement.kind {
+                            StatementKind::Evaluate(Expression {
+                                kind: ExpressionKind::RuntimeFailureMessage(message),
+                                ty,
+                                ..
+                            }) => {
+                                assert_eq!(*ty, TypeInterner::NOTHING);
+                                assert_eq!(message.ty, TypeInterner::STRING);
+                                let ExpressionKind::Local(local) = message.kind else {
+                                    panic!("borrow staged predicate error");
+                                };
+                                Some(local)
+                            }
+                            _ => None,
+                        })?;
+                assert!(matches!(block.terminator.kind, TerminatorKind::Unreachable));
+                Some(message)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 1);
+        let error = errors[0];
+        assert_eq!(function.local(error).unwrap().name, "$return.error");
+        let assignments = function.blocks.iter().flat_map(|block| &block.statements).filter(|statement|
+            matches!(statement.kind, StatementKind::Let { local, .. } if local == error)
+        ).count();
+        assert_eq!(
+            assignments, 2,
+            "either rejected predicate forwards its exact error"
+        );
+        let plan = crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        assert!(plan.owned_locals.contains(&(error.index() as usize)));
+        assert!(
+            plan.live_in
+                .iter()
+                .any(|live| live.contains(&(error.index() as usize)))
+        );
+    }
+
+    #[test]
+    fn native_return_dynamic_failure_keeps_nested_message_handlers_in_order() {
+        let (mut hir, types) = handler_source_hir(
+            r#"namespace app
+function inspect(value: optional[string]) returns nothing:
+    string message = value handle: default "missing"
+    return nothing
+"#,
+        );
+        let function = hir
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        let hir::StatementKind::Let { value, .. } = &function.body.statements[0].kind else {
+            panic!("message handler");
+        };
+        let boundary = Expression {
+            kind: ExpressionKind::RuntimeFailureMessage(Box::new(value.clone())),
+            ty: TypeInterner::NOTHING,
+            span: value.span,
+        };
+        assert!(has_extractable_handle(&boundary));
+        function.body.statements[0].kind = hir::StatementKind::Expression(boundary);
+        let program = lower(&hir, &types).unwrap();
+        validate(&program).unwrap();
+        let function = inspected_handler_function(&program);
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(|statement| matches!(statement.kind, StatementKind::SumTag { .. }))
+        );
+        let message = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                StatementKind::Evaluate(Expression {
+                    kind: ExpressionKind::RuntimeFailureMessage(message),
+                    ..
+                }) => Some(message),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            matches!(message.kind, ExpressionKind::Local(_)),
+            "handler must be extracted before failure"
+        );
+        crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+    }
+
+    #[test]
+    fn native_return_owned_candidates_and_error_messages_keep_cleanup_ownership() {
+        let (program, types) = lower_handler_source(
+            r#"namespace app
+type Nonempty = list[int64] where true
+function inspect(items: list[int64]) returns Nonempty:
+    return items
+"#,
+        );
+        let function = inspected_handler_function(&program);
+        validate(&program).unwrap();
+        let entry = &function.blocks[function.entry.index() as usize];
+        let StatementKind::Let {
+            local: candidate,
+            value,
+        } = &entry.statements[0].kind
+        else {
+            panic!("staged candidate");
+        };
+        assert!(matches!(&value.kind, ExpressionKind::Clone(inner)
+            if matches!(inner.kind, ExpressionKind::Local(local) if local == function.params[0].local)));
+        let plan = crate::move_values::MoveValuePlan::analyze(&program, function, &types).unwrap();
+        for local in [function.params[0].local, *candidate] {
+            assert!(plan.owned_locals.contains(&(local.index() as usize)));
+        }
+        let (index, message) = function
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(index, block)| {
+                block
+                    .statements
+                    .iter()
+                    .find_map(|statement| match &statement.kind {
+                        StatementKind::Evaluate(Expression {
+                            kind: ExpressionKind::RuntimeFailureMessage(message),
+                            ..
+                        }) => Some((index, message)),
+                        _ => None,
+                    })
+            })
+            .unwrap();
+        let ExpressionKind::Local(error) = message.kind else {
+            panic!("borrow original error");
+        };
+        assert!(plan.owned_locals.contains(&(error.index() as usize)));
+        assert!(plan.live_in[index].contains(&(error.index() as usize)));
+        let returns = function
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                if let TerminatorKind::Return(Some(value)) = &block.terminator.kind {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(returns.len(), 1);
+        assert_eq!(returns[0].ty, function.return_type);
+        let ExpressionKind::Local(output) = returns[0].kind else {
+            panic!("owned validated result");
+        };
+        assert!(plan.owned_locals.contains(&(output.index() as usize)));
     }
 
     #[test]

@@ -983,14 +983,30 @@ tests and all 598 frontend fixtures pass. The four linked call regressions and t
 refined-sum refusal control also pass against this combined source revision.
 Final workspace and supported-host distribution validation remain required.
 
-The audit also exposes missing native predicates for a newly refined return.
-The checker admits returning a base or ancestor value under a refined return
-annotation. Reference validation rejects `return -1` under Positive and a
-Positive value of 7 under High constrained above 10. Native Return lowering
-currently inserts only a representation coercion, so these unproven returns
-can bypass their predicates. This is a selected invariant implementation gap;
-do not suppress reference validation to match it. Exact return-proof reuse is
-distinct from validation of new return values.
+Native returns now establish newly requested root refinements before exposing
+their checked result type. Returning `-1` under Positive, or a Positive value of
+7 under High constrained above 10, rejects with the reference error. The original
+checked expression supplies source proof before coercion: exact returns skip
+predicates, and ancestor returns check only their missing suffix. Concrete
+generic/method signatures select destinations; nested inline targets restore the
+enclosing function, and reflected body facts keep the selected return target.
+MIR stages the candidate once, preserves pending depths, and forwards the first
+predicate failure through a private exact-string `RuntimeFailureMessage` boundary
+and the existing borrowed runtime failure leaf. Owned candidates and error strings
+retain their cleanup slots. No source spelling, ABI operation, or broader outer
+secret/container return admission is added.
+
+Eleven focused HIR, MIR, and object-emission tests and all 214 HIR/MIR/codegen
+unit tests pass. Three linked return regressions and two inline regressions pass
+in debug and release after source removal, with handwritten scalar/ancestor,
+owned Unicode/string/list, generic/method/reflected, alias capture, pending,
+predicate-error, operand-precedence, and exit-71 cleanup expectations. Closed
+comptime, compiled verify suites, and 100-trial property suites also pass.
+These five supplemental tests bring native conformance to 298 tests without
+changing the fixed acceptance inventory. Full workspace and supported-host
+distribution checks still need to certify the final revision. Native reflected
+producers that admit newly requested refinements remain a separate concrete gap;
+return proof reuse cannot replace validation at that producer.
 
 The locked Windows workspace run at `52bd4dcb` passed every target and doc-test
 with tracked source frozen throughout. All 284 native conformance tests passed,

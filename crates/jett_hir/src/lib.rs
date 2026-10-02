@@ -451,6 +451,9 @@ pub enum ExpressionKind {
     InterfaceType(Box<Expression>),
     /// Compiler-owned terminal runtime failure with an already checked result type.
     RuntimeFailure(String),
+    /// Compiler-owned terminal failure borrowing an exact string error message.
+    /// This has no source spelling and evaluates to nothing.
+    RuntimeFailureMessage(Box<Expression>),
     /// Set or clear diagnostic context around a generated property call.
     /// This has no source-level spelling and evaluates to nothing.
     PropertyCaseContext(Option<NativePropertyCase>),
@@ -835,6 +838,7 @@ impl Validator<'_> {
             | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::DisplayResult(value)
             | ExpressionKind::EquatableResult(value)
+            | ExpressionKind::RuntimeFailureMessage(value)
             | ExpressionKind::InterfaceType(value)
             | ExpressionKind::Run(value)
             | ExpressionKind::Join(value)
@@ -1786,6 +1790,7 @@ impl<'a> Lowerer<'a> {
             static_selections,
             comptime_type_bindings,
         );
+        body_lowerer.return_type = Some(return_type);
         let mut params = Vec::with_capacity(source.function.params.len());
         for (param, ty) in source.function.params.iter().zip(parameter_types) {
             let Some(definition) = body_lowerer
@@ -2459,6 +2464,7 @@ struct BodyLowerer<'lowerer, 'program> {
     locals: Vec<Local>,
     visible_bindings: Vec<HashMap<String, LocalId>>,
     scoped_type_bindings: Vec<ScopedTypeBinding>,
+    return_type: Option<TypeId>,
 }
 
 impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
@@ -2505,6 +2511,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             locals: Vec::new(),
             visible_bindings: vec![HashMap::new()],
             scoped_type_bindings: Vec::new(),
+            return_type: None,
         }
     }
 
@@ -2709,7 +2716,10 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             ),
             Stmt::Return(ret) => {
                 let value = match &ret.value {
-                    Some(value) => Some(self.lower_expression(value)?),
+                    Some(value) => {
+                        let value = self.lower_expression(value)?;
+                        Some(self.refine_return_value(value, ret.span)?)
+                    }
                     None => None,
                 };
                 (StatementKind::Return(value), ret.span)
@@ -3499,6 +3509,7 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                 let Type::Function {
                     params: parameter_types,
                     view_params: parameter_views,
+                    return_type,
                     ..
                 } = self.parent.check.interner.resolve(ty).clone()
                 else {
@@ -3546,7 +3557,9 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
                         view_params.push(local);
                     }
                 }
+                let enclosing_return_type = self.return_type.replace(return_type);
                 let body = self.lower_block(body);
+                self.return_type = enclosing_return_type;
                 self.visible_bindings.pop();
                 ExpressionKind::InlineFunction {
                     scoped_type_bindings: self.scoped_type_bindings.clone(),
@@ -3649,6 +3662,67 @@ impl<'lowerer, 'program> BodyLowerer<'lowerer, 'program> {
             args,
             evaluation_order,
             kind,
+        })
+    }
+
+    fn refine_return_value(&mut self, value: Expression, span: Span) -> Option<Expression> {
+        let Some(return_type) = self.return_type else {
+            return Some(value);
+        };
+        if value.ty == return_type
+            || value.ty == TypeInterner::NEVER
+            || !matches!(
+                self.parent.check.interner.resolve(return_type),
+                Type::Refinement { .. }
+            )
+        {
+            return Some(value);
+        }
+        let mut predicates = self.checked_refinement_predicates(return_type, span)?;
+        if let Some(index) = predicates
+            .iter()
+            .position(|predicate| predicate.refined_type == value.ty)
+        {
+            predicates.drain(..=index);
+        }
+        let error_local = LocalId(self.locals.len() as u32);
+        self.locals.push(Local {
+            id: error_local,
+            name: "$return.error".to_string(),
+            ty: TypeInterner::STRING,
+            debug_ty: TypeInterner::STRING,
+            debug_type_name: None,
+            mutable: false,
+            view_source: None,
+            span,
+        });
+        let failure = Block {
+            statements: vec![Statement {
+                kind: StatementKind::Expression(Expression {
+                    kind: ExpressionKind::RuntimeFailureMessage(Box::new(Expression {
+                        kind: ExpressionKind::Local(error_local),
+                        ty: TypeInterner::STRING,
+                        span,
+                    })),
+                    ty: TypeInterner::NOTHING,
+                    span,
+                }),
+                span,
+            }],
+            span,
+        };
+        Some(Expression {
+            kind: ExpressionKind::Handle {
+                target: Box::new(value),
+                kind: HandleKind::Refinement {
+                    refined_type: return_type,
+                    predicates,
+                },
+                error_local: Some(error_local),
+                failure,
+            },
+            ty: return_type,
+            span,
         })
     }
 
@@ -9417,6 +9491,288 @@ function main() returns int64:
             assert_eq!(variant.index(), index as u32);
             assert_eq!(payloads.len(), index);
         }
+    }
+
+    fn return_refinement_guard(
+        function: &Function,
+    ) -> (&Expression, &[RefinementPredicate], LocalId, &Block) {
+        let StatementKind::Return(Some(value)) = &function.body.statements.last().unwrap().kind
+        else {
+            panic!(
+                "expected source return in {}",
+                function.identity.declaration.name
+            );
+        };
+        let ExpressionKind::Handle {
+            target,
+            kind:
+                HandleKind::Refinement {
+                    refined_type,
+                    predicates,
+                },
+            error_local: Some(error),
+            failure,
+        } = &value.kind
+        else {
+            panic!("expected generated return refinement guard: {value:?}");
+        };
+        assert_eq!(*refined_type, function.return_type);
+        assert_eq!(value.ty, function.return_type);
+        let StatementKind::Expression(Expression {
+            kind: ExpressionKind::RuntimeFailureMessage(message),
+            ty,
+            ..
+        }) = &failure.statements[0].kind
+        else {
+            panic!("expected exact dynamic predicate rejection");
+        };
+        assert_eq!(*ty, TypeInterner::NOTHING);
+        assert_eq!(message.ty, TypeInterner::STRING);
+        assert_eq!(message.kind, ExpressionKind::Local(*error));
+        let metadata = &function.locals[error.index() as usize];
+        assert_eq!(metadata.ty, TypeInterner::STRING);
+        assert!(metadata.view_source.is_none());
+        (target, predicates, *error, failure)
+    }
+
+    #[test]
+    fn native_return_refinement_checks_only_missing_predicate_suffixes() {
+        let (program, checked) = lower_source_with_check(
+            r#"namespace app
+type Positive = int64 where value > 0
+type Higher = Positive where value > 10
+function from_base(raw: int64) returns Higher:
+    return raw
+function from_ancestor(ready: Positive) returns Higher:
+    return ready
+function exact(ready: Higher) returns Higher:
+    return ready
+function pending(raw: int64) returns Positive:
+    return run raw
+"#,
+            false,
+        );
+        validate(&program).unwrap();
+        validate_backend_types(&program, &checked.interner).unwrap();
+        for (name, names) in [
+            ("from_base", vec!["app.Positive", "app.Higher"]),
+            ("from_ancestor", vec!["app.Higher"]),
+            ("pending", vec!["app.Positive"]),
+        ] {
+            let function = program
+                .functions
+                .iter()
+                .find(|f| f.identity.declaration.name == name)
+                .unwrap();
+            let (source, predicates, _, _) = return_refinement_guard(function);
+            assert_eq!(
+                predicates
+                    .iter()
+                    .map(|p| p.type_name.as_str())
+                    .collect::<Vec<_>>(),
+                names
+            );
+            let parameter = function.params[0].local;
+            if name == "pending" {
+                assert!(matches!(&source.kind, ExpressionKind::Run(value)
+                    if matches!(value.kind, ExpressionKind::Local(id) if id == parameter)));
+            } else {
+                assert_eq!(source.kind, ExpressionKind::Local(parameter));
+            }
+            assert_eq!(
+                source.ty, function.params[0].ty,
+                "source signature must stay exact"
+            );
+        }
+        let exact = program
+            .functions
+            .iter()
+            .find(|f| f.identity.declaration.name == "exact")
+            .unwrap();
+        let StatementKind::Return(Some(value)) = &exact.body.statements[0].kind else {
+            panic!("exact return");
+        };
+        assert_eq!(value.kind, ExpressionKind::Local(exact.params[0].local));
+        assert!(
+            !exact
+                .locals
+                .iter()
+                .any(|local| local.name == "$return.error")
+        );
+    }
+
+    #[test]
+    fn native_return_refinement_uses_concrete_generic_and_method_targets() {
+        let (program, checked) = lower_source_with_check(
+            r#"namespace app
+type Positive = int64 where value > 0
+struct Holder:
+    raw: int64
+    function promoted(view self: Holder) returns Positive:
+        return self.raw
+function generic[T](raw: int64, witness: T) returns T:
+    return raw
+function main() returns nothing:
+    Positive seed = 7 handle error: return nothing
+    Positive found = generic[Positive](raw: 8, witness: seed)
+    int64 plain = generic[int64](raw: 9, witness: 0)
+    trace found
+    trace plain
+    return nothing
+"#,
+            false,
+        );
+        validate_backend_types(&program, &checked.interner).unwrap();
+        let method = program
+            .functions
+            .iter()
+            .find(|f| f.debug_kind == FunctionDebugKind::Named("app.Holder.promoted".into()))
+            .unwrap();
+        let (source, predicates, _, _) = return_refinement_guard(method);
+        assert!(matches!(source.kind, ExpressionKind::Field { .. }));
+        assert_eq!(predicates.len(), 1);
+        let generic = program
+            .functions
+            .iter()
+            .filter(|f| f.identity.declaration.name == "generic")
+            .collect::<Vec<_>>();
+        assert_eq!(generic.len(), 2);
+        for function in generic {
+            if function.return_type == TypeInterner::INT64 {
+                let StatementKind::Return(Some(value)) = &function.body.statements[0].kind else {
+                    panic!("plain generic");
+                };
+                assert_eq!(value.kind, ExpressionKind::Local(function.params[0].local));
+                assert!(
+                    !function
+                        .locals
+                        .iter()
+                        .any(|local| local.name == "$return.error")
+                );
+            } else {
+                let (source, predicates, _, _) = return_refinement_guard(function);
+                assert_eq!(source.ty, TypeInterner::INT64);
+                assert_eq!(predicates.len(), 1);
+                assert_eq!(
+                    predicates[0].refined_type,
+                    function.identity.type_arguments[0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_return_refinement_inline_targets_restore_enclosing_scope() {
+        let (program, checked) = lower_source_with_check(
+            r#"namespace app
+type Positive = int64 where value > 0
+type Higher = Positive where value > 10
+function outer(raw: int64) returns Higher:
+    function() returns int64 plain = function() returns int64:
+        return raw
+    function() returns Positive narrowed = function() returns Positive:
+        function() returns int64 nested = function() returns int64:
+            return raw
+        return raw
+    return raw
+"#,
+            false,
+        );
+        validate(&program).unwrap();
+        validate_backend_types(&program, &checked.interner).unwrap();
+        let outer = program
+            .functions
+            .iter()
+            .find(|f| f.identity.declaration.name == "outer")
+            .unwrap();
+        let (_, predicates, _, _) = return_refinement_guard(outer);
+        assert_eq!(
+            predicates
+                .iter()
+                .map(|p| p.type_name.as_str())
+                .collect::<Vec<_>>(),
+            ["app.Positive", "app.Higher"]
+        );
+        let callbacks = program
+            .functions
+            .iter()
+            .filter(|f| f.debug_kind == FunctionDebugKind::Inline)
+            .collect::<Vec<_>>();
+        assert_eq!(callbacks.len(), 3);
+        for callback in callbacks {
+            if callback.return_type == TypeInterner::INT64 {
+                let StatementKind::Return(Some(value)) = &callback.body.statements[0].kind else {
+                    panic!("plain inline return");
+                };
+                assert!(matches!(value.kind, ExpressionKind::Local(_)));
+            } else {
+                let (_, predicates, _, _) = return_refinement_guard(callback);
+                assert_eq!(
+                    predicates
+                        .iter()
+                        .map(|p| p.type_name.as_str())
+                        .collect::<Vec<_>>(),
+                    ["app.Positive"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_return_refinement_survives_reflected_body_fact_switches() {
+        let program = lower_source(
+            r#"namespace app
+type Positive = int64 where value > 0
+struct Mixed:
+    label: string
+    count: int64
+function reflected[T](view model: T, raw: int64) returns Positive:
+    for field in type.fields[T]():
+        comptime type Field = field.type_info:
+            return raw
+    return raw
+function main() returns nothing:
+    Mixed model = Mixed(label: "one", count: 1)
+    Positive found = reflected[Mixed](view model, 7)
+    trace found
+    return nothing
+"#,
+        );
+        let function = program
+            .functions
+            .iter()
+            .find(|f| f.identity.declaration.name == "reflected")
+            .unwrap();
+        let StatementKind::For { body, .. } = &function.body.statements[0].kind else {
+            panic!("reflected loop");
+        };
+        let StatementKind::ReflectedTypeDispatch { arms, .. } = &body.statements[0].kind else {
+            panic!("bound types");
+        };
+        assert_eq!(arms.len(), 2);
+        for arm in arms {
+            let StatementKind::Return(Some(value)) = &arm.body.statements[0].kind else {
+                panic!("bound return");
+            };
+            let ExpressionKind::Handle {
+                target,
+                kind:
+                    HandleKind::Refinement {
+                        refined_type,
+                        predicates,
+                    },
+                ..
+            } = &value.kind
+            else {
+                panic!("bound return guard");
+            };
+            assert_eq!(*refined_type, function.return_type);
+            assert_eq!(target.ty, TypeInterner::INT64);
+            assert_eq!(target.kind, ExpressionKind::Local(function.params[1].local));
+            assert_eq!(predicates[0].type_name, "app.Positive");
+        }
+        let (_, predicates, _, _) = return_refinement_guard(function);
+        assert_eq!(predicates[0].type_name, "app.Positive");
     }
 
     #[test]

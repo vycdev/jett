@@ -811,6 +811,7 @@ impl Coercions<'_> {
             | ExpressionKind::RefinementValidated(value)
             | ExpressionKind::DisplayResult(value)
             | ExpressionKind::EquatableResult(value)
+            | ExpressionKind::RuntimeFailureMessage(value)
             | ExpressionKind::FunctionAdapter { value, .. }
             | ExpressionKind::InterfaceCoerce { value, .. }
             | ExpressionKind::InterfaceType(value)
