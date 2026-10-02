@@ -1078,6 +1078,22 @@ tests and all 396 interpreter tests pass with the repair. Complete workspace and
 supported-host distribution validation still need to certify the repaired
 revision; the failed runs do not establish those gates.
 
+The locked Windows workspace run at `f8e70722` passed every target and doc-test
+with tracked source frozen throughout. All 399 interpreter tests, 598 frontend
+fixtures, and 301 native conformance tests passed. The independent inventory
+gates passed for 182 HIR/MIR fixtures, 182 native objects, 30 entry cases,
+25 runtime contracts, 155 verify fixtures, and three property fixtures with
+100 trials each. This checkpoint includes the call-frame stack repair, declared
+ancestor proof reuse, native return validation, and direct/piped reflected root
+producer validation. It does not close the remaining nested-container or other
+reflection pipeline gaps, or the unresolved language policies.
+
+The [supported-host run for the stack repair at `57e0b003`](https://github.com/vycdev/jett/actions/runs/36974175496)
+passed both workspace/build/package jobs and both clean installed jobs. The
+[run for `f8e70722`](https://github.com/vycdev/jett/actions/runs/36975813263)
+is still in progress; the earlier repair's distribution evidence does not certify
+the later reflected producer changes.
+
 The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).
 Supplemental cases do not change the inventory denominator. Full workspace and
