@@ -1662,78 +1662,7 @@ impl<'src> Parser<'src> {
     /// A var decl starts with a type followed by an identifier followed by `=`.
     /// We look ahead to check this pattern.
     fn looks_like_var_decl(&self) -> bool {
-        // Must start with something that could be a type
-        if !self.is_type_start(self.peek()) {
-            return false;
-        }
-
-        // Walk forward to find the pattern: Type [GenericArgs] Ident =
-        let mut lookahead = 0;
-
-        // Skip the type name
-        let first = self.peek_nth(lookahead);
-        if !self.is_type_start(first) {
-            return false;
-        }
-
-        // Handle function types: `function(T, U) returns V name =`
-        if first == TokenKind::Function {
-            lookahead += 1;
-            if self.peek_nth(lookahead) != TokenKind::LParen {
-                return false;
-            }
-            lookahead += 1;
-            let mut depth = 1;
-            while depth > 0 && lookahead < 40 {
-                match self.peek_nth(lookahead) {
-                    TokenKind::LParen => depth += 1,
-                    TokenKind::RParen => depth -= 1,
-                    TokenKind::Eof => return false,
-                    _ => {}
-                }
-                lookahead += 1;
-            }
-            // Skip `returns Type` — the return type can itself be complex
-            // (e.g. `function(int64) returns function(int64) returns int64`)
-            if self.peek_nth(lookahead) != TokenKind::Returns {
-                return false;
-            }
-            lookahead += 1;
-            // Skip the return type recursively (simplified: skip one or more tokens
-            // until we find an identifier followed by `=`)
-            return self.scan_past_type_for_var_decl(lookahead);
-        }
-
-        lookahead += 1;
-        lookahead = self.skip_dotted_type_path(lookahead);
-
-        // Handle generic args: Type[...]
-        if self.peek_nth(lookahead) == TokenKind::LBracket {
-            lookahead += 1;
-            let mut depth = 1;
-            while depth > 0 && lookahead < 20 {
-                match self.peek_nth(lookahead) {
-                    TokenKind::LBracket => depth += 1,
-                    TokenKind::RBracket => depth -= 1,
-                    TokenKind::Eof => return false,
-                    _ => {}
-                }
-                lookahead += 1;
-            }
-        }
-        lookahead = self.skip_state_type_qualifiers(lookahead);
-
-        // Now we should see an identifier (or contextual keyword) followed by `=`
-        let name_kind = self.peek_nth(lookahead);
-        if (name_kind == TokenKind::Ident
-            || self.is_contextual_ident(name_kind)
-            || self.is_reserved_identifier_at(lookahead))
-            && self.peek_nth(lookahead + 1) == TokenKind::Eq
-        {
-            return true;
-        }
-
-        false
+        self.scan_past_type_for_var_decl(0)
     }
 
     fn is_type_start(&self, kind: TokenKind) -> bool {
@@ -1767,51 +1696,35 @@ impl<'src> Parser<'src> {
     /// Starting at `lookahead`, skip past one type expression, then check for `ident =`.
     /// Used by `looks_like_var_decl` to handle function type return types.
     fn scan_past_type_for_var_decl(&self, mut lookahead: usize) -> bool {
-        if lookahead >= 60 {
-            return false;
-        }
-        let kind = self.peek_nth(lookahead);
-        if kind == TokenKind::Function {
-            // Nested function type: `function(…) returns T`
-            lookahead += 1;
-            if self.peek_nth(lookahead) != TokenKind::LParen {
+        // A function return type may itself be a function. Advance through
+        // those prefixes iteratively; the token stream bounds this lookahead.
+        while self.peek_nth(lookahead) == TokenKind::Function {
+            let Some(after_params) = self.skip_balanced_type_delimiters(
+                lookahead + 1,
+                TokenKind::LParen,
+                TokenKind::RParen,
+            ) else {
+                return false;
+            };
+            if self.peek_nth(after_params) != TokenKind::Returns {
                 return false;
             }
-            lookahead += 1;
-            let mut depth = 1;
-            while depth > 0 && lookahead < 60 {
-                match self.peek_nth(lookahead) {
-                    TokenKind::LParen => depth += 1,
-                    TokenKind::RParen => depth -= 1,
-                    TokenKind::Eof => return false,
-                    _ => {}
-                }
-                lookahead += 1;
-            }
-            if self.peek_nth(lookahead) != TokenKind::Returns {
-                return false;
-            }
-            lookahead += 1;
-            return self.scan_past_type_for_var_decl(lookahead);
+            lookahead = after_params + 1;
         }
-        if !self.is_type_start(kind) {
+        if !self.is_type_start(self.peek_nth(lookahead)) {
             return false;
         }
         lookahead += 1;
         lookahead = self.skip_dotted_type_path(lookahead);
-        // Skip generic args: Type[…]
         if self.peek_nth(lookahead) == TokenKind::LBracket {
-            lookahead += 1;
-            let mut depth = 1;
-            while depth > 0 && lookahead < 60 {
-                match self.peek_nth(lookahead) {
-                    TokenKind::LBracket => depth += 1,
-                    TokenKind::RBracket => depth -= 1,
-                    TokenKind::Eof => return false,
-                    _ => {}
-                }
-                lookahead += 1;
-            }
+            let Some(after_args) = self.skip_balanced_type_delimiters(
+                lookahead,
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+            ) else {
+                return false;
+            };
+            lookahead = after_args;
         }
         lookahead = self.skip_state_type_qualifiers(lookahead);
         let name_kind = self.peek_nth(lookahead);
@@ -1819,6 +1732,41 @@ impl<'src> Parser<'src> {
             || self.is_contextual_ident(name_kind)
             || self.is_reserved_identifier_at(lookahead))
             && self.peek_nth(lookahead + 1) == TokenKind::Eq
+    }
+
+    /// Return the relative token offset after one balanced delimiter group.
+    /// Lookahead never consumes input or crosses a logical line, and exhaustion
+    /// without the matching close is a failed recognition rather than a limit.
+    fn skip_balanced_type_delimiters(
+        &self,
+        lookahead: usize,
+        open: TokenKind,
+        close: TokenKind,
+    ) -> Option<usize> {
+        if self.peek_nth(lookahead) != open {
+            return None;
+        }
+        let mut depth = 0;
+        for (offset, token) in self
+            .tokens
+            .iter()
+            .skip(self.pos)
+            .enumerate()
+            .skip(lookahead)
+        {
+            match token.kind {
+                TokenKind::Eof | TokenKind::Newline => return None,
+                kind if kind == open => depth += 1,
+                kind if kind == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(offset + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     fn is_reserved_identifier_at(&self, lookahead: usize) -> bool {
@@ -2481,24 +2429,13 @@ impl<'src> Parser<'src> {
     }
 
     fn looks_like_generic_args(&self) -> bool {
-        // Quick check: `[` followed by a type name and eventually `](`
-        if self.peek() != TokenKind::LBracket {
+        let Some(after_args) =
+            self.skip_balanced_type_delimiters(0, TokenKind::LBracket, TokenKind::RBracket)
+        else {
             return false;
-        }
-        let mut i = 1;
-        let mut depth = 1;
-        while depth > 0 && i < 20 {
-            match self.peek_nth(i) {
-                TokenKind::LBracket => depth += 1,
-                TokenKind::RBracket => depth -= 1,
-                TokenKind::Eof | TokenKind::Newline => return false,
-                _ => {}
-            }
-            i += 1;
-        }
-        // After `]`, we should see `(`
-        self.peek_nth(i) == TokenKind::LParen
-            || depth == 0 && self.peek_nth(i - 1 + 1) == TokenKind::LParen
+        };
+        // The matching `]` must be immediately followed by the call's `(`.
+        self.peek_nth(after_args) == TokenKind::LParen
     }
 
     fn parse_generic_call(&mut self, callee: Expr) -> Expr {
@@ -4302,6 +4239,267 @@ function first(view items: list[int64]) returns optional[int64]:
                 assert_eq!(args.len(), 2);
             }
             other => panic!("expected GenericCall, got {:?}", other),
+        }
+    }
+
+    const DEEP_GENERIC_TYPE: &str = "list[optional[result[map[int64, list[int64]], set[int64]]]]";
+
+    fn generic_type_owners<'a>(ty: &'a TypeExpr, owners: &mut Vec<&'a str>) {
+        match ty {
+            TypeExpr::Named(_) => {}
+            TypeExpr::Generic(owner, children, _) => {
+                owners.push(owner.name.as_str());
+                for child in children {
+                    generic_type_owners(child, owners);
+                }
+            }
+            TypeExpr::View(inner, _) | TypeExpr::StateQualified(inner, _, _) => {
+                generic_type_owners(inner, owners)
+            }
+            TypeExpr::Function(params, output, _) => {
+                for param in params {
+                    generic_type_owners(param, owners);
+                }
+                generic_type_owners(output, owners);
+            }
+        }
+    }
+
+    fn generic_call_in_expression(mut expression: &Expr) -> (&[TypeExpr], &[CallArg]) {
+        if let Expr::Pipeline(_, steps, _) = expression {
+            assert_eq!(steps.len(), 1);
+            assert!(steps[0].extra_args.is_empty());
+            expression = &steps[0].function;
+        }
+        if let Expr::View(inner, _) = expression {
+            expression = inner;
+        }
+        let Expr::GenericCall(_, types, args, _) = expression else {
+            panic!("deep requested generic call: {expression:?}");
+        };
+        (types, args)
+    }
+
+    #[test]
+    fn parse_deep_generic_calls_and_pipelines_preserve_complete_type_arguments() {
+        let token_source = format!("[Record, {DEEP_GENERIC_TYPE}]()");
+        let tokens = jett_lexer::tokenize(&token_source, FileId::new(0)).tokens;
+        assert!(
+            tokens
+                .iter()
+                .position(|t| t.kind == TokenKind::LParen)
+                .unwrap()
+                > 20
+        );
+        for pipeline in [false, true] {
+            let call = if pipeline {
+                format!(
+                    "source into view type.field_value[Record, {DEEP_GENERIC_TYPE}](view field)"
+                )
+            } else {
+                format!("type.field_value[Record, {DEEP_GENERIC_TYPE}](view source, view field)")
+            };
+            let source = format!(
+                "function read(view source: Record, view field: TypeField) returns {DEEP_GENERIC_TYPE}:\n    return {call}\n"
+            );
+            let result = parse_str(&source);
+            assert!(result.errors.is_empty(), "{pipeline}: {:?}", result.errors);
+            let (types, args) = generic_call_in_expression(extract_expr_from_return(&result));
+            assert_eq!(types.len(), 2);
+            assert_eq!(args.len(), if pipeline { 1 } else { 2 });
+            assert!(matches!(&types[0], TypeExpr::Named(name) if name.name == "Record"));
+            let span = types[1].span();
+            assert_eq!(
+                &source[span.start as usize..span.end as usize],
+                DEEP_GENERIC_TYPE
+            );
+            let mut owners = Vec::new();
+            generic_type_owners(&types[1], &mut owners);
+            assert_eq!(owners, ["list", "optional", "result", "map", "list", "set"]);
+
+            // A deep checked request must also remain a declaration when its
+            // annotation and its initializer both need the longer lookahead.
+            let local_source = format!(
+                "function read(view source: Record, view field: TypeField) returns {DEEP_GENERIC_TYPE}:\n    {DEEP_GENERIC_TYPE} extracted = {call}\n    return extracted\n"
+            );
+            let local_result = parse_str(&local_source);
+            assert!(
+                local_result.errors.is_empty(),
+                "{pipeline}: {:?}",
+                local_result.errors
+            );
+            let Item::Function(function) = &local_result.module.items[0] else {
+                panic!("function");
+            };
+            let Stmt::VarDecl(local) = &function.body.stmts[0] else {
+                panic!("typed getter local");
+            };
+            assert_eq!(local.name.name, "extracted");
+            let local_span = local.ty.span();
+            assert_eq!(
+                &local_source[local_span.start as usize..local_span.end as usize],
+                DEEP_GENERIC_TYPE
+            );
+            let (types, args) = generic_call_in_expression(&local.value);
+            assert_eq!(types.len(), 2);
+            assert_eq!(args.len(), if pipeline { 1 } else { 2 });
+        }
+    }
+
+    #[test]
+    fn parse_deep_generic_callables_keep_parameter_and_return_type_trees() {
+        let requested = "list[function(list[optional[result[list[optional[list[optional[int64]]]], string]]], function(map[string, list[bool]]) returns result[bool, string]) returns optional[list[result[int64, string]]]]";
+        let tokens = jett_lexer::tokenize(requested, FileId::new(0)).tokens;
+        assert!(tokens.len() > 60);
+        for pipeline in [false, true] {
+            let call = if pipeline {
+                format!("source into choose[{requested}]()")
+            } else {
+                format!("choose[{requested}](view source)")
+            };
+            let source = format!(
+                "function select(view source: string) returns {requested}:\n    return {call}\n"
+            );
+            let result = parse_str(&source);
+            assert!(result.errors.is_empty(), "{pipeline}: {:?}", result.errors);
+            let (types, _) = generic_call_in_expression(extract_expr_from_return(&result));
+            assert_eq!(types.len(), 1);
+            let TypeExpr::Generic(owner, items, _) = &types[0] else {
+                panic!("list callable");
+            };
+            assert_eq!(owner.name, "list");
+            let TypeExpr::Function(params, output, _) = &items[0] else {
+                panic!("callable leaf");
+            };
+            assert_eq!(params.len(), 2);
+            assert!(matches!(params[1], TypeExpr::Function(_, _, _)));
+            assert!(
+                matches!(output.as_ref(), TypeExpr::Generic(owner, _, _) if owner.name == "optional")
+            );
+            let mut owners = Vec::new();
+            generic_type_owners(&types[0], &mut owners);
+            assert_eq!(
+                owners,
+                [
+                    "list", "list", "optional", "result", "list", "optional", "list", "optional",
+                    "map", "list", "result", "optional", "list", "result"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn parse_deep_generic_locals_and_function_return_chains_keep_declaration_shape() {
+        let deep = format!("{}int64{}", "list[".repeat(24), "]".repeat(24));
+        let callback = format!(
+            "function({deep}, {deep}) returns {}{deep}",
+            "function() returns ".repeat(16)
+        );
+        let qualified = format!("models.Holder[{deep}]");
+        let source = format!(
+            "function declarations() returns nothing:\n    mutable {deep} items = seed\n    {callback} callback = seed\n    {qualified} retained = seed\n    models.Session at active selected = seed\n"
+        );
+        let result = parse_str(&source);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let Item::Function(function) = &result.module.items[0] else {
+            panic!("function");
+        };
+        assert_eq!(function.body.stmts.len(), 4);
+        for (index, expected) in [
+            deep.as_str(),
+            callback.as_str(),
+            qualified.as_str(),
+            "models.Session at active",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Stmt::VarDecl(declaration) = &function.body.stmts[index] else {
+                panic!("deep local {index}");
+            };
+            assert_eq!(declaration.mutable, index == 0);
+            let span = declaration.ty.span();
+            assert_eq!(&source[span.start as usize..span.end as usize], expected);
+        }
+    }
+
+    fn lookahead_parser(source: &str) -> Parser<'_> {
+        Parser::new(source, jett_lexer::tokenize(source, FileId::new(0)).tokens)
+    }
+
+    #[test]
+    fn type_lookahead_is_input_bounded_non_consuming_and_requires_complete_delimiters() {
+        let deep = format!("{}int64{}", "list[".repeat(128), "]".repeat(128));
+        let generic = format!("[{deep}](source)");
+        let parser = lookahead_parser(&generic);
+        assert!(parser.looks_like_generic_args());
+        assert_eq!(parser.pos, 0);
+        assert!(parser.errors.is_empty());
+        let prefixed_generic = format!("prefix [{deep}](source)");
+        let mut parser = lookahead_parser(&prefixed_generic);
+        parser.pos = 1;
+        assert!(parser.looks_like_generic_args());
+        assert_eq!(parser.pos, 1);
+        let local = format!("{}int64 callback = seed", "function() returns ".repeat(512));
+        let parser = lookahead_parser(&local);
+        assert!(parser.looks_like_var_decl());
+        assert_eq!(parser.pos, 0);
+        for malformed in [
+            format!("[{deep}"),
+            format!("[{deep}]"),
+            format!("[{deep}]](source)"),
+            format!("[{deep}]name(source)"),
+            format!("[list[int64]\n](source)"),
+            format!("[{deep}]\n(source)"),
+            "[".repeat(2048),
+        ] {
+            let mut parser = lookahead_parser(&malformed);
+            assert!(!parser.looks_like_generic_args(), "{malformed}");
+            assert_eq!(parser.pos, 0);
+            // Exhausting a hand-supplied token stream without its EOF sentinel
+            // must also terminate without peeking indefinitely beyond input.
+            parser.tokens.retain(|token| token.kind != TokenKind::Eof);
+            assert!(
+                !parser.looks_like_generic_args(),
+                "missing EOF: {malformed}"
+            );
+            assert_eq!(parser.pos, 0);
+        }
+        for malformed in [
+            format!("list[{deep} items = seed"),
+            "function(int64\n) returns int64 callback = seed".into(),
+            "function(int64)\nreturns int64 callback = seed".into(),
+            "function() returns".into(),
+            "function(int64) int64 callback = seed".into(),
+            "function(".repeat(2048),
+            format!("{deep}\nitems = seed"),
+            "models.Session at active".into(),
+        ] {
+            let parser = lookahead_parser(&malformed);
+            assert!(!parser.looks_like_var_decl(), "{malformed}");
+            assert_eq!(parser.pos, 0);
+        }
+    }
+
+    #[test]
+    fn parse_malformed_deep_generic_calls_and_locals_reports_errors_and_terminates() {
+        let deep = format!("{}int64{}", "list[".repeat(24), "]".repeat(24));
+        for statement in [
+            format!("return choose[{deep}(source)"),
+            format!("return choose[{deep}]"),
+            format!("return choose[{deep}]("),
+            format!("return source into choose[{deep}]("),
+            format!("return choose[list[int64]\n](source)"),
+            format!("list[{deep} items = seed"),
+            "function(int64\n) returns int64 callback = seed".into(),
+        ] {
+            let source = format!("function broken() returns nothing:\n    {statement}\n");
+            let result = parse_str(&source);
+            assert!(!result.errors.is_empty(), "accepted malformed {statement}");
+            assert!(
+                result.errors.len() <= source.len(),
+                "unbounded recovery errors"
+            );
         }
     }
 

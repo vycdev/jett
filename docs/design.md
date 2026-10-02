@@ -7493,6 +7493,10 @@ Generics use `[T]` (square brackets) rather than `<T>` — avoids ambiguity with
 
 Generic type parameters may be inferred when argument types uniquely determine every parameter, including direct and pipeline calls to source-owned stdlib functions such as `list.length(items)`. Calls with no inferable value argument, an ambiguous result-only parameter, or an explicit reflection target write the type arguments. When type arguments are written, their count must exactly match the callable's generic arity.
 
+Nested type arguments and callable annotations have no fixed token lookahead
+limit. Direct calls, pipeline calls, and typed local declarations recognize the
+complete type on its logical line; malformed delimiters remain parse errors.
+
 An empty collection initially contributes the uninhabited element type `never`.
 When arguments have supplied every generic parameter, an expected result type
 may refine an inferred `never` to a concrete type. It does not introduce a

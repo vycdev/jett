@@ -1171,3 +1171,13 @@ output; and emitted release objects match optimized codegen while differing
 from unoptimized controls. Both runtime manifest profiles reject a mismatched
 selection. Native conformance now contains 308 supplemental tests. This repairs
 suite mode selection; it does not close the remaining language-policy gaps.
+
+Deep reflected requests exposed parser lookahead ceilings before either backend
+could check the requested type. Generic calls and typed locals now recognize
+balanced type syntax across the complete logical line, with iterative callable
+return prefixes and no fixed 20/40/60-token cutoff. All 92 parser tests and all
+598 frontend fixtures pass. The five new parser regressions cover direct and
+pipeline requests, nested callable arguments and locals, source spans,
+non-consuming recognition, missing EOF sentinels, and malformed-input recovery.
+This repairs recognition of existing syntax; recursive reflected-field native
+execution remains a separate obligation.

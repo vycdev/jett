@@ -1750,3 +1750,14 @@ Before this API change, the frozen `b733296a` workspace (compiled source
 `cca40a2e`) passed the complete locked workspace run and doc-tests, including
 all 305 then-current native conformance tests and every inventory gate. Later
 source changes and supported-host distribution retain their independent gates.
+
+### Deep type syntax recognition
+
+Generic calls and typed local declarations no longer stop recognizing valid
+types after fixed 20/40/60-token lookahead budgets. Balanced delimiters are
+scanned within the actual logical line, and callable return prefixes are
+iterative. Five focused regressions cover complete direct/pipeline requested
+types, callable and local type trees, non-consuming bounded recognition, and
+malformed-input recovery. All 92 parser tests and 598 frontend fixtures pass.
+This preserves the existing grammar and does not claim completion of recursive
+reflected-field execution or change the broad 85% estimate.

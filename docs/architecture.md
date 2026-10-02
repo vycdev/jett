@@ -304,6 +304,13 @@ retained separately where formatting and source tooling need them.
 - **Pratt parsing** (precedence climbing) for expressions — handles arithmetic operators, comparisons, boolean operators, and `modulo` with correct precedence.
 - **Error recovery:** On a parse error, the parser skips to the next `Dedent` at the current level or `Newline`, emitting an error node. This allows reporting multiple errors per file.
 
+Generic-call and typed-local recognition scan balanced type delimiters without
+consuming tokens. The logical line and actual token stream bound the scan;
+there are no fixed token budgets for nested arguments or callable annotations.
+Callable return prefixes are scanned iteratively. Recognition still requires
+the matching generic `]` immediately before the call's `(`, or a complete local
+type followed by its binding name and `=`; normal parsing validates the type.
+
 ### Direct AST now, CST later
 
 Initial Jett versions deliberately parse directly into the AST while language
