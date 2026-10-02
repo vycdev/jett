@@ -1153,3 +1153,21 @@ The admitted alias-as-constructor spelling also remains an unresolved source
 contract; see [type alias constructor calls](../open_design/type_alias_constructor_calls.md).
 Supplemental cases do not change the inventory denominator. Full workspace and
 supported-host distribution validation remain obligations for the final revision.
+
+The frozen `b733296a` workspace, whose compiled source is unchanged from
+`cca40a2e`, passed `cargo test --locked --workspace --no-fail-fast`, including
+all doc-tests. This verifies 403 interpreter tests, 598 frontend fixtures,
+305 supplemental native conformance tests, all 182 native object obligations,
+and the complete verify/property inventory. The log is
+`target/native-workspace-b733296a.log`; later changes need their own verification.
+
+Native verify/property suite APIs now forward explicit build options through
+lowering, emission, and executable building. Existing default wrappers retain
+debug behavior. Three focused regressions pass: default and explicit-debug
+objects match; debug/release suites execute with matching runtime manifests
+after source removal, with 100 property trials and release traces omitted;
+release debug printing reports E0362 before publication and preserves existing
+output; and emitted release objects match optimized codegen while differing
+from unoptimized controls. Both runtime manifest profiles reject a mismatched
+selection. Native conformance now contains 308 supplemental tests. This repairs
+suite mode selection; it does not close the remaining language-policy gaps.

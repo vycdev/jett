@@ -1734,3 +1734,19 @@ interpreter error and exit 71 after cleanup when a later argument fails. This
 closes the unfinished fixture verification from the saved commit; the open
 semantic decisions and supported-host release gates remain in the acceptance
 audit.
+
+### Native suite build modes
+
+Verify/property suite lowering, object emission, and executable APIs now accept
+explicit `BuildOptions`; their existing wrappers retain default debug behavior.
+Release options apply source policy, remove trace/breakpoint execution, and
+enable optimized codegen. Three focused regressions pass in both runtime
+profiles after source removal, including 100 property trials, default-object
+compatibility, optimized-object comparison, manifest profile rejection, and
+E0362 publication rollback. Supplemental native conformance now has 308 tests.
+The fixed inventory denominator and broad 85% estimate are unchanged.
+
+Before this API change, the frozen `b733296a` workspace (compiled source
+`cca40a2e`) passed the complete locked workspace run and doc-tests, including
+all 305 then-current native conformance tests and every inventory gate. Later
+source changes and supported-host distribution retain their independent gates.

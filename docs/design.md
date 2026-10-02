@@ -7951,6 +7951,11 @@ computation. Move-only namespace constant ownership remains an explicit parity
 obligation. A native regression executes baked `math.factorial(5)` after removing
 its source file.
 
+Native verify and property suites honor the selected debug or release build
+mode, including release debug-print restrictions and omission of trace and
+breakpoint execution. Selecting a release suite also selects optimized native
+codegen; the runtime bundle must match the caller's selected profile.
+
 
 ### Native string and numeric execution slice
 

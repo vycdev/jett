@@ -2696,11 +2696,15 @@ pub fn lower_file_for_native_tests(
 pub fn lower_file_for_native_verify_suite(
     path: &Path,
 ) -> Result<BackendLoweringResult, BackendLoweringError> {
-    lower_file_for_backend_inner(
-        path,
-        BuildOptions::default(),
-        BackendLoweringMode::VerifySuite,
-    )
+    lower_file_for_native_verify_suite_with_options(path, BuildOptions::default())
+}
+
+/// Lower the native verify suite with mode-specific source policy.
+pub fn lower_file_for_native_verify_suite_with_options(
+    path: &Path,
+    options: BuildOptions,
+) -> Result<BackendLoweringResult, BackendLoweringError> {
+    lower_file_for_backend_inner(path, options, BackendLoweringMode::VerifySuite)
 }
 
 /// Lower checked property bodies with the interpreter's deterministic `given`
@@ -2708,11 +2712,15 @@ pub fn lower_file_for_native_verify_suite(
 pub fn lower_file_for_native_property_suite(
     path: &Path,
 ) -> Result<BackendLoweringResult, BackendLoweringError> {
-    lower_file_for_backend_inner(
-        path,
-        BuildOptions::default(),
-        BackendLoweringMode::PropertySuite,
-    )
+    lower_file_for_native_property_suite_with_options(path, BuildOptions::default())
+}
+
+/// Lower the native property suite with mode-specific source policy.
+pub fn lower_file_for_native_property_suite_with_options(
+    path: &Path,
+    options: BuildOptions,
+) -> Result<BackendLoweringResult, BackendLoweringError> {
+    lower_file_for_backend_inner(path, options, BackendLoweringMode::PropertySuite)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -72,6 +72,9 @@ mod refinement_sum;
 #[path = "native_conformance/reflected_producers.rs"]
 mod reflected_producers;
 
+#[path = "native_conformance/suite_options.rs"]
+mod suite_options;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

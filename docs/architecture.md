@@ -3287,6 +3287,11 @@ The native driver accepts `BuildOptions` for artifact generation. Release mode
 applies frontend debug-print restrictions, discards trace/breakpoint HIR nodes
 before MIR expands their expressions, and enables Cranelift speed optimization.
 Breakpoint conditions therefore have no release execution or output.
+Native verify and property suite lowering, object emission, and executable
+building accept the same `BuildOptions`. Their existing entry points retain
+default debug behavior; options variants apply release source policy and
+optimized codegen. Runtime archives remain explicit caller inputs, validated
+against their selected profile when loaded from a manifest.
 
 All eleven checked capability types have native entry grants and value
 representations. Stderr, Stdin, Filesystem, Network, Process, and Log use

@@ -27,7 +27,8 @@ use jett_hir::FunctionId;
 
 use crate::{
     BackendLoweringError, BackendLoweringResult, lower_file_for_native_property_suite,
-    lower_file_for_native_tests, lower_file_for_native_verify_suite,
+    lower_file_for_native_property_suite_with_options, lower_file_for_native_tests,
+    lower_file_for_native_verify_suite_with_options,
 };
 
 /// The sole target accepted by the version 1 native Windows linker.
@@ -696,20 +697,28 @@ pub fn emit_host_program_object_for_file_with_options(
 pub fn emit_host_verify_suite_object_for_file(
     source_path: &Path,
 ) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    emit_host_verify_suite_object_for_file_with_options(source_path, crate::BuildOptions::default())
+}
+
+/// Apply source build policy and optimization to the native verify suite.
+pub fn emit_host_verify_suite_object_for_file_with_options(
+    source_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
     validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
-    let lowered = lower_file_for_native_verify_suite(source_path).map_err(|source| {
-        NativeBuildError::Lowering {
+    let lowered = lower_file_for_native_verify_suite_with_options(source_path, options).map_err(
+        |source| NativeBuildError::Lowering {
             source_path: source_path.to_path_buf(),
             source: Box::new(source),
-        }
-    })?;
+        },
+    )?;
     let entry =
         lowered
             .native_verify_entry
             .ok_or_else(|| NativeBuildError::MissingVerifyBodies {
                 source_path: source_path.to_path_buf(),
             })?;
-    emit_program_object_from_lowering(source_path, lowered, entry, false)
+    emit_program_object_from_lowering(source_path, lowered, entry, options.release)
 }
 
 /// Emit one launcher-compatible object that calls each checked property body
@@ -717,20 +726,31 @@ pub fn emit_host_verify_suite_object_for_file(
 pub fn emit_host_property_suite_object_for_file(
     source_path: &Path,
 ) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
+    emit_host_property_suite_object_for_file_with_options(
+        source_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source build policy and optimization to the native property suite.
+pub fn emit_host_property_suite_object_for_file_with_options(
+    source_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeProgramObjectArtifact, NativeBuildError> {
     validate_regular_file(source_path, NativePathRole::Source, Some("jett"))?;
-    let lowered = lower_file_for_native_property_suite(source_path).map_err(|source| {
-        NativeBuildError::Lowering {
+    let lowered = lower_file_for_native_property_suite_with_options(source_path, options).map_err(
+        |source| NativeBuildError::Lowering {
             source_path: source_path.to_path_buf(),
             source: Box::new(source),
-        }
-    })?;
+        },
+    )?;
     let entry =
         lowered
             .native_property_entry
             .ok_or_else(|| NativeBuildError::MissingPropertyBodies {
                 source_path: source_path.to_path_buf(),
             })?;
-    emit_program_object_from_lowering(source_path, lowered, entry, false)
+    emit_program_object_from_lowering(source_path, lowered, entry, options.release)
 }
 
 fn emit_program_object_from_lowering(
@@ -807,7 +827,22 @@ pub fn build_host_verify_suite_executable(
     launcher: &NativeLauncherBundle,
     output_path: &Path,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
-    let object = emit_host_verify_suite_object_for_file(source_path)?;
+    build_host_verify_suite_executable_with_options(
+        source_path,
+        launcher,
+        output_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source policy and optimization before linking the native verify suite.
+pub fn build_host_verify_suite_executable_with_options(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_verify_suite_object_for_file_with_options(source_path, options)?;
     link_host_object(&object, launcher, output_path)
 }
 
@@ -817,7 +852,22 @@ pub fn build_host_property_suite_executable(
     launcher: &NativeLauncherBundle,
     output_path: &Path,
 ) -> Result<NativeExecutableArtifact, NativeBuildError> {
-    let object = emit_host_property_suite_object_for_file(source_path)?;
+    build_host_property_suite_executable_with_options(
+        source_path,
+        launcher,
+        output_path,
+        crate::BuildOptions::default(),
+    )
+}
+
+/// Apply source policy and optimization before linking the native property suite.
+pub fn build_host_property_suite_executable_with_options(
+    source_path: &Path,
+    launcher: &NativeLauncherBundle,
+    output_path: &Path,
+    options: crate::BuildOptions,
+) -> Result<NativeExecutableArtifact, NativeBuildError> {
+    let object = emit_host_property_suite_object_for_file_with_options(source_path, options)?;
     link_host_object(&object, launcher, output_path)
 }
 
