@@ -1050,3 +1050,307 @@ function inspect(view source: Session at ready, view other: Session at ready, vi
         );
     }
 }
+
+#[test]
+fn secret_owner_local_views_preserve_exact_nested_field_qualification() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+type Values = list[int64] where true
+type Hidden = secret[Values] where true
+struct Payload:
+    items: Values
+    hidden: secret[Values]
+    nominal_hidden: Hidden
+    unit: nothing
+struct Envelope:
+    payload: Payload
+bitfield network Packet:
+    width: 8 bits
+    payload: list[uint8]
+machine Session:
+    states:
+        ready(payload: Payload)
+        empty
+function inspect(view source: secret[Envelope], view packet: secret[Packet], view session: secret[Session at ready]) returns nothing:
+    secret[Payload] aggregate = view source.payload
+    secret[Payload] forwarded_aggregate = view aggregate
+    secret[Values] refined = view forwarded_aggregate.items
+    Values revealed = declassify view forwarded_aggregate.items
+    list[int64] coarsened = coarsen declassify view forwarded_aggregate.items
+    secret[Values] already_hidden = view forwarded_aggregate.hidden
+    Hidden nominal_hidden = view forwarded_aggregate.nominal_hidden
+    nothing unit = view source.payload.unit
+    secret[list[uint8]] payload = view packet.payload
+    secret[Payload] machine_record = view session.payload
+    secret[Values] machine_items = view session.payload.items
+    Values owned = clone declassify refined
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let function = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let source = local(function, "source");
+    let aggregate = local(function, "aggregate");
+    let forwarded = local(function, "forwarded_aggregate");
+    assert_eq!(aggregate.view_source, Some(source.id));
+    assert_eq!(forwarded.view_source, Some(aggregate.id));
+    for name in [
+        "refined",
+        "revealed",
+        "coarsened",
+        "already_hidden",
+        "nominal_hidden",
+    ] {
+        assert_eq!(
+            local(function, name).view_source,
+            Some(forwarded.id),
+            "{name}"
+        );
+        assert_eq!(
+            local_view_root(&function.locals, local(function, name).id),
+            Some(source.id)
+        );
+    }
+    assert_eq!(
+        local(function, "payload").view_source,
+        Some(local(function, "packet").id)
+    );
+    for name in ["machine_record", "machine_items"] {
+        assert_eq!(
+            local(function, name).view_source,
+            Some(local(function, "session").id),
+            "{name}"
+        );
+    }
+    let values = local(function, "revealed").ty;
+    assert!(
+        matches!(checked.interner.resolve(local(function, "refined").ty), Type::Secret(inner) if *inner == values)
+    );
+    assert_eq!(
+        local(function, "already_hidden").ty,
+        local(function, "refined").ty
+    );
+    assert!(
+        matches!(checked.interner.resolve(local(function, "nominal_hidden").ty), Type::Refinement { name, base } if name == "app.Hidden" && *base == local(function, "refined").ty)
+    );
+    assert_eq!(local(function, "unit").ty, TypeInterner::NOTHING);
+    assert_eq!(local(function, "unit").view_source, None);
+    assert_eq!(local(function, "owned").view_source, None);
+    let unit = local(function, "unit").id;
+    let value = function
+        .body
+        .statements
+        .iter()
+        .find_map(|statement| match &statement.kind {
+            StatementKind::Let { local, value } if *local == unit => Some(value),
+            _ => None,
+        })
+        .unwrap();
+    validate_local_view_initializer(
+        value,
+        source.id,
+        source.ty,
+        TypeInterner::NOTHING,
+        &checked.interner,
+    )
+    .unwrap();
+}
+
+#[test]
+fn secret_owner_local_views_keep_generic_scalar_and_linear_binding_facts() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+struct Box[T]:
+    item: T
+function inspect[T](view source: secret[Box[T]]) returns nothing:
+    secret[T] borrowed = view source.item
+    T revealed = declassify view source.item
+    return nothing
+function main() returns nothing:
+    secret[Box[int64]] scalar = Box[int64](item: 7)
+    secret[Box[list[int64]]] aggregate = Box[list[int64]](item: list(1))
+    secret[list[int64]] local_alias = view aggregate.item
+    list[int64] owned = clone declassify local_alias
+    inspect[int64](view scalar)
+    inspect[list[int64]](view aggregate)
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let functions = program
+        .functions
+        .iter()
+        .filter(|function| function.identity.declaration.name == "inspect")
+        .collect::<Vec<_>>();
+    assert_eq!(functions.len(), 2);
+    for function in functions {
+        let source = local(function, "source");
+        let borrowed = local(function, "borrowed");
+        let revealed = local(function, "revealed");
+        assert!(
+            matches!(checked.interner.resolve(borrowed.ty), Type::Secret(inner) if *inner == revealed.ty)
+        );
+        // Secret-qualified scalars retain the existing noncopyable source mode;
+        // only an explicitly declassified primitive has implicit copy facts.
+        assert_eq!(borrowed.view_source, Some(source.id));
+        let expected = if revealed.ty == TypeInterner::INT64 {
+            None
+        } else {
+            Some(source.id)
+        };
+        assert_eq!(revealed.view_source, expected);
+    }
+    let main = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "main")
+        .unwrap();
+    assert_eq!(
+        local(main, "local_alias").view_source,
+        Some(local(main, "aggregate").id)
+    );
+    assert_eq!(local(main, "owned").view_source, None);
+}
+
+#[test]
+fn unused_secret_owner_local_views_reject_forged_qualification_and_origins() {
+    let (program, mut checked) = checked_source(
+        r#"namespace app
+type Proven = list[int64] where true
+type Sibling = list[int64] where false
+type Hidden = secret[Proven] where true
+struct Payload:
+    items: Proven
+    hidden: secret[Proven]
+    nominal_hidden: Hidden
+    unit: nothing
+struct Foreign:
+    items: Proven
+function inspect(view source: secret[Payload], view other: secret[Payload], view foreign: secret[Foreign]) returns nothing:
+    secret[Proven] unused_alias = view source.items
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let function = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let source = local(function, "source");
+    let other = local(function, "other").id;
+    let foreign = local(function, "foreign").ty;
+    let alias = local(function, "unused_alias").id;
+    let secret_proven = local(function, "unused_alias").ty;
+    let Type::Secret(proven) = *checked.interner.resolve(secret_proven) else {
+        panic!("secret nominal endpoint")
+    };
+    let Type::Secret(payload) = *checked.interner.resolve(source.ty) else {
+        panic!("direct secret owner")
+    };
+    let Type::Secret(foreign_payload) = *checked.interner.resolve(foreign) else {
+        panic!("foreign direct secret owner")
+    };
+    let Type::Refinement {
+        base: plain_list, ..
+    } = *checked.interner.resolve(proven)
+    else {
+        panic!("nominal field")
+    };
+    let sibling = checked.interner.type_ids().find(|ty| matches!(checked.interner.resolve(*ty), Type::Refinement { name, .. } if name == "app.Sibling")).unwrap();
+    let hidden = checked.interner.type_ids().find(|ty| matches!(checked.interner.resolve(*ty), Type::Refinement { name, .. } if name == "app.Hidden")).unwrap();
+    let double_secret_endpoint = checked.interner.intern(Type::Secret(secret_proven));
+    let secret_sibling = checked.interner.intern(Type::Secret(sibling));
+    let secret_base = checked.interner.intern(Type::Secret(plain_list));
+    let extra_nominal_secret = checked.interner.intern(Type::Secret(hidden));
+    let secret_unit = checked.interner.intern(Type::Secret(TypeInterner::NOTHING));
+    let double_secret_owner = checked.interner.intern(Type::Secret(source.ty));
+    let source_id = source.id;
+    for (invalid, expected) in [
+        ("drop secrecy", "invalid field endpoint type"),
+        ("extra endpoint secrecy", "invalid field endpoint type"),
+        ("already-secret double wrap", "invalid field endpoint type"),
+        ("nominal-secret extra wrap", "invalid field endpoint type"),
+        ("unit secret wrap", "invalid field endpoint type"),
+        ("sibling refinement", "invalid field endpoint type"),
+        ("discard refinement", "invalid field endpoint type"),
+        ("multiple owner secrets", "invalid field owner"),
+        ("unqualified owner", "invalid field endpoint type"),
+        ("field owner", "invalid field owner"),
+        ("field index", "invalid field index"),
+        ("source identity", "stable backing local"),
+        ("source type", "stable backing local"),
+        ("foreign owner", "stable backing local"),
+        ("orphan", "no validated initializer"),
+    ] {
+        let mut forged = program.clone();
+        let function = forged
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        if invalid == "orphan" {
+            function.body.statements.remove(0);
+        } else {
+            if invalid == "source type" {
+                function.locals[source_id.index() as usize].ty = foreign;
+            }
+            let endpoint = match invalid {
+                "drop secrecy" => proven,
+                "extra endpoint secrecy" | "already-secret double wrap" => double_secret_endpoint,
+                "nominal-secret extra wrap" => extra_nominal_secret,
+                "unit secret wrap" => secret_unit,
+                "sibling refinement" => secret_sibling,
+                "discard refinement" => secret_base,
+                _ => secret_proven,
+            };
+            function.locals[alias.index() as usize].ty = endpoint;
+            let StatementKind::Let { value, .. } = &mut function.body.statements[0].kind else {
+                panic!("unused field alias initializer")
+            };
+            value.ty = endpoint;
+            let ExpressionKind::View(projection) = &mut value.kind else {
+                panic!("explicit secret field view")
+            };
+            projection.ty = endpoint;
+            let ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } = &mut projection.kind
+            else {
+                panic!("exact field")
+            };
+            match invalid {
+                "already-secret double wrap" => *field = FieldId(1),
+                "nominal-secret extra wrap" => *field = FieldId(2),
+                "unit secret wrap" => *field = FieldId(3),
+                "multiple owner secrets" => base.ty = double_secret_owner,
+                "unqualified owner" => base.ty = payload,
+                "field owner" => *owner_type = foreign_payload,
+                "field index" => *field = FieldId(u32::MAX),
+                "source identity" => base.kind = ExpressionKind::Local(other),
+                "foreign owner" => {
+                    base.ty = foreign;
+                    *owner_type = foreign_payload;
+                }
+                _ => {}
+            }
+        }
+        let errors = validate_backend_types(&forged, &checked.interner).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "{invalid}: {errors:?}"
+        );
+    }
+}

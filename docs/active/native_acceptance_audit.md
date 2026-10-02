@@ -1544,7 +1544,8 @@ tests (878.50 seconds), all 182 object obligations (four-test manifest gate,
 506.38 seconds), 83 driver library tests (70.43 seconds), all 598 frontend
 fixtures (21.95 seconds), remaining workspace targets and doc-tests. Its
 [workflow 37053539878](https://github.com/vycdev/jett/actions/runs/37053539878)
-still requires a terminal all-four-job result. This accepted local predecessor
+passes all four Linux GNU/Windows MSVC build/package and relocated installed-
+package jobs (last completion `2026-10-02T20:19:29Z`). This accepted predecessor
 does not validate the later bitfield source changes. Exact parser behavior
 and focused logs are in [the parser contract](native_json_uninhabited_parse_slots.md).
 The objective remains whole-language native parity; the about-85% planning
@@ -1581,3 +1582,42 @@ exact qualification/ownership limits and required gates are in
 [the bitfield contract](native_bitfield_projected_local_views.md). The accepted
 08f9f7e7 result above is predecessor evidence, not new-head acceptance. The
 about-85% coarse estimate and fixed 207 inventory remain unchanged.
+
+
+### Direct secret aggregate local views: focused acceptance and open observation
+
+The selected exact one-Secret owner/endpoint proof is integrated. It retains
+declared nothing/already-secret nominal exceptions, root/index/type anchoring,
+immutable loans, non-owning storage and existing pending guards. Three focused
+HIR tests pass (136 filtered, 0.00 seconds) in
+`target/native-secret-owner-local-view-hir.log`. The warning-interrupted first
+invocation produced no test result and is not acceptance evidence.
+
+All seven linked cases pass together (2.82 seconds, 432 filtered) in
+`target/native-secret-owner-local-view-linked.log`, with matching profiles and
+source-deleted execution. Six pin successful outcome parity. The pending case
+separately pins the raw reference message and native `[redacted]` error, matching
+`before:secret\n`, status 71 and cleanup. This preserves the already recorded
+[open observation boundary](../open_design/debug_print_hidden_secrets.md);
+it neither weakens native redaction nor claims diagnostic parity.
+The initial six-pass/one-failure attempt (4.56 seconds) is retained in
+`target/native-secret-owner-local-view-linked-initial-mismatch.log`. Its mistaken
+shared error oracle was corrected to the existing separate-backend contract;
+no source policy or interpreter behavior was changed.
+
+All 954 crossed compiler library tests pass (41 codegen, 416 comptime, 139 HIR,
+86 MIR, 48 resolve, 224 typecheck) in
+`target/native-secret-owner-local-view-phases.log`.
+All 83 driver library tests pass (66.62 seconds) in
+`target/native-secret-owner-local-view-driver.log`; all 598 frontend fixtures
+pass (22.51 seconds) in `target/native-secret-owner-local-view-frontend.log`.
+All seven source-format checks, Rust formatting and diff checks pass in
+`target/native-secret-owner-local-view-format.json`.
+
+The corpus registers 439 supplemental tests. New-head full workspace/object/
+platform gates remain pending. The accepted 08f9f7e7 workspace/platform and bitfield focused gates
+above are predecessor evidence. Exact selected rules and actual seven-source
+characterization are in
+[the secret-owner contract](native_secret_owner_projected_local_views.md).
+The about-85% estimate, fixed 207 inventory and whole-language 100% objective
+remain unchanged; the independent MIR staging repair is not applied.

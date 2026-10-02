@@ -128,8 +128,9 @@ the executed 19-test focused gate. The coherent 08f9f7e7 parser workspace
 subsequently passes all 425 native tests, 182 object obligations and remaining
 workspace/doc-tests with unchanged source and clean start/end. Exact logs and
 counts are centralized in [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
-Its all-four-job supported-host result remains pending. This local parser
-acceptance does not establish later bitfield workspace/platform acceptance.
+Its supported-host workflow also passes all four build/package and relocated
+installed-package jobs. This accepted parser predecessor does not establish
+later bitfield or secret-owner workspace/platform acceptance.
 
 The initial focused-unit log selected zero tests and is not accepted evidence;
 the applied-unit log above records the actual pass. The source application

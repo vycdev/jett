@@ -261,6 +261,29 @@ repair selects no mutable or temporary view, owner-change, capture-escape,
 projected-write or loan-expiry policy and makes no claim for later repairs.
 
 
+## Direct secret aggregate owner follow-up
+
+The same typed initializer proof now retains one direct Secret layer on an
+exact declared Struct, Bitfield or MachineState receiver. Nothing and an
+already-secret nominal field keep their declared type; every other endpoint
+gains exactly one Secret layer. Field identity/type, checked root, immutable
+loans, non-owning slots and pending access remain unchanged. Explicit borrowed
+declassification/coarsening and owned clones preserve their established roles.
+No hidden-secret debugger or general lifetime policy is selected.
+
+The three focused HIR tests pass (136 filtered), followed by all 954 crossed
+compiler library tests. All seven linked cases pass in 2.82 seconds: six pin
+full successful outcome parity, while the pending receiver separately pins its
+raw reference message and existing native redaction with matching partial stdout
+and status 71. This follows the already recorded open observation boundary;
+it does not claim seven diagnostic-parity cases. All 83 driver library tests,
+598 frontend fixtures and seven source-format checks pass. New
+439-test workspace/platform gates remain pending.
+Exact captures, selected proof and current evidence are in
+[the secret-owner contract](native_secret_owner_projected_local_views.md).
+The independent projected interface/handler repair remains unapplied.
+
+
 ## Boundaries requiring a contract
 
 The existing [projected assignment note](../open_design/projected_field_assignment.md)

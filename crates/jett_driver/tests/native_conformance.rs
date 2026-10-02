@@ -93,6 +93,9 @@ mod json_inferred_parse_slots;
 #[path = "native_conformance/bitfield_local_views.rs"]
 mod bitfield_local_views;
 
+#[path = "native_conformance/secret_owner_local_views.rs"]
+mod secret_owner_local_views;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

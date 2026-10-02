@@ -177,6 +177,22 @@ fn refinement_ancestor(types: &TypeInterner, mut source: TypeId, target: TypeId)
     false
 }
 
+/// Match the checker's already-secret exception without discarding a field's
+/// nominal refinement identity or peeling the aggregate receiver's wrappers.
+fn declared_field_is_secret(types: &TypeInterner, mut ty: TypeId) -> Option<bool> {
+    for _ in 0..types.len() {
+        if ty.index() as usize >= types.len() {
+            return None;
+        }
+        match types.resolve(ty) {
+            Type::Secret(_) => return Some(true),
+            Type::Refinement { base, .. } => ty = *base,
+            _ => return Some(false),
+        }
+    }
+    None
+}
+
 pub fn validate_local_view_initializer(
     value: &Expression,
     source: LocalId,
@@ -203,7 +219,21 @@ pub fn validate_local_view_initializer(
                 owner_type,
                 field,
             } => {
-                if owner_type.index() as usize >= types.len() || base.ty != *owner_type {
+                if owner_type.index() as usize >= types.len()
+                    || base.ty.index() as usize >= types.len()
+                {
+                    return Err("native borrowed projection has an invalid field owner");
+                }
+                let secret_owner = matches!(
+                    types.resolve(base.ty),
+                    Type::Secret(inner)
+                        if *inner == *owner_type
+                            && matches!(
+                                types.resolve(*inner),
+                                Type::Struct(_) | Type::Bitfield(_) | Type::MachineState { .. }
+                            )
+                );
+                if base.ty != *owner_type && !secret_owner {
                     return Err("native borrowed projection has an invalid field owner");
                 }
                 let field_type = match types.resolve(*owner_type) {
@@ -232,7 +262,18 @@ pub fn validate_local_view_initializer(
                 let Some(field_type) = field_type else {
                     return Err("native borrowed projection has an invalid field index");
                 };
-                if value.ty != field_type {
+                let Some(already_secret) = declared_field_is_secret(types, field_type) else {
+                    return Err("native borrowed projection has an invalid field endpoint type");
+                };
+                let valid_result = if secret_owner
+                    && field_type != TypeInterner::NOTHING
+                    && !already_secret
+                {
+                    matches!(types.resolve(value.ty), Type::Secret(inner) if *inner == field_type)
+                } else {
+                    value.ty == field_type
+                };
+                if !valid_result {
                     return Err("native borrowed projection has an invalid field endpoint type");
                 }
                 value = base;

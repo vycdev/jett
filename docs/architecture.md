@@ -708,6 +708,17 @@ is outside this bounded path contract. The
 whole owner's type can differ from the selected field type; the typed path,
 not carrier equality with the whole owner, establishes that dependency.
 
+The shared projected-view proof accepts a base whose type is the exact owner,
+or one direct `Secret(owner_type)` for a declared Struct, Bitfield or
+MachineState. Declaration/state/index lookup remains exact. For a secret base,
+`nothing` and already-secret fields retain their declared TypeId; a bounded
+walk of a declared refinement's base chain detects secrecy without erasing its
+nominal identity. Every other field expression must be exactly
+`Secret(declared_field_type)`. This is separate from the existing final local
+annotation's outer-secret promotion. The original secret receiver stays in the
+initializer, preserving existing pending guards. No arbitrary wrapper peeling,
+declassification, carrier retagging, hidden owner or runtime change is added.
+
 Endpoint types retain their checked qualification and existing representation
 checks. No field-index path is duplicated in alias metadata, and no runtime ABI,
 hidden owner, or implicit allocation is introduced. Every borrowed initializer
@@ -741,7 +752,7 @@ Native ownership planning conservatively refuses owner consumption or rebinding
 after an alias may have been created on a reachable path. It does not select a
 source lifetime-expiry rule. Mutable alias chains, temporary roots, projected
 mutation, allocating conversions, flow-narrowed bare-machine origins, and
-field paths without the checked struct/exact-state proof remain explicit
+field paths without the checked declared-owner proof remain explicit
 native limitations. Owner transitions after alias creation follow the same
 conservative owner-change refusal; see
 [the bounded implementation](active/native_local_view_aliases.md) and

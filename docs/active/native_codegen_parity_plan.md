@@ -2019,8 +2019,8 @@ crossed compiler gate passes 949 tests, followed by 83 driver library tests,
 all 598 frontend fixtures and all 19 new source format checks. The corpus
 registers 425 supplemental tests, separate from this executed focused gate.
 The parser revision 08f9f7e7 subsequently passes its complete frozen
-425-test workspace and all 182 object obligations; its supported-host workflow
-still requires a terminal all-four-job result. Exact accepted-head evidence is
+425-test workspace and all 182 object obligations. Its supported-host workflow
+also passes all four jobs. Exact accepted-head evidence is
 centralized in [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up). The scoped
 evidence and acceptance requirements are in
 [the parser contract](native_json_uninhabited_parse_slots.md). This follow-up
@@ -2047,3 +2047,26 @@ in [the bitfield contract](native_bitfield_projected_local_views.md) and
 [the acceptance audit](native_acceptance_audit.md#bitfield-field-local-views-focused-acceptance).
 The broad estimate stays about 85%, the fixed inventory stays 207, and the
 whole-language objective remains 100%.
+
+
+### Direct secret aggregate local views: bounded focused acceptance
+
+The declared-owner proof now preserves the already selected one-direct-Secret
+receiver rule and exact endpoint qualification. Nothing and already-secret
+nominal fields remain exact; other fields gain one Secret layer. Existing root,
+immutable-loan, pending and non-owning cleanup contracts are unchanged.
+
+Three focused HIR tests, all 954 crossed compiler library tests and all seven
+linked cases pass. Six cases pin successful outcome parity; the pending receiver
+pins raw reference error and existing native redaction separately under the
+[open observation policy](../open_design/debug_print_hidden_secrets.md), with
+matching partial stdout/status and preserved cleanup. It does not establish
+diagnostic parity or select new policy. All 83 driver library tests, 598 frontend
+fixtures and seven source-format checks pass. New-head 439-test full
+workspace/object/platform gates remain pending. Exact
+proof, captures and required resolution are in
+[the secret-owner contract](native_secret_owner_projected_local_views.md) and
+[the acceptance audit](native_acceptance_audit.md#direct-secret-aggregate-local-views-focused-acceptance-and-open-observation).
+This changes neither hidden-secret observation policy nor the independent
+unapplied MIR handler staging. Whole-language 100% remains the objective,
+with about-85% tracking and the fixed 207 inventory unchanged.

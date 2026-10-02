@@ -5844,6 +5844,16 @@ behavior. Ordinary structs, bitfields and exact-state machines can be
 intermediate owners. This adds no payload shape, hidden owner, implicit clone
 or lifetime rule; see the [bitfield contract](active/native_bitfield_projected_local_views.md).
 
+The native path proof also retains the existing directly secret-qualified
+aggregate field rule. A receiver can carry one direct `secret[Owner]` layer,
+where Owner is the exact declared struct, bitfield or machine state. Its field
+keeps the declared type when it is `nothing` or already secret, including a
+nominal refinement over secret data; other fields gain exactly one outer secret
+layer. The actual qualified receiver remains in the path. No multiple-layer
+owner peeling, implicit declassification or nominal substitution establishes a
+view. Explicit borrowed `declassify` and `coarsen` retain their existing proof
+and owner dependency; see the [secret-owner contract](active/native_secret_owner_projected_local_views.md).
+
 The original owner remains live for dependent reads; projected and forwarded
 aliases are non-owning and carry no cleanup obligation. Explicit clones acquire
 independent ownership, and ordinary owned field initializers retain their copy
