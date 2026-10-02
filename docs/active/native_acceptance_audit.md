@@ -1092,8 +1092,14 @@ reflection pipeline gaps, or the unresolved language policies.
 The [supported-host run for the stack repair at `57e0b003`](https://github.com/vycdev/jett/actions/runs/36974175496)
 passed both workspace/build/package jobs and both clean installed jobs. The
 [run for `f8e70722`](https://github.com/vycdev/jett/actions/runs/36975813263)
-is still in progress; the earlier repair's distribution evidence does not certify
-the later reflected producer changes.
+passed both workspace/build/package jobs and the Linux clean installed job.
+Its Windows clean installed job failed when the native linker exceeded its
+60-second deadline on the first relocated debug build, without linker output.
+This does not establish the fourth distribution gate. The
+[run for `cca40a2e`](https://github.com/vycdev/jett/actions/runs/36980991837)
+is live in both platform workspace checks; its eventual installed-package result
+must determine whether the linker timeout recurs. The earlier repair's green
+distribution evidence does not certify these later changes.
 
 The admitted one-operand observers `type.variant_value`,
 `type.machine_state_value`, and `type.arg` now append their existing checked
