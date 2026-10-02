@@ -1,0 +1,11 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function main(stdout: Stdout) returns nothing:
+    map[string, Session] value = json.parse[map[string, Session]]("{{}}") handle error:
+        return Stdout.write(view stdout, "error:{error}\n")
+    Stdout.write(view stdout, "unexpected admission\n")

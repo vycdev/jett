@@ -128,7 +128,10 @@ first-error controls in direct and pipeline forms. The later inactive-payload
 decoder group also passed separately. The final-source JSON family gate passes
 all 39 tests, including the 23 new groups, in
 `target/native-json-qualified-json-family-final.log` (438.34 seconds).
-Complete workspace and supported-host acceptance remain pending.
+The frozen `23ac34c4` complete workspace and doc-tests also pass in
+`target/native-workspace-23ac34c4.log`, including all 346 native tests and
+182 object obligations. Supported-host acceptance for that revision and
+acceptance for later test additions remain independent gates.
 
 This is a bounded private type-correctness repair selected before guard
 integration. It does not add an early machine-state gate, filter public

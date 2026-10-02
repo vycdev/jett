@@ -8,6 +8,9 @@ use jett_driver::native::{
 use jett_driver::{BuildOptions, run_file_capture_outcome};
 use std::fs;
 
+#[path = "json_qualified_machines/wrappers.rs"]
+mod wrappers;
+
 #[derive(Clone, Copy)]
 enum Oracle {
     Exact(&'static str),
@@ -393,6 +396,18 @@ fn native_qualified_machine_json_bare_and_invalid_selected_payloads_keep_policy_
         (
             "reject_cached_parse_exact",
             include_str!("json_qualified_machines/reject_cached_parse_exact.jett"),
+        ),
+        (
+            "optional_bare_policy_negative",
+            include_str!("json_qualified_machines/wrappers/optional_bare_policy_negative.jett"),
+        ),
+        (
+            "result_bare_policy_negative",
+            include_str!("json_qualified_machines/wrappers/result_bare_policy_negative.jett"),
+        ),
+        (
+            "map_bare_policy_negative",
+            include_str!("json_qualified_machines/wrappers/map_bare_policy_negative.jett"),
         ),
     ];
     for (name, text) in cases {

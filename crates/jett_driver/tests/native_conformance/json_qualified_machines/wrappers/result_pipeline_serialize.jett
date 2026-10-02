@@ -1,0 +1,21 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function result_count(view value: result[Session at ready, Session at ready]) returns string:
+    Session at ready item = clone value handle error:
+        return "fail:{error.count}"
+    return "ok:{item.count}"
+function main(stdout: Stdout) returns nothing:
+    Session at ready first_seed = Session(ready, 51)
+    Session at ready second_seed = Session(ready, 52)
+    result[Session at ready, Session at ready] first = ok(first_seed)
+    result[Session at ready, Session at ready] second = fail(second_seed)
+    string first_encoded = first into view json.serialize[result[Session at ready, Session at ready]]()
+    Stdout.write(view stdout, "{first_encoded}\n")
+    string second_encoded = second into view json.serialize[result[Session at ready, Session at ready]]()
+    Stdout.write(view stdout, "{second_encoded}\n")
+    Stdout.write(view stdout, "retained:{result_count(view first)}:{result_count(view second)}\n")

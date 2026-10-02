@@ -1,0 +1,21 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function map_count(view values: map[string, Session at ready]) returns int64:
+    optional[Session at ready] maybe = map.get[string, Session at ready](clone values, "entry")
+    Session at ready item = maybe handle:
+        return -1
+    return item.count
+function main(stdout: Stdout) returns nothing:
+    Session at ready seed = Session(ready, 61)
+    map[string, Session at ready] first = map("entry": seed)
+    map[string, Session at ready] second = map.new[string, Session at ready]()
+    string first_encoded = json.serialize[map[string, Session at ready]](view first)
+    Stdout.write(view stdout, "{first_encoded}\n")
+    string second_encoded = json.serialize[map[string, Session at ready]](view second)
+    Stdout.write(view stdout, "{second_encoded}\n")
+    Stdout.write(view stdout, "retained:{map_count(view first)}:{map_count(view second)}\n")

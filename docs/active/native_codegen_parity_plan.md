@@ -1861,7 +1861,7 @@ mechanism. Fresh primitive pipeline witnesses establish that the missing
 handoff was an independent defect. Ordinary JSON policy, argument evaluation,
 ownership, and step-local handling are unchanged.
 
-The current supplemental suite has 23 tests over 32 Jett fixtures, covering
+The qualified-JSON repair suite has 23 tests over 32 Jett fixtures, covering
 direct/pipeline operations, qualified list aliases, handled state/extra-field
 errors, input preservation, both profiles, source removal, publication policy,
 pure comptime/verify/property execution, exact string-key aliases, and an
@@ -1872,8 +1872,8 @@ guard. The additional group over three inactive callable/interface/actor
 fixtures passes all four direct JSON APIs for the selected ready payload in
 both runtime profiles after source removal (one pass, 345 filtered) in
 `target/native-json-qualified-unselected-payloads-final.log`. The compiled
-native corpus now contains 346 tests. These separate focused runs do not
-establish 346 executed passes. The final-source JSON family gate passes all
+native corpus at that checkpoint contains 346 tests. These separate focused
+runs do not establish 346 executed passes. The final-source JSON family gate passes all
 39 tests (307 filtered), including all 23 new groups and 16 existing JSON
 regressions, in `target/native-json-qualified-json-family-final.log`
 (438.34 seconds).
@@ -1881,10 +1881,40 @@ regressions, in `target/native-json-qualified-json-family-final.log`
 Recorded phase checks pass: 40 codegen, 416 comptime, 125 HIR, 79 MIR, and
 221 typechecker tests. The driver batch's 82 passes plus one temporary capture
 PermissionDenied failure are followed by a passing isolated retry of that
-exact test; this is distinct from a clean full-batch result. Native objects
-and final frozen workspace/platform acceptance
-remain pending and must be filled from actual results. All 598 frontend fixtures
-pass on the repaired source in `target/native-json-qualified-frontend-fixtures.log`
-(20.66 seconds). The JSON row
-retains its other concrete-shape obligations; the broad estimate remains about
+exact test; this is distinct from a clean full-batch result. All 598 frontend
+fixtures pass on the repaired source in `target/native-json-qualified-frontend-fixtures.log`
+(20.66 seconds). The frozen `23ac34c4` complete workspace subsequently passes
+in `target/native-workspace-23ac34c4.log`, including all 346 native tests,
+182 object obligations, 598 frontend fixtures, all 83 driver library tests,
+and doc-tests, with unchanged head and worktree. Workflow 37013565734 has
+passed its Windows build/package job; Linux and clean installed-package
+acceptance remain pending. Later test additions retain their own acceptance
+gates. The JSON row retains its other concrete-shape obligations;
+the broad estimate remains about
 85%, and the fixed inventory remains 207 fixtures with 182 object obligations.
+
+### Qualified machine JSON wrapper coverage
+
+Twenty-four additional native tests cross optional, result, and string-keyed map
+wrappers with all four public JSON APIs and direct/pipeline forms. They select
+the valid ready payload while another state contains a non-string-keyed map.
+Occupied/absent optionals, both repeated-type result arguments and arms,
+populated/empty maps, and retained owners are covered. Three additional empty
+or inactive bare-machine targets retain compile-time E0343 and preserve output
+publication in both profiles.
+
+All 27 fixture preflights pass in
+`target/native-json-qualified-wrapper-preflight/results.json`. All 24 new linked
+tests pass (346 filtered, 190.12 seconds) in
+`target/native-json-qualified-wrapper-linked.log`, comparing exact reference
+output in both matching runtime profiles after source deletion. The extended
+policy group passes (one test, 369 filtered, 7.93 seconds) in
+`target/native-json-qualified-wrapper-policy.log`. Source and Rust formatting
+checks pass. No production code or public admission rule changes in this slice.
+
+The supplemental corpus now registers 370 tests. This is not a complete frozen
+370-test workspace or supported-host acceptance result; the accepted local
+workspace checkpoint above contains 346. Wrong-state wrapper diagnostics,
+deeper combinations, aliases, secrets, pending values, and independent language
+contracts remain open audit work. The broad 85% estimate and 207-fixture
+inventory denominator remain unchanged.

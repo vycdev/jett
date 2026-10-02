@@ -1,0 +1,20 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function map_count(view values: map[string, Session at ready]) returns int64:
+    optional[Session at ready] maybe = map.get[string, Session at ready](clone values, "entry")
+    Session at ready item = maybe handle:
+        return -1
+    return item.count
+function main(stdout: Stdout) returns nothing:
+    string first_raw = "{{\"entry\":{{\"state\":\"ready\",\"payload\":{{\"count\":61}}}}}}"
+    map[string, Session at ready] first = first_raw into json.parse_exact[map[string, Session at ready]]() handle error:
+        return Stdout.write(view stdout, "first error:{error}\n")
+    string second_raw = "{{}}"
+    map[string, Session at ready] second = second_raw into json.parse_exact[map[string, Session at ready]]() handle error:
+        return Stdout.write(view stdout, "second error:{error}\n")
+    Stdout.write(view stdout, "parsed:{map_count(view first)}:{map_count(view second)}\n")

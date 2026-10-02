@@ -1,0 +1,19 @@
+namespace app
+machine Session:
+    states:
+        ready(count: int64)
+        cached(entries: map[int64, int64])
+    transitions:
+        ready to cached
+function result_count(view value: result[Session at ready, Session at ready]) returns string:
+    Session at ready item = clone value handle error:
+        return "fail:{error.count}"
+    return "ok:{item.count}"
+function main(stdout: Stdout) returns nothing:
+    string first_raw = "{{\"ok\":{{\"state\":\"ready\",\"payload\":{{\"count\":51}}}}}}"
+    result[Session at ready, Session at ready] first = json.parse[result[Session at ready, Session at ready]](first_raw) handle error:
+        return Stdout.write(view stdout, "first error:{error}\n")
+    string second_raw = "{{\"fail\":{{\"state\":\"ready\",\"payload\":{{\"count\":52}}}}}}"
+    result[Session at ready, Session at ready] second = json.parse[result[Session at ready, Session at ready]](second_raw) handle error:
+        return Stdout.write(view stdout, "second error:{error}\n")
+    Stdout.write(view stdout, "parsed:{result_count(view first)}:{result_count(view second)}\n")

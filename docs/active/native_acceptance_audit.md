@@ -1335,7 +1335,7 @@ reference path while native lowering refused the generic JSON intrinsic. Bare
 machine controls reported E0343. These characterization results identify the
 defects; they are not validation of the new implementation or regression suite.
 
-The current linked suite contains 23 independent tests and 32 Jett fixtures.
+The qualified-JSON repair suite contains 23 independent tests and 32 Jett fixtures.
 It is intended to cover all four JSON operations in direct and pipeline forms,
 qualified aliases in lists, wrong-state handling, lenient and exact extra fields,
 borrowed-value preservation, primitive parser input clone/reread, debug and
@@ -1363,7 +1363,8 @@ retry (one pass, 82 filtered) in
 `target/native-json-qualified-driver-permission-retry.log`. The original
 batch is not described as an uninterrupted passing run.
 
-The compiled supplemental native corpus now contains 346 tests, confirmed
+At this qualified-JSON checkpoint, the compiled supplemental corpus contains
+346 tests, confirmed
 by the final JSON family gate's 39 passes and 307 filtered in
 `target/native-json-qualified-json-family-final.log` (438.34 seconds).
 That gate includes all 23 new groups on the final source and 16 existing JSON
@@ -1373,8 +1374,44 @@ and additional group's pass remain recorded separately in
 `target/native-json-qualified-unselected-payloads-final.log`.
 All 598 frontend fixtures pass on the repaired source
 in `target/native-json-qualified-frontend-fixtures.log` (20.66 seconds).
-Native object gates, a frozen complete workspace with doc-tests, and
-supported-host jobs for the current JSON changes remain pending. Earlier
-phase results do not validate later source additions.
+The frozen `23ac34c4` complete workspace passes in
+`target/native-workspace-23ac34c4.log`, including all 346 native conformance
+tests (838.03 seconds), all 182 native object obligations, all 598 frontend
+fixtures (22.88 seconds), and doc-tests. Its full driver library batch also
+passes all 83 tests, separately from the earlier temporary-file retry.
+The head and worktree remained unchanged throughout that run. Supported-host
+acceptance for this revision remains pending in
+[workflow run 37013565734](https://github.com/vycdev/jett/actions/runs/37013565734):
+the Windows build/package job has passed; Linux and clean installed-package
+acceptance are not yet complete. Earlier phase results do not validate later
+source additions.
 This slice supplements the unchanged 207-fixture inventory; the
 broad estimate remains about 85%.
+
+### Qualified machine JSON inside optional, result, and map wrappers
+
+An additional 24 linked tests cover `optional[Session at ready]`, both arms of
+`result[Session at ready, Session at ready]`, and `map[string, Session at ready]`.
+Each wrapper crosses all four public JSON APIs with direct and pipeline calls.
+The machine's unrelated cached state contains an unsupported integer-keyed map.
+The controls exercise occupied and absent optionals, both result arms, populated
+and empty maps, and retained original owners. Three additional bare-machine
+controls keep E0343 for an empty optional, an inactive result arm, and an empty
+map; runtime emptiness does not exempt a target from public type policy.
+
+All 27 new Jett fixtures passed frontend/reference preflight in
+`target/native-json-qualified-wrapper-preflight/results.json`: the 24 valid
+cases produced exact literal stdout and empty stderr, and the three invalid
+cases reported E0343. All 24 linked tests then passed (346 filtered) in
+`target/native-json-qualified-wrapper-linked.log` (190.12 seconds), using both
+matching runtime profiles after source removal. The extended policy group
+passes (one test, 369 filtered) in `target/native-json-qualified-wrapper-policy.log`
+(7.93 seconds), preserving existing output artifacts in both profiles.
+All 27 source-format checks and Rust formatting checks pass.
+
+This test-only extension registers 370 supplemental native tests. The frozen
+346-test workspace result and these focused passes remain separate evidence;
+a complete 370-test workspace and supported-host run have not yet been accepted.
+Wrong-state wrapper errors, deeper wrapper combinations, aliases, secrets, and
+pending values retain their independent audit obligations. The broad estimate
+remains about 85%, and the fixed inventory remains 207 fixtures.
