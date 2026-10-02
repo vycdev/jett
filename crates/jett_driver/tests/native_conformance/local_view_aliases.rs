@@ -12,10 +12,19 @@ enum ProjectedOutcome {
 }
 
 fn run_case(name: &str, source_text: &str, expected: ProjectedOutcome) {
+    run_case_with_traces(name, source_text, expected, &[]);
+}
+
+fn run_case_with_traces(
+    name: &str,
+    source_text: &str,
+    expected: ProjectedOutcome,
+    expected_traces: &[&str],
+) {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join(format!("{name}.jett"));
     fs::write(&source, source_text).unwrap();
-    let (reference, status, stderr) = match expected {
+    let (reference, status, terminal_stderr) = match expected {
         ProjectedOutcome::Success(stdout) => {
             let output = jett_driver::run_file_capture_outcome(&source)
                 .unwrap_or_else(|error| panic!("{name}: checked reference fixture: {error:?}"));
@@ -24,13 +33,23 @@ fn run_case(name: &str, source_text: &str, expected: ProjectedOutcome) {
         }
         ProjectedOutcome::RuntimeFailure { stdout, message } => {
             let failure = jett_driver::run_file_capture_outcome(&source)
-                .expect_err("later owned argument fails after projected alias observation");
+                .expect_err("expected terminal projected view fixture failure");
             assert_eq!(failure.output.stdout, stdout, "{name}");
             assert_eq!(failure.message, message, "{name}");
             (failure.output, 71, format!("{message}\n"))
         }
     };
-    assert!(reference.debug_events.is_empty(), "{name}: {reference:?}");
+    let expected_events = expected_traces
+        .iter()
+        .map(|text| jett_driver::DebugEvent {
+            kind: jett_driver::DebugEventKind::Trace,
+            text: (*text).to_owned(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reference.debug_events, expected_events,
+        "{name}: {reference:?}"
+    );
     assert!(
         reference.frontend_debug_observations.is_empty(),
         "{name}: {reference:?}"
@@ -65,6 +84,12 @@ fn run_case(name: &str, source_text: &str, expected: ProjectedOutcome) {
             reference.stdout.as_bytes(),
             "{name}, release={release}"
         );
+        let debug = if release {
+            String::new()
+        } else {
+            jett_driver::render_debug_events(&reference.debug_events)
+        };
+        let stderr = format!("{debug}{terminal_stderr}");
         assert_eq!(
             actual.stderr,
             stderr.as_bytes(),
@@ -421,4 +446,236 @@ function main(stdout: Stdout) returns nothing:
             "{actual:?}"
         );
     }
+}
+
+#[test]
+fn native_machine_projected_local_view_exact_packet_matches_reference_without_source() {
+    run_case(
+        "machine_01_exact_packet",
+        include_str!("local_view_aliases/machines/01_exact_packet.jett"),
+        ProjectedOutcome::Success(""),
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_payloads_and_forwarding_preserve_original_owner() {
+    run_case(
+        "machine_02_owned_payloads_forwarded",
+        include_str!("local_view_aliases/machines/02_owned_payloads_forwarded.jett"),
+        ProjectedOutcome::Success("bytes:4142:4142:414243:4142\nitems:2:2:3:2\n"),
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_parameter_clones_preserve_callers_owner() {
+    run_case(
+        "machine_03_view_parameter",
+        include_str!("local_view_aliases/machines/03_view_parameter.jett"),
+        ProjectedOutcome::Success("bytes:414243:4142\nitems:3:2\n"),
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_struct_to_machine_path_preserves_owner() {
+    run_case(
+        "machine_04_struct_to_machine",
+        include_str!("local_view_aliases/machines/04_struct_to_machine.jett"),
+        ProjectedOutcome::Success("bytes:4344:4344:4344\nitems:2:2:2\n"),
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_machine_to_struct_path_preserves_owner() {
+    run_case(
+        "machine_05_machine_to_struct",
+        include_str!("local_view_aliases/machines/05_machine_to_struct.jett"),
+        ProjectedOutcome::Success("bytes:4546:4546:4546\nitems:2:2:2\n"),
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_failure_preserves_argument_order_and_cleanup() {
+    run_case(
+        "machine_06_later_argument_failure",
+        include_str!("local_view_aliases/machines/06_later_argument_failure.jett"),
+        ProjectedOutcome::RuntimeFailure {
+            stdout: "before\nborrowed:2\nfailure\n",
+            message: "runtime error: list.__remove_at: index -1 out of bounds",
+        },
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_owned_field_copy_remains_independent() {
+    run_case(
+        "machine_07_owned_field_copy_control",
+        include_str!("local_view_aliases/machines/07_owned_field_copy_control.jett"),
+        ProjectedOutcome::Success("414243:4142\n"),
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_owner_changes_reject_before_publication() {
+    use jett_driver::native::{NativeBuildError, build_host_executable_with_options};
+    use jett_driver::{BuildOptions, build_file_with_options};
+
+    let cases = [
+        (
+            "machine_owner_consumption",
+            include_str!("local_view_aliases/machines/08_owner_consumption_boundary.jett"),
+        ),
+        (
+            "machine_owner_transition",
+            include_str!("local_view_aliases/machines/09_owner_transition_boundary.jett"),
+        ),
+    ];
+    for (name, source_text) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join(format!("{name}.jett"));
+        fs::write(&source, source_text).unwrap();
+        let reference = jett_driver::run_file_capture_outcome(&source)
+            .unwrap_or_else(|error| panic!("{name}: admitted reference boundary: {error:?}"));
+        assert_eq!(reference.stdout, "4142\n", "{name}");
+        assert!(reference.debug_events.is_empty(), "{name}: {reference:?}");
+        assert!(
+            reference.frontend_debug_observations.is_empty(),
+            "{name}: {reference:?}"
+        );
+        let output = directory.path().join("preserved.exe");
+        let sentinel = b"existing native publication";
+        fs::write(&output, sentinel).unwrap();
+        let launcher = if cfg!(windows) {
+            NativeLauncherBundle::windows_msvc_static_v1(directory.path().join("unused.lib"))
+        } else {
+            NativeLauncherBundle::linux_gnu_v1(directory.path().join("unused.a"))
+        };
+        assert!(!launcher.archive_path.exists());
+
+        for release in [false, true] {
+            let options = BuildOptions { release };
+            let checked = build_file_with_options(&source, options);
+            assert!(
+                !checked.has_errors,
+                "{name}: the source boundary stays frontend-admitted: {:?}",
+                checked.diagnostics
+            );
+            let error = build_host_executable_with_options(&source, &launcher, &output, options)
+                .expect_err(
+                    "persistent alias owner must fail before archive lookup and publication",
+                );
+            assert!(error.debug_observations().is_empty(), "{name}: {error:?}");
+            let NativeBuildError::Codegen { source, .. } = error else {
+                panic!("{name}: expected persistent alias ownership failure: {error:?}");
+            };
+            let jett_codegen_cranelift::CodegenError::InvalidMirContract { message, .. } = source
+            else {
+                panic!("{name}: expected persistent alias ownership contract: {source:?}");
+            };
+            let owner = message
+                .strip_prefix("native owner ")
+                .and_then(|rest| {
+                    rest.strip_suffix(
+                        " consumption or rebinding after creating a local view alias is not implemented",
+                    )
+                })
+                .unwrap_or_else(|| panic!("{name}: unexpected ownership contract: {message}"));
+            owner
+                .parse::<usize>()
+                .unwrap_or_else(|error| panic!("{name}: invalid owner identity {owner}: {error}"));
+            assert_eq!(fs::read(&output).unwrap(), sentinel, "{name}");
+            assert!(!launcher.archive_path.exists());
+        }
+    }
+}
+
+#[test]
+fn native_machine_projected_local_view_pending_whole_owner_fails_before_field_observation() {
+    run_case_with_traces(
+        "machine_10_pending_whole_machine",
+        include_str!("local_view_aliases/machines/10_pending_whole_machine.jett"),
+        ProjectedOutcome::RuntimeFailure {
+            stdout: "before:whole\n",
+            message: "runtime error: field access is not supported on pending(pending(app.Packet@ready(bytes(65, 66), list(2, 3))))",
+        },
+        &[],
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_pending_struct_to_machine_owner_preserves_depth() {
+    run_case_with_traces(
+        "machine_11_pending_struct_to_machine",
+        include_str!("local_view_aliases/machines/11_pending_struct_to_machine.jett"),
+        ProjectedOutcome::RuntimeFailure {
+            stdout: "before:struct-machine\nintermediate\n",
+            message: "runtime error: field access is not supported on pending(pending(app.Packet@ready(bytes(67, 68), list(4, 5))))",
+        },
+        &[
+            "trace forwarded_machine: app.Packet at ready = pending(pending(app.Packet@ready(bytes(67, 68), list(4, 5))))\n",
+        ],
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_pending_machine_to_struct_owner_preserves_depth() {
+    run_case_with_traces(
+        "machine_12_pending_machine_to_struct",
+        include_str!("local_view_aliases/machines/12_pending_machine_to_struct.jett"),
+        ProjectedOutcome::RuntimeFailure {
+            stdout: "before:machine-struct\nintermediate\n",
+            message: "runtime error: field access is not supported on pending(pending(app.Payload(data: bytes(69, 70), items: list(6, 7))))",
+        },
+        &[
+            "trace forwarded_struct: app.Payload = pending(pending(app.Payload(data: bytes(69, 70), items: list(6, 7))))\n",
+        ],
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_pending_endpoint_clones_join_without_changing_owner() {
+    run_case_with_traces(
+        "machine_13_pending_endpoint_copies",
+        include_str!("local_view_aliases/machines/13_pending_endpoint_copies.jett"),
+        ProjectedOutcome::Success("bytes:414243:4142\nitems:3:2\n"),
+        &[
+            "trace forwarded: bytes = pending(pending(bytes(65, 66)))\n",
+            "trace once: bytes = pending(bytes(65, 66))\n",
+            "trace forwarded: bytes = pending(pending(bytes(65, 66)))\n",
+            "trace once: bytes = pending(bytes(65, 66))\n",
+            "trace forwarded: list[int64] = pending(pending(list(2, 3)))\n",
+            "trace once: list[int64] = pending(list(2, 3))\n",
+            "trace forwarded: list[int64] = pending(pending(list(2, 3)))\n",
+            "trace once: list[int64] = pending(list(2, 3))\n",
+            "trace packet: app.Packet at ready = app.Packet@ready(pending(pending(bytes(65, 66))), pending(pending(list(2, 3))))\n",
+        ],
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_pending_whole_owner_clones_join_before_projection() {
+    run_case_with_traces(
+        "machine_14_pending_whole_owner_copies",
+        include_str!("local_view_aliases/machines/14_pending_whole_owner_copies.jett"),
+        ProjectedOutcome::Success("bytes:4142:414243:4142\nitems:2:3:2\n"),
+        &[
+            "trace forwarded: app.Packet at ready = pending(pending(app.Packet@ready(bytes(65, 66), list(2, 3))))\n",
+            "trace once: app.Packet at ready = pending(app.Packet@ready(bytes(65, 66), list(2, 3)))\n",
+            "trace forwarded: app.Packet at ready = pending(pending(app.Packet@ready(bytes(65, 66), list(2, 3))))\n",
+            "trace once: app.Packet at ready = pending(app.Packet@ready(bytes(65, 66), list(2, 3)))\n",
+            "trace packet: app.Packet at ready = pending(pending(app.Packet@ready(bytes(65, 66), list(2, 3))))\n",
+        ],
+    );
+}
+
+#[test]
+fn native_machine_projected_local_view_generic_and_qualified_endpoints_keep_exact_types() {
+    run_case(
+        "machine_15_typed_endpoints",
+        include_str!("local_view_aliases/machines/15_typed_endpoints.jett"),
+        ProjectedOutcome::Success(concat!(
+            "scalar:7:7:2:3:2:5:11:2:3:2:3:13\n",
+            "bytes:414243:4142:2:3:2:5:11:2:3:2:3:13:2:3:2:5:11:2:3:2:3:13\n",
+            "items:3:2:2:3:2:5:11:2:3:2:3:13\n",
+        )),
+    );
 }

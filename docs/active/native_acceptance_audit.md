@@ -1443,10 +1443,61 @@ valid field alias; its zero-test Windows target is not an executed pass. Linux
 CI remains required, and the matching Windows CLI source independently refuses
 the owner change before archive lookup.
 
-The supplemental corpus registers 378 tests. A complete frozen workspace and
-supported-host gate for this change remain required. Qualified-machine payload
-field aliases have a fresh frontend/reference success and native refusal in
-`target/native-next-after-projected-view/root_machine_field_alias.preflight.json`.
-Neither these focused passes nor the fixed inventory establish full-language
-parity. The planning estimate remains about 85% and the inventory denominator
-remains 207.
+This ordinary-struct checkpoint registered 378 native tests. Its later frozen
+a0bf12df workspace passed all local gates, while supported-host acceptance
+retains its separate revision-specific obligation. A qualified machine-field
+alias was source-valid but native-refused before the exact-state follow-up
+below. Neither this checkpoint nor the fixed inventory establishes full-
+language parity; the planning estimate stays about 85% and denominator 207.
+
+### Exact qualified-machine field local-view focused acceptance
+
+The exact declared MachineState owner lookup is integrated with unchanged
+source/nominal proof, persistent loans, non-owning slots and runtime ABI.
+Malformed unused state/index/endpoint/root metadata and concrete generic
+contexts pass the compiler gate: 261 tests (41 codegen, 134 HIR, 86 MIR) in
+`target/native-machine-projected-view-phases.log`. All 83 driver library tests
+pass in `target/native-machine-projected-view-driver-frontend.log`; all 598
+frontend fixtures pass in `target/native-machine-projected-view-frontend.log`
+under the corrected `fixture_suite` target.
+
+The 25-test local-alias batch passes (366 filtered, 17.72 seconds) in
+`target/native-machine-projected-view-pending-linked.log`; the typed-endpoint
+case passes separately (one test, 391 filtered, 2.80 seconds) in
+`target/native-machine-projected-view-typed-linked.log`. These are 26 distinct
+executed tests, not one combined batch. Linked cases use matching runtime
+profiles and execute after source removal, preserving original owners, clone independence, exact
+pending/intermediate errors, depth-two traces and explicit joins, terminal
+status/cleanup. Separate boundary cases prove before-publication owner-change
+refusal without looking up the archive. Generic endpoint
+modes and nominal/secret field identities are pinned by the final case. All 15
+machine Jett source-format checks and Rust formatting checks pass. Initial
+source-only preflight and the corrected E0308 fixture handler are recorded in
+[the scoped note](native_local_view_aliases.md#exact-state-qualified-machine-field-follow-up).
+
+Bare flow-narrowed machine origins, mutable backing chains, temporary roots,
+projected writes, allocating conversions and owner consume/rebind/transition
+after reachable alias creation remain outside this bounded native support.
+The actual owner-change group reaches the existing typed ownership refusal
+before archive lookup and preserves the output sentinel in both profiles.
+No source loan-expiry or temporary-lifetime contract is selected.
+
+The previous frozen a0bf12df workspace passed with unchanged head/worktree
+and exit zero at 16:01:32 UTC in `target/native-workspace-a0bf12df.log`: all 378
+native tests (785.23 seconds), all 182 object obligations (491.87 seconds), 598
+frontend fixtures (20.05 seconds), 83 driver library tests (75.05 seconds), and
+the remaining workspace/doc-tests. That prior result does not validate later
+machine source/test additions. A complete frozen 392-test workspace and all
+four supported-host jobs for the new source remain required.
+
+The earlier a0f0c982 workflow
+[37019114837](https://github.com/vycdev/jett/actions/runs/37019114837) passed all
+four jobs. The latest a0bf12df workflow
+[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) is still in
+progress at this checkpoint: Linux GNU build passed, Windows MSVC build remains
+in progress, and installed-package jobs are pending. Neither earlier revision
+establishes new-source platform acceptance. The about-85% planning estimate and
+fixed 207-fixture denominator remain unchanged; full-language parity is not claimed.
+
+The current corpus registers 392 tests. Broader owner/endpoint combinations
+and independent language surfaces remain audit obligations.

@@ -1,0 +1,12 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes)
+function consume(packet: Packet at ready) returns nothing:
+    return nothing
+function main(stdout: Stdout) returns nothing:
+    Packet at ready packet = Packet(ready, bytes.from_string("AB"))
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    Stdout.write(view stdout, "{bytes.to_hex(view forwarded)}\n")
+    consume(packet)

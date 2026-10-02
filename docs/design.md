@@ -5795,10 +5795,24 @@ copying.
 
 Native lowering supports direct and forwarded immutable local views with a
 stable immutable local or view-parameter origin, including finite ordinary-struct
-field paths rooted in that origin. Each field step preserves its checked owner,
+and exactly state-qualified machine field paths rooted in that origin. Each
+field step preserves its checked owner,
 field identity, and endpoint type. The endpoint's existing secret, refinement,
 or interface identity is not erased to establish the path. Bytes and lists are
 examples of this rule, not an endpoint-type allowlist.
+
+The same read-only view rule permits a finite field path through a declared
+`Machine at state` payload. Its native initializer proof must resolve the
+exact machine and declared state, then preserve the canonical field identity
+and endpoint type. Ordinary structs and state-qualified machines can be
+intermediate owners in the same path. Every machine step must already carry
+that exact state type in the checked path, and the terminating local must
+preserve its actual declared type. This bounded proof does not recover state
+qualification from a flow-narrowed bare backing slot.
+The bounded native proof continues to refuse transition, consumption, or
+rebinding of an owner after a reachable alias has been created. Nominal
+refinement and secrecy qualification retain the same proof requirements
+as ordinary-struct views.
 
 The original owner remains live for dependent reads; projected and forwarded
 aliases are non-owning and carry no cleanup obligation. Explicit clones acquire

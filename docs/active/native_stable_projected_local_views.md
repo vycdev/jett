@@ -37,9 +37,15 @@ Verification must cover direct and nested paths, forwarded aliases, view
 parameters, exact checked contexts, clone independence, owner liveness, and
 success/failure cleanup with linked debug/release native execution.
 
-The integrated focused checkpoint passes all 896 compiler-phase library tests
-and all 12 local-alias native driver tests, including the eight new linked
-cases, matching profiles, source removal, and terminal-failure cleanup. Exact
-logs and the remaining whole-workspace/platform obligations are recorded in
-`native_local_view_aliases.md`. State-qualified machine field paths remain a
-confirmed separate native gap rather than part of this ordinary-struct result.
+The ordinary-struct focused checkpoint passed all 896 compiler-phase library
+tests and 12 local-alias native tests; the later frozen a0bf12df workspace
+passed all local gates at its 378-test corpus. The
+[exact-state follow-up](native_local_view_aliases.md#exact-state-qualified-machine-field-follow-up)
+now extends the same proof to declared MachineState payloads. Its current
+261 HIR/MIR/codegen library tests pass, as do 26 distinct local-alias tests
+across a 25-test batch and a separate typed-endpoint test. Exact scope/logs
+are in that note. The new 392-test frozen workspace and supported-host
+acceptance remain required. This preserves exact state/nominal qualification
+and current owner-change boundaries; bare flow-narrowed, mutable or temporary
+origins and broader projected owner/endpoint combinations remain outside the
+bounded proof rather than being counted as complete view support.

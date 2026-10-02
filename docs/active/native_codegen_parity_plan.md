@@ -1928,14 +1928,57 @@ Owner liveness and non-owning cleanup storage remain unchanged. Conversion
 proofs preserve nominal refinements, allowing only existing explicit ancestors,
 exact secret declassification, and harmless outer secret promotion.
 
-All 896 compiler-phase library tests and all 12 local-alias driver tests pass
-on the final integrated source. The latter include eight new linked cases with
+At the ordinary-struct checkpoint, all 896 compiler-phase library tests and
+12 local-alias driver tests passed on its integrated source. The latter include
+eight new linked cases with
 matching debug/release archives, source removal, independent clones, and later
 argument-failure cleanup; the corpus registers 378 tests. Exact logs and scope
 are in [the local-view note](native_local_view_aliases.md). These focused gates
 do not replace complete frozen workspace and supported-host acceptance.
 
-A qualified-machine field alias independently passes frontend/reference
-execution and fails the ordinary-struct native origin proof. Mutable/temporary
+A qualified-machine field alias passed frontend/reference execution but failed
+the native origin proof before the exact-state follow-up below. Mutable/temporary
 roots and unresolved lifetime decisions also remain separate obligations. The
 broad estimate stays about 85%; the fixed inventory remains 207 fixtures.
+
+### Exact qualified-machine field local views: focused acceptance
+
+Exact declared MachineState field steps now preserve checked immediate origin,
+state/source identity, endpoint and nominal qualification through the existing
+initializer tree. Persistent loans, non-owning slots, pending checks and tag
+offsets remain the existing MIR/emitter contract. Source policy and ABI do not
+change; bare flow-narrowed/mutable/temporary origins and owner changes remain
+outside bounded support.
+
+Current focused library gates pass 261 tests (41 codegen, 134 HIR, 86 MIR),
+and the driver/frontend gate passes 83 library tests and 598 fixtures. The
+local-alias gate passes 25 tests (366 filtered, 17.72 seconds), with one
+separate typed-endpoint pass (391 filtered, 2.80 seconds): 26 unique executed
+cases, not a combined batch. Linked cases execute in both profiles after
+source removal; rejection controls preserve publication before archive lookup.
+Exact pending owner/intermediate errors and endpoint clone/two-join traces,
+owner-change publication refusal, generic copy/borrow facts and nominal/secret
+field identities are pinned. Exact logs and initial source-only preflight
+distinctions are recorded in
+[the local-view note](native_local_view_aliases.md#exact-state-qualified-machine-field-follow-up).
+
+The previous frozen a0bf12df workspace passed with unchanged head/worktree
+and exit zero at 16:01:32 UTC in `target/native-workspace-a0bf12df.log`: all 378
+native tests (785.23 seconds), all 182 object obligations (491.87 seconds), 598
+frontend fixtures (20.05 seconds), 83 driver library tests (75.05 seconds), and
+the remaining workspace/doc-tests. That prior result does not validate later
+machine source/test additions. A complete frozen 392-test workspace and all
+four supported-host jobs for the new source remain required.
+
+The earlier a0f0c982 workflow
+[37019114837](https://github.com/vycdev/jett/actions/runs/37019114837) passed all
+four jobs. The latest a0bf12df workflow
+[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) is still in
+progress at this checkpoint: Linux GNU build passed, Windows MSVC build remains
+in progress, and installed-package jobs are pending. Neither earlier revision
+establishes new-source platform acceptance. The about-85% planning estimate and
+fixed 207-fixture denominator remain unchanged; full-language parity is not claimed.
+
+The new corpus registers 392 tests. The estimate remains about 85%; broader
+view/endpoint shapes, open semantics and independent language rows remain
+audit work toward the unchanged whole-language objective.

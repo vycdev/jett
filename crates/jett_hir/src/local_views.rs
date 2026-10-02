@@ -206,14 +206,21 @@ pub fn validate_local_view_initializer(
                 if owner_type.index() as usize >= types.len() || base.ty != *owner_type {
                     return Err("native borrowed projection has an invalid field owner");
                 }
-                let Type::Struct(struct_id) = types.resolve(*owner_type) else {
-                    return Err("native borrowed projection requires ordinary struct fields");
+                let fields = match types.resolve(*owner_type) {
+                    Type::Struct(struct_id) => &types.resolve_struct(*struct_id).fields,
+                    Type::MachineState { machine, state } => {
+                        let Some(state) = types.resolve_machine(*machine).state(*state) else {
+                            return Err("native borrowed projection has an invalid machine state");
+                        };
+                        &state.fields
+                    }
+                    _ => {
+                        return Err(
+                            "native borrowed projection requires ordinary struct or state-qualified machine fields",
+                        );
+                    }
                 };
-                let Some((_, field_type)) = types
-                    .resolve_struct(*struct_id)
-                    .fields
-                    .get(field.index() as usize)
-                else {
+                let Some((_, field_type)) = fields.get(field.index() as usize) else {
                     return Err("native borrowed projection has an invalid field index");
                 };
                 if value.ty != *field_type {

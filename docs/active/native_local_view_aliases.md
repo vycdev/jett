@@ -147,12 +147,103 @@ Windows target discovers zero tests, so Linux CI still must execute that gate;
 the same source has an actual Windows native-object refusal in
 `target/native-stable-projected-view-owner-conflict.json`.
 
-The supplemental native corpus registers 378 tests. These focused results do
-not establish a complete frozen 378-test workspace or supported-host acceptance,
-or every projected owner/endpoint combination. A state-qualified machine-field
-alias is independently frontend/reference-valid but still fails this ordinary-
-struct path proof; its actual characterization is
+The ordinary-struct checkpoint registered 378 native tests; its subsequent
+frozen a0bf12df workspace passed all local gates. Focused results and the
+later workspace acceptance remain separate evidence. Before the exact-state
+follow-up below, a machine-field alias was frontend/reference-valid but
+failed the struct-only proof, as characterized in
 `target/native-next-after-projected-view/root_machine_field_alias.preflight.json`.
+
+## Exact state-qualified machine field follow-up
+
+Status: integrated; focused compiler and linked gates pass. New-source full
+workspace and supported-host acceptance remain pending. Rule Set 24 and the
+existing exact-state payload rule already permit the read-only source form.
+
+The initializer's existing Field proof now accepts a declaration-backed
+MachineState owner. It resolves the exact machine/state and payload fields,
+then checks the zero-based FieldId, exact endpoint, base-owner type and actual
+terminating local identity/type. Struct-to-machine and machine-to-struct paths
+compose through the same finite tree. Every initializer, including unused ones,
+still requires proof before compaction. Nominal refinement, outer-secret
+promotion, exact Coarsen ancestors and direct-Secret Declassify remain unchanged.
+
+MIR reuses persistent whole-owner loans, liveness, non-owning storage and cleanup.
+Native emission keeps the existing machine tag-slot offset outside canonical
+FieldId metadata and checks pending owners at each field access. Borrowed linear
+reads retain their handle; owning copies and explicit clones acquire independent
+ownership. No ABI, hidden owner, implicit clone/join or lifetime policy changes.
+
+The initial nine-case characterization in
+`target/native-machine-projected-view-preflight/results.json` recorded 18
+successful frontend checks, eight reference successes and one terminal failure.
+Six alias cases and two owner-change probes had 16 native refusals at the old
+struct-only proof; the owning-copy control was not native-built in that batch.
+
+After integration, three focused new HIR tests pass. The current library gate
+passes 261 tests: 41 codegen, 134 HIR and 86 MIR in
+`target/native-machine-projected-view-phases.log`. It includes exact malformed
+unused state/index/endpoint/root, bare/foreign owner and orphan controls, plus
+concrete generic contexts. This is not a new complete workspace/library claim.
+All 83 driver library tests pass (66.89 seconds) in
+`target/native-machine-projected-view-driver-frontend.log`. The corrected
+`fixture_suite` invocation passes all 598 frontend fixtures (22.15 seconds)
+in `target/native-machine-projected-view-frontend.log`; the earlier command
+used the nonexistent `fixtures` target and executed no frontend tests.
+
+The expanded local-alias gate passes 25 tests (366 filtered, 17.72 seconds) in
+`target/native-machine-projected-view-pending-linked.log`. It includes the
+existing ordinary-struct controls, seven exact-state cases and the consume/
+transition publication-sentinel group, plus five pending-machine cases.
+Those pending cases preserve whole-owner and intermediate-owner field errors,
+depth-two endpoint/owner aliases, explicit clone/two-join copies and unchanged
+originals. Ordered runtime Trace events, application stdout, stderr and status
+0/71 match in both runtime profiles after source removal; release omits traces
+while retaining terminal errors. Earlier pending frontend/reference preflight
+is recorded separately in `target/native-machine-projected-view-pending-draft/results.json`.
+
+The typed-endpoint case passes separately (one test, 391 filtered, 2.80 seconds)
+in `target/native-machine-projected-view-typed-linked.log`, using matching
+archives and source removal with exact application stdout and empty debug
+events. `Envelope[int64]`, `Envelope[bytes]` and `Envelope[list[int64]]`
+instances retain scalar-copy versus aggregate-borrow facts. Exact machine fields
+retain `NarrowValues`/`Numbers` and `secret[list[int64]]` identities through
+explicit borrowed Coarsen/Declassify;
+grown clones leave reread originals unchanged. Its source preflight is
+`target/native-machine-projected-view-typed-endpoints-draft/preflight.json`.
+An initial handler around an already-proven Packet constructor reported E0308;
+removing that invalid handler repaired only the fixture, without compiler changes.
+
+These are 26 distinct executed local-alias tests across the 25-test batch and
+the separate typed-endpoint pass, not one executed 26-test batch. The supplemental
+native corpus registers 392 tests. All 15 machine Jett source-format checks and
+Rust formatting checks pass. Broader endpoint/owner combinations retain their
+independent obligations; the examples do not impose an endpoint allowlist.
+
+Bare flow-narrowed machine origins, mutable backing chains, temporary roots,
+projected writes, allocating conversions and owner consume/rebind/transition
+after reachable alias creation remain outside this bounded native support.
+The actual owner-change group reaches the existing typed ownership refusal
+before archive lookup and preserves the output sentinel in both profiles.
+No source loan-expiry or temporary-lifetime contract is selected.
+
+The previous frozen a0bf12df workspace passed with unchanged head/worktree
+and exit zero at 16:01:32 UTC in `target/native-workspace-a0bf12df.log`: all 378
+native tests (785.23 seconds), all 182 object obligations (491.87 seconds), 598
+frontend fixtures (20.05 seconds), 83 driver library tests (75.05 seconds), and
+the remaining workspace/doc-tests. That prior result does not validate later
+machine source/test additions. A complete frozen 392-test workspace and all
+four supported-host jobs for the new source remain required.
+
+The earlier a0f0c982 workflow
+[37019114837](https://github.com/vycdev/jett/actions/runs/37019114837) passed all
+four jobs. The latest a0bf12df workflow
+[37027835546](https://github.com/vycdev/jett/actions/runs/37027835546) is still in
+progress at this checkpoint: Linux GNU build passed, Windows MSVC build remains
+in progress, and installed-package jobs are pending. Neither earlier revision
+establishes new-source platform acceptance. The about-85% planning estimate and
+fixed 207-fixture denominator remain unchanged; full-language parity is not claimed.
+
 
 ## Boundaries requiring a contract
 

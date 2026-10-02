@@ -1,0 +1,16 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes, items: list[int64])
+struct Envelope:
+    packet: Packet at ready
+function main(stdout: Stdout) returns nothing:
+    Envelope envelope = Envelope(packet: Packet(ready, bytes.from_string("CD"), list(4, 5)))
+    Packet at ready borrowed_packet = view envelope.packet
+    Packet at ready forwarded_packet = borrowed_packet
+    bytes borrowed_data = view forwarded_packet.data
+    bytes duplicate = clone borrowed_data
+    list[int64] borrowed_items = view envelope.packet.items
+    list[int64] independent = clone borrowed_items
+    Stdout.write(view stdout, "bytes:{bytes.to_hex(view borrowed_data)}:{bytes.to_hex(view duplicate)}:{bytes.to_hex(view envelope.packet.data)}\n")
+    Stdout.write(view stdout, "items:{list.length(view borrowed_items)}:{list.length(view independent)}:{list.length(view envelope.packet.items)}\n")

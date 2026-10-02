@@ -595,3 +595,274 @@ fn local_views_validate_origins_types_and_conversion_rebuilding() {
             .any(|error| error.message.contains("stable backing local"))
     );
 }
+
+#[test]
+fn qualified_machine_local_views_compose_with_struct_fields_and_exact_qualifications() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+type Values = list[int64] where true
+type NarrowValues = Values where true
+struct Payload:
+    items: list[int64]
+    refined: NarrowValues
+machine Session:
+    states:
+        ready(payload: Payload, hidden: secret[NarrowValues], number: int64)
+        empty
+struct Envelope:
+    session: Session at ready
+function inspect(view source: Session at ready, view envelope: Envelope) returns nothing:
+    Payload projected_record = view source.payload
+    list[int64] machine_struct = view source.payload.items
+    list[int64] record_items = view projected_record.items
+    list[int64] forwarded = record_items
+    Session at ready projected_machine = view envelope.session
+    list[int64] struct_machine = view projected_machine.payload.items
+    list[int64] mixed = view envelope.session.payload.items
+    NarrowValues direct = view source.payload.refined
+    Values ancestor = coarsen view source.payload.refined
+    NarrowValues revealed = declassify view source.hidden
+    secret[list[int64]] promoted = view source.payload.items
+    list[int64] copied = source.payload.items
+    list[int64] cloned = clone forwarded
+    int64 scalar = view source.number
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let function = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let source = local(function, "source");
+    let envelope = local(function, "envelope");
+    for name in [
+        "projected_record",
+        "machine_struct",
+        "direct",
+        "ancestor",
+        "revealed",
+        "promoted",
+    ] {
+        assert_eq!(local(function, name).view_source, Some(source.id), "{name}");
+        assert_eq!(
+            local_view_root(&function.locals, local(function, name).id),
+            Some(source.id)
+        );
+    }
+    for name in ["projected_machine", "mixed"] {
+        assert_eq!(
+            local(function, name).view_source,
+            Some(envelope.id),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        local(function, "record_items").view_source,
+        Some(local(function, "projected_record").id)
+    );
+    assert_eq!(
+        local(function, "forwarded").view_source,
+        Some(local(function, "record_items").id)
+    );
+    assert_eq!(
+        local(function, "struct_machine").view_source,
+        Some(local(function, "projected_machine").id)
+    );
+    assert!(matches!(
+        checked.interner.resolve(source.ty),
+        Type::MachineState { .. }
+    ));
+    assert_eq!(local(function, "projected_machine").ty, source.ty);
+    assert_ne!(local(function, "machine_struct").ty, source.ty);
+    assert_eq!(local(function, "direct").ty, local(function, "revealed").ty);
+    for name in ["copied", "cloned", "scalar"] {
+        assert_eq!(local(function, name).view_source, None, "{name}");
+    }
+}
+
+#[test]
+fn qualified_machine_local_views_transport_generic_binding_contexts() {
+    let (program, checked) = checked_source(
+        r#"namespace app
+struct Payload:
+    items: list[int64]
+machine Session:
+    states:
+        ready(payload: Payload)
+        empty
+struct Envelope[T]:
+    session: Session at ready
+    extra: T
+function inspect[T](view source: Envelope[T]) returns nothing:
+    list[int64] alias = view source.session.payload.items
+    T generic_alias = view source.extra
+    list[int64] forwarded = alias
+    trace forwarded
+    return nothing
+function main() returns nothing:
+    inspect[int64](view Envelope[int64](session: Session(ready, Payload(items: list(1))), extra: 7))
+    inspect[list[int64]](view Envelope[list[int64]](session: Session(ready, Payload(items: list(2))), extra: list(3)))
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let inspect = program
+        .functions
+        .iter()
+        .filter(|function| function.identity.declaration.name == "inspect")
+        .collect::<Vec<_>>();
+    assert_eq!(inspect.len(), 2);
+    for function in inspect {
+        let source = local(function, "source");
+        let alias = local(function, "alias");
+        assert_eq!(alias.view_source, Some(source.id));
+        assert_eq!(local(function, "forwarded").view_source, Some(alias.id));
+        let generic_alias = local(function, "generic_alias");
+        if generic_alias.ty == TypeInterner::INT64 {
+            assert_eq!(generic_alias.view_source, None);
+        } else {
+            assert_eq!(generic_alias.ty, alias.ty);
+            assert_eq!(generic_alias.view_source, Some(source.id));
+        }
+    }
+}
+
+#[test]
+fn unused_qualified_machine_local_views_require_exact_state_field_and_root_proofs() {
+    let (program, mut checked) = checked_source(
+        r#"namespace app
+machine Session:
+    states:
+        ready(items: list[int64])
+        cached(items: list[string])
+        empty
+machine Other:
+    states:
+        ready(items: list[int64])
+function inspect(view source: Session at ready, view other: Session at ready, view foreign: Other at ready) returns nothing:
+    list[int64] unused_alias = view source.items
+    return nothing
+"#,
+        false,
+    )
+    .unwrap();
+    validate_backend_types(&program, &checked.interner).unwrap();
+    let function = program
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "inspect")
+        .unwrap();
+    let source = local(function, "source").id;
+    let other = local(function, "other").id;
+    let foreign_type = local(function, "foreign").ty;
+    let alias = local(function, "unused_alias").id;
+    let source_type = local(function, "source").ty;
+    let Type::MachineState { machine, .. } = *checked.interner.resolve(source_type) else {
+        panic!("statically qualified root");
+    };
+    let cached = checked
+        .interner
+        .resolve_machine(machine)
+        .state_id("cached")
+        .unwrap();
+    let empty = checked
+        .interner
+        .resolve_machine(machine)
+        .state_id("empty")
+        .unwrap();
+    let cached_type = checked.interner.intern(Type::MachineState {
+        machine,
+        state: cached,
+    });
+    let empty_type = checked.interner.intern(Type::MachineState {
+        machine,
+        state: empty,
+    });
+    let stale_type = checked.interner.intern(Type::MachineState {
+        machine,
+        state: jett_types::MachineStateId::new(u32::MAX),
+    });
+    let bare_type = checked.interner.intern(Type::Machine(machine));
+    let different_items = checked.interner.intern(Type::List(TypeInterner::STRING));
+    for (invalid, expected) in [
+        ("stale state", "invalid machine state"),
+        ("different state", "invalid field endpoint type"),
+        ("empty state", "invalid field index"),
+        ("field index", "invalid field index"),
+        ("field endpoint", "invalid field endpoint type"),
+        ("field owner", "invalid field owner"),
+        ("source identity", "stable backing local"),
+        ("source type", "stable backing local"),
+        ("bare owner", "state-qualified machine fields"),
+        ("foreign machine", "stable backing local"),
+        ("orphan", "no validated initializer"),
+    ] {
+        let mut forged = program.clone();
+        let function = forged
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "inspect")
+            .unwrap();
+        if invalid == "orphan" {
+            function.body.statements.remove(0);
+        } else {
+            if invalid == "source type" {
+                function.locals[source.index() as usize].ty = bare_type;
+            }
+            if invalid == "field endpoint" {
+                function.locals[alias.index() as usize].ty = different_items;
+            }
+            let StatementKind::Let { value, .. } = &mut function.body.statements[0].kind else {
+                panic!("unused machine field alias initializer");
+            };
+            if invalid == "field endpoint" {
+                value.ty = different_items;
+            }
+            let ExpressionKind::View(projection) = &mut value.kind else {
+                panic!("explicit field view");
+            };
+            if invalid == "field endpoint" {
+                projection.ty = different_items;
+            }
+            let ExpressionKind::Field {
+                base,
+                owner_type,
+                field,
+            } = &mut projection.kind
+            else {
+                panic!("checked machine field projection");
+            };
+            let changed_owner = match invalid {
+                "stale state" => Some(stale_type),
+                "different state" => Some(cached_type),
+                "empty state" => Some(empty_type),
+                "bare owner" => Some(bare_type),
+                "foreign machine" => Some(foreign_type),
+                _ => None,
+            };
+            if let Some(changed_owner) = changed_owner {
+                *owner_type = changed_owner;
+                base.ty = changed_owner;
+            }
+            if invalid == "field owner" {
+                *owner_type = cached_type;
+            }
+            if invalid == "field index" {
+                *field = FieldId(u32::MAX);
+            }
+            if invalid == "source identity" {
+                base.kind = ExpressionKind::Local(other);
+            }
+        }
+        let errors = validate_backend_types(&forged, &checked.interner).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "{invalid}: {errors:?}"
+        );
+    }
+}

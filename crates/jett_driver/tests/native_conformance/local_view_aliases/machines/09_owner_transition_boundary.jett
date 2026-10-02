@@ -1,0 +1,14 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes)
+        empty
+    transitions:
+        ready to empty
+function main(stdout: Stdout) returns nothing:
+    Packet at ready packet = Packet(ready, bytes.from_string("AB"))
+    bytes borrowed = view packet.data
+    bytes forwarded = borrowed
+    Stdout.write(view stdout, "{bytes.to_hex(view forwarded)}\n")
+    Packet at empty finished = Packet.transition(packet, empty)
+    return nothing

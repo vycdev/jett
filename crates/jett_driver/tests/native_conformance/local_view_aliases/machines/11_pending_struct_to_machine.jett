@@ -1,0 +1,16 @@
+namespace app
+machine Packet:
+    states:
+        ready(data: bytes, items: list[int64])
+struct Envelope:
+    packet: Packet at ready
+function main(stdout: Stdout) returns nothing:
+    Envelope envelope = Envelope(packet: run run Packet(ready, bytes.from_string("CD"), list(4, 5)))
+    Stdout.write(view stdout, "before:struct-machine\n")
+    Packet at ready borrowed_machine = view envelope.packet
+    Packet at ready forwarded_machine = borrowed_machine
+    trace forwarded_machine
+    Stdout.write(view stdout, "intermediate\n")
+    bytes borrowed = view forwarded_machine.data
+    bytes forwarded = borrowed
+    Stdout.write(view stdout, "after:{bytes.to_hex(view forwarded)}\n")

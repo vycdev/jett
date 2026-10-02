@@ -697,8 +697,14 @@ declaration identity in each ordinary, generic, and reflected body. HIR records
 an alias's immediate backing `LocalId`; native admission requires an immutable
 chain to an immutable owner or view parameter. A direct initializer preserves
 the same carrier and interface erasure. A projected initializer uses its existing
-finite typed `Field` nodes to prove each ordinary-struct owner, canonical field
-index, intermediate type, endpoint type, and terminating local identity. The
+finite typed `Field` nodes to prove each ordinary-struct or exact declared
+`MachineState` owner, canonical field index, intermediate type, endpoint type,
+and terminating local identity. A qualified-machine step resolves the exact
+machine/state definition before indexing that state's fields. A stale state,
+foreign owner, invalid index, or different endpoint cannot supply a proof.
+Every machine step must preserve its exact state, and the terminating local
+must match its actual declared source type. A flow-narrowed bare backing slot
+is outside this bounded path contract. The
 whole owner's type can differ from the selected field type; the typed path,
 not carrier equality with the whole owner, establishes that dependency.
 
@@ -710,6 +716,13 @@ unreachable blocks. Generated snapshots and captured copies remain owned;
 origins from another body cannot survive as borrowed captures. MIR retains and
 remaps the backing chain, expands alias reads into whole-owner liveness, and
 excludes aliases from cleanup slots. Pending checks remain at each field access.
+The canonical machine FieldId is zero-based within the declared payload.
+Native emission adds the existing tag-slot offset when reading the payload;
+that physical offset is not stored in checked path metadata. Borrowed linear
+field reads keep the existing handle, while ordinary owned reads clone it.
+Concrete generic contexts preserve their checked endpoint types and binding
+modes: implicitly copyable endpoints remain copies, while move-only aliases
+retain their validated source dependency.
 Borrowed matches clone their scrutinee before taking payloads, and callbacks
 borrow their descriptor while it is invoked. Explicit clones still acquire
 independent ownership.
@@ -723,8 +736,10 @@ existing handles. Plain string view expressions retain ordinary copy behavior.
 Native ownership planning conservatively refuses owner consumption or rebinding
 after an alias may have been created on a reachable path. It does not select a
 source lifetime-expiry rule. Mutable alias chains, temporary roots, projected
-mutation, allocating conversions, and field paths without the checked ordinary
-struct proof remain explicit native limitations; see
+mutation, allocating conversions, flow-narrowed bare-machine origins, and
+field paths without the checked struct/exact-state proof remain explicit
+native limitations. Owner transitions after alias creation follow the same
+conservative owner-change refusal; see
 [the bounded implementation](active/native_local_view_aliases.md) and
 [the stable projected-view contract](active/native_stable_projected_local_views.md).
 

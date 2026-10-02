@@ -1,0 +1,17 @@
+namespace app
+struct Payload:
+    data: bytes
+    items: list[int64]
+machine Envelope:
+    states:
+        ready(packet: Payload)
+function main(stdout: Stdout) returns nothing:
+    Envelope at ready envelope = Envelope(ready, run run Payload(data: bytes.from_string("EF"), items: list(6, 7)))
+    Stdout.write(view stdout, "before:machine-struct\n")
+    Payload borrowed_struct = view envelope.packet
+    Payload forwarded_struct = borrowed_struct
+    trace forwarded_struct
+    Stdout.write(view stdout, "intermediate\n")
+    list[int64] borrowed = view forwarded_struct.items
+    list[int64] forwarded = borrowed
+    Stdout.write(view stdout, "after:{list.length(view forwarded)}\n")

@@ -1,0 +1,55 @@
+namespace app
+type Numbers = list[int64] where true
+type NarrowValues = Numbers where true
+machine Packet:
+    states:
+        ready(refined: NarrowValues, hidden: secret[list[int64]])
+struct Envelope[T]:
+    packet: Packet at ready
+    extra: T
+function peek(view values: list[int64], index: int64) returns int64:
+    return list.get[int64](view values, index) handle:
+        default -1
+function generic_copy[T](view source: Envelope[T]) returns T:
+    T borrowed = view source.extra
+    T forwarded = borrowed
+    return clone forwarded
+function qualified_report[T](view source: Envelope[T]) returns string:
+    Packet at ready projected = view source.packet
+    Packet at ready forwarded = projected
+    NarrowValues refined_alias = view forwarded.refined
+    Numbers ancestor = coarsen view refined_alias
+    list[int64] coarse = coarsen view ancestor
+    mutable list[int64] grown = clone coarse
+    grown = list.append[int64](grown, 11)
+    secret[list[int64]] hidden_alias = view forwarded.hidden
+    list[int64] revealed = declassify view hidden_alias
+    mutable list[int64] hidden_grown = clone revealed
+    hidden_grown = list.append[int64](hidden_grown, 13)
+    NarrowValues original_refined = view source.packet.refined
+    Numbers original_ancestor = coarsen view original_refined
+    list[int64] original_coarse = coarsen view original_ancestor
+    list[int64] original_hidden = declassify view source.packet.hidden
+    return "{list.length(view coarse)}:{list.length(view grown)}:{list.length(view original_coarse)}:{peek(view original_coarse, 0)}:{peek(view grown, 2)}:{list.length(view revealed)}:{list.length(view hidden_grown)}:{list.length(view original_hidden)}:{peek(view original_hidden, 0)}:{peek(view hidden_grown, 2)}"
+function main(stdout: Stdout) returns nothing:
+    NarrowValues refined = list(5, 7) handle error:
+        return Stdout.write(view stdout, "refinement error:{error}\n")
+    secret[list[int64]] hidden = list(3, 4)
+    Packet at ready packet = Packet(ready, refined, hidden)
+    Packet at ready byte_packet = clone packet
+    Packet at ready list_packet = clone packet
+    Envelope[int64] scalar = Envelope[int64](packet: packet, extra: 7)
+    Envelope[bytes] payload = Envelope[bytes](packet: byte_packet, extra: bytes.from_string("AB"))
+    Envelope[list[int64]] values = Envelope[list[int64]](packet: list_packet, extra: list(2, 3))
+    int64 scalar_copy = generic_copy[int64](view scalar)
+    string scalar_report = qualified_report[int64](view scalar)
+    Stdout.write(view stdout, "scalar:{scalar_copy}:{scalar.extra}:{scalar_report}\n")
+    bytes payload_copy = generic_copy[bytes](view payload)
+    bytes payload_grown = bytes.concat(payload_copy, bytes.from_string("C"))
+    string byte_report = qualified_report[bytes](view payload)
+    string byte_again = qualified_report[bytes](view payload)
+    Stdout.write(view stdout, "bytes:{bytes.to_hex(view payload_grown)}:{bytes.to_hex(view payload.extra)}:{byte_report}:{byte_again}\n")
+    list[int64] values_copy = generic_copy[list[int64]](view values)
+    list[int64] values_grown = list.append[int64](values_copy, 17)
+    string list_report = qualified_report[list[int64]](view values)
+    Stdout.write(view stdout, "items:{list.length(view values_grown)}:{list.length(view values.extra)}:{list_report}\n")
