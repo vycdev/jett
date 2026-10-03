@@ -2219,6 +2219,16 @@ no public provider API or resource value. Its checked boundary and remaining
 lifecycle work are recorded in the
 [active resource-hook note](active/native_resource_hook_identity.md).
 
+The compiler can retain one immutable checked resource program by owning the
+parsed source and deriving its resolution and checking internally. Parse,
+resolution and checking errors prevent that handoff, including errors unrelated
+to an otherwise valid private hook. Complete hook identities and signatures are
+validated even when unused. Ordinary checking still returns source diagnostics
+for repair. This compiler proof does not install a provider or authorize a live
+resource operation; runtime execution must retain the same checked program.
+The [checked-program handoff](active/native_resource_checked_program.md) records
+the implemented boundary and the remaining driver/runtime integration.
+
 The checker refuses copying a Resource-bearing field into ownership, including
 through borrowed parents, and refuses cloning collection/reflection getters
 whose returned data contains a Resource. Explicit field views and reads of

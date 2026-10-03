@@ -21,6 +21,7 @@ pub struct CheckedResourceHook {
 pub enum ResourceHookError {
     Resolution(ResourceKernelError),
     SourceResolutionFailed,
+    SourceCheckingFailed,
     MissingResourceType(DefId),
     InvalidResourceType(DefId),
     MissingFunctionType(DefId),
@@ -48,6 +49,24 @@ impl std::error::Error for ResourceHookError {}
 
 /// Validate all facts, including unused hooks, before a subsequent phase uses them.
 pub fn validate_resource_hooks(
+    module: &Module,
+    resolved: &ResolveResult,
+    checked: &CheckResult,
+) -> Result<(), ResourceHookError> {
+    validate_resource_hook_identities(module, resolved, checked)?;
+    if checked
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return Err(ResourceHookError::SourceCheckingFailed);
+    }
+    Ok(())
+}
+
+/// Check exact declaration/type joins while ordinary source diagnostics stay inspectable.
+/// This helper is not an execution-phase acceptance gate.
+pub(crate) fn validate_resource_hook_identities(
     module: &Module,
     resolved: &ResolveResult,
     checked: &CheckResult,

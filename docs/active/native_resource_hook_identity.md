@@ -2,8 +2,8 @@
 
 Status: the isolated identity implementation passes all 14 focused tests.
 The broader compiler, object, driver, frontend and lowering gates also pass.
-The subsequent clean `616b51b9` full workspace also passes; its supported-host
-run remains in progress. The [acceptance audit](native_acceptance_audit.md#resource-static-ownership-boundaries)
+The subsequent clean `616b51b9` full workspace and all four supported-host
+build/installed jobs also pass. The [acceptance audit](native_acceptance_audit.md#resource-static-ownership-boundaries)
 keeps local and platform evidence separate. The production catalog is empty;
 no Resource value or provider operation executes in this change. Whole-language native coverage remains about 85%, with the fixed
 207-fixture inventory and 100% objective unchanged.
@@ -153,3 +153,15 @@ unsupported Resource values stays conservative. Actor/message transfer,
 pending work, cancellation, late completions, capability provenance and real
 provider/socket adapters remain required parts of the full goal. Neither
 implicit Resource cloning nor runtime pinning is selected here.
+
+
+## Successful checked-program handoff
+
+The later [immutable checked-program boundary](native_resource_checked_program.md)
+owns its parse/resolve/check session and refuses parser, resolver and checker
+errors before publication. Public hook validation now also refuses checker Error
+diagnostics; diagnostic checking retains the separate identity-only helper so
+ordinary source failures stay inspectable. This closes the successful-source
+proof gap without installing a provider or changing the Close signature, source
+purity rule or Resource value representation. Driver retention and reached-hook
+runtime eligibility remain separate prerequisites.

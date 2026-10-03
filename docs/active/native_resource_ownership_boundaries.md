@@ -5,8 +5,8 @@ source groups, and the broader compiler/object/driver/frontend/lowering gates.
 All 34 frozen source witnesses are rechecked in debug and release with stable
 inputs. These are static prerequisites for live Resources. No runtime carrier,
 provider installation, source-scope cleanup or native Resource operation is
-introduced. New whole-workspace and supported-host acceptance remain pending.
-The accepted clean `616b51b9` predecessor and separate platform status are in the
+introduced. Exact clean `b7180bd9` subsequently passes the full workspace; its
+supported-host run remains in progress. The accepted local and platform status are in the
 [acceptance audit](native_acceptance_audit.md#resource-static-ownership-boundaries).
 The broad estimate remains about 85%; 207 inventory fixtures, 182 object
 obligations, 464 supplemental cases and the whole-language 100% goal are unchanged.

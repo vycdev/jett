@@ -377,6 +377,11 @@ fn privileged_resource_entry_rejects_unused_resolver_corruption_and_checks_sourc
         "source bodies must remain normally checked: {:?}",
         checked.diagnostics
     );
+    assert_eq!(
+        validate_resource_hooks(&module, &resolved, &checked),
+        Err(ResourceHookError::SourceCheckingFailed),
+        "diagnostic-bearing checker results must not pass the public phase gate"
+    );
 }
 
 #[test]

@@ -6,6 +6,7 @@ pub mod complexity;
 pub mod errors;
 pub mod ownership;
 pub mod resource_hooks;
+mod resource_program;
 
 pub use checker::{
     CheckOptions, CheckResult, CheckedBindingMode, CheckedBodyFacts, CheckedCallArgumentOrder,
@@ -20,3 +21,5 @@ pub use resource_hooks::{CheckedResourceHook, ResourceHookError, validate_resour
 
 #[cfg(test)]
 mod resource_hook_tests;
+
+pub use resource_program::{CheckedResourceProgram, ResourceProgramError};

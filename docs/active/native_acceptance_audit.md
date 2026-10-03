@@ -1821,3 +1821,43 @@ supported-host acceptance remain pending. This prerequisite adds no linked
 Resource case or object obligation: the about-85% estimate, fixed 207 inventory,
 182 obligations, 464 supplemental cases and whole-language 100% objective stay
 unchanged.
+
+
+## Immutable checked Resource program handoff
+
+Exact clean `b7180bd9` completes its frozen full workspace with exit zero and
+all 92 successful result groups. It passes 464 supplemental native cases
+(958.70 seconds), all 182 object obligations (four-test manifest gate, 650.63
+seconds), remaining workspace targets and doc tests. Start/end HEAD and
+cleanliness match in `target/native-workspace-b7180bd9.json`; the actual session
+1952 is terminal with exit zero and ends `2026-10-03T13:18:31.4769949Z`.
+Its supported-host run 37123835396 remains in progress at this checkpoint.
+
+Exact predecessor `616b51b9` now also has supported-host acceptance: workflow
+[37119573097](https://github.com/vycdev/jett/actions/runs/37119573097) succeeds in
+both Windows/Linux build and installed relocated-package jobs. The final
+Windows installed job completes `2026-10-03T13:14:20Z`. This supersedes that
+run's earlier in-progress observations; it does not validate the new handoff.
+
+`CheckedResourceProgram::prepare` owns its ParseResult and derives resolution
+and checking internally with explicit loader origins/private catalog input.
+Only immutable source/resolver/checker/interner observations are exposed. Error
+diagnostics from each source phase prevent sealing, and complete unused hook
+identity/signature checks still apply. Public hook validation adds independent
+checker-error refusal while ordinary checking keeps inspectable source repair
+diagnostics. No private operation executes or Resource carrier is installed.
+
+The root-owned focused gate passes all **43 Resource groups**, including seven
+new source-driven snapshot groups and the strengthened invalid-body phase-gate
+assertion. The broader **454 library tests** pass: 139 HIR, 54 resolver and 261
+typechecker. Five compiler hashes remain unchanged in
+`target/native-resource-checked-program-focused.json` and
+`target/native-resource-checked-program-phases.json`, both exit zero. The
+[scope and evidence note](native_resource_checked_program.md) preserves the
+pre-Rust contract and separates this handoff from driver retention, reached-hook
+runtime eligibility, call ownership, cleanup and native Resource admission.
+
+Full-workspace and supported-host validation for this new change remain pending.
+The fixed 207 inventory, 182 object obligations and 464 supplemental native
+cases are unchanged; the about-85% estimate is still coarse planning and the
+whole-language native-codegen objective remains 100%.

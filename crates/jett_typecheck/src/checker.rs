@@ -24,7 +24,7 @@ use jett_types::{
 
 use crate::capability;
 use crate::errors;
-use crate::resource_hooks::{CheckedResourceHook, ResourceHookError, validate_resource_hooks};
+use crate::resource_hooks::{CheckedResourceHook, ResourceHookError};
 
 mod graphics_audit;
 
@@ -359,7 +359,7 @@ pub fn check_with_resource_kernels(
         return Err(error);
     }
     let checked = finish_check(checker, module, options, true);
-    validate_resource_hooks(module, resolve, &checked)?;
+    crate::resource_hooks::validate_resource_hook_identities(module, resolve, &checked)?;
     Ok(checked)
 }
 

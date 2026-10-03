@@ -2166,6 +2166,21 @@ remain unchanged. No production hook, provider dispatch or source carrier is
 installed. The implementation and focused evidence are in
 [the resource-hook identity note](active/native_resource_hook_identity.md).
 
+`CheckedResourceProgram::prepare` consumes the whole `ParseResult` and explicit
+loader origins, then resolves and checks the owned AST internally with the
+existing private compiler catalog. Its Module, ResolveResult, CheckResult/type
+interner, origins and parser observations have only shared immutable access.
+There is no constructor from independent checked parts or mutable/into-parts
+access. Error diagnostics from each source phase prevent a sealed result;
+warnings remain inspectable. Public `validate_resource_hooks` additionally
+refuses checker errors with `SourceCheckingFailed`, while a crate-private
+identity/shape helper lets the diagnostic checker keep returning repair facts.
+The full generic/scoped facts, parameter permutations and binding modes remain
+owned by that exact session. This validates the frontend through checking;
+explicit comptime and verification keep their separate evaluation gates.
+The driver still needs to retain the snapshot instead of rereading source before
+interpretation. See [the handoff note](active/native_resource_checked_program.md).
+
 Before source execution, the checker separates owning field copies from
 borrowed place projections. Only Field and the existing transparent place
 wrappers propagate that projection context; calls and owning constructors check

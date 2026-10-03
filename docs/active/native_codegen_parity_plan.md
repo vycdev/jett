@@ -2223,3 +2223,27 @@ This is checker-stage safety evidence. Resource carriers, fake/real providers,
 source cleanup and native lifecycle execution remain required. The new full
 workspace and supported-host gates are pending; 85%, 207 fixtures, 182 object
 obligations and the 464-case supplemental corpus are unchanged.
+
+
+### Immutable checked Resource program prerequisite
+
+The exact clean static-guard head `b7180bd9` now passes its full workspace:
+all 92 result groups, 464 supplemental native cases and 182 object obligations.
+Its supported-host workflow remains in progress. The earlier `616b51b9` workflow
+passes all four Windows/Linux build and installed relocation jobs. These are
+separate commit-specific receipts in the acceptance audit.
+
+The next compiler handoff retains one owned parsed Module, ResolveResult,
+CheckResult/interner and explicit loader origins, derived internally and exposed
+only through shared references. Parser, resolver and checker errors prevent
+sealing; public hook validation rejects checker errors independently while
+ordinary checking retains source repair diagnostics. All 43 focused Resource
+groups pass, including seven new snapshot groups; all 454 resolver/typechecker/
+HIR library tests pass with five unchanged compiler source hashes. The
+[checked-program note](native_resource_checked_program.md) records exact scope.
+This supplies no provider, runtime Resource, cleanup or native ABI. Driver
+retention, program-bound invocation eligibility and exact caller ownership
+handoff remain required; a formal View mode alone does not recover caller
+retention. Full-workspace and supported-host gates for this change are pending.
+The about-85% estimate, fixed 207 inventory/182 object obligations, 464 native
+cases and whole-language 100% objective remain unchanged.
