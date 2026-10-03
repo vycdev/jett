@@ -29,8 +29,11 @@ checking with a valid catalog can return an Error-bearing CheckResult for
 repair, but that result cannot pass the successful-program handoff.
 
 This step enables no live Resource, provider, cleanup ledger or native carrier.
-The production catalog remains empty. The driver's current post-check reparse
-is still a required integration repair. Raw DefId/TypeId integers are local to
+The production catalog remains empty. The private reference driver now retains
+the sealed checked program instead of reparsing after checking; its isolated
+follow-up and commit-specific acceptance are recorded in
+[the reference preparation note](native_prepared_reference_driver.md).
+Raw DefId/TypeId integers are local to
 the retained program, not proof that a value came from another session. Runtime
 callable identity, ownership retention and execution effects must be tied to
 that snapshot before dispatch. Resource-only finalizer eligibility and current
@@ -52,8 +55,11 @@ supplemental native conformance cases.
 
 `CheckedResourceProgram::prepare` stores one owned parse/resolve/check session,
 with immutable accessors for the original module, full resolver/checker facts,
-loader origins and parser diagnostics. `ResourceProgramError` retains complete
-failed-phase diagnostics or the typed catalog/identity error. Warning-only parse
+loader origins and parser diagnostics. The reference follow-up extends
+`ResourceProgramError` to retain observations through the failed phase, including
+preceding parse/resolve warnings. Structured metadata variants keep their typed
+cause and observations; diagnostics() returns Some even for an empty prefix,
+and Error::source preserves the cause. Warning-only parse
 observations are retained; the warning test injects a compiler diagnostic into a
 real ParseResult and does not claim that the parser emitted that warning.
 
@@ -77,18 +83,38 @@ through both gates. These are compiler-source tests, not live Resource execution
 The accepted predecessor is exact clean `b7180bd9`. Its full workspace ends at
 `2026-10-03T13:18:31.4769949Z` with all 92 result groups, 464 native conformance
 cases (958.70 seconds) and all 182 object obligations (four-test manifest gate,
-650.63 seconds). Its supported-host run remains in progress at this checkpoint.
-The earlier exact `616b51b9` workflow
+650.63 seconds). Its supported-host workflow
+[37123835396](https://github.com/vycdev/jett/actions/runs/37123835396) now passes
+all four Windows/Linux build and installed relocation jobs, finishing
+`2026-10-03T14:14:19Z`. The earlier exact `616b51b9` workflow
 [37119573097](https://github.com/vycdev/jett/actions/runs/37119573097) passes all
 four Windows/Linux build and installed relocation jobs, finishing
 `2026-10-03T13:14:20Z`. That result does not validate this new handoff.
 
 The snapshot proves parsing, resolution, checking and hook shape only. It does
 not bypass explicit comptime or verification failures, retain baked runtime
-authority, authenticate a foreign raw DefId or repair the driver's reparse.
+authority or authenticate a foreign raw DefId. The separate reference bridge
+repairs post-preparation rereading without granting live Resource authority.
 Program-bound callable descriptors, reached-hook runtime-context eligibility,
 checked caller ownership facts, one-owner ledgers and native drop elaboration
 remain required. Current name/source-position-based first-view retention and
 formal-mode lowering disagree on some call shapes; no universal bare-argument
 cleanup policy is selected here. The next characterization must establish those
 source outcomes before a live Resource route is admitted.
+
+
+## Retained reference integration
+
+The isolated follow-up over `94bb6b2e` keeps public BuildResult unchanged while
+retaining the exact checked program and primary FileId0 entry privately. Its
+focused gate passes all 46 Resource groups and four new driver groups with both
+source hashes unchanged. The tests retain earlier warnings/metadata causes,
+run the original primary/support program after source deletion or mutation,
+keep comptime/verify/runtime observations once, and refuse failed or missing
+handoffs before provider setup. All 544 driver/HIR/resolver/typechecker tests, 598 frontend
+fixtures and eight backend-lowering regressions also pass with stable source
+hashes. New full-workspace/platform acceptance for this follow-up remains
+pending. The detailed receipt and predecessor failure
+context are centralized in
+[the reference note](native_prepared_reference_driver.md#verification-and-remaining-boundaries)
+and [acceptance audit](native_acceptance_audit.md#retained-reference-preparation).

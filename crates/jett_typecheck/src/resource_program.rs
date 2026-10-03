@@ -34,18 +34,25 @@ pub enum ResourceProgramError {
     ParseDiagnostics(Vec<Diagnostic>),
     ResolveDiagnostics(Vec<Diagnostic>),
     CheckDiagnostics(Vec<Diagnostic>),
-    ResolveMetadata(ResourceKernelError),
-    CheckMetadata(ResourceHookError),
+    ResolveMetadata {
+        source: ResourceKernelError,
+        diagnostics: Vec<Diagnostic>,
+    },
+    CheckMetadata {
+        source: ResourceHookError,
+        diagnostics: Vec<Diagnostic>,
+    },
 }
 
 impl ResourceProgramError {
-    /// Original phase diagnostics, including warnings accompanying an Error.
+    /// Observations through the failed phase, in original source-phase order.
     pub fn diagnostics(&self) -> Option<&[Diagnostic]> {
         match self {
             Self::ParseDiagnostics(diagnostics)
             | Self::ResolveDiagnostics(diagnostics)
-            | Self::CheckDiagnostics(diagnostics) => Some(diagnostics),
-            Self::ResolveMetadata(_) | Self::CheckMetadata(_) => None,
+            | Self::CheckDiagnostics(diagnostics)
+            | Self::ResolveMetadata { diagnostics, .. }
+            | Self::CheckMetadata { diagnostics, .. } => Some(diagnostics),
         }
     }
 }
@@ -58,13 +65,23 @@ impl fmt::Display for ResourceProgramError {
                 formatter.write_str("resource program has resolver errors")
             }
             Self::CheckDiagnostics(_) => formatter.write_str("resource program has checker errors"),
-            Self::ResolveMetadata(error) => write!(formatter, "{error}"),
-            Self::CheckMetadata(error) => write!(formatter, "{error}"),
+            Self::ResolveMetadata { source, .. } => write!(formatter, "{source}"),
+            Self::CheckMetadata { source, .. } => write!(formatter, "{source}"),
         }
     }
 }
 
-impl std::error::Error for ResourceProgramError {}
+impl std::error::Error for ResourceProgramError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ResolveMetadata { source, .. } => Some(source),
+            Self::CheckMetadata { source, .. } => Some(source),
+            Self::ParseDiagnostics(_) | Self::ResolveDiagnostics(_) | Self::CheckDiagnostics(_) => {
+                None
+            }
+        }
+    }
+}
 
 impl CheckedResourceProgram {
     /// Resolve and check this owned parse with explicit trusted compiler inputs.
@@ -82,20 +99,48 @@ impl CheckedResourceProgram {
         if has_errors(&parse_diagnostics) {
             return Err(ResourceProgramError::ParseDiagnostics(parse_diagnostics));
         }
-        let resolved = resolve_with_resource_kernels(&module, &source_origins, kernels)
-            .map_err(ResourceProgramError::ResolveMetadata)?;
+        let resolved =
+            resolve_with_resource_kernels(&module, &source_origins, kernels).map_err(|source| {
+                ResourceProgramError::ResolveMetadata {
+                    source,
+                    diagnostics: observed_diagnostics(&parse_diagnostics, &[], &[]),
+                }
+            })?;
         if has_errors(&resolved.diagnostics) {
             return Err(ResourceProgramError::ResolveDiagnostics(
-                resolved.diagnostics,
+                observed_diagnostics(&parse_diagnostics, &resolved.diagnostics, &[]),
             ));
         }
-        let checked = check_with_resource_kernels(&module, &resolved, options)
-            .map_err(ResourceProgramError::CheckMetadata)?;
+        let checked =
+            check_with_resource_kernels(&module, &resolved, options).map_err(|source| {
+                ResourceProgramError::CheckMetadata {
+                    source,
+                    diagnostics: observed_diagnostics(
+                        &parse_diagnostics,
+                        &resolved.diagnostics,
+                        &[],
+                    ),
+                }
+            })?;
         if has_errors(&checked.diagnostics) {
-            return Err(ResourceProgramError::CheckDiagnostics(checked.diagnostics));
+            return Err(ResourceProgramError::CheckDiagnostics(
+                observed_diagnostics(
+                    &parse_diagnostics,
+                    &resolved.diagnostics,
+                    &checked.diagnostics,
+                ),
+            ));
         }
-        validate_resource_hooks(&module, &resolved, &checked)
-            .map_err(ResourceProgramError::CheckMetadata)?;
+        validate_resource_hooks(&module, &resolved, &checked).map_err(|source| {
+            ResourceProgramError::CheckMetadata {
+                source,
+                diagnostics: observed_diagnostics(
+                    &parse_diagnostics,
+                    &resolved.diagnostics,
+                    &checked.diagnostics,
+                ),
+            }
+        })?;
         Ok(Self {
             module,
             resolved,
@@ -124,6 +169,19 @@ impl CheckedResourceProgram {
     pub fn parse_diagnostics(&self) -> &[Diagnostic] {
         &self.parse_diagnostics
     }
+}
+
+fn observed_diagnostics(
+    parsed: &[Diagnostic],
+    resolved: &[Diagnostic],
+    checked: &[Diagnostic],
+) -> Vec<Diagnostic> {
+    parsed
+        .iter()
+        .chain(resolved)
+        .chain(checked)
+        .cloned()
+        .collect()
 }
 
 fn has_errors(diagnostics: &[Diagnostic]) -> bool {
@@ -369,7 +427,10 @@ mod tests {
                 .unwrap_err();
         assert!(matches!(
             error,
-            ResourceProgramError::ResolveMetadata(ResourceKernelError::UntrustedOrigin(_))
+            ResourceProgramError::ResolveMetadata {
+                source: ResourceKernelError::UntrustedOrigin(_),
+                ..
+            }
         ));
         let (parsed, origins, mut kernels) = inputs(source);
         kernels.push(kernels[0].clone());
@@ -378,7 +439,10 @@ mod tests {
                 .unwrap_err();
         assert!(matches!(
             error,
-            ResourceProgramError::ResolveMetadata(ResourceKernelError::DuplicateCatalogEntry(_))
+            ResourceProgramError::ResolveMetadata {
+                source: ResourceKernelError::DuplicateCatalogEntry(_),
+                ..
+            }
         ));
     }
 
@@ -461,5 +525,126 @@ function main() returns int64:
         );
         assert_eq!(program.checked().resource_hooks.len(), 3);
         validate_resource_hooks(program.module(), program.resolved(), program.checked()).unwrap();
+    }
+
+    #[test]
+    fn retained_resource_program_keeps_prior_warnings_before_source_failures() {
+        let file = FileId::new(0);
+        let warning = Diagnostic::warning(1, "injected parser observation", Span::new(file, 0, 8));
+        for (source, check_failure) in [
+            (
+                "function inspect() returns nothing:\n    missing()\n    return nothing\n",
+                false,
+            ),
+            (
+                "function inspect() returns nothing:\n    int64 retained_warning = 1\n    int64 _broken = true\n    return nothing\n",
+                true,
+            ),
+        ] {
+            let mut parsed = parse(source, file);
+            assert!(!has_errors(&parsed.errors), "{:?}", parsed.errors);
+            parsed.errors.push(warning.clone());
+            // These observations come from a real source resolution, not a fabricated warning.
+            let expected_resolved = resolve_with_resource_kernels(
+                &parsed.module,
+                &HashMap::from([(file, SourceOrigin::Project)]),
+                &[],
+            )
+            .unwrap();
+            let error = CheckedResourceProgram::prepare(
+                parsed,
+                HashMap::from([(file, SourceOrigin::Project)]),
+                &[],
+                CheckOptions::default(),
+            )
+            .unwrap_err();
+            let diagnostics = error.diagnostics().unwrap();
+            assert_eq!(diagnostics[0].code, warning.code);
+            assert_eq!(diagnostics[0].span, warning.span);
+            assert_eq!(diagnostics[0].message, warning.message);
+            for (actual, expected) in diagnostics[1..].iter().zip(&expected_resolved.diagnostics) {
+                assert_eq!(actual.code, expected.code);
+                assert_eq!(actual.span, expected.span);
+                assert_eq!(actual.message, expected.message);
+                assert_eq!(actual.severity, expected.severity);
+            }
+            if check_failure {
+                assert!(matches!(&error, ResourceProgramError::CheckDiagnostics(_)));
+                assert_eq!(expected_resolved.diagnostics.len(), 1);
+                assert_eq!(diagnostics[1].code.code(), 202);
+                assert_eq!(
+                    diagnostics[1].message,
+                    "unused variable: `retained_warning`"
+                );
+                assert_eq!(diagnostics.len(), 3);
+                assert_eq!(diagnostics[2].code.code(), 311);
+            } else {
+                assert!(matches!(
+                    &error,
+                    ResourceProgramError::ResolveDiagnostics(_)
+                ));
+                assert_eq!(diagnostics.len(), 1 + expected_resolved.diagnostics.len());
+            }
+        }
+    }
+
+    #[test]
+    fn retained_resource_program_preserves_observations_and_typed_metadata_causes() {
+        use std::error::Error;
+        let source = "namespace resource_probe\nresource TestHandle\n";
+        for with_warning in [false, true] {
+            let (mut parsed, mut origins, kernels) = inputs(source);
+            let file = FileId::new(STDLIB_FILE_ID_START);
+            let warning =
+                Diagnostic::warning(1, "injected parser observation", Span::new(file, 0, 8));
+            if with_warning {
+                parsed.errors.push(warning.clone());
+            }
+            origins.insert(file, SourceOrigin::Project);
+            let error =
+                CheckedResourceProgram::prepare(parsed, origins, &kernels, CheckOptions::default())
+                    .unwrap_err();
+            let diagnostics = error
+                .diagnostics()
+                .expect("metadata failures also retain observations");
+            assert_eq!(diagnostics.len(), usize::from(with_warning));
+            if with_warning {
+                assert_eq!(diagnostics[0].code, warning.code);
+                assert_eq!(diagnostics[0].span, warning.span);
+                assert_eq!(diagnostics[0].message, warning.message);
+            }
+            let ResourceProgramError::ResolveMetadata { source, .. } = &error else {
+                panic!("wrong metadata phase: {error:?}");
+            };
+            assert_eq!(error.to_string(), source.to_string());
+            assert_eq!(error.source().unwrap().to_string(), source.to_string());
+        }
+    }
+
+    #[test]
+    fn retained_resource_program_keeps_real_resolver_warnings_on_success() {
+        let file = FileId::new(0);
+        let mut parsed = parse(
+            "function inspect() returns nothing:\n    int64 retained_warning = 1\n    return nothing\n",
+            file,
+        );
+        let warning = Diagnostic::warning(1, "injected parser observation", Span::new(file, 0, 8));
+        parsed.errors.push(warning.clone());
+        let program = CheckedResourceProgram::prepare(
+            parsed,
+            HashMap::from([(file, SourceOrigin::Project)]),
+            &[],
+            CheckOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(program.parse_diagnostics().len(), 1);
+        assert_eq!(program.parse_diagnostics()[0].message, warning.message);
+        assert_eq!(program.resolved().diagnostics.len(), 1);
+        assert_eq!(program.resolved().diagnostics[0].code.code(), 202);
+        assert_eq!(
+            program.resolved().diagnostics[0].message,
+            "unused variable: `retained_warning`"
+        );
+        assert!(program.checked().diagnostics.is_empty());
     }
 }

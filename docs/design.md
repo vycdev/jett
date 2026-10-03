@@ -2226,8 +2226,15 @@ to an otherwise valid private hook. Complete hook identities and signatures are
 validated even when unused. Ordinary checking still returns source diagnostics
 for repair. This compiler proof does not install a provider or authorize a live
 resource operation; runtime execution must retain the same checked program.
-The [checked-program handoff](active/native_resource_checked_program.md) records
-the implemented boundary and the remaining driver/runtime integration.
+Reference execution retains that same immutable merged program and the primary
+source main's exact span and namespace through interpretation. It does not
+reread or rediscover modules after preparation. Earlier warnings remain ordered
+observations when a later source phase rejects the program. The public build
+result stays unchanged, and required comptime/verification failures still
+prevent execution. This is a compiler handoff, not live Resource authority.
+The [checked-program handoff](active/native_resource_checked_program.md) and
+[reference preparation note](active/native_prepared_reference_driver.md) record
+the bounded implementation and remaining runtime prerequisites.
 
 The checker refuses copying a Resource-bearing field into ownership, including
 through borrowed parents, and refuses cloning collection/reflection getters

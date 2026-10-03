@@ -2229,9 +2229,9 @@ obligations and the 464-case supplemental corpus are unchanged.
 
 The exact clean static-guard head `b7180bd9` now passes its full workspace:
 all 92 result groups, 464 supplemental native cases and 182 object obligations.
-Its supported-host workflow remains in progress. The earlier `616b51b9` workflow
-passes all four Windows/Linux build and installed relocation jobs. These are
-separate commit-specific receipts in the acceptance audit.
+Its supported-host workflow 37123835396 also passes all four Windows/Linux build
+and installed relocation jobs. The earlier `616b51b9` four-job result remains
+historical. These are separate commit-specific receipts in the acceptance audit.
 
 The next compiler handoff retains one owned parsed Module, ResolveResult,
 CheckResult/interner and explicit loader origins, derived internally and exposed
@@ -2241,9 +2241,33 @@ ordinary checking retains source repair diagnostics. All 43 focused Resource
 groups pass, including seven new snapshot groups; all 454 resolver/typechecker/
 HIR library tests pass with five unchanged compiler source hashes. The
 [checked-program note](native_resource_checked_program.md) records exact scope.
-This supplies no provider, runtime Resource, cleanup or native ABI. Driver
-retention, program-bound invocation eligibility and exact caller ownership
+This supplies no provider, runtime Resource, cleanup or native ABI. Private
+reference-driver retention is now implemented in the following bounded
+follow-up. Program-bound invocation eligibility and exact caller ownership
 handoff remain required; a formal View mode alone does not recover caller
-retention. Full-workspace and supported-host gates for this change are pending.
+retention. Full-workspace and supported-host gates remain commit-specific.
 The about-85% estimate, fixed 207 inventory/182 object obligations, 464 native
 cases and whole-language 100% objective remain unchanged.
+
+
+### Retained reference preparation
+
+A private driver result now retains the exact sealed checked Module and primary
+FileId0 main span/namespace through reference execution. Public BuildResult is
+unchanged. Runtime uses one merged registration and performs no source read,
+parse or module rediscovery after preparation. The earlier macOS graphics
+thread-selection read remains outside this bounded repair. Phase errors retain
+all preceding warnings in order, and metadata errors retain their typed cause.
+Required comptime and verification still run once and gate execution before
+providers. No Resource value, provider, hook dispatch or native ABI is enabled.
+
+All 46 focused Resource groups and four new driver groups pass with stable
+source hashes. All 544 driver/HIR/resolver/typechecker tests also pass with those
+hashes unchanged. All 598 frontend fixtures and eight backend-lowering
+regressions also pass. New full-workspace/platform acceptance remains pending. The exact94 predecessor
+workspace failed after a NamedTempFile.reopen PermissionDenied; its affected
+native case passes an isolated rerun, not whole-workspace acceptance. See
+[the reference contract and proof](native_prepared_reference_driver.md) and
+[centralized acceptance context](native_acceptance_audit.md#retained-reference-preparation).
+The about-85% estimate, fixed 207 inventory/182 obligations, 464 supplemental
+native cases and whole-language 100% goal are unchanged.

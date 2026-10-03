@@ -1831,7 +1831,12 @@ all 92 successful result groups. It passes 464 supplemental native cases
 seconds), remaining workspace targets and doc tests. Start/end HEAD and
 cleanliness match in `target/native-workspace-b7180bd9.json`; the actual session
 1952 is terminal with exit zero and ends `2026-10-03T13:18:31.4769949Z`.
-Its supported-host run 37123835396 remains in progress at this checkpoint.
+Its supported-host workflow
+[37123835396](https://github.com/vycdev/jett/actions/runs/37123835396) now succeeds
+in all four Windows/Linux build and installed relocation jobs. The last Windows
+installed job ends `2026-10-03T14:14:19Z`; the exact-head receipt is retained in
+`target/native-platform-b7180bd9.json`. Earlier in-progress observations are
+superseded by that result, without transferring acceptance to exact94.
 
 Exact predecessor `616b51b9` now also has supported-host acceptance: workflow
 [37119573097](https://github.com/vycdev/jett/actions/runs/37119573097) succeeds in
@@ -1861,3 +1866,49 @@ Full-workspace and supported-host validation for this new change remain pending.
 The fixed 207 inventory, 182 object obligations and 464 supplemental native
 cases are unchanged; the about-85% estimate is still coarse planning and the
 whole-language native-codegen objective remains 100%.
+
+
+## Retained reference preparation
+
+The isolated reference follow-up over exact `94bb6b2e` retains a private
+`Arc<CheckedResourceProgram>` and primary FileId0 main span/namespace alongside
+unchanged public BuildResult observations. Required evaluation uses that same
+merged AST and checked facts. Runtime gates compilation and missing-snapshot
+failures before providers, registers the saved module once and performs no
+post-preparation read/parse/rediscovery. The macOS preliminary graphics-thread
+read remains scoped outside this guarantee. Through-failure diagnostics preserve
+earlier phase warnings and typed metadata causes. This enables no live Resource,
+provider, callable descriptor authority or native ABI. See
+[the selected contract and scope](native_prepared_reference_driver.md).
+
+All **46 focused Resource groups** and **four new driver groups** pass in
+`target/native-prepared-reference-driver-focused.json`, ending
+`2026-10-03T14:12:41.4871736Z` with exit zero and both formatted source hashes
+unchanged. These include three new warning/cause groups and four driver controls
+for deleted or mutated sources, primary selection despite a support main,
+once-only frontend/runtime observations, and failure before provider setup.
+All **544 driver/HIR/resolver/typechecker tests** also pass: 87 driver, 139 HIR,
+54 resolver and 264 typechecker. `target/native-prepared-reference-driver-phases.json`
+ends with exit zero at `2026-10-03T14:15:36.7702211Z`; both source hashes remain
+unchanged. All **eight backend-lowering regressions** (198.73 seconds), including
+the fixed inventory lowering check, and **598 frontend fixtures** (24.41 seconds)
+pass in `target/native-prepared-reference-driver-frontend.json`, ending
+`2026-10-03T14:20:34.8384468Z` with exit zero and the same two source hashes.
+New full-workspace and supported-host acceptance remain pending.
+
+Exact94's frozen full workspace is **not accepted**: it ends with Cargo exit101,
+91 successful result groups and stable clean HEAD in
+`target/native-workspace-94bb6b2e.json` at `2026-10-03T14:10:25.5278499Z`.
+Its native suite passes 463 cases and fails one NamedTempFile.reopen operation
+with PermissionDenied. All four object-manifest tests pass (562.05 seconds),
+but that does not make the workspace successful. The affected exact94 native
+case passes its separate rerun (one passed, 463 filtered, 7.98 seconds) under
+elevated execution; this is a changed permission context, not acceptance of the
+failed whole-workspace run. The original failure remains evidence.
+
+The last accepted local predecessor remains `b7180bd9`, with its 464 native
+cases, 182 object obligations and 92 result groups recorded above. The same b718 head also has all-four supported-host acceptance, recorded above;
+616 remains historical. These receipts do not transfer to exact94 or this
+follow-up. The exact94 workflow 37126837754 is still in progress. No linked native case or
+object obligation is added: fixed 207 inventory/182 obligations, 464 supplemental cases, about-85% planning
+and the whole-language 100% goal remain unchanged.

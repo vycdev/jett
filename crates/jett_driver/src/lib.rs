@@ -21,7 +21,10 @@ use jett_parser::ast::{FunctionDecl, FunctionDef, Item, Module, Param, TypeExpr}
 use jett_parser::{ParseResult, parse};
 use jett_query::{QueryDatabase, SourceOrigin};
 use jett_resolve::resolve;
-use jett_typecheck::{CheckOptions, CheckResult, check, check_with_options};
+use jett_typecheck::{
+    CheckOptions, CheckResult, CheckedResourceProgram, ResourceProgramError, check,
+    check_with_options,
+};
 use jett_types::ReflectionMetadata;
 pub use native_property_cases::NativePropertyPlan;
 use std::borrow::Cow;
@@ -106,6 +109,28 @@ pub struct BuildResult {
     /// Values baked by explicit `comptime` expressions.
     pub explicit_comptime_values: Option<Arc<jett_comptime::ExplicitComptimeValues>>,
     pub debug_observations: Vec<DebugObservation>,
+}
+
+/// Private reference handoff; public builds may discard this retained session.
+struct PreparedReference {
+    build: BuildResult,
+    program: Option<Arc<CheckedResourceProgram>>,
+    entry: Option<PreparedReferenceEntry>,
+}
+
+struct PreparedReferenceEntry {
+    namespace: Option<String>,
+    span: Span,
+}
+
+impl PreparedReference {
+    fn rejected(build: BuildResult) -> Self {
+        Self {
+            build,
+            program: None,
+            entry: None,
+        }
+    }
 }
 
 /// Backend-neutral programs and checked data produced for a valid source file.
@@ -3056,12 +3081,20 @@ fn lower_file_for_backend_inner(
 }
 
 fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -> BuildResult {
+    prepare_reference_file(path, include_project, options).build
+}
+
+fn prepare_reference_file(
+    path: &Path,
+    include_project: bool,
+    options: BuildOptions,
+) -> PreparedReference {
     let file_path_str = path.display().to_string();
 
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            return BuildResult {
+            return PreparedReference::rejected(BuildResult {
                 diagnostics: vec![Diagnostic::error(
                     0,
                     format!("failed to read {}: {}", path.display(), e),
@@ -3075,7 +3108,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
                 breakpoint_exclusions: None,
                 explicit_comptime_values: None,
                 debug_observations: Vec::new(),
-            };
+            });
         }
     };
 
@@ -3084,11 +3117,16 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
     // Phase 1+2: Lex + Parse (parse internally calls tokenize)
     let mut parse_result = parse_source_with_query(&source, &file_path_str);
     all_diagnostics.extend(parse_result.errors.clone());
+    let entry =
+        find_main_function(&parse_result.module).map(|(namespace, main)| PreparedReferenceEntry {
+            namespace,
+            span: main.span,
+        });
 
     // If there are parse errors, stop here — resolve/typecheck won't produce useful results
     let has_parse_errors = has_error_diagnostics(&all_diagnostics);
     if has_parse_errors {
-        return BuildResult {
+        return PreparedReference::rejected(BuildResult {
             has_errors: true,
             diagnostics: all_diagnostics,
             source,
@@ -3098,7 +3136,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
             debug_observations: Vec::new(),
-        };
+        });
     }
 
     // Multi-file: prepend stdlib and sibling project modules so
@@ -3110,7 +3148,7 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
     }
     all_diagnostics.extend(support_modules.diagnostics);
     if has_error_diagnostics(&all_diagnostics) {
-        return BuildResult {
+        return PreparedReference::rejected(BuildResult {
             has_errors: true,
             diagnostics: all_diagnostics,
             source,
@@ -3120,59 +3158,61 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
             breakpoint_exclusions: None,
             explicit_comptime_values: None,
             debug_observations: Vec::new(),
-        };
+        });
     }
     prepend_support_modules(&mut parse_result.module, support_modules.modules);
 
-    // Phase 3: Resolve names
-    let resolve_result = resolve(&parse_result.module);
-    all_diagnostics.extend(resolve_result.diagnostics.clone());
-
-    let has_resolve_errors = has_error_diagnostics(&all_diagnostics);
-    if has_resolve_errors {
-        return BuildResult {
-            has_errors: true,
-            diagnostics: all_diagnostics,
-            source,
-            file_path: file_path_str,
-            reflection_metadata: None,
-            checked_expression_types: None,
-            breakpoint_exclusions: None,
-            explicit_comptime_values: None,
-            debug_observations: Vec::new(),
-        };
-    }
-
-    // Phase 4: Type check
-    let check_result = check_with_options(
-        &parse_result.module,
-        &resolve_result,
+    let primary_span = parse_result.module.span;
+    let mut source_origins = HashMap::from([(FileId::new(0), SourceOrigin::Project)]);
+    source_origins.extend(support_modules.origins);
+    // Discovery observations retain their position after the primary parse.
+    parse_result.errors = all_diagnostics;
+    let program = match CheckedResourceProgram::prepare(
+        parse_result,
+        source_origins,
+        &[],
         CheckOptions {
             release: options.release,
         },
-    );
-    all_diagnostics.extend(check_result.diagnostics.clone());
-
-    let has_typecheck_errors = has_error_diagnostics(&all_diagnostics);
-    if has_typecheck_errors {
-        return BuildResult {
-            has_errors: true,
-            diagnostics: all_diagnostics,
-            source,
-            file_path: file_path_str,
-            reflection_metadata: None,
-            checked_expression_types: None,
-            breakpoint_exclusions: None,
-            explicit_comptime_values: None,
-            debug_observations: Vec::new(),
-        };
-    }
+    ) {
+        Ok(program) => Arc::new(program),
+        Err(error) => {
+            let mut diagnostics = error.diagnostics().unwrap_or(&[]).to_vec();
+            if matches!(
+                &error,
+                ResourceProgramError::ResolveMetadata { .. }
+                    | ResourceProgramError::CheckMetadata { .. }
+            ) {
+                diagnostics.push(Diagnostic::error(0, error.to_string(), primary_span));
+            }
+            return PreparedReference::rejected(BuildResult {
+                has_errors: true,
+                diagnostics,
+                source,
+                file_path: file_path_str,
+                reflection_metadata: None,
+                checked_expression_types: None,
+                breakpoint_exclusions: None,
+                explicit_comptime_values: None,
+                debug_observations: Vec::new(),
+            });
+        }
+    };
+    let check_result = program.checked();
+    let resolve_result = program.resolved();
+    let mut all_diagnostics = program
+        .parse_diagnostics()
+        .iter()
+        .chain(&resolve_result.diagnostics)
+        .chain(&check_result.diagnostics)
+        .cloned()
+        .collect::<Vec<_>>();
 
     // Phase 5: Execute verify blocks at compile time
     let reflection_metadata = check_result.reflection_metadata.clone();
-    let checked_expression_types = Arc::new(expression_type_names(&check_result, &resolve_result));
+    let checked_expression_types = Arc::new(expression_type_names(check_result, resolve_result));
     let evaluation = evaluate_explicit_comptime_expressions_capture(
-        &parse_result.module,
+        program.module(),
         reflection_metadata.clone(),
         checked_expression_types.clone(),
         Arc::new(check_result.breakpoint_exclusions.clone()),
@@ -3187,8 +3227,8 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
     let explicit_comptime_values = Arc::new(evaluation.values);
     if !has_error_diagnostics(&all_diagnostics) {
         let results = run_verify_blocks_detailed_with_checked_values(
-            &parse_result.module,
-            check_result.reflection_metadata,
+            program.module(),
+            check_result.reflection_metadata.clone(),
             checked_expression_types.clone(),
             Arc::new(check_result.breakpoint_exclusions.clone()),
             explicit_comptime_values.clone(),
@@ -3205,16 +3245,21 @@ fn build_file_inner(path: &Path, include_project: bool, options: BuildOptions) -
 
     let has_errors = has_error_diagnostics(&all_diagnostics);
 
-    BuildResult {
+    let build = BuildResult {
         has_errors,
         diagnostics: all_diagnostics,
         source,
         file_path: file_path_str,
         reflection_metadata: Some(reflection_metadata),
         checked_expression_types: Some(checked_expression_types),
-        breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions)),
+        breakpoint_exclusions: Some(Arc::new(check_result.breakpoint_exclusions.clone())),
         explicit_comptime_values: Some(explicit_comptime_values),
         debug_observations,
+    };
+    PreparedReference {
+        build,
+        program: Some(program),
+        entry,
     }
 }
 
@@ -3642,12 +3687,6 @@ fn stdlib_root() -> PathBuf {
         .join("..")
         .join("..")
         .join("stdlib")
-}
-
-/// Discover and parse all sibling .jett files in the project (if a jett.proj exists).
-/// Returns parsed modules for files other than the entry file.
-fn discover_project_modules(entry_path: &Path) -> Vec<Module> {
-    discover_project_modules_with_diagnostics(entry_path).modules
 }
 
 fn discover_project_modules_with_diagnostics(entry_path: &Path) -> DiscoveredModules {
@@ -4097,7 +4136,21 @@ fn runtime_requires_caller_thread(path: &Path, options: &RunOptions, macos: bool
 }
 
 fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFailure> {
-    let build = build_file(path);
+    run_prepared_reference(
+        prepare_reference_file(path, true, BuildOptions::default()),
+        options,
+    )
+}
+
+fn run_prepared_reference(
+    prepared: PreparedReference,
+    options: RunOptions,
+) -> Result<RunOutput, RunFailure> {
+    let PreparedReference {
+        build,
+        program,
+        entry,
+    } = prepared;
 
     if options.emit_runtime_debug {
         use std::io::Write;
@@ -4133,18 +4186,35 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
         )));
     }
 
-    // Parse again to get the module for interpretation
-    let source = fs::read_to_string(path)
-        .map_err(|error| frontend_failure(format!("failed to read {}: {error}", path.display())))?;
-    let file_id = FileId::new(0);
-    let parse_result = parse(&source, file_id);
-    let module = parse_result.module;
-
-    let Some((main_namespace, main_func)) = find_main_function(&module) else {
-        return Err(frontend_failure(
-            "runtime error: no `main` function found".to_string(),
-        ));
-    };
+    let program = program.ok_or_else(|| {
+        frontend_failure(
+            "runtime error: successful compilation has no retained checked program".to_string(),
+        )
+    })?;
+    let entry = entry
+        .ok_or_else(|| frontend_failure("runtime error: no `main` function found".to_string()))?;
+    let main_func = program
+        .module()
+        .items
+        .iter()
+        .find_map(|item| {
+            if let Item::Function(function) = item
+                && entry.span.file == FileId::new(0)
+                && function.span == entry.span
+                && function.name.name == "main"
+            {
+                Some(function)
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            frontend_failure(
+                "runtime error: retained primary entry does not match the checked program"
+                    .to_string(),
+            )
+        })?;
+    let main_namespace = entry.namespace;
 
     let main_args = default_runtime_args_for_main(main_func).map_err(&frontend_failure)?;
 
@@ -4220,19 +4290,8 @@ fn run_file_inner(path: &Path, options: RunOptions) -> Result<RunOutput, RunFail
         interp.enable_stdout_capture();
     }
 
-    // Register compiler-shipped stdlib modules before project and entry files.
-    for module in discover_stdlib_modules() {
-        register_module_items(&mut interp, &module);
-    }
-
-    // Register items from sibling project files first (so they're available to main file).
-    let sibling_modules = discover_project_modules(path);
-    for module in &sibling_modules {
-        register_module_items(&mut interp, module);
-    }
-
-    // Register items from the entry file (may override sibling definitions).
-    register_module_items(&mut interp, &module);
+    // The exact checked merged module preserves support -> project -> primary order.
+    register_module_items(&mut interp, program.module());
 
     // The checked entry's arguments were granted by default_runtime_args_for_main;
     // no arbitrary host aggregate enters this trusted source-body boundary.
@@ -5265,6 +5324,194 @@ verify checking:
             observed(DebugPhase::Comptime, DebugEventKind::Print, "expression:"),
             observed(DebugPhase::FrontendVerify, DebugEventKind::Print, "verify:"),
         ]
+    }
+
+    fn prepared_capture_options() -> RunOptions {
+        RunOptions {
+            capture_stdout: true,
+            emit_runtime_debug: false,
+            random_test_samples: None,
+            clock_test_samples: None,
+            environment_test_snapshot: None,
+            graphics_test_events: None,
+        }
+    }
+
+    fn invalid_environment_options() -> RunOptions {
+        RunOptions {
+            environment_test_snapshot: Some(EnvironmentTestSnapshot {
+                arguments: vec![EnvironmentTestText::InvalidUnicode],
+                entries: Vec::new(),
+            }),
+            ..prepared_capture_options()
+        }
+    }
+
+    #[test]
+    fn prepared_reference_uses_saved_primary_entry_and_support_after_source_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("jett.proj"),
+            "name: retained_reference\n",
+        )
+        .unwrap();
+        let support = directory.path().join("support.jett");
+        let primary = directory.path().join("main.jett");
+        fs::write(
+            &support,
+            r#"namespace support
+export function echo[T](value: T) returns T:
+    return value
+export function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "wrong entry\n")
+    return nothing
+"#,
+        )
+        .unwrap();
+        fs::write(
+            &primary,
+            r#"function main(stdout: Stdout) returns nothing:
+    use support
+    Stdout.write(view stdout, "saved:{support.echo(7)}\n")
+    return nothing
+"#,
+        )
+        .unwrap();
+        let prepared = prepare_reference_file(&primary, true, BuildOptions::default());
+        assert!(
+            !prepared.build.has_errors,
+            "{:?}",
+            prepared.build.diagnostics
+        );
+        let program = prepared.program.as_ref().unwrap();
+        assert!(program.resolved().resource_kernels.is_empty());
+        assert!(program.checked().resource_hooks.is_empty());
+        assert!(!program.checked().generic_function_instantiations.is_empty());
+        assert_eq!(
+            program.source_origins().get(&FileId::new(0)),
+            Some(&SourceOrigin::Project)
+        );
+        assert!(
+            program
+                .source_origins()
+                .values()
+                .any(|origin| *origin == SourceOrigin::Stdlib)
+        );
+        let selected = prepared.entry.as_ref().unwrap();
+        assert_eq!(selected.span.file, FileId::new(0));
+        assert_eq!(selected.namespace, None);
+        let (first_namespace, first_main) = find_main_function(program.module()).unwrap();
+        assert_eq!(first_namespace.as_deref(), Some("support"));
+        assert_ne!(
+            first_main.span, selected.span,
+            "the merged first main is deliberately not the entry"
+        );
+        // Any second read or discovery would fail or run different source now.
+        fs::write(&support, "this is no longer valid Jett\n").unwrap();
+        fs::remove_file(&primary).unwrap();
+        let output = run_prepared_reference(prepared, prepared_capture_options()).unwrap();
+        assert_eq!(output.stdout, "saved:7\n");
+        assert!(output.debug_events.is_empty());
+        assert!(output.frontend_debug_observations.is_empty());
+    }
+
+    #[test]
+    fn prepared_reference_retains_comptime_verify_and_runtime_observations_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(&path, DEBUG_PHASE_SOURCE).unwrap();
+        let prepared = prepare_reference_file(&path, true, BuildOptions::default());
+        assert!(
+            !prepared.build.has_errors,
+            "{:?}",
+            prepared.build.diagnostics
+        );
+        assert_eq!(prepared.build.debug_observations, frontend_phase_oracle());
+        fs::remove_file(&path).unwrap();
+        let output = run_prepared_reference(prepared, prepared_capture_options()).unwrap();
+        assert_eq!(output.stdout, "14\n");
+        assert_eq!(output.frontend_debug_observations, frontend_phase_oracle());
+        assert_eq!(
+            output.debug_events,
+            vec![
+                DebugEvent {
+                    kind: DebugEventKind::Print,
+                    text: "trace public".into()
+                },
+                DebugEvent {
+                    kind: DebugEventKind::Println,
+                    text: "tail\n".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn prepared_reference_refuses_frontend_failure_before_provider_initialization() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(
+            &path,
+            r#"function reject() returns int64:
+    print("before-failure")
+    string impossible = string.repeat("ab", 9223372036854775807)
+    return string.char_count(impossible)
+function main(env: Environment) returns nothing:
+    int64 failed = comptime reject()
+verify unreachable:
+    println("must not execute")
+"#,
+        )
+        .unwrap();
+        let prepared = prepare_reference_file(&path, true, BuildOptions::default());
+        assert!(prepared.build.has_errors);
+        assert!(
+            prepared.program.is_some(),
+            "the checked session is retained after required-evaluation failure"
+        );
+        let expected = vec![observed(
+            DebugPhase::Comptime,
+            DebugEventKind::Print,
+            "before-failure",
+        )];
+        assert_eq!(prepared.build.debug_observations, expected);
+        fs::remove_file(&path).unwrap();
+        let failure = run_prepared_reference(prepared, invalid_environment_options()).unwrap_err();
+        assert!(
+            failure
+                .message
+                .contains("string.repeat: requested output is too large"),
+            "{failure}"
+        );
+        assert!(!failure.message.contains("Environment"), "{failure}");
+        assert!(failure.output.stdout.is_empty());
+        assert!(failure.output.debug_events.is_empty());
+        assert_eq!(failure.output.frontend_debug_observations, expected);
+    }
+
+    #[test]
+    fn prepared_reference_refuses_missing_snapshot_before_provider_initialization() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.jett");
+        fs::write(
+            &path,
+            "function main(env: Environment) returns nothing:\n    return nothing\n",
+        )
+        .unwrap();
+        let mut prepared = prepare_reference_file(&path, true, BuildOptions::default());
+        assert!(
+            !prepared.build.has_errors,
+            "{:?}",
+            prepared.build.diagnostics
+        );
+        prepared.program = None;
+        let failure = run_prepared_reference(prepared, invalid_environment_options()).unwrap_err();
+        assert_eq!(
+            failure.message,
+            "runtime error: successful compilation has no retained checked program"
+        );
+        assert!(failure.output.stdout.is_empty());
+        assert!(failure.output.debug_events.is_empty());
     }
 
     #[test]

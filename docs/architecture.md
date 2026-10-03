@@ -2178,8 +2178,26 @@ identity/shape helper lets the diagnostic checker keep returning repair facts.
 The full generic/scoped facts, parameter permutations and binding modes remain
 owned by that exact session. This validates the frontend through checking;
 explicit comptime and verification keep their separate evaluation gates.
-The driver still needs to retain the snapshot instead of rereading source before
-interpretation. See [the handoff note](active/native_resource_checked_program.md).
+The reference driver keeps a private preparation result containing the public
+BuildResult observations, an Arc of that sealed program and the primary FileId0
+main's saved span/namespace. Public BuildResult/build_file signatures and fields
+are unchanged. Required evaluation uses the original merged AST and checked
+scoped/generic facts once. Runtime emits retained frontend observations, gates
+build errors and missing snapshots before provider setup, then registers that
+exact merged module once; registration resets namespace at each item FileId.
+No post-preparation source read, parse or support rediscovery occurs. Existing
+macOS graphics thread selection still reads/parses before preparation, so the
+entire public run path is not claimed to parse once.
+
+ResourceProgramError keeps all observations through the failed phase in parse,
+resolve and check order. Metadata variants retain typed source errors plus the
+earlier observations; diagnostics() keeps its optional-slice signature and
+returns Some even for an empty metadata prefix. Display and Error::source expose
+the original metadata cause. Successful session records stay owned without
+repeat checking; earlier prefixes are cloned only on failure. See
+[the reference handoff](active/native_prepared_reference_driver.md). This does
+not install Resource providers or callable authority; other driver/backend
+preparation paths and runtime eligibility remain separate work.
 
 Before source execution, the checker separates owning field copies from
 borrowed place projections. Only Field and the existing transparent place
