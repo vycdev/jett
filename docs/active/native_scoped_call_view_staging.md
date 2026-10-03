@@ -96,9 +96,10 @@ staging commit now passes its complete 461-case workspace, all 182 object
 obligations, remaining targets and doc-tests with 92 successful groups and an
 unchanged head. Its terminal record is centralized in
 [the descriptor note](native_uninhabited_callback_descriptors.md#accepted-predecessor-and-separate-follow-up).
-Supported-host workflow 37112967414 is still live and remains independently
-required. No full surface completion, denominator change, or new coarse coverage
-percentage is claimed by this note.
+Supported-host workflow 37112967414 also passes all four Windows/Linux build/
+package and relocated installed jobs, last completing `2026-10-03T10:23:08Z`.
+No full surface completion, denominator change, or new coarse coverage percentage
+is claimed by this note.
 
 ## Expanded consuming-operation acceptance
 
@@ -128,5 +129,5 @@ status/stdout/stderr and empty unintended observations. All 13 tracked source
 format checks pass in `target/native-scoped-call-view-source-format13.json`.
 Rust formatting and diff checks pass. The supplemental corpus now registers
 461 cases. Complete local workspace and 182-object acceptance at `55027914`
-are recorded above; supported-host acceptance remains pending. The fixed inventory
-is still 207 and the broad planning estimate remains about 85%.
+and all four supported-host jobs are recorded above. The fixed inventory is
+still 207 and the broad planning estimate remains about 85%.

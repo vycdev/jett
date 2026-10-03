@@ -1,11 +1,11 @@
 # Native descriptors with an uninhabited invocation input
 
-Status: the repaired `90d82701` revision passes its complete clean workspace
-and all four supported-host jobs. Later call-view staging at `55027914` passes
-its complete clean workspace; its supported-host jobs remain separate and live. The
-separate latent nested/secret-result follow-up passes the focused compiler and
-linked gates below; complete 464-case/platform acceptance remains pending.
-The native parity objective remains whole-language coverage.
+Status: `72237c4a` passes its complete clean 464-case workspace and all 182
+object obligations. Its supported-host workflow remains in progress. The
+preceding `55027914` call-view revision passes both its complete workspace and
+all four supported-host jobs. The later
+[resource kind-tag correction](native_resource_kind_tags.md) has separate
+focused acceptance. The native parity objective remains whole-language coverage.
 
 ## Existing source behavior
 
@@ -271,8 +271,9 @@ source-format checks pass. The isolated corpus registers 464 supplemental tests;
 registration is not complete-workspace acceptance.
 
 The broader compiler run passes **989 library units**: 63 codegen, 416 comptime,
-139 HIR, 99 MIR, 48 resolve and 224 typecheck. It also passes 62 comptime and one
-MIR integration test, for **1052 actual tests** with Cargo exit zero. Its wrapper
+139 HIR, 99 MIR, 48 resolve and 224 typecheck. It also passes 62 codegen object
+integration tests and one MIR integration test, for **1052 actual tests** with
+Cargo exit zero. Its wrapper
 exits one solely because the expected count incorrectly excluded the 63
 integration tests; all seven source hashes remain unchanged. Preserve that
 wrapper/log as a count-guard failure, not a compiler failure or full-workspace
@@ -287,9 +288,15 @@ formatting checks pass. The earlier compiler count-guard record remains
 `target/native-latent-callback-phases.json` with the actual passing Cargo log
 `target/native-latent-callback-libraries.log`; it is not silently replaced.
 
-**Pending:** complete 464-case workspace, independent 182-object and
-supported-host acceptance for the actual follow-up revision remain required.
-These focused gates do not accept that future revision's complete corpus.
+The exact clean committed follow-up `72237c4a` subsequently passes the complete
+workspace: 464 native cases (954.38 seconds), all 182 object obligations in the
+four-test manifest gate (542.22 seconds), 83 driver tests (72.45 seconds), 598
+frontend fixtures (22.91 seconds), remaining targets and doc-tests. The wrapper
+exits zero with 92 successful groups, clean start/end and unchanged exact head at
+`2026-10-03T10:40:27.4609702Z` in `target/native-workspace-72237c4a.log` and
+`.json`. Supported-host
+[workflow 37115479516](https://github.com/vycdev/jett/actions/runs/37115479516)
+is still in progress; that platform acceptance remains independently required.
 
 ### Accepted predecessor and separate follow-up
 
@@ -301,7 +308,10 @@ obligations (534.62 seconds), 83 driver tests (78.52 seconds), 598 frontend
 fixtures (22.20 seconds), remaining targets and doc-tests. The wrapper exits
 zero with 92 successful groups, clean start/end and unchanged exact head at
 `2026-10-03T09:56:47.1797084Z` in `target/native-workspace-55027914.log` and
-`.json`. Supported-host workflow 37112967414 is still running. This accepts
-that local staging revision, not its platform or the separate isolated
-latent-callback follow-up. The whole-language objective stays 100%, broad tracking
-stays about 85%, and the fixed 207 inventory/182 object obligations are unchanged.
+`.json`. Supported-host
+[workflow 37112967414](https://github.com/vycdev/jett/actions/runs/37112967414)
+also passes all four Windows/Linux build/package and relocated installed jobs,
+last completing `2026-10-03T10:23:08Z`. This accepts the staging revision on those
+hosts; the later `72237c4a` platform run remains separate. The whole-language
+objective stays 100%, broad tracking stays about 85%, and the fixed 207
+inventory/182 object obligations are unchanged.

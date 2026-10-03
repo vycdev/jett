@@ -19163,6 +19163,59 @@ function joined(candidate: result[int64, string]) returns int64:
     }
 
     #[test]
+    fn checked_resource_kind_tag_preserves_opaque_type_metadata() {
+        let mut metadata = ReflectionMetadata::new();
+        metadata.insert_type_info(ReflectionTypeInfo::new(
+            "io.FileHandle",
+            "resource",
+            None,
+            false,
+            Vec::new(),
+        ));
+        let mut interpreter = Interpreter::new();
+        interpreter.set_reflection_metadata(Arc::new(metadata));
+        let ty = type_named("io.FileHandle");
+        let expected_tag = Value::Enum {
+            type_name: "TypeKind".into(),
+            variant: "resource_type".into(),
+            fields: Vec::new(),
+        };
+        let tag = interpreter
+            .call_builtin_with_type_args("type.kind_tag", std::slice::from_ref(&ty), &[])
+            .expect("typed kind builtin")
+            .expect("resource kind metadata");
+        assert_eq!(tag, expected_tag);
+        let info = interpreter
+            .call_builtin_with_type_args("type.info", std::slice::from_ref(&ty), &[])
+            .expect("typed info builtin")
+            .expect("resource info metadata");
+        let Value::Struct { fields, .. } = info else {
+            panic!("expected TypeInfo")
+        };
+        assert!(
+            fields
+                .iter()
+                .any(|(name, value)| name == "kind_tag" && *value == expected_tag)
+        );
+        for builtin in ["type.fields", "type.variants", "type.machine_states"] {
+            assert_eq!(
+                interpreter
+                    .call_builtin_with_type_args(builtin, std::slice::from_ref(&ty), &[],)
+                    .expect("typed shape builtin")
+                    .expect("empty resource shape"),
+                Value::List(Vec::new())
+            );
+        }
+        assert_eq!(
+            interpreter
+                .call_builtin_with_type_args("type.primitive_tag", &[ty], &[],)
+                .expect("typed primitive builtin")
+                .expect("resource has no primitive"),
+            Value::OptionalNone
+        );
+    }
+
+    #[test]
     fn direct_type_reflection_uses_checked_metadata_when_available() {
         let mut metadata = ReflectionMetadata::new();
         metadata.insert_type_info(ReflectionTypeInfo::new(

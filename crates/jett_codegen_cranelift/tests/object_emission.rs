@@ -52,6 +52,70 @@ fn lower_source_with_equatable(source: &str, include_equatable: bool) -> (Progra
 }
 
 #[test]
+fn native_resource_kind_tags_emit_without_resource_values() {
+    let file = FileId::new(jett_common::STDLIB_FILE_ID_START);
+    let mut parsed = jett_parser::parse(
+        r#"namespace opaque_metadata
+export resource FileHandle
+type HandleAlias = FileHandle
+export function resource_kind() returns bool:
+    return type.kind_tag[FileHandle]() == TypeKind.resource_type
+export function resource_info() returns bool:
+    return type.info[FileHandle]().kind_tag == TypeKind.resource_type
+export function alias_kind() returns bool:
+    return type.kind_tag[HandleAlias]() == TypeKind.alias_type
+"#,
+        file,
+    );
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let project_file = FileId::new(0);
+    let mut caller = jett_parser::parse(
+        r#"namespace app
+function main() returns bool:
+    use opaque_metadata
+    bool kind = opaque_metadata.resource_kind()
+    bool info = opaque_metadata.resource_info()
+    bool alias = opaque_metadata.alias_kind()
+    return kind and info and alias
+"#,
+        project_file,
+    );
+    assert!(caller.errors.is_empty(), "{:?}", caller.errors);
+    parsed.module.items.append(&mut caller.module.items);
+    let resolved = jett_resolve::resolve(&parsed.module);
+    let checked = jett_typecheck::check(&parsed.module, &resolved);
+    assert!(
+        checked
+            .diagnostics
+            .iter()
+            .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+        "{:?}",
+        checked.diagnostics
+    );
+    let origins = HashMap::from([
+        (file, SourceOrigin::Stdlib),
+        (project_file, SourceOrigin::Project),
+    ]);
+    let hir = jett_hir::lower(&parsed.module, &resolved, &checked, &origins)
+        .expect("resource metadata HIR");
+    let mir = jett_mir::lower(&hir, &checked.interner).expect("resource metadata MIR");
+    let artifact = emit_host_object(&mir, &checked.interner).expect("type-only resource object");
+    assert!(!artifact.bytes.is_empty());
+    for name in ["resource_kind", "resource_info", "alias_kind"] {
+        let function = mir
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == name)
+            .unwrap();
+        assert!(
+            artifact
+                .symbols
+                .contains(&symbol_name(&function.identity, &checked.interner).unwrap())
+        );
+    }
+}
+
+#[test]
 fn native_reflected_root_reads_retain_only_selected_predicates_and_failure_leaf() {
     let (mut program, types) = lower_source(
         r#"namespace app

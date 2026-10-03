@@ -808,6 +808,7 @@ impl<'a> TypeChecker<'a> {
                 "machine_type",
                 "machine_state_type",
                 "unknown_type",
+                "resource_type",
             ]),
         });
         let type_kind_ty = self.interner.intern(Type::Enum(type_kind_eid));
@@ -21518,6 +21519,29 @@ function main() returns nothing:
                 .is_none(),
             "resources must not expose aggregate fields"
         );
+    }
+
+    #[test]
+    fn stdlib_resource_kind_tag_is_a_checked_enum_variant() {
+        let result = check_source_result_with_file_id(
+            r#"namespace io
+export resource FileHandle
+type HandleAlias = FileHandle
+function resource_kind_matches() returns bool:
+    return type.kind_tag[FileHandle]() == TypeKind.resource_type
+function resource_info_matches() returns bool:
+    return type.info[FileHandle]().kind_tag == TypeKind.resource_type
+function alias_kind_matches() returns bool:
+    return type.kind_tag[HandleAlias]() == TypeKind.alias_type
+"#,
+            FileId::new(STDLIB_FILE_ID_START),
+        );
+        let errors: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     }
 
     #[test]

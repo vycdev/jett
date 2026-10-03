@@ -516,9 +516,13 @@ Walk all type declarations and build the type registry:
 - **User-defined types:** structs, enums, machines, actors, bitfields, interfaces, type aliases (including refinement types).
 - **Compiler-shipped resource types:** nominal `resource Name` declarations with
   no source representation or constructor. They are move-only, carry one
-  trusted cleanup obligation, and expose only name plus `resource_type` in
-  type-level reflection. See the
-  [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md).
+  trusted cleanup obligation, and expose only the nominal name plus
+  `TypeKind.resource_type` in type-level reflection. Their primitive tag is
+  absent and their field, variant and machine-state metadata is empty. The
+  builtin enum schema and shared reflection mapper use the same resource tag;
+  existing enum indices and ordinary alias tags are preserved. See the
+  [opaque runtime resource contract](completed/opaque_runtime_resource_contract.md)
+  and [type-only implementation evidence](active/native_resource_kind_tags.md).
 - **Function types:** `function(T) returns U`, with each parameter's owned or
   `view` mode included in type identity and checked for function values.
 - **Capability types:** `Filesystem`, `Network`, `Stdout`, `Stderr`, `Stdin`, `Clock`, `Random`, `Process`, `Environment`, `Foreign`, `Log`. Random sampling uses the explicit `view Random` API, injected per-runtime generator state, and non-cryptographic contract defined in the [Random capability and entropy contract](completed/random_capability_entropy_contract.md). The interpreter-backed [`Environment` contract](open_design/environment_argv_capability_contract.md) uses source-owned `Environment.get` and `Environment.args` over one immutable injected launch snapshot; ambient `os.env`/`os.args` are removed. `Foreign` guards the generated native C boundary specified by the [C FFI contract](open_design/c_ffi_binding_contract.md). `Log` authorizes the independent structured application-log channel defined by the [structured logging contract](completed/structured_logging_contract.md). Property tests may create only the typed test capabilities admitted by the [capability mocking contract](completed/capability_mocking_test_harness_contract.md); this does not open the capability set or add production constructors.

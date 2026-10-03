@@ -1739,10 +1739,21 @@ All 63 codegen tests and 27 linked regressions pass with unchanged source hashes
 The broader compiler run passes 1052 tests (989 library units plus 63 integration
 tests); its wrapper's incorrect expected-count guard is not a compiler failure.
 The 83 driver, 598 frontend and eight backend-lowering gates also pass with
-unchanged sources. Complete 464-case workspace/object/platform acceptance
-remains **pending**. Independently, main `55027914` passes its complete
-clean 461-case workspace, all 182 object obligations and 92 successful groups;
-its platform workflow is still live. The exact-head local acceptance record is
-centralized in the descriptor note above. Neither predecessor result accepts
-the separate isolated follow-up. The fixed inventory remains 207, object obligations 182,
-broad estimate about 85%, and whole-language goal 100%.
+unchanged sources. Exact clean `72237c4a` subsequently passes its complete
+464-case workspace, all 182 object obligations and 92 successful result groups;
+its supported-host workflow remains in progress. Independently, `55027914`
+passes all four supported-host jobs as well as its complete local workspace.
+Exact-head acceptance records are centralized in the descriptor note above.
+The fixed inventory remains 207, object obligations 182, broad estimate about
+85%, and whole-language goal 100%.
+
+## Resource type-only kind tags
+
+The checked builtin enum schema and shared reflection mapper now agree on the
+accepted opaque `resource_type` tag. Three regressions cover source comparisons,
+reference type metadata with empty shapes, and a native object reached through
+an ordinary project caller. The affected 800 compiler tests and 598 frontend
+fixtures pass with unchanged source hashes. This adds no live Resource carrier,
+provider, source constructor or cleanup behavior. Complete workspace/platform
+acceptance for this correction remains separate; exact evidence and remaining
+lifecycle prerequisites are in [the active note](native_resource_kind_tags.md).

@@ -299,6 +299,7 @@ impl ReflectionTypeInfo {
             "function" => "function_type",
             "machine" => "machine_type",
             "machine_state" => "machine_state_type",
+            "resource" => "resource_type",
             _ => "unknown_type",
         }
     }

@@ -2156,11 +2156,22 @@ checked before any body pruning. No runtime or ABI change is required.
 The isolated follow-up passes 63 codegen tests, all 27 linked regressions and
 1052 tests in the broader compiler run; the count-guard wrapper discrepancy is
 recorded separately from passing tests. All 83 driver, 598 frontend and eight
-backend-lowering tests also pass. Complete 464-case workspace/object/platform
-acceptance remains **pending**. See
+backend-lowering tests also pass. Exact clean `72237c4a` subsequently passes its
+complete 464-case workspace, all 182 object obligations and 92 successful result
+groups; its supported-host workflow remains in progress. The preceding
+`55027914` staging revision passes all four supported-host jobs as well as its
+complete workspace. See
 [the centralized proof and gates](native_uninhabited_callback_descriptors.md#latent-nested-closures-and-direct-secret-results).
-Main `55027914` passes its complete clean 461-case workspace and all 182 object
-obligations; its supported-host workflow remains live. Accepted full
-`90d82701` evidence and the separate isolated follow-up remain distinct. This bounded repair changes neither the
-fixed 207 inventory/182 object obligations nor the about-85% estimate and
-whole-language 100% objective.
+This bounded repair changes neither the fixed 207 inventory/182 object
+obligations nor the about-85% estimate and whole-language 100% objective.
+
+### Opaque resource type-only metadata
+
+The builtin `TypeKind` enum now admits the already selected `resource_type`
+variant, and the shared reflection mapper returns the same tag. Existing enum
+indices, alias tags and empty opaque shapes are preserved. Source checking,
+reference metadata and native object emission are tested without a Resource
+value. The affected 800 compiler tests and 598 frontend fixtures pass; complete
+workspace/platform acceptance for this correction remains separate. See
+[the contract and executed evidence](native_resource_kind_tags.md). Live resource
+hooks, carriers, provider authority and exactly-once cleanup remain open.

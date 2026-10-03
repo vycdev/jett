@@ -2205,6 +2205,11 @@ source declares a nominal runtime-owned handle as `resource Name`, for example
 is move-only, cannot be cloned, compared, serialized, or reflected as a value,
 and cannot be disguised as a fieldless struct.
 
+Type-only reflection exposes the nominal name and `TypeKind.resource_type`.
+A resource has no primitive tag; its field, variant and machine-state metadata
+are empty. This metadata does not expose a resource value or constructor. A
+named type alias retains the ordinary `alias_type` reflection tag.
+
 Moving a resource transfers its single cleanup obligation. A `view` borrows it
 without taking cleanup responsibility. An explicit close consumes the owner;
 otherwise the compiler invokes the same trusted finalizer exactly once when the
