@@ -1,0 +1,14 @@
+namespace app
+function make_size[T](view values: list[T]) returns function(T) returns int64:
+    int64 size = list.length[T](view values)
+    return function(ignored: T) returns int64: return size
+function terminal[T](values: list[T], view stdout: Stdout) returns nothing:
+    function(T) returns int64 callback = make_size[T](view values)
+    list[function(T) returns int64] callbacks = list(clone callback)
+    bytes owner = bytes.from_string("owned")
+    Stdout.write(view stdout, "before:{list.length[T](view values)}:{list.length[function(T) returns int64](view callbacks)}:{bytes.length(view owner)}\n")
+    list[string] removed = list.remove_at[string](list("owned", "other"), -1)
+    list[int64] mapped = list.map[T, int64](values, callback)
+    Stdout.write(view stdout, "unreachable:{list.length[int64](view mapped)}:{list.length[string](view removed)}:{list.length[function(T) returns int64](view callbacks)}:{bytes.length(view owner)}\n")
+function main(stdout: Stdout) returns nothing:
+    terminal(list(), view stdout)

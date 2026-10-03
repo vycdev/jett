@@ -96,6 +96,9 @@ mod bitfield_local_views;
 #[path = "native_conformance/secret_owner_local_views.rs"]
 mod secret_owner_local_views;
 
+#[path = "native_conformance/uninhabited_callbacks.rs"]
+mod uninhabited_callbacks;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

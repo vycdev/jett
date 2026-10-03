@@ -2043,7 +2043,8 @@ The crossed compiler gate passes 951 library tests, followed by all 83 driver
 library tests, 598 frontend fixtures and seven source-format checks. The corpus
 registers 432 tests at its checkpoint. The later clean `cb617ecf` full workspace
 includes the repair and passes 439 native tests and all 182 object obligations.
-Supported-host acceptance for these owner-view revisions remains pending. Required proof, pre-change captures and exact executed logs are
+Supported-host acceptance passes at `5d919052` and the later documentation-only
+`194ce065` revision. Required proof, pre-change captures and exact executed logs are
 in [the bitfield contract](native_bitfield_projected_local_views.md) and
 [the acceptance audit](native_acceptance_audit.md#bitfield-field-local-views-focused-acceptance).
 The broad estimate stays about 85%, the fixed inventory stays 207, and the
@@ -2066,10 +2067,38 @@ diagnostic parity or select new policy. All 83 driver library tests, 598 fronten
 fixtures and seven source-format checks pass. The exact clean `cb617ecf`
 workspace passes all 439 native tests, all 182 object obligations, remaining
 workspace targets and doc-tests, with unchanged head and exit zero at
-`2026-10-02T20:55:57.0941072Z`. Supported-host platform gates remain pending. Exact
+`2026-10-02T20:55:57.0941072Z`. The documentation-only `194ce065` revision
+passes all four supported-host build/package and relocated installed jobs in
+[workflow 37064035604](https://github.com/vycdev/jett/actions/runs/37064035604),
+with identical compiler/runtime/test sources. Exact
 proof, captures and required resolution are in
 [the secret-owner contract](native_secret_owner_projected_local_views.md) and
 [the acceptance audit](native_acceptance_audit.md#direct-secret-aggregate-local-views-focused-acceptance-and-open-observation).
 This changes neither hidden-secret observation policy nor the independent
 unapplied MIR handler staging. Whole-language 100% remains the objective,
 with about-85% tracking and the fixed 207 inventory unchanged.
+
+
+### Inferred uninhabited callback inputs: descriptor storage and invocation
+
+Native codegen now distinguishes retaining a callback descriptor from invoking
+its original body. An exact non-capture Never input permits normal owned
+descriptor storage, captures, cloning, pending state and cleanup through a
+nonzero internal trap entry, with no Never scalar or return payload. Original
+typed metadata is checked before preparation; unused enclosing-frame slots from
+inline extraction compact without deleting parent blocks or typed dependencies.
+Surviving callable Never inputs and forged values remain rejected.
+
+All 966 compiler library tests and all nine source-deleted linked cases pass.
+The latter exercise both matching profiles with exact success/failure outcomes,
+captured ownership, pending joins, real integer calls, ordinary loop bodies and
+equality inside uncallable bodies. Nine source-format checks and Rust formatting
+pass, as do all 83 driver library tests and 598 frontend fixtures.
+The corpus registers 448 supplemental cases; actual complete-workspace,
+object and supported-host acceptance for the repair head remains pending.
+Pre-change characterization, initial failures and selected proof boundaries are
+in [the descriptor contract](native_uninhabited_callback_descriptors.md) and
+[the acceptance audit](native_acceptance_audit.md#uninhabited-input-callback-descriptors-focused-acceptance).
+This does not complete all callback-body operations or the independent borrowed
+handler staging. Whole-language 100% remains the objective, tracked at about 85%
+with the fixed 207-fixture inventory.

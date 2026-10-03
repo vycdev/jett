@@ -48,6 +48,48 @@ fn assert_dense_reachable(function: &Function) {
     }
 }
 
+fn assert_named_control_flow_and_abi_preserved(function: &Function, original: &Function) {
+    assert_eq!(function.id, original.id);
+    assert_eq!(function.identity, original.identity);
+    assert_eq!(function.debug_kind, original.debug_kind);
+    assert_eq!(function.return_type, original.return_type);
+    assert_eq!(function.span, original.span);
+    assert_eq!(function.entry, original.entry);
+    assert_eq!(function.capture_count, original.capture_count);
+    assert_eq!(function.params.len(), original.params.len());
+    for (parameter, old_parameter) in function.params.iter().zip(&original.params) {
+        let mut expected = old_parameter.clone();
+        expected.local = parameter.local;
+        assert_eq!(parameter, &expected);
+        let mut expected_local = original.local(old_parameter.local).unwrap().clone();
+        expected_local.id = parameter.local;
+        assert_eq!(function.local(parameter.local), Some(&expected_local));
+    }
+    assert_eq!(function.blocks.len(), original.blocks.len());
+    let before = ControlFlowGraph::analyze(original).unwrap();
+    let after = ControlFlowGraph::analyze(function).unwrap();
+    for (block, old_block) in function.blocks.iter().zip(&original.blocks) {
+        assert_eq!(block.id, old_block.id);
+        assert_eq!(block.statements.len(), old_block.statements.len());
+        assert_eq!(block.terminator.span, old_block.terminator.span);
+        assert_eq!(
+            std::mem::discriminant(&block.terminator.kind),
+            std::mem::discriminant(&old_block.terminator.kind),
+        );
+        assert_eq!(after.successors(block.id), before.successors(old_block.id));
+        for (statement, old_statement) in block.statements.iter().zip(&old_block.statements) {
+            assert_eq!(statement.span, old_statement.span);
+            assert_eq!(
+                std::mem::discriminant(&statement.kind),
+                std::mem::discriminant(&old_statement.kind),
+            );
+        }
+    }
+    for (index, local) in function.locals.iter().enumerate() {
+        assert_eq!(local.id.index() as usize, index);
+    }
+}
+
 const AFTER_LOOP: &str = r#"namespace app
 function main(unused: int64) returns int64:
     for impossible in list():
@@ -246,7 +288,10 @@ fn generated_metadata_selection_preserves_named_functions_even_with_inline_like_
     validate(&program).unwrap();
     let original = program.clone();
     prepare_native_generated_functions(&mut program);
-    assert_eq!(program, original);
+    validate(&program).unwrap();
+    for (function, previous) in program.functions.iter().zip(&original.functions) {
+        assert_named_control_flow_and_abi_preserved(function, previous);
+    }
 }
 
 #[test]
@@ -279,4 +324,117 @@ fn generated_compaction_does_not_hide_invalid_unreachable_or_parameter_ids() {
         assert_eq!(program, original);
         assert!(validate(&program).is_err());
     }
+}
+
+#[test]
+fn factory_compaction_keeps_unused_descriptor_parameters_and_original_block_dependencies() {
+    let source = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    int64 kept = 40
+    function(T) returns int64 callback = function(ignored: T) returns int64: return kept
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#;
+    let (original, types) = lower_source(source);
+    let factory = original
+        .functions
+        .iter()
+        .find(|function| function.identity.declaration.name == "stored")
+        .expect("source factory");
+    let factory_id = factory.id;
+    let detached = factory
+        .locals
+        .iter()
+        .find(|local| local.ty == TypeInterner::NEVER)
+        .expect("inline formal remains in the shared parent table")
+        .id;
+    let descriptor = original
+        .functions
+        .iter()
+        .find(|function| function.debug_kind == hir::FunctionDebugKind::Inline)
+        .expect("stored descriptor target");
+    let descriptor_id = descriptor.id;
+    assert_eq!(descriptor.capture_count, 1);
+    assert_eq!(descriptor.params[1].ty, TypeInterner::NEVER);
+    assert_eq!(descriptor.params[1].mode, ParamMode::Owned);
+
+    let mut compacted = original.clone();
+    prepare_native_generated_functions(&mut compacted);
+    validate(&compacted).unwrap();
+    let compacted_factory = &compacted.functions[factory_id.index() as usize];
+    assert_named_control_flow_and_abi_preserved(compacted_factory, factory);
+    assert!(
+        !compacted_factory
+            .locals
+            .iter()
+            .any(|local| local.ty == TypeInterner::NEVER)
+    );
+    let StatementKind::Let { value, .. } = &compacted_factory.blocks[0].statements[1].kind else {
+        panic!("source callback binding");
+    };
+    let ExpressionKind::ClosureRef { function, captures } = &value.kind else {
+        panic!("captured descriptor construction");
+    };
+    assert_eq!(*function, descriptor_id);
+    assert_eq!(captures.len(), 1);
+    assert_eq!(compacted_factory.local(captures[0]).unwrap().name, "kept");
+    move_values::MoveValuePlan::analyze(&compacted, compacted_factory, &types)
+        .expect("enclosing capture initialization and ownership survive local remapping");
+    let compacted_descriptor = &compacted.functions[descriptor_id.index() as usize];
+    assert_eq!(compacted_descriptor.identity, descriptor.identity);
+    assert_eq!(compacted_descriptor.capture_count, 1);
+    assert_eq!(compacted_descriptor.params.len(), 2);
+    for (parameter, previous) in compacted_descriptor.params.iter().zip(&descriptor.params) {
+        let mut expected = previous.clone();
+        expected.local = parameter.local;
+        assert_eq!(parameter, &expected);
+    }
+    assert_eq!(compacted_descriptor.params[1].ty, TypeInterner::NEVER);
+    assert_eq!(
+        compacted_descriptor
+            .local(compacted_descriptor.params[1].local)
+            .unwrap()
+            .ty,
+        TypeInterner::NEVER
+    );
+
+    // A reference in an original disconnected block prevents the parent slot
+    // from being treated as unused. This pass must preserve that later proof
+    // obligation instead of using callable reachability to hide it.
+    let mut with_dependency = original.clone();
+    let factory = &mut with_dependency.functions[factory_id.index() as usize];
+    let dependency = BlockId(factory.blocks.len() as u32);
+    factory.blocks.push(BasicBlock {
+        id: dependency,
+        statements: vec![Statement {
+            kind: StatementKind::Trace(detached),
+            span: factory.span,
+        }],
+        terminator: Terminator {
+            kind: TerminatorKind::Unreachable,
+            span: factory.span,
+        },
+    });
+    validate(&with_dependency).unwrap();
+    let before = with_dependency.functions[factory_id.index() as usize].clone();
+    prepare_native_generated_functions(&mut with_dependency);
+    validate(&with_dependency).unwrap();
+    let factory = &with_dependency.functions[factory_id.index() as usize];
+    assert_named_control_flow_and_abi_preserved(factory, &before);
+    let StatementKind::Trace(kept_dependency) =
+        factory.blocks[dependency.index() as usize].statements[0].kind
+    else {
+        panic!("original disconnected trace must survive");
+    };
+    assert_eq!(
+        factory.local(kept_dependency).unwrap().ty,
+        TypeInterner::NEVER
+    );
+    assert_eq!(
+        factory.local(kept_dependency).unwrap().debug_ty,
+        TypeInterner::NEVER
+    );
 }

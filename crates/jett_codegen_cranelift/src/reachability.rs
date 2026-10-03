@@ -62,7 +62,11 @@ fn reachable_functions(
             program,
             types,
         };
-        collect_function_references(function, &mut references);
+        // Retain its identity for descriptor storage, but no valid call can
+        // enter this original body or make its callees executable roots.
+        if !crate::verify::descriptor_only_function(function) {
+            collect_function_references(function, &mut references);
+        }
         for (target, span) in references.functions {
             mark_reachable(
                 program,
@@ -608,6 +612,42 @@ function main() returns nothing:
     }
 
     #[test]
+    fn descriptor_only_entry_does_not_make_original_body_callees_callable() {
+        let (mut program, types) = lower_source_with_types(
+            r#"namespace app
+function source_leaf() returns int64:
+    return 99
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    function(T) returns int64 callback = function(ignored: T) returns int64: return source_leaf()
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+        );
+        set_origin(&mut program, "source_leaf", SourceOrigin::Stdlib);
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| crate::verify::descriptor_only_function(function))
+            .expect("Never-input descriptor identity");
+        let descriptor_id = descriptor.id;
+        let reachable = reachable_function_ids_with_types(&program, &types).unwrap();
+        assert!(reachable.contains(&descriptor_id));
+        let source_leaf = program
+            .functions
+            .iter()
+            .find(|function| function.identity.declaration.name == "source_leaf")
+            .unwrap();
+        assert!(!reachable.contains(&source_leaf.id));
+        let object = crate::emit_host_object(&program, &types)
+            .expect("metadata validates original call without emitting it");
+        let leaf_symbol = crate::symbol_name(&source_leaf.identity, &types).unwrap();
+        assert!(!object.symbols.contains(&leaf_symbol));
+    }
+
+    #[test]
     fn retained_calls_and_references_still_reach_uninhabited_specializations() {
         for source in [
             r#"namespace app
@@ -640,7 +680,7 @@ function root() returns function(int64) returns int64:
             // suppressing implicit roots must never supply a `never` carrier.
             assert!(matches!(
                 crate::emit_host_object(&program, &types),
-                Err(CodegenError::UnsupportedType { .. })
+                Err(CodegenError::InvalidMirContract { .. })
             ));
         }
     }

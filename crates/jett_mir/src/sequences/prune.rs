@@ -33,6 +33,12 @@ pub(crate) fn unreachable(function: &mut Function) {
         block_targets(&mut block.terminator.kind, &remap_block);
     }
 
+    unused_locals(function);
+}
+
+/// Remove absent frame slots without changing any original control-flow block.
+/// Every parameter, binding, read, capture and debug or loan reference survives.
+pub(crate) fn unused_locals(function: &mut Function) {
     let mut used = vec![false; function.locals.len()];
     for parameter in &function.params {
         used[parameter.local.index() as usize] = true;

@@ -1,0 +1,10 @@
+namespace app
+function equality_report[T](values: list[T]) returns string:
+    function(T) returns bool callback = function(value: T) returns bool:
+        return value == value
+    list[bool] mapped = list.map[T, bool](values, callback)
+    bool first = list.get[bool](view mapped, 0) handle:
+        default false
+    return "{list.length[bool](view mapped)}:{first}"
+function main(stdout: Stdout) returns nothing:
+    Stdout.write(view stdout, "equality:{equality_report(list())}:{equality_report(list(9))}\n")

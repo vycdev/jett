@@ -225,6 +225,7 @@ fn emit_for_triple(
             },
         )?;
     }
+    crate::verify::verify_descriptor_bodies(program, types)?;
     let mut prepared = program.clone();
     jett_mir::prepare_native_sequences(&mut prepared, types);
     jett_mir::prepare_native_uninhabited_sums(&mut prepared, types);
@@ -544,6 +545,11 @@ fn signature(
     let mut signature = module.make_signature();
     signature.params.push(runtime_context_abi_param(module));
     signature.params.push(AbiParam::new(ir::types::I64));
+    if crate::verify::descriptor_only_function(function) {
+        // This non-null descriptor entry cannot be invoked by checked code.
+        // Its internal trap ABI contains no Never parameter or return carrier.
+        return Ok(signature);
+    }
     for parameter in function.params.iter().skip(function.capture_count) {
         if let Some(ty) = clif_type(types, parameter.ty, "function parameter")? {
             signature.params.push(AbiParam::new(ty));
@@ -647,6 +653,12 @@ fn clif_type(
         | ScalarKind::Environment
         | ScalarKind::Graphics
         | ScalarKind::OpaqueCapability => Some(ir::types::I64),
+        ScalarKind::Uninhabited => {
+            return Err(CodegenError::UnsupportedType {
+                type_name: types.type_name(ty),
+                context: context.to_string(),
+            });
+        }
         ScalarKind::SignedInteger(bits)
         | ScalarKind::UnsignedInteger(bits)
         | ScalarKind::Float(bits) => {
@@ -734,6 +746,17 @@ fn translate_function(
     symbol: &str,
     context: &mut Context,
 ) -> Result<(), CodegenError> {
+    if crate::verify::descriptor_only_function(function) {
+        let mut builder_context = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.ins().trap(TrapCode::unwrap_user(1));
+        builder.seal_all_blocks();
+        builder.finalize();
+        return Ok(());
+    }
     let actor_state_range = actor_handler_state_range(function, types, symbol)?;
     let mut builder_context = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
@@ -3197,7 +3220,8 @@ impl Translator<'_, '_> {
             | ScalarKind::Random
             | ScalarKind::Environment
             | ScalarKind::Graphics
-            | ScalarKind::OpaqueCapability => {
+            | ScalarKind::OpaqueCapability
+            | ScalarKind::Uninhabited => {
                 return Err(contract_error(
                     self.symbol,
                     span,
@@ -3632,6 +3656,574 @@ mod tests {
         .expect("HIR lowering");
         let mir = jett_mir::lower(&hir, &checked.interner).expect("MIR lowering");
         (mir, checked.interner)
+    }
+
+    const UNINHABITED_DESCRIPTOR_SOURCE: &str = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    function(T) returns int64 callback = function(ignored: T) returns int64: return 7
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#;
+
+    #[test]
+    fn uninhabited_input_descriptor_emits_nonnull_trap_entry_without_value_abi() {
+        let (mut program, types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("original descriptor metadata");
+        jett_mir::prepare_native_sequences(&mut program, &types);
+        jett_mir::prepare_native_uninhabited_sums(&mut program, &types);
+        jett_mir::prepare_native_generated_functions(&mut program);
+        let verified = verify_program(&program, &types).expect("prepared native program");
+        let mut module = test_object_module();
+        let declarations = declare_reachable_functions(&mut module, &program, &types, &verified)
+            .expect("retained descriptor declaration");
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| crate::verify::descriptor_only_function(function))
+            .expect("inferred Never-input inline target");
+        assert_eq!(descriptor.capture_count, 0);
+        assert_eq!(descriptor.params[0].ty, TypeInterner::NEVER);
+        let declaration = declarations
+            .get(descriptor.id)
+            .expect("retained descriptor entry");
+        assert_eq!(declaration.signature.params.len(), 2);
+        assert!(declaration.signature.returns.is_empty());
+        let mut context = module.make_context();
+        context.func.signature = declaration.signature.clone();
+        translate_function(
+            &mut module,
+            &declarations,
+            &program,
+            descriptor,
+            &types,
+            &declaration.symbol,
+            &mut context,
+        )
+        .expect("descriptor entry translation");
+        let opcodes = context
+            .func
+            .layout
+            .blocks()
+            .flat_map(|block| context.func.layout.block_insts(block))
+            .map(|instruction| context.func.dfg.insts[instruction].opcode())
+            .collect::<Vec<_>>();
+        assert_eq!(opcodes, [ir::Opcode::Trap]);
+        let object = emit_host_object(&program, &types).expect("owned stored descriptor object");
+        assert!(
+            object
+                .symbols
+                .iter()
+                .any(|symbol| symbol == &declaration.symbol)
+        );
+        assert!(!object.bytes.is_empty());
+    }
+
+    #[test]
+    fn uninhabited_input_descriptors_keep_captures_and_never_result_metadata() {
+        for source in [
+            r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    int64 size = 7
+    function(T) returns int64 callback = function(ignored: T) returns int64: return size
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+            r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns T]:
+    function(T) returns T callback = function(value: T) returns T: return value
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+        ] {
+            let (program, types) = lower_source(source);
+            let descriptor = program
+                .functions
+                .iter()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("inferred descriptor-only target");
+            assert!(
+                descriptor.params[descriptor.capture_count..]
+                    .iter()
+                    .any(|parameter| parameter.ty == TypeInterner::NEVER)
+            );
+            if descriptor.capture_count != 0 {
+                assert_eq!(descriptor.capture_count, 1);
+                assert_eq!(descriptor.params[0].ty, TypeInterner::INT64);
+            } else {
+                assert_eq!(descriptor.return_type, TypeInterner::NEVER);
+            }
+            let object = emit_host_object(&program, &types)
+                .expect("capture environment or uncallable Never-result descriptor");
+            assert!(!object.bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn descriptor_original_loop_body_validates_before_native_preparation() {
+        let source = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    function(T) returns int64 callback = function(ignored: T) returns int64:
+        mutable int64 total = 0
+        for item in list(1, 2):
+            total = total + item
+        return total
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#;
+        let (program, types) = lower_source(source);
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| crate::verify::descriptor_only_function(function))
+            .unwrap();
+        assert!(
+            descriptor
+                .blocks
+                .iter()
+                .any(|block| { matches!(block.terminator.kind, TerminatorKind::ForEach { .. }) })
+        );
+        assert!(
+            !emit_host_object(&program, &types)
+                .expect("original typed loop needs no callable frame")
+                .bytes
+                .is_empty()
+        );
+        let (mut invalid, types) = lower_source(source);
+        let descriptor = invalid
+            .functions
+            .iter_mut()
+            .find(|function| crate::verify::descriptor_only_function(function))
+            .unwrap();
+        let key = descriptor
+            .blocks
+            .iter()
+            .find_map(|block| {
+                if let TerminatorKind::ForEach { key, .. } = block.terminator.kind {
+                    Some(key)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        descriptor.locals[key.index() as usize].ty = TypeInterner::BOOL;
+        descriptor.locals[key.index() as usize].debug_ty = TypeInterner::BOOL;
+        assert!(matches!(
+            emit_host_object(&invalid, &types),
+            Err(CodegenError::InvalidMirContract { message, .. })
+                if message == "original descriptor loop key type does not match its iterable"
+        ));
+    }
+
+    #[test]
+    fn descriptor_original_never_equality_keeps_exact_operand_and_result_proof() {
+        for operator in ["==", "!="] {
+            let source = format!(
+                r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns bool]:
+    function(T) returns bool callback = function(value: T) returns bool: return value {operator} value
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#
+            );
+            let (program, types) = lower_source(&source);
+            let descriptor = program
+                .functions
+                .iter()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("inferred Never equality target");
+            assert_eq!(descriptor.return_type, TypeInterner::BOOL);
+            assert_eq!(descriptor.params[0].ty, TypeInterner::NEVER);
+            crate::verify::verify_descriptor_bodies(&program, &types)
+                .expect("exact Never equality is valid original metadata");
+            assert!(
+                !emit_host_object(&program, &types)
+                    .expect("uncallable equality needs no Never value carrier")
+                    .bytes
+                    .is_empty()
+            );
+
+            for corruption in 0..2 {
+                let (mut invalid, types) = lower_source(&source);
+                let descriptor = invalid
+                    .functions
+                    .iter_mut()
+                    .find(|function| crate::verify::descriptor_only_function(function))
+                    .unwrap();
+                let value = descriptor
+                    .blocks
+                    .iter_mut()
+                    .find_map(|block| {
+                        if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("inline equality return");
+                if corruption == 0 {
+                    value.ty = TypeInterner::INT64;
+                } else {
+                    let ExpressionKind::Binary { right, .. } = &mut value.kind else {
+                        panic!("inline equality expression");
+                    };
+                    right.ty = TypeInterner::INT64;
+                    right.kind = ExpressionKind::Int(7);
+                }
+                let expected = if corruption == 0 {
+                    "binary operation is inconsistent with checked type `int64`"
+                } else {
+                    "binary operand types differ"
+                };
+                assert!(
+                    matches!(
+                        emit_host_object(&invalid, &types),
+                        Err(CodegenError::InvalidMirContract { message, .. }) if message == expected
+                    ),
+                    "{operator} corruption {corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enclosing_descriptor_compaction_preserves_original_metadata_and_surviving_uses() {
+        for corruption in 0..4 {
+            let (mut program, types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+            let factory = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "stored")
+                .expect("checked enclosing factory");
+            let detached = factory
+                .locals
+                .iter()
+                .position(|local| local.ty == TypeInterner::NEVER)
+                .expect("unused extracted inline formal");
+            assert!(
+                !factory
+                    .params
+                    .iter()
+                    .any(|param| { param.local == factory.locals[detached].id })
+            );
+            if corruption == 2 {
+                factory.blocks[0].statements.push(jett_mir::Statement {
+                    kind: StatementKind::Trace(factory.locals[detached].id),
+                    span: factory.span,
+                });
+            } else if corruption == 3 {
+                factory.blocks[0].statements.push(jett_mir::Statement {
+                    kind: StatementKind::Let {
+                        local: factory.locals[detached].id,
+                        value: Expression {
+                            kind: ExpressionKind::Int(7),
+                            ty: TypeInterner::NEVER,
+                            span: factory.span,
+                        },
+                    },
+                    span: factory.span,
+                });
+            } else {
+                let mut foreign = TypeInterner::new();
+                let mut invalid = TypeInterner::INT64;
+                for _ in 0..=types.len() {
+                    invalid = foreign.intern(jett_types::Type::List(invalid));
+                }
+                assert!(invalid.index() as usize >= types.len());
+                if corruption == 0 {
+                    factory.locals[detached].ty = invalid;
+                } else {
+                    factory.locals[detached].debug_ty = invalid;
+                }
+            }
+            assert!(
+                matches!(
+                    emit_host_object(&program, &types),
+                    Err(CodegenError::UnsupportedType { .. })
+                ),
+                "enclosing slot corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn descriptor_pruning_preserves_original_body_and_metadata_validation() {
+        for corruption in 0..6 {
+            let (mut program, types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+            let function_count = program.functions.len();
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("descriptor target");
+            match corruption {
+                0 => {
+                    let Some(value) = descriptor.blocks.iter_mut().find_map(|block| {
+                        if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    }) else {
+                        panic!("inline value return");
+                    };
+                    value.kind = ExpressionKind::Bool(true);
+                }
+                1 => {
+                    let local = descriptor.params[0].local;
+                    let mut foreign = TypeInterner::new();
+                    let mut invalid = TypeInterner::INT64;
+                    for _ in 0..=types.len() {
+                        invalid = foreign.intern(jett_types::Type::List(invalid));
+                    }
+                    assert!(invalid.index() as usize >= types.len());
+                    let unused = descriptor.locals.len();
+                    let mut copied = descriptor.locals[local.index() as usize].clone();
+                    copied.id = jett_hir::LocalId::new(unused as u32);
+                    copied.name = "unused".into();
+                    copied.ty = invalid;
+                    copied.debug_ty = invalid;
+                    descriptor.locals.push(copied);
+                }
+                2 => descriptor.capture_count = descriptor.params.len() + 1,
+                3 => {
+                    descriptor.debug_kind = jett_hir::FunctionDebugKind::Inline;
+                    descriptor.params[0].name = "bad\nname".into();
+                    let local = descriptor.params[0].local;
+                    descriptor.locals[local.index() as usize].name = "bad\nname".into();
+                }
+                4 => {
+                    let Some(value) = descriptor.blocks.iter_mut().find_map(|block| {
+                        if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                            Some(value)
+                        } else {
+                            None
+                        }
+                    }) else {
+                        panic!("inline value return");
+                    };
+                    value.kind = ExpressionKind::Call {
+                        function: FunctionId::new(function_count as u32 + 1),
+                        args: Vec::new(),
+                        evaluation_order: Vec::new(),
+                    };
+                }
+                5 => {
+                    let mut foreign = TypeInterner::new();
+                    let mut invalid = TypeInterner::INT64;
+                    for _ in 0..=types.len() {
+                        invalid = foreign.intern(jett_types::Type::List(invalid));
+                    }
+                    assert!(invalid.index() as usize >= types.len());
+                    let local = descriptor.params[0].local.index() as usize;
+                    descriptor.locals[local].debug_ty = invalid;
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                emit_host_object(&program, &types).is_err(),
+                "corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn callable_direct_edges_cannot_invoke_an_exact_never_input_descriptor() {
+        let (mut program, types) = lower_source(
+            r#"namespace app
+function target(value: int64) returns int64:
+    return 7
+function root() returns int64:
+    return target(1)
+"#,
+        );
+        let target = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "target")
+            .unwrap();
+        target.params[0].ty = TypeInterner::NEVER;
+        let argument = target.params[0].local.index() as usize;
+        target.locals[argument].ty = TypeInterner::NEVER;
+        target.locals[argument].debug_ty = TypeInterner::NEVER;
+        assert!(crate::verify::descriptor_only_function(target));
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::InvalidMirContract { message, .. })
+                if message == "callable direct edge requires an uninhabited parameter"
+        ));
+    }
+
+    #[test]
+    fn callable_indirect_edges_cannot_invoke_an_exact_never_input_descriptor() {
+        let (mut program, mut types) = lower_source(
+            r#"namespace app
+function root() returns int64:
+    function(int64) returns int64 callback = function(value: int64) returns int64: return 7
+    return callback(1)
+"#,
+        );
+        let callback_type = types.intern(jett_types::Type::Function {
+            params: vec![TypeInterner::NEVER],
+            view_params: vec![false],
+            return_type: TypeInterner::INT64,
+        });
+        let descriptor = program
+            .functions
+            .iter_mut()
+            .find(|function| function.debug_kind == jett_hir::FunctionDebugKind::Inline)
+            .unwrap();
+        descriptor.params[0].ty = TypeInterner::NEVER;
+        let argument = descriptor.params[0].local.index() as usize;
+        descriptor.locals[argument].ty = TypeInterner::NEVER;
+        descriptor.locals[argument].debug_ty = TypeInterner::NEVER;
+        let root = &mut program.functions[0];
+        let StatementKind::Let { local, value } = &mut root.blocks[0].statements[0].kind else {
+            panic!("callback binding");
+        };
+        value.ty = callback_type;
+        root.locals[local.index() as usize].ty = callback_type;
+        root.locals[local.index() as usize].debug_ty = callback_type;
+        let TerminatorKind::Return(Some(value)) = &mut root.blocks[0].terminator.kind else {
+            panic!("indirect return");
+        };
+        let ExpressionKind::IndirectCall { callee, .. } = &mut value.kind else {
+            panic!("indirect callback use");
+        };
+        callee.ty = callback_type;
+        if let ExpressionKind::View(inner) | ExpressionKind::Clone(inner) = &mut callee.kind {
+            inner.ty = callback_type;
+        }
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::InvalidMirContract { message, .. })
+                if message == "callable indirect edge requires an uninhabited parameter"
+        ));
+    }
+
+    #[test]
+    fn descriptor_metadata_cannot_manufacture_never_values_or_capture_them() {
+        for phantom in [ExpressionKind::Nothing, ExpressionKind::Int(7)] {
+            let (mut program, types) = lower_source(
+                r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns T]:
+    function(T) returns T callback = function(value: T) returns T: return value
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+            );
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .unwrap();
+            let value = descriptor
+                .blocks
+                .iter_mut()
+                .find_map(|block| {
+                    if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(value.ty, TypeInterner::NEVER);
+            value.kind = phantom;
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { .. })
+            ));
+        }
+        for never_capture in [true, false] {
+            let (mut program, types) = lower_source(
+                r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns int64]:
+    int64 size = 7
+    function(T) returns int64 callback = function(ignored: T) returns int64: return size
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list()))
+"#,
+            );
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .unwrap();
+            assert_eq!(descriptor.capture_count, 1);
+            if never_capture {
+                descriptor.params[0].ty = TypeInterner::NEVER;
+                let capture = descriptor.params[0].local.index() as usize;
+                descriptor.locals[capture].ty = TypeInterner::NEVER;
+                descriptor.locals[capture].debug_ty = TypeInterner::NEVER;
+            } else {
+                descriptor.params[0].mode = jett_mir::ParamMode::View;
+            }
+            let expected_message = if never_capture {
+                "descriptor capture cannot be uninhabited"
+            } else {
+                "descriptor capture must use owned environment storage"
+            };
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { message, .. })
+                    if message == expected_message
+            ));
+        }
+    }
+
+    #[test]
+    fn descriptor_authority_rejects_return_only_never_and_mismatched_view_modes() {
+        for mismatch in [false, true] {
+            let (mut program, mut types) = lower_source(UNINHABITED_DESCRIPTOR_SOURCE);
+            let descriptor = program
+                .functions
+                .iter_mut()
+                .find(|function| crate::verify::descriptor_only_function(function))
+                .expect("inline descriptor");
+            if mismatch {
+                descriptor.params[0].mode = jett_mir::ParamMode::View;
+            } else {
+                // A result-only Never cannot erase effects from a callable body.
+                descriptor.params[0].ty = TypeInterner::INT64;
+                let argument = descriptor.params[0].local.index() as usize;
+                descriptor.locals[argument].ty = TypeInterner::INT64;
+                descriptor.locals[argument].debug_ty = TypeInterner::INT64;
+                descriptor.return_type = TypeInterner::NEVER;
+                assert!(!crate::verify::descriptor_only_function(descriptor));
+                let result_only = types.intern(jett_types::Type::Function {
+                    params: vec![TypeInterner::INT64],
+                    view_params: vec![false],
+                    return_type: TypeInterner::NEVER,
+                });
+                assert!(matches!(
+                    scalar_kind(&types, result_only, "result-only descriptor"),
+                    Err(CodegenError::UnsupportedType { .. })
+                ));
+            }
+            assert!(emit_host_object(&program, &types).is_err());
+        }
     }
 
     #[test]

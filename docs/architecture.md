@@ -1258,8 +1258,21 @@ check, ends any iteration loan, and routes directly to the exit without reading
 an element. It compacts unreachable blocks and unused locals only in functions
 changed by this lowering, preserving dense IDs and retained debug metadata.
 Eager concrete generic specializations with a bare `never` parameter or result
-are not implicit native project roots; retained calls and function references
-still reach them and require ordinary verification. Inhabited containers and
+are not implicit native project roots. Retained calls require ordinary callable
+verification; a retained function descriptor is distinct from invoking its body.
+An exact non-capture `never` input permits descriptor-only representation, with
+normal capture storage, cloning, pending depth, labels and cleanup. Original
+typed metadata must be checked before preparation prunes any body or local,
+while native control-flow and ownership checks follow normal preparation.
+Original local and debug types are checked before unused enclosing-frame slots
+are compacted across all original blocks and typed references. This removes
+transferred inline-body slots without changing parent control flow or erasing
+real parameters, bindings, captures, observations or loan dependencies.
+The descriptor retains a nonzero internal trap entry with no `never` parameter
+or return carrier; no valid call reaches it and no original body effect is
+emitted. Bare `never` captures, mismatched signatures and surviving impossible
+calls remain invalid. A return-only `never` signature does not grant this proof.
+Inhabited containers and
 absent sum arms containing `never` retain their normal representations.
 Native handler preparation also recognizes an exact final `SumTag` followed
 by a branch on its checked boolean local. An optional with a `never` payload

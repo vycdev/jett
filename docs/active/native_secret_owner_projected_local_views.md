@@ -98,7 +98,13 @@ frontend fixtures (19.08 seconds), remaining workspace targets and doc-tests.
 The unchanged-head, clean-start/end wrapper finishes at
 `2026-10-02T20:55:57.0941072Z` with exit zero and 92 successful result groups,
 recorded in `target/native-workspace-cb617ecf.log` and its JSON summary.
-Supported-host acceptance for this revision remains pending. The prior accepted
+Supported-host acceptance passes at documentation-only `194ce065`, whose
+compiler/runtime/test sources are identical: all four build/package and
+relocated installed jobs succeed in
+[workflow 37064035604](https://github.com/vycdev/jett/actions/runs/37064035604)
+(last completion `2026-10-02T22:10:29Z`). The standalone `cb617ecf` workflow
+was superseded and cancelled without starting jobs; it is not acceptance.
+The prior accepted
 08f9f7e7 platform and bitfield focused gates are centralized in
 [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
 The predecessor platform result does not validate this secret revision.

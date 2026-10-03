@@ -1578,7 +1578,8 @@ and diff checks pass.
 
 The bitfield checkpoint registers 432 supplemental tests. The later clean
 `cb617ecf` workspace below includes this repair and passes all 182 object
-obligations. Supported-host jobs for these owner-view revisions remain pending. Initial source characterization,
+obligations. Supported-host jobs for both owner-view revisions now pass, as
+recorded below. Initial source characterization,
 exact qualification/ownership limits and required gates are in
 [the bitfield contract](native_bitfield_projected_local_views.md). The accepted
 08f9f7e7 result above is predecessor evidence, not new-head acceptance. The
@@ -1625,9 +1626,52 @@ four-test manifest gate (516.91 seconds), and all 83 driver library tests
 targets and doc-tests pass. The wrapper reports exit zero and 92 successful
 result groups. This accepts both owner-view repairs at that exact source
 revision; it does not settle the preserved observation-policy boundary.
-Supported-host platform gates for the owner-view revisions remain pending.
-The accepted 08f9f7e7 platform result above is predecessor evidence. Exact selected rules and actual seven-source
+The documentation-only `194ce065` revision has identical compiler/runtime/test
+sources and passes all four jobs in
+[workflow 37064035604](https://github.com/vycdev/jett/actions/runs/37064035604):
+Windows MSVC static-CRT and Linux GNU build/package jobs, followed by both
+relocated installed-package jobs (last completion `2026-10-02T22:10:29Z`).
+The standalone `cb617ecf` run 37060490263 was superseded and cancelled before
+starting any job; that cancelled run is not acceptance evidence. The bitfield
+`5d919052` revision separately passes all four jobs in
+[workflow 37058389987](https://github.com/vycdev/jett/actions/runs/37058389987)
+(last completion `2026-10-02T21:16:06Z`). Exact selected rules and actual seven-source
 characterization are in
 [the secret-owner contract](native_secret_owner_projected_local_views.md).
 The about-85% estimate, fixed 207 inventory and whole-language 100% objective
 remain unchanged; the independent MIR staging repair is not applied.
+
+
+### Uninhabited-input callback descriptors: focused acceptance
+
+An inferred empty-list callback remains an inhabited function descriptor even
+when a non-capture input cannot exist. Native emission now retains its exact
+captures, label, cloning, pending state and cleanup with a nonzero trap entry;
+it creates no Never argument/result carrier and emits no original body effect.
+Original descriptor metadata and all original local/debug types are checked
+before preparation. Named enclosing functions compact only unused frame slots
+across all original blocks and typed dependencies; surviving callable Never
+parameters, locals and invocations remain invalid.
+
+All 966 compiler library tests pass (52 codegen, 416 comptime, 139 HIR, 87 MIR,
+48 resolve and 224 typecheck) in `target/native-uninhabited-callback-phases.log`.
+All nine linked regressions pass together (3.65 seconds, 439 filtered) in
+`target/native-uninhabited-callback-linked.log`, using matching profiles and
+source deletion. Direct/returned/captured descriptors, owned cloning, pending
+joins, Never-result identity, loop/equality bodies, invoked integer controls and
+terminal failure cleanup retain exact outcomes. Nine Jett source-format checks
+and Rust formatting pass. The corpus registers 448 supplemental cases.
+All 83 driver library tests pass (69.44 seconds) in
+`target/native-uninhabited-callback-driver.log`; all 598 frontend fixtures pass
+(24.60 seconds) in `target/native-uninhabited-callback-frontend.log`.
+
+The first isolated unit attempts failed before MIR because their loader does
+not load the stdlib facade. Declared source helpers corrected those test inputs;
+the driver cases retain full stdlib evaluation. The actual factory diagnostic
+then exposed unused child formals in the enclosing frame table. Initial logs,
+pre-change captures, exact bounds and remaining gates are in
+[the descriptor contract](native_uninhabited_callback_descriptors.md).
+Complete workspace/object and supported-host results for the actual repair
+revision remain pending. The 439-case predecessor acceptance above cannot be
+substituted for that proof. The whole-language objective remains 100%, the fixed
+inventory remains 207, and the broad planning estimate stays about 85%.

@@ -81,7 +81,11 @@ clean `cb617ecf` workspace includes this repair and passes all 439 native tests
 workspace targets and doc-tests. Its unchanged-head, clean-start/end result
 finishes at `2026-10-02T20:55:57.0941072Z` with exit zero; logs and metadata are
 `target/native-workspace-cb617ecf.log` and its JSON summary. Supported-host
-acceptance for the owner-view revisions remains pending. The accepted clean 08f9f7e7 parser predecessor is recorded separately
+acceptance also passes: all four jobs at `5d919052` in
+[workflow 37058389987](https://github.com/vycdev/jett/actions/runs/37058389987)
+and at the later documentation-only `194ce065` revision in
+[workflow 37064035604](https://github.com/vycdev/jett/actions/runs/37064035604).
+The accepted clean 08f9f7e7 parser predecessor is recorded separately
 in [the acceptance audit](native_acceptance_audit.md#current-frozen-revision-and-inferred-json-follow-up).
 It cannot substitute for the new source gates. Whole-language native parity
 remains the 100% objective, tracked with the unchanged about-85% estimate and

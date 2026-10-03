@@ -38,6 +38,9 @@ pub(crate) enum ScalarKind {
     Environment,
     Graphics,
     OpaqueCapability,
+    // Only original-body integrity checking of a descriptor-only function uses
+    // this kind. scalar_kind never supplies a runtime carrier for bare Never.
+    Uninhabited,
 }
 
 pub(crate) fn known_unit_enum_variant(expression: &Expression) -> bool {
@@ -173,6 +176,98 @@ fn native_constructible_builder_kind(types: &TypeInterner, ty: TypeId) -> Option
     }
 }
 
+/// A real function descriptor can exist although its invocation needs an
+/// impossible argument. Captures are values, so they must never supply this proof.
+pub(crate) fn descriptor_only_function(function: &Function) -> bool {
+    function.capture_count <= function.params.len()
+        && !function.params[..function.capture_count]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+        && function.params[function.capture_count..]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+}
+
+/// Check the original uncallable bodies before native preparation can erase a
+/// malformed local, function reference or capture. Their source bodies will not
+/// be emitted, but their typed contracts still apply.
+pub(crate) fn verify_descriptor_bodies(
+    program: &Program,
+    types: &TypeInterner,
+) -> Result<(), CodegenError> {
+    jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
+    // Shared inline tables contain valid Never metadata that need not allocate
+    // a parent frame slot. Check all other original types before compaction;
+    // every surviving callable Never use is still rejected after preparation.
+    for function in &program.functions {
+        for local in &function.locals {
+            for (ty, role) in [(local.ty, "local"), (local.debug_ty, "debug local")] {
+                if ty != TypeInterner::NEVER {
+                    scalar_kind(types, ty, format!("original {role} `{}`", local.name))?;
+                }
+            }
+        }
+    }
+    let mut functions = Vec::new();
+    let mut by_mir_index = vec![None; program.functions.len()];
+    for function in &program.functions {
+        if !function.params[function.capture_count..]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+        {
+            continue;
+        }
+        if function.params[..function.capture_count]
+            .iter()
+            .any(|parameter| parameter.ty == TypeInterner::NEVER)
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: "descriptor capture cannot be uninhabited".into(),
+            });
+        }
+        if function.params[..function.capture_count]
+            .iter()
+            .any(|parameter| parameter.mode != jett_mir::ParamMode::Owned)
+        {
+            return Err(CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: "descriptor capture must use owned environment storage".into(),
+            });
+        }
+        super::emit::debug::function_label(function).map_err(|message| {
+            CodegenError::InvalidMirContract {
+                function: function.identity.declaration.name.clone(),
+                span: function.span,
+                message: message.into(),
+            }
+        })?;
+        by_mir_index[function.id.index() as usize] = Some(functions.len());
+        functions.push(VerifiedFunction {
+            mir_id: function.id,
+            symbol: symbol_name(&function.identity, types)?,
+        });
+    }
+    let verified = VerifiedProgram {
+        by_mir_index,
+        functions,
+    };
+    let verifier = Verifier {
+        program,
+        types,
+        verified: &verified,
+        phase: VerifierPhase::DescriptorMetadata,
+    };
+    for function in &program.functions {
+        if descriptor_only_function(function) {
+            verifier.function(function)?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VerifiedFunction {
     pub(crate) mir_id: FunctionId,
@@ -259,13 +354,18 @@ pub(crate) fn verify_program(
         by_mir_index,
     };
 
-    let verifier = Verifier {
-        program,
-        types,
-        verified: &verified,
-    };
     for verified_function in verified.functions() {
         let (_, function) = function_by_id(program, verified_function.mir_id)?;
+        let verifier = Verifier {
+            program,
+            types,
+            verified: &verified,
+            phase: if descriptor_only_function(function) {
+                VerifierPhase::DescriptorMetadata
+            } else {
+                VerifierPhase::CallableNative
+            },
+        };
         verifier.function(function)?;
     }
     Ok(verified)
@@ -363,14 +463,27 @@ fn scalar_kind_inner(
         }
         Type::Function {
             params,
+            view_params,
             return_type,
-            ..
         } => {
+            if params.len() != view_params.len() {
+                return Err(CodegenError::UnsupportedType {
+                    type_name: types.type_name(ty),
+                    context: "function value view parameter metadata".into(),
+                });
+            }
+            // The descriptor is inhabited even when a parameter cannot be
+            // supplied. Never remains unsupported as an actual runtime value.
+            let descriptor_only = params.contains(&TypeInterner::NEVER);
             if seen.insert(ty) {
                 for param in params {
-                    scalar_kind_inner(types, *param, "function value parameter".into(), seen)?;
+                    if !descriptor_only || *param != TypeInterner::NEVER {
+                        scalar_kind_inner(types, *param, "function value parameter".into(), seen)?;
+                    }
                 }
-                scalar_kind_inner(types, *return_type, "function value result".into(), seen)?;
+                if !descriptor_only || *return_type != TypeInterner::NEVER {
+                    scalar_kind_inner(types, *return_type, "function value result".into(), seen)?;
+                }
             }
             ScalarKind::Function
         }
@@ -516,35 +629,67 @@ fn interface_conversion_shape(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifierPhase {
+    /// Typed original-body integrity, with no callable frame or Never carrier.
+    DescriptorMetadata,
+    /// Prepared operations that will actually execute through the native ABI.
+    CallableNative,
+}
+
 struct Verifier<'a> {
     program: &'a Program,
     types: &'a TypeInterner,
     verified: &'a VerifiedProgram,
+    phase: VerifierPhase,
 }
 
 impl Verifier<'_> {
+    fn value_kind(
+        &self,
+        function: &Function,
+        ty: TypeId,
+        context: impl Into<String>,
+    ) -> Result<ScalarKind, CodegenError> {
+        if ty == TypeInterner::NEVER
+            && self.phase == VerifierPhase::DescriptorMetadata
+            && descriptor_only_function(function)
+        {
+            Ok(ScalarKind::Uninhabited)
+        } else {
+            scalar_kind(self.types, ty, context)
+        }
+    }
+
     fn function(&self, function: &Function) -> Result<(), CodegenError> {
         self.reject_entry_predecessors(function)?;
 
         let name = self.function_name(function);
         for param in &function.params {
-            scalar_kind(
-                self.types,
+            self.value_kind(
+                function,
                 param.ty,
                 format!("parameter `{}` of `{name}`", param.name),
             )?;
         }
-        scalar_kind(
-            self.types,
+        self.value_kind(
+            function,
             function.return_type,
             format!("return type of `{name}`"),
         )?;
         for local in &function.locals {
-            scalar_kind(
-                self.types,
+            self.value_kind(
+                function,
                 local.ty,
                 format!("local `{}` of `{name}`", local.name),
             )?;
+            if self.phase == VerifierPhase::DescriptorMetadata {
+                self.value_kind(
+                    function,
+                    local.debug_ty,
+                    format!("debug type of original local `{}` of `{name}`", local.name),
+                )?;
+            }
         }
         for block in &function.blocks {
             for statement in &block.statements {
@@ -552,8 +697,14 @@ impl Verifier<'_> {
             }
             self.terminator(function, &block.terminator)?;
         }
-        jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
-            .map_err(|message| self.contract_error(function, function.span, message))?;
+        // Descriptor-only bodies retain their original typed contracts, but
+        // never execute and need neither a native sequence form nor an owning
+        // machine-code frame. Their caller still validates capture evaluation,
+        // initialization, ownership and cleanup normally.
+        if self.phase == VerifierPhase::CallableNative {
+            jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
+                .map_err(|message| self.contract_error(function, function.span, message))?;
+        }
         Ok(())
     }
 
@@ -1166,6 +1317,48 @@ impl Verifier<'_> {
                 }
                 Ok(())
             }
+            TerminatorKind::ForEach {
+                key,
+                value,
+                iterable,
+                ..
+            } if self.phase == VerifierPhase::DescriptorMetadata
+                && descriptor_only_function(function) =>
+            {
+                // Original typed loops are valid in an uncallable body. Check
+                // their binding schema before native preparation may erase it;
+                // do not demand a prepared native loop or execute the iterable.
+                self.expression(function, iterable)?;
+                let (key_type, value_type) = match self.types.resolve(iterable.ty) {
+                    Type::List(element) | Type::Set(element) if value.is_none() => (*element, None),
+                    Type::Map(key, value_type) if value.is_some() => (*key, Some(*value_type)),
+                    Type::String if value.is_none() => (TypeInterner::STRING, None),
+                    _ => {
+                        return Err(self.contract_error(
+                            function,
+                            terminator.span,
+                            "original descriptor loop has an invalid iterable or binding shape",
+                        ));
+                    }
+                };
+                self.require_same_type(
+                    function,
+                    terminator.span,
+                    key_type,
+                    function.local(*key).unwrap().ty,
+                    "original descriptor loop key type does not match its iterable",
+                )?;
+                if let (Some(value), Some(value_type)) = (value, value_type) {
+                    self.require_same_type(
+                        function,
+                        terminator.span,
+                        value_type,
+                        function.local(*value).unwrap().ty,
+                        "original descriptor loop value type does not match its iterable",
+                    )?;
+                }
+                Ok(())
+            }
             TerminatorKind::ForEach { .. } => {
                 Err(self.unsupported(function, terminator.span, "for-each loop"))
             }
@@ -1196,8 +1389,8 @@ impl Verifier<'_> {
     }
 
     fn expression(&self, function: &Function, expression: &Expression) -> Result<(), CodegenError> {
-        let kind = scalar_kind(
-            self.types,
+        let kind = self.value_kind(
+            function,
             expression.ty,
             format!("expression in `{}`", self.function_name(function)),
         )?;
@@ -1449,6 +1642,18 @@ impl Verifier<'_> {
                         "direct call target is absent from the function table",
                     ));
                 };
+                if self.phase == VerifierPhase::CallableNative
+                    && callee
+                        .params
+                        .iter()
+                        .any(|parameter| parameter.ty == TypeInterner::NEVER)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "callable direct edge requires an uninhabited parameter",
+                    ));
+                }
                 if args.len() != callee.params.len() {
                     return Err(self.contract_error(
                         function,
@@ -2082,6 +2287,15 @@ impl Verifier<'_> {
                 else {
                     return Err(self.expression_kind_error(function, expression, "indirect call"));
                 };
+                if self.phase == VerifierPhase::CallableNative
+                    && params.contains(&TypeInterner::NEVER)
+                {
+                    return Err(self.contract_error(
+                        function,
+                        expression.span,
+                        "callable indirect edge requires an uninhabited parameter",
+                    ));
+                }
                 if params.len() != args.len() || view_params.len() != params.len() {
                     return Err(self.contract_error(
                         function,
@@ -2997,8 +3211,8 @@ impl Verifier<'_> {
     ) -> Result<(), CodegenError> {
         self.expression(function, left)?;
         self.expression(function, right)?;
-        let operand = scalar_kind(self.types, left.ty, "binary operand")?;
-        let right_operand = scalar_kind(self.types, right.ty, "binary operand")?;
+        let operand = self.value_kind(function, left.ty, "binary operand")?;
+        let right_operand = self.value_kind(function, right.ty, "binary operand")?;
         let left_type = self.secret_inner_type(left.ty).unwrap_or(left.ty);
         let right_type = self.secret_inner_type(right.ty).unwrap_or(right.ty);
         let refined_divisor = operand.is_integer()
@@ -3015,7 +3229,7 @@ impl Verifier<'_> {
                 "binary operand types differ",
             ));
         }
-        let result = scalar_kind(self.types, expression.ty, "binary result")?;
+        let result = self.value_kind(function, expression.ty, "binary result")?;
         if (self.secret_inner_type(left.ty).is_some() || self.secret_inner_type(right.ty).is_some())
             && self.secret_inner_type(expression.ty).is_none()
         {

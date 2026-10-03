@@ -7586,6 +7586,15 @@ expression may create a callback that accepts a capability when invoked later.
 The body is checked in its own function context and cannot acquire authority
 from the surrounding expression.
 
+A concretely instantiated callback may accept the internal uninhabited element
+type inferred from an empty collection. The callback itself is still a value:
+creation, storage, returns, explicit cloning, pending state and cleanup preserve
+its ordinary captures and metadata without invoking it. No checked invocation
+can supply the uninhabited input. Its result may also be uninhabited without
+creating a result value. Mapping an empty collection evaluates its inputs and
+checks the source body normally, then runs no callback body and manufactures no
+element. This does not add a source spelling or runtime carrier for `never`.
+
 Named arguments use parameter names from a checked function or constructor
 declaration, and parentheses preserve that declaration metadata. Anonymous
 function types contain parameter types and ownership modes but no names; calls
