@@ -1268,6 +1268,14 @@ Original local and debug types are checked before unused enclosing-frame slots
 are compacted across all original blocks and typed references. This removes
 transferred inline-body slots without changing parent control flow or erasing
 real parameters, bindings, captures, observations or loan dependencies.
+Original type validation distinguishes checked metadata from native value
+eligibility. An exact `never` function result can appear in original metadata,
+including nested container and nominal types, without proving descriptor-only
+invocation. This preserves closures in absent optional/result arms until normal
+arm preparation removes their creation and calls. Function view-schema lengths
+and every inhabited child type are still validated before compaction. Prepared
+runtime classification remains strict: a surviving return-only `never` function
+is unsupported, and no `never` capture environment or carrier is emitted.
 The descriptor retains a nonzero internal trap entry with no `never` parameter
 or return carrier; no valid call reaches it and no original body effect is
 emitted. Bare `never` captures, mismatched signatures and surviving impossible

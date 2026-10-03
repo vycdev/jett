@@ -2102,3 +2102,24 @@ in [the descriptor contract](native_uninhabited_callback_descriptors.md) and
 This does not complete all callback-body operations or the independent borrowed
 handler staging. Whole-language 100% remains the objective, tracked at about 85%
 with the fixed 207-fixture inventory.
+
+### Original function metadata repair after the full callback run
+
+The exact clean `d14b830b` native suite completes with 446 passes and two
+sum-arm failures. Original preflight demands a native result carrier for a
+closure that checked impossible optional/result arm preparation later removes.
+The remaining workspace/object targets were stopped after this complete native
+suite failed; its log and terminal metadata retain the unchanged clean head,
+446/2 outcome and explicit stop reason. It is not full acceptance.
+
+The recursive OriginalMetadata/NativeValue type-validation distinction preserves
+the exact Never result as original metadata, without admitting a surviving
+return-only callback or Never capture. All 969 compiler library tests, both
+previously failing linked sum-arm tests and all nine callback tests pass. Three
+new codegen units cover absent-arm closure removal and strict nested metadata
+and live-value negatives. See
+[the regression evidence](native_uninhabited_callback_descriptors.md#full-run-regression-and-original-function-metadata-repair).
+The repaired commit still needs its own complete workspace, 182-object and
+supported-host runs. Corpus 448, inventory 207, about-85% tracking and the
+whole-language 100% objective remain unchanged. Borrowed handler staging remains
+the next independent implementation after this repair.

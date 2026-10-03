@@ -30,6 +30,16 @@ high-level loop bodies must not be rejected by running a prepared-native
 ownership checker before that lowering. Malformed unused types, locals,
 references, signatures and captures must not be laundered by pruning.
 
+Original type shape and prepared native value eligibility are separate phases.
+An exact Never function result remains valid original metadata even without a
+Never input. Existing checked optional/result arms can contain such a closure,
+including an impossible capture, whose creation and invocation disappear only
+after arm preparation proves them absent. Recursive container and nominal
+metadata keeps this distinction; malformed view schemas, foreign child TypeIds
+and recovery results still fail before pruning. A surviving return-only Never
+function still fails native classification, and an actual descriptor cannot
+store a Never capture. This does not broaden descriptor-only authority.
+
 Inline extraction shares a dense local table with its enclosing function. The
 actual prepared factory retains the extracted child's unused Never formal in
 that table, even though the parent has no statement or parameter using it.
@@ -154,3 +164,36 @@ diagnostic exposed the transferred parent slots and selected the compaction
 repair before the passing gates above. Ordinary callable body checks remain
 independent of descriptor-only metadata; unrelated unsupported latent operations
 are not claimed complete by these nine cases.
+
+## Full-run regression and original function metadata repair
+
+The exact clean `d14b830b` full native suite finishes with 446 passes and two
+failures (941.02 seconds) in `target/native-workspace-d14b830b.log`. Both existing
+sum-arm regressions fail with `type <never> is unsupported in function value
+result (Never)`: original preflight demands a runtime representation for a
+`function() returns Never` closure before sum preparation removes its impossible
+arm. This is distinct from named local compaction. After the complete native
+suite reported these failures, root stopped the remaining object/workspace
+targets; the wrapper records terminal exit -1, unchanged clean head and the
+reason in `target/native-workspace-d14b830b.json`. That run grants no complete
+workspace or 182-object acceptance.
+
+The repair adds a recursive typed OriginalMetadata/NativeValue distinction.
+Only exact Never function results gain the original-metadata exception;
+native scalar classification, descriptor proof and capture eligibility remain
+strict. Three new codegen units cover absent optional success, result success
+and result error closures, omitted closure symbols/environments, valid nested
+metadata, malformed nested local/debug types and live return-only rejection.
+
+All 969 compiler library tests pass in
+`target/native-original-function-metadata-phases.log`: 55 codegen, 416 comptime,
+139 HIR, 87 MIR, 48 resolve and 224 typecheck. Both previously failing linked
+tests pass (48.51 seconds, 446 filtered) in
+`target/native-original-function-metadata-linked-sum-arms.log`; all nine callback
+tests pass again (3.82 seconds, 439 filtered) in
+`target/native-original-function-metadata-linked-callbacks.log`. The existing
+linked tests retain both runtime profiles, source deletion, pending-error order,
+comptime observations and native verify/property execution. The corpus remains
+448 cases. Fresh complete-workspace/object and supported-host acceptance for
+the repaired revision is still required; the about-85% estimate and fixed 207
+inventory remain unchanged.

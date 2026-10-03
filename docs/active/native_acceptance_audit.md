@@ -1675,3 +1675,31 @@ Complete workspace/object and supported-host results for the actual repair
 revision remain pending. The 439-case predecessor acceptance above cannot be
 substituted for that proof. The whole-language objective remains 100%, the fixed
 inventory remains 207, and the broad planning estimate stays about 85%.
+
+## Original function metadata in absent sum arms
+
+The clean `d14b830b` full native suite reports 446 passes and two existing
+sum-arm failures (941.02 seconds). Original preflight rejects a closure's exact
+Never result before checked impossible-arm preparation can remove the closure.
+The remaining object/workspace targets were stopped after that complete native
+suite failed; `target/native-workspace-d14b830b.json` records exit -1, unchanged
+clean head and the stop reason. No complete-workspace or object acceptance is
+claimed for this attempt.
+
+OriginalMetadata type validation now permits that exact function-result
+metadata recursively while preserving view-schema and inhabited child checks.
+NativeValue classification remains strict, and a return-only Never signature
+still grants no descriptor authority or runtime capture/value representation.
+The three new codegen units pin all three absent optional/result arms, omitted
+closure symbols, nested metadata validity, malformed child/result/view schemas
+in both local and debug types, and surviving return-only rejection.
+
+All 969 compiler library tests pass in
+`target/native-original-function-metadata-phases.log`. The two previously failing
+linked tests pass (48.51 seconds) in
+`target/native-original-function-metadata-linked-sum-arms.log`, retaining both
+profiles, pending diagnostics, source deletion and native verify/property
+execution. All nine callback cases pass again (3.82 seconds) in
+`target/native-original-function-metadata-linked-callbacks.log`. Exact repaired
+head workspace/object and supported-host acceptance remains required. The corpus
+is still 448, the fixed inventory 207, and the planning estimate about 85%.

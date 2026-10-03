@@ -4226,6 +4226,196 @@ function root() returns int64:
         }
     }
 
+    const ABSENT_CAPTURED_RESULT_SOURCE: &str = r#"namespace app
+function capture_optional[T](candidate: optional[T]) returns nothing:
+    T item = candidate handle:
+        return nothing
+    function() returns T callback = function() returns T: return item
+    T copied = callback()
+    return nothing
+function capture_success[T, E](candidate: result[T, E]) returns nothing:
+    T item = candidate handle error:
+        return nothing
+    function() returns T callback = function() returns T: return item
+    T copied = callback()
+    return nothing
+function capture_failure[T, E](candidate: result[T, E]) returns nothing:
+    T item = candidate handle error:
+        function() returns E callback = function() returns E: return error
+        E copied = callback()
+        return nothing
+    return nothing
+function root() returns nothing:
+    capture_optional(none)
+    capture_success(fail("absent"))
+    capture_failure(ok(8))
+    return nothing
+"#;
+
+    #[test]
+    fn absent_sum_arms_keep_original_function_result_metadata_without_native_carriers() {
+        let (mut program, mut types) = lower_source(ABSENT_CAPTURED_RESULT_SOURCE);
+        let absent_closures = program
+            .functions
+            .iter()
+            .filter(|function| {
+                function.debug_kind == jett_hir::FunctionDebugKind::Inline
+                    && function.return_type == TypeInterner::NEVER
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(absent_closures.len(), 3);
+        assert!(absent_closures.iter().all(|function| {
+            function.capture_count == 1
+                && function.params.len() == 1
+                && function.params[0].ty == TypeInterner::NEVER
+                && !crate::verify::descriptor_only_function(function)
+        }));
+        let absent_symbols = absent_closures
+            .iter()
+            .map(|function| crate::symbol_name(&function.identity, &types).unwrap())
+            .collect::<Vec<_>>();
+        let result_only = types.intern(jett_types::Type::Function {
+            params: Vec::new(),
+            view_params: Vec::new(),
+            return_type: TypeInterner::NEVER,
+        });
+        let optional = types.intern(jett_types::Type::Optional(result_only));
+        let nested = types.intern(jett_types::Type::List(optional));
+        assert!(matches!(
+            scalar_kind(&types, nested, "nested runtime result"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        let factory = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "capture_optional")
+            .unwrap();
+        let mut unused = factory.locals[0].clone();
+        unused.id = jett_hir::LocalId::new(u32::try_from(factory.locals.len()).unwrap());
+        unused.name = "unused_nested_result_metadata".into();
+        unused.ty = nested;
+        unused.debug_ty = nested;
+        factory.locals.push(unused);
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("valid original metadata in absent sum arms");
+        jett_mir::prepare_native_sequences(&mut program, &types);
+        jett_mir::prepare_native_uninhabited_sums(&mut program, &types);
+        jett_mir::prepare_native_generated_functions(&mut program);
+        let verified = verify_program(&program, &types).expect("prepared inhabited sum arms");
+        assert!(
+            verified
+                .functions()
+                .iter()
+                .all(|function| !absent_symbols.contains(&function.symbol))
+        );
+        let object = emit_host_object(&program, &types).expect("absent closure object");
+        assert!(!object.bytes.is_empty());
+        assert!(
+            object
+                .symbols
+                .iter()
+                .all(|symbol| !absent_symbols.contains(symbol))
+        );
+    }
+
+    #[test]
+    fn absent_function_results_do_not_hide_malformed_original_type_metadata() {
+        for debug_type in [false, true] {
+            for corruption in 0..4 {
+                let (mut program, mut types) = lower_source(ABSENT_CAPTURED_RESULT_SOURCE);
+                let mut foreign = TypeInterner::new();
+                let mut invalid = TypeInterner::INT64;
+                for _ in 0..=types.len() + 2 {
+                    invalid = foreign.intern(jett_types::Type::List(invalid));
+                }
+                assert!(invalid.index() as usize > types.len() + 1);
+                let malformed = match corruption {
+                    0 => types.intern(jett_types::Type::Function {
+                        params: vec![TypeInterner::INT64],
+                        view_params: Vec::new(),
+                        return_type: TypeInterner::NEVER,
+                    }),
+                    1 => types.intern(jett_types::Type::Function {
+                        params: vec![invalid],
+                        view_params: vec![false],
+                        return_type: TypeInterner::NEVER,
+                    }),
+                    2 => types.intern(jett_types::Type::Function {
+                        params: Vec::new(),
+                        view_params: Vec::new(),
+                        return_type: invalid,
+                    }),
+                    3 => types.intern(jett_types::Type::Function {
+                        params: Vec::new(),
+                        view_params: Vec::new(),
+                        return_type: TypeInterner::ERROR,
+                    }),
+                    _ => unreachable!(),
+                };
+                let wrapped = types.intern(jett_types::Type::List(malformed));
+                let local = program
+                    .functions
+                    .iter_mut()
+                    .find(|function| function.identity.declaration.name == "capture_optional")
+                    .expect("optional specialization")
+                    .locals
+                    .iter_mut()
+                    .find(|local| {
+                        matches!(types.resolve(local.ty),
+                        jett_types::Type::Function { return_type, .. }
+                        if *return_type == TypeInterner::NEVER)
+                    })
+                    .expect("absent-arm callback local");
+                if debug_type {
+                    local.debug_ty = wrapped;
+                } else {
+                    local.ty = wrapped;
+                }
+                assert!(
+                    matches!(
+                        emit_host_object(&program, &types),
+                        Err(CodegenError::UnsupportedType { .. })
+                    ),
+                    "debug={debug_type}, corruption={corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn live_return_only_never_function_result_still_requires_native_representation() {
+        let (mut program, mut types) = lower_source(
+            "namespace app\nfunction root() returns nothing:\n    function() returns int64 callback = function() returns int64: return 7\n    trace callback\n    return nothing\n",
+        );
+        let result_only = types.intern(jett_types::Type::Function {
+            params: Vec::new(),
+            view_params: Vec::new(),
+            return_type: TypeInterner::NEVER,
+        });
+        let root = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "root")
+            .unwrap();
+        let local = root
+            .locals
+            .iter_mut()
+            .find(|local| matches!(types.resolve(local.ty), jett_types::Type::Function { .. }))
+            .unwrap();
+        local.ty = result_only;
+        local.debug_ty = result_only;
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("return-only Never is valid type metadata");
+        assert!(matches!(
+            scalar_kind(&types, result_only, "live return-only function"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+    }
+
     #[test]
     fn custom_assertion_message_in_verify_body_emits_native_entry() {
         let file = FileId::new(0);

@@ -7595,6 +7595,13 @@ creating a result value. Mapping an empty collection evaluates its inputs and
 checks the source body normally, then runs no callback body and manufactures no
 element. This does not add a source spelling or runtime carrier for `never`.
 
+A concrete specialization may also contain a closure returning the internal
+uninhabited type inside a provably absent optional or result arm. Its source
+body still receives normal checking. Native preparation may omit both creation
+and invocation after selecting the inhabited arm. The original function type
+remains valid metadata; it does not grant a surviving closure a callable native
+representation or permit an uninhabited capture to be stored at runtime.
+
 Named arguments use parameter names from a checked function or constructor
 declaration, and parentheses preserve that declaration metadata. Anonymous
 function types contain parameter types and ownership modes but no names; calls

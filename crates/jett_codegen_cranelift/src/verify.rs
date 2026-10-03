@@ -196,14 +196,21 @@ pub(crate) fn verify_descriptor_bodies(
     types: &TypeInterner,
 ) -> Result<(), CodegenError> {
     jett_mir::validate(program).map_err(CodegenError::InvalidMir)?;
-    // Shared inline tables contain valid Never metadata that need not allocate
-    // a parent frame slot. Check all other original types before compaction;
-    // every surviving callable Never use is still rejected after preparation.
+    // Shared inline tables and impossible sum arms contain valid Never metadata
+    // that need not allocate a native frame slot. Validate original type shapes
+    // without demanding a carrier for an absent function result; every surviving
+    // callable Never use is still rejected after preparation.
     for function in &program.functions {
         for local in &function.locals {
             for (ty, role) in [(local.ty, "local"), (local.debug_ty, "debug local")] {
                 if ty != TypeInterner::NEVER {
-                    scalar_kind(types, ty, format!("original {role} `{}`", local.name))?;
+                    scalar_kind_inner(
+                        types,
+                        ty,
+                        format!("original {role} `{}`", local.name),
+                        &mut HashSet::new(),
+                        TypeValidationPhase::OriginalMetadata,
+                    )?;
                 }
             }
         }
@@ -387,18 +394,31 @@ fn function_by_id(program: &Program, id: FunctionId) -> Result<(usize, &Function
     Ok((index, function))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeValidationPhase {
+    OriginalMetadata,
+    NativeValue,
+}
+
 pub(crate) fn scalar_kind(
     types: &TypeInterner,
     ty: TypeId,
     context: impl Into<String>,
 ) -> Result<ScalarKind, CodegenError> {
-    scalar_kind_inner(types, ty, context.into(), &mut HashSet::new())
+    scalar_kind_inner(
+        types,
+        ty,
+        context.into(),
+        &mut HashSet::new(),
+        TypeValidationPhase::NativeValue,
+    )
 }
 fn scalar_kind_inner(
     types: &TypeInterner,
     ty: TypeId,
     context: String,
     seen: &mut HashSet<TypeId>,
+    phase: TypeValidationPhase,
 ) -> Result<ScalarKind, CodegenError> {
     let type_count = u32::try_from(types.len()).unwrap_or(u32::MAX);
     if ty.index() >= type_count {
@@ -423,12 +443,12 @@ fn scalar_kind_inner(
         Type::String => ScalarKind::String,
         Type::Bytes => ScalarKind::Bytes,
         Type::Secret(inner) | Type::Refinement { base: inner, .. } => {
-            return scalar_kind_inner(types, *inner, context, seen);
+            return scalar_kind_inner(types, *inner, context, seen, phase);
         }
         Type::Struct(id) => {
             if seen.insert(ty) {
                 for (_, field) in &types.resolve_struct(*id).fields {
-                    scalar_kind_inner(types, *field, "struct field".into(), seen)?;
+                    scalar_kind_inner(types, *field, "struct field".into(), seen, phase)?;
                 }
             }
             ScalarKind::Struct
@@ -437,7 +457,7 @@ fn scalar_kind_inner(
             if seen.insert(ty) {
                 for variant in &types.resolve_enum(*id).variants {
                     for (_, field) in &variant.fields {
-                        scalar_kind_inner(types, *field, "enum payload".into(), seen)?;
+                        scalar_kind_inner(types, *field, "enum payload".into(), seen, phase)?;
                     }
                 }
             }
@@ -446,7 +466,7 @@ fn scalar_kind_inner(
         Type::Bitfield(id) => {
             if seen.insert(ty) {
                 for field in &types.resolve_bitfield(*id).fields {
-                    scalar_kind_inner(types, field.ty, "bitfield field".into(), seen)?;
+                    scalar_kind_inner(types, field.ty, "bitfield field".into(), seen, phase)?;
                 }
             }
             ScalarKind::Bitfield
@@ -455,7 +475,7 @@ fn scalar_kind_inner(
             if seen.insert(ty) {
                 for state in &types.resolve_machine(*id).states {
                     for (_, field) in &state.fields {
-                        scalar_kind_inner(types, *field, "machine payload".into(), seen)?;
+                        scalar_kind_inner(types, *field, "machine payload".into(), seen, phase)?;
                     }
                 }
             }
@@ -472,17 +492,33 @@ fn scalar_kind_inner(
                     context: "function value view parameter metadata".into(),
                 });
             }
-            // The descriptor is inhabited even when a parameter cannot be
-            // supplied. Never remains unsupported as an actual runtime value.
+            // A real descriptor needs an impossible input to omit its result
+            // carrier. Original metadata may also describe a return-only Never
+            // function in an arm that native preparation proves absent. This
+            // phase grants neither descriptor authority nor a runtime carrier.
             let descriptor_only = params.contains(&TypeInterner::NEVER);
             if seen.insert(ty) {
                 for param in params {
                     if !descriptor_only || *param != TypeInterner::NEVER {
-                        scalar_kind_inner(types, *param, "function value parameter".into(), seen)?;
+                        scalar_kind_inner(
+                            types,
+                            *param,
+                            "function value parameter".into(),
+                            seen,
+                            phase,
+                        )?;
                     }
                 }
-                if !descriptor_only || *return_type != TypeInterner::NEVER {
-                    scalar_kind_inner(types, *return_type, "function value result".into(), seen)?;
+                if *return_type != TypeInterner::NEVER
+                    || (!descriptor_only && phase == TypeValidationPhase::NativeValue)
+                {
+                    scalar_kind_inner(
+                        types,
+                        *return_type,
+                        "function value result".into(),
+                        seen,
+                        phase,
+                    )?;
                 }
             }
             ScalarKind::Function
@@ -491,7 +527,7 @@ fn scalar_kind_inner(
             if seen.insert(ty) {
                 let actor = types.resolve_actor(*id);
                 for (_, field) in actor.capability_params.iter().chain(&actor.state_fields) {
-                    scalar_kind_inner(types, *field, "actor state field".into(), seen)?;
+                    scalar_kind_inner(types, *field, "actor state field".into(), seen, phase)?;
                 }
                 for message in &actor.messages {
                     for (_, parameter) in &message.params {
@@ -500,6 +536,7 @@ fn scalar_kind_inner(
                             *parameter,
                             "actor message parameter".into(),
                             seen,
+                            phase,
                         )?;
                     }
                     scalar_kind_inner(
@@ -507,6 +544,7 @@ fn scalar_kind_inner(
                         message.responds,
                         "actor message response".into(),
                         seen,
+                        phase,
                     )?;
                 }
             }
@@ -514,20 +552,20 @@ fn scalar_kind_inner(
         }
         Type::List(inner) => {
             if *inner != TypeInterner::NEVER {
-                scalar_kind_inner(types, *inner, "list element".into(), seen)?;
+                scalar_kind_inner(types, *inner, "list element".into(), seen, phase)?;
             }
             ScalarKind::List
         }
         Type::Set(inner) => {
-            scalar_kind_inner(types, *inner, "set element".into(), seen)?;
+            scalar_kind_inner(types, *inner, "set element".into(), seen, phase)?;
             ScalarKind::Set
         }
         Type::Map(key, value) => {
             if *key != TypeInterner::NEVER {
-                scalar_kind_inner(types, *key, "map key".into(), seen)?;
+                scalar_kind_inner(types, *key, "map key".into(), seen, phase)?;
             }
             if *value != TypeInterner::NEVER {
-                scalar_kind_inner(types, *value, "map value".into(), seen)?;
+                scalar_kind_inner(types, *value, "map value".into(), seen, phase)?;
             }
             ScalarKind::Map
         }
@@ -535,16 +573,16 @@ fn scalar_kind_inner(
         Type::Interface(_) => ScalarKind::Struct,
         Type::Optional(inner) => {
             if *inner != TypeInterner::NEVER {
-                scalar_kind_inner(types, *inner, "optional payload".into(), seen)?;
+                scalar_kind_inner(types, *inner, "optional payload".into(), seen, phase)?;
             }
             ScalarKind::Sum
         }
         Type::Result(ok, error) => {
             if *ok != TypeInterner::NEVER {
-                scalar_kind_inner(types, *ok, "result success payload".into(), seen)?;
+                scalar_kind_inner(types, *ok, "result success payload".into(), seen, phase)?;
             }
             if *error != TypeInterner::NEVER {
-                scalar_kind_inner(types, *error, "result failure payload".into(), seen)?;
+                scalar_kind_inner(types, *error, "result failure payload".into(), seen, phase)?;
             }
             ScalarKind::Sum
         }
