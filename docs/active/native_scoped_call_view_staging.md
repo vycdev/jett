@@ -91,8 +91,12 @@ workspace, all 182 object obligations and 92 result groups. Its supported-host
 [workflow 37108099164](https://github.com/vycdev/jett/actions/runs/37108099164)
 passes all four Windows/Linux build/package and relocated installed jobs, last
 completing `2026-10-03T09:03:23Z`. Those results accept the preceding callback
-repair, not this later staging implementation. Complete workspace, independent
-182-object and supported-host acceptance for the actual staging commit remain
+repair, not this later staging implementation. The exact clean `55027914`
+staging commit now passes its complete 461-case workspace, all 182 object
+obligations, remaining targets and doc-tests with 92 successful groups and an
+unchanged head. Its terminal record is centralized in
+[the descriptor note](native_uninhabited_callback_descriptors.md#accepted-predecessor-and-separate-follow-up).
+Supported-host workflow 37112967414 is still live and remains independently
 required. No full surface completion, denominator change, or new coarse coverage
 percentage is claimed by this note.
 
@@ -123,6 +127,6 @@ profiles build before source deletion, then bounded launches compare exact
 status/stdout/stderr and empty unintended observations. All 13 tracked source
 format checks pass in `target/native-scoped-call-view-source-format13.json`.
 Rust formatting and diff checks pass. The supplemental corpus now registers
-461 cases; the actual complete corpus, 182-object and supported-host gates for
-the staging commit remain independent pending obligations. The fixed inventory
+461 cases. Complete local workspace and 182-object acceptance at `55027914`
+are recorded above; supported-host acceptance remains pending. The fixed inventory
 is still 207 and the broad planning estimate remains about 85%.

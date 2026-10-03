@@ -1,8 +1,10 @@
 # Native descriptors with an uninhabited invocation input
 
-Status: implementation integrated. The repaired `90d82701` revision passes its
-complete clean workspace and all four supported-host jobs. Later call-view
-staging has separate focused and complete acceptance obligations.
+Status: the repaired `90d82701` revision passes its complete clean workspace
+and all four supported-host jobs. Later call-view staging at `55027914` passes
+its complete clean workspace; its supported-host jobs remain separate and live. The
+separate latent nested/secret-result follow-up passes the focused compiler and
+linked gates below; complete 464-case/platform acceptance remains pending.
 The native parity objective remains whole-language coverage.
 
 ## Existing source behavior
@@ -20,7 +22,8 @@ no value and no scalar carrier. An exact checked non-capture parameter equal to
 the internal Never TypeId grants descriptor-only emission authority. Captures,
 generic markers, source names, display labels and a return-only Never signature
 do not grant it. The result may also be Never when an invocation is already
-impossible; no result carrier or default payload is created.
+impossible, including one direct secret qualification; no result carrier or
+default payload is created.
 
 ## Representation and validation contract
 
@@ -39,7 +42,9 @@ after arm preparation proves them absent. Recursive container and nominal
 metadata keeps this distinction; malformed view schemas, foreign child TypeIds
 and recovery results still fail before pruning. A surviving return-only Never
 function still fails native classification, and an actual descriptor cannot
-store a Never capture. This does not broaden descriptor-only authority.
+store a Never capture. Latent owned-capture metadata inside an already
+uncallable body is checked separately and creates no environment. This does
+not broaden descriptor-only authority.
 
 Inline extraction shares a dense local table with its enclosing function. The
 actual prepared factory retains the extracted child's unused Never formal in
@@ -204,3 +209,99 @@ the independent supported-host gate for that revision and passes all four build/
 package and relocated installed jobs, last completing `2026-10-03T09:03:23Z`.
 The about-85% estimate,
 fixed 207 inventory and whole-language objective remain unchanged.
+
+## Latent nested closures and direct secret results
+
+The selected pre-Rust contract is
+`target/native-uninhabited-latent-callback-draft/contract.md` (SHA `422abde8`).
+The exact non-capture Never input remains the sole descriptor-only authority.
+The retained outer descriptor may contain a nested zero-argument closure that
+captures this absent input; creating or calling that inner closure is only
+latent source behavior. A direct Secret[Never] result of the same uncallable
+callback similarly needs no result carrier. Concrete instantiations retain
+ordinary closure environments, invocation and explicit declassification.
+
+The verifier follows validated FunctionRef, ClosureRef and function-adapter
+edges from the already proven metadata root. Exact target identity, signature,
+view/capture modes and capture-local types are checked before a visited
+FunctionId set prevents cycles and repeated body validation. Every followed
+original body is checked without granting native reachability or a frame.
+Composite bodies use OriginalMetadata classification. Only exact Never and
+one direct Secret[Never] gain the absent-value metadata treatment; no arbitrary
+qualification/refinement is peeled. Actual created captures, live return-only
+callbacks, callable Never edges, phantom literals, malformed nested metadata
+and unsupported opaque Resource layouts retain their existing rejection.
+The source policy, native trap ABI, runtime and hidden-secret rules are unchanged.
+
+### Characterization and focused execution
+
+Three exact LF sources have actual default-profile reference/agent status zero,
+empty stderr/debug observations and literal stdout:
+
+| Case | Application stdout |
+| --- | --- |
+| Nested closure in an absent callback plus invoked integer control | `nested:0:1:7\n` |
+| Cloned/stored secret-result descriptor plus explicit integer declassification | `secret:1:7:1\n` |
+| Concrete nested/secret-only control | `control:1:7:9\n` |
+
+Before the repair, all three source-format and six frontend profile checks
+passed. The first two sources refused Never function-result representation in
+both native profiles; the concrete control reached the deliberately unavailable
+runtime bundle. All six output sentinels survived. Fresh characterization
+with the isolated repaired CLI repeats all three format/default reference/agent
+and six frontend checks, preserves exact source hashes/output, and now reaches
+object generation and the unavailable bundle for all six native probes. These
+probes are object-admission evidence, not linked execution. Exact captures and
+CLI provenance are in `target/native-uninhabited-nested-secret-callback-witness`
+and `target/native-uninhabited-latent-callback-after`.
+
+All **63 codegen library tests pass** (0.30 seconds) in
+`target/native-latent-callback-codegen.log`. Six new source-derived units pin
+latent symbol absence with retained outer/concrete symbols, direct secret result
+descriptor classification, original-body phantom result rejection, exact owned
+capture edges, malformed nested local/debug types and live return-only rejection.
+The combined linked wrapper passes all **27 tests**: three new cases (6.95
+seconds), nine existing descriptor cases (18.01 seconds), two sum-arm cases
+(87.04 seconds) and thirteen scoped call-view cases (25.69 seconds). Both matching
+runtime profiles build before source deletion, then compare exact status/output
+and empty unintended observations. The wrapper exits zero with all seven formatted
+compiler/test source hashes unchanged at `2026-10-03T09:53:15.5452645Z` in
+`target/native-latent-callback-linked.json` and its four logs. The three new Jett
+source-format checks pass. The isolated corpus registers 464 supplemental tests;
+registration is not complete-workspace acceptance.
+
+The broader compiler run passes **989 library units**: 63 codegen, 416 comptime,
+139 HIR, 99 MIR, 48 resolve and 224 typecheck. It also passes 62 comptime and one
+MIR integration test, for **1052 actual tests** with Cargo exit zero. Its wrapper
+exits one solely because the expected count incorrectly excluded the 63
+integration tests; all seven source hashes remain unchanged. Preserve that
+wrapper/log as a count-guard failure, not a compiler failure or full-workspace
+acceptance. Its actual passing tests do not require repetition.
+
+The corrected remaining-gates wrapper passes all 83 driver tests (89.77
+seconds), 598 frontend fixtures (24.61 seconds) and eight backend-lowering
+tests (168.01 seconds). It exits zero with the same seven source hashes unchanged
+at `2026-10-03T10:01:25.0163025Z` in
+`target/native-latent-callback-remaining-phases.json` and its three logs. Rust
+formatting checks pass. The earlier compiler count-guard record remains
+`target/native-latent-callback-phases.json` with the actual passing Cargo log
+`target/native-latent-callback-libraries.log`; it is not silently replaced.
+
+**Pending:** complete 464-case workspace, independent 182-object and
+supported-host acceptance for the actual follow-up revision remain required.
+These focused gates do not accept that future revision's complete corpus.
+
+### Accepted predecessor and separate follow-up
+
+The accepted `90d82701` complete 448-case workspace, 182 object obligations,
+92 result groups and all four supported-host jobs above remain historical
+exact-head evidence. Main `55027914` now passes its complete clean workspace:
+461 native cases (915.93 seconds), the four-test manifest covering all 182 object
+obligations (534.62 seconds), 83 driver tests (78.52 seconds), 598 frontend
+fixtures (22.20 seconds), remaining targets and doc-tests. The wrapper exits
+zero with 92 successful groups, clean start/end and unchanged exact head at
+`2026-10-03T09:56:47.1797084Z` in `target/native-workspace-55027914.log` and
+`.json`. Supported-host workflow 37112967414 is still running. This accepts
+that local staging revision, not its platform or the separate isolated
+latent-callback follow-up. The whole-language objective stays 100%, broad tracking
+stays about 85%, and the fixed 207 inventory/182 object obligations are unchanged.

@@ -4417,6 +4417,289 @@ function root() returns nothing:
         ));
     }
 
+    const LATENT_NESTED_CALLBACK_SOURCE: &str = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns T]:
+    function(T) returns T callback = function(value: T) returns T:
+        function() returns T inner = function() returns T: return value
+        return inner()
+    return list(callback)
+function root() returns int64:
+    return consume_value(stored(list())) + consume_value(stored(list(7)))
+"#;
+
+    const SECRET_UNINHABITED_CALLBACK_SOURCE: &str = r#"namespace app
+function consume_value[T](value: T) returns int64:
+    return 0
+function stored[T](values: list[T]) returns list[function(T) returns secret[T]]:
+    function(T) returns secret[T] callback = function(value: T) returns secret[T]: return value
+    return list(clone callback)
+function root() returns int64:
+    return consume_value(stored(list())) + consume_value(stored(list(7)))
+"#;
+
+    #[test]
+    fn retained_never_input_descriptor_checks_latent_closure_without_emitting_it() {
+        let (program, types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+        let latent = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.capture_count == 1
+                    && function.params.len() == 1
+                    && function.params[0].ty == TypeInterner::NEVER
+                    && function.return_type == TypeInterner::NEVER
+            })
+            .expect("zero-argument nested closure with a latent Never capture");
+        assert!(!crate::verify::descriptor_only_function(latent));
+        let latent_symbol = crate::symbol_name(&latent.identity, &types).unwrap();
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| {
+                crate::verify::descriptor_only_function(function)
+                    && function.return_type == TypeInterner::NEVER
+            })
+            .expect("retained exact Never-input outer descriptor");
+        let descriptor_symbol = crate::symbol_name(&descriptor.identity, &types).unwrap();
+        let concrete = program
+            .functions
+            .iter()
+            .find(|function| {
+                function.debug_kind == jett_hir::FunctionDebugKind::Inline
+                    && function.capture_count == 1
+                    && function.params.len() == 1
+                    && function.params[0].ty == TypeInterner::INT64
+                    && function.return_type == TypeInterner::INT64
+            })
+            .expect("actually callable nested int64 specialization");
+        let concrete_symbol = crate::symbol_name(&concrete.identity, &types).unwrap();
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("complete original nested typed contracts");
+        let object =
+            emit_host_object(&program, &types).expect("descriptor and concrete nested object");
+        assert!(!object.bytes.is_empty());
+        assert!(object.symbols.contains(&descriptor_symbol));
+        assert!(!object.symbols.contains(&latent_symbol));
+        assert!(object.symbols.contains(&concrete_symbol));
+    }
+
+    #[test]
+    fn never_input_secret_result_descriptor_does_not_create_a_secret_never_carrier() {
+        let (program, mut types) = lower_source(SECRET_UNINHABITED_CALLBACK_SOURCE);
+        let hidden_never = types.intern(jett_types::Type::Secret(TypeInterner::NEVER));
+        let descriptor_type = types.intern(jett_types::Type::Function {
+            params: vec![TypeInterner::NEVER],
+            view_params: vec![false],
+            return_type: hidden_never,
+        });
+        assert_eq!(
+            scalar_kind(&types, descriptor_type, "secret result descriptor").unwrap(),
+            ScalarKind::Function
+        );
+        assert!(matches!(
+            scalar_kind(&types, hidden_never, "live secret Never"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        let descriptor = program
+            .functions
+            .iter()
+            .find(|function| {
+                crate::verify::descriptor_only_function(function)
+                    && function.return_type == hidden_never
+            })
+            .expect("secret-qualified Never result retains exact input authority");
+        let symbol = crate::symbol_name(&descriptor.identity, &types).unwrap();
+        let object =
+            emit_host_object(&program, &types).expect("stored secret-result descriptor object");
+        assert!(object.symbols.contains(&symbol));
+        assert!(!object.bytes.is_empty());
+    }
+
+    #[test]
+    fn latent_nested_original_bodies_cannot_fabricate_uninhabited_results() {
+        for phantom in [ExpressionKind::Nothing, ExpressionKind::Int(7)] {
+            let (mut program, types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+            let latent = program
+                .functions
+                .iter_mut()
+                .find(|function| {
+                    function.capture_count == 1
+                        && function.params.len() == 1
+                        && function.params[0].ty == TypeInterner::NEVER
+                        && function.return_type == TypeInterner::NEVER
+                })
+                .unwrap();
+            let value = latent
+                .blocks
+                .iter_mut()
+                .find_map(|block| {
+                    if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(value.ty, TypeInterner::NEVER);
+            value.kind = phantom;
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { .. })
+            ));
+        }
+        for phantom in [ExpressionKind::Nothing, ExpressionKind::Int(7)] {
+            let (mut program, types) = lower_source(SECRET_UNINHABITED_CALLBACK_SOURCE);
+            let descriptor = program.functions.iter_mut().find(|function| {
+                crate::verify::descriptor_only_function(function)
+                    && matches!(types.resolve(function.return_type), jett_types::Type::Secret(inner) if *inner == TypeInterner::NEVER)
+            }).unwrap();
+            let value = descriptor
+                .blocks
+                .iter_mut()
+                .find_map(|block| {
+                    if let TerminatorKind::Return(Some(value)) = &mut block.terminator.kind {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert!(
+                matches!(types.resolve(value.ty), jett_types::Type::Secret(inner) if *inner == TypeInterner::NEVER)
+            );
+            value.kind = phantom;
+            assert!(matches!(
+                emit_host_object(&program, &types),
+                Err(CodegenError::InvalidMirContract { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn latent_never_capture_edges_keep_exact_owned_capture_contracts() {
+        for corruption in 0..3 {
+            let (mut program, types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+            let latent = program
+                .functions
+                .iter_mut()
+                .find(|function| {
+                    function.capture_count == 1
+                        && function.params.len() == 1
+                        && function.params[0].ty == TypeInterner::NEVER
+                        && function.return_type == TypeInterner::NEVER
+                })
+                .unwrap();
+            match corruption {
+                0 => latent.params[0].mode = jett_mir::ParamMode::View,
+                1 => {
+                    latent.params[0].ty = TypeInterner::INT64;
+                    let local = latent.params[0].local.index() as usize;
+                    latent.locals[local].ty = TypeInterner::INT64;
+                    latent.locals[local].debug_ty = TypeInterner::INT64;
+                }
+                2 => latent.return_type = TypeInterner::INT64,
+                _ => unreachable!(),
+            }
+            assert!(
+                emit_host_object(&program, &types).is_err(),
+                "capture corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn latent_nested_type_metadata_cannot_hide_foreign_children_or_view_modes() {
+        for debug_type in [false, true] {
+            for corruption in 0..3 {
+                let (mut program, mut types) = lower_source(LATENT_NESTED_CALLBACK_SOURCE);
+                let mut foreign = TypeInterner::new();
+                let mut invalid = TypeInterner::INT64;
+                for _ in 0..=types.len() + 2 {
+                    invalid = foreign.intern(jett_types::Type::List(invalid));
+                }
+                assert!(invalid.index() as usize > types.len() + 1);
+                let malformed = types.intern(jett_types::Type::Function {
+                    params: if corruption == 0 {
+                        vec![TypeInterner::INT64]
+                    } else {
+                        Vec::new()
+                    },
+                    view_params: Vec::new(),
+                    return_type: match corruption {
+                        0 => TypeInterner::NEVER,
+                        1 => invalid,
+                        2 => TypeInterner::ERROR,
+                        _ => unreachable!(),
+                    },
+                });
+                let wrapped = types.intern(jett_types::Type::List(malformed));
+                let latent = program
+                    .functions
+                    .iter_mut()
+                    .find(|function| {
+                        function.capture_count == 1
+                            && function.params.len() == 1
+                            && function.params[0].ty == TypeInterner::NEVER
+                            && function.return_type == TypeInterner::NEVER
+                    })
+                    .unwrap();
+                let mut local = latent.locals[0].clone();
+                local.id = jett_hir::LocalId::new(u32::try_from(latent.locals.len()).unwrap());
+                local.name = "unused_latent_nested_metadata".into();
+                if debug_type {
+                    local.debug_ty = wrapped;
+                } else {
+                    local.ty = wrapped;
+                }
+                latent.locals.push(local);
+                assert!(
+                    matches!(
+                        emit_host_object(&program, &types),
+                        Err(CodegenError::UnsupportedType { .. })
+                    ),
+                    "debug={debug_type}, corruption={corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn latent_secret_result_support_does_not_grant_live_return_only_authority() {
+        let (mut program, mut types) = lower_source(
+            "namespace app\nfunction root() returns nothing:\n    function() returns int64 callback = function() returns int64: return 7\n    trace callback\n    return nothing\n",
+        );
+        let hidden_never = types.intern(jett_types::Type::Secret(TypeInterner::NEVER));
+        let result_only = types.intern(jett_types::Type::Function {
+            params: Vec::new(),
+            view_params: Vec::new(),
+            return_type: hidden_never,
+        });
+        assert!(matches!(
+            scalar_kind(&types, result_only, "live secret result-only function"),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+        let root = program
+            .functions
+            .iter_mut()
+            .find(|function| function.identity.declaration.name == "root")
+            .unwrap();
+        let local = root
+            .locals
+            .iter_mut()
+            .find(|local| matches!(types.resolve(local.ty), jett_types::Type::Function { .. }))
+            .unwrap();
+        local.ty = result_only;
+        local.debug_ty = result_only;
+        crate::verify::verify_descriptor_bodies(&program, &types)
+            .expect("latent type shape is metadata only");
+        assert!(matches!(
+            emit_host_object(&program, &types),
+            Err(CodegenError::UnsupportedType { .. })
+        ));
+    }
+
     #[test]
     fn custom_assertion_message_in_verify_body_emits_native_entry() {
         let file = FileId::new(0);

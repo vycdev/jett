@@ -2094,8 +2094,9 @@ The latter exercise both matching profiles with exact success/failure outcomes,
 captured ownership, pending joins, real integer calls, ordinary loop bodies and
 equality inside uncallable bodies. Nine source-format checks and Rust formatting
 pass, as do all 83 driver library tests and 598 frontend fixtures.
-The corpus registers 448 supplemental cases; actual complete-workspace,
-object and supported-host acceptance for the repair head remains pending.
+The corpus registers 448 supplemental cases at this checkpoint; the repaired
+`90d82701` complete-workspace/object and supported-host result below subsequently
+accepts that source scope.
 Pre-change characterization, initial failures and selected proof boundaries are
 in [the descriptor contract](native_uninhabited_callback_descriptors.md) and
 [the acceptance audit](native_acceptance_audit.md#uninhabited-input-callback-descriptors-focused-acceptance).
@@ -2142,3 +2143,24 @@ source aliases and same-operation owner-change safety remain separate.
 See [the implementation and focused gates](native_scoped_call_view_staging.md).
 Whole-language coverage remains about 85%, with the fixed 207-fixture inventory
 and 100% native-language objective unchanged.
+
+### Latent nested bodies and direct secret callback results
+
+Exact Never-input callbacks now preserve source-valid nested closure metadata
+and one direct Secret[Never] result without demanding a runtime carrier. Typed
+function/closure/adapter edges are checked before a separate cycle-safe original
+body traversal; this does not add native reachability or relax live callable,
+capture, nominal, Resource or hidden-secret policy guards. The source remains
+checked before any body pruning. No runtime or ABI change is required.
+
+The isolated follow-up passes 63 codegen tests, all 27 linked regressions and
+1052 tests in the broader compiler run; the count-guard wrapper discrepancy is
+recorded separately from passing tests. All 83 driver, 598 frontend and eight
+backend-lowering tests also pass. Complete 464-case workspace/object/platform
+acceptance remains **pending**. See
+[the centralized proof and gates](native_uninhabited_callback_descriptors.md#latent-nested-closures-and-direct-secret-results).
+Main `55027914` passes its complete clean 461-case workspace and all 182 object
+obligations; its supported-host workflow remains live. Accepted full
+`90d82701` evidence and the separate isolated follow-up remain distinct. This bounded repair changes neither the
+fixed 207 inventory/182 object obligations nor the about-85% estimate and
+whole-language 100% objective.

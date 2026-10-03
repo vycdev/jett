@@ -1,0 +1,12 @@
+namespace app
+function nested_map[T](values: list[T]) returns list[T]:
+    function(T) returns T callback = function(value: T) returns T:
+        function() returns T inner = function() returns T: return value
+        return inner()
+    return list.map[T, T](values, callback)
+function main(stdout: Stdout) returns nothing:
+    int64 absent = list.length(view nested_map(list()))
+    list[int64] mapped = nested_map(list(7))
+    int64 first = list.get[int64](view mapped, 0) handle:
+        default -1
+    Stdout.write(view stdout, "nested:{absent}:{list.length[int64](view mapped)}:{first}\n")

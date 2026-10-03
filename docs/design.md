@@ -7611,6 +7611,15 @@ creating a result value. Mapping an empty collection evaluates its inputs and
 checks the source body normally, then runs no callback body and manufactures no
 element. This does not add a source spelling or runtime carrier for `never`.
 
+The already uncallable callback body may contain a nested zero-argument closure
+that captures its input and returns it. That nested body still receives normal
+checking, but its environment is never created and its call never executes in
+this specialization. The same source with an inhabited input follows ordinary
+closure creation and invocation. A directly secret-qualified uninhabited result
+likewise creates no result value when an exact uninhabited input already makes
+invocation impossible. This grants neither a surviving return-only callback a
+callable representation nor an uninhabited capture a runtime environment.
+
 A concrete specialization may also contain a closure returning the internal
 uninhabited type inside a provably absent optional or result arm. Its source
 body still receives normal checking. Native preparation may omit both creation

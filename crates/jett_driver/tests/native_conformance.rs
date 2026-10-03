@@ -102,6 +102,9 @@ mod secret_owner_local_views;
 #[path = "native_conformance/uninhabited_callbacks.rs"]
 mod uninhabited_callbacks;
 
+#[path = "native_conformance/latent_callbacks.rs"]
+mod latent_callbacks;
+
 struct Launcher {
     bundle: NativeLauncherBundle,
     _directory: tempfile::TempDir,

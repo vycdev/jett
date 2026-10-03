@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashSet};
 
 use jett_common::{SourceOrigin, Span};
 use jett_hir::{
@@ -203,7 +203,7 @@ pub(crate) fn verify_descriptor_bodies(
     for function in &program.functions {
         for local in &function.locals {
             for (ty, role) in [(local.ty, "local"), (local.debug_ty, "debug local")] {
-                if ty != TypeInterner::NEVER {
+                if !exact_uninhabited_metadata_type(types, ty) {
                     scalar_kind_inner(
                         types,
                         ty,
@@ -266,6 +266,7 @@ pub(crate) fn verify_descriptor_bodies(
         types,
         verified: &verified,
         phase: VerifierPhase::DescriptorMetadata,
+        metadata_functions: RefCell::new(HashSet::new()),
     };
     for function in &program.functions {
         if descriptor_only_function(function) {
@@ -372,6 +373,7 @@ pub(crate) fn verify_program(
             } else {
                 VerifierPhase::CallableNative
             },
+            metadata_functions: RefCell::new(HashSet::new()),
         };
         verifier.function(function)?;
     }
@@ -392,6 +394,14 @@ fn function_by_id(program: &Program, id: FunctionId) -> Result<(usize, &Function
             )
         })?;
     Ok((index, function))
+}
+
+/// Only these exact checked shapes describe an absent value in latent bodies.
+/// This does not grant either shape a runtime carrier or peel other qualifiers.
+fn exact_uninhabited_metadata_type(types: &TypeInterner, ty: TypeId) -> bool {
+    ty == TypeInterner::NEVER
+        || ((ty.index() as usize) < types.len()
+            && matches!(types.resolve(ty), Type::Secret(inner) if *inner == TypeInterner::NEVER))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -509,7 +519,7 @@ fn scalar_kind_inner(
                         )?;
                     }
                 }
-                if *return_type != TypeInterner::NEVER
+                if !exact_uninhabited_metadata_type(types, *return_type)
                     || (!descriptor_only && phase == TypeValidationPhase::NativeValue)
                 {
                     scalar_kind_inner(
@@ -680,26 +690,42 @@ struct Verifier<'a> {
     types: &'a TypeInterner,
     verified: &'a VerifiedProgram,
     phase: VerifierPhase,
+    // This is an original-body integrity traversal, not callable reachability.
+    metadata_functions: RefCell<HashSet<FunctionId>>,
 }
 
 impl Verifier<'_> {
     fn value_kind(
         &self,
-        function: &Function,
+        _function: &Function,
         ty: TypeId,
         context: impl Into<String>,
     ) -> Result<ScalarKind, CodegenError> {
-        if ty == TypeInterner::NEVER
-            && self.phase == VerifierPhase::DescriptorMetadata
-            && descriptor_only_function(function)
-        {
-            Ok(ScalarKind::Uninhabited)
+        if self.phase == VerifierPhase::DescriptorMetadata {
+            if exact_uninhabited_metadata_type(self.types, ty) {
+                return Ok(ScalarKind::Uninhabited);
+            }
+            scalar_kind_inner(
+                self.types,
+                ty,
+                context.into(),
+                &mut HashSet::new(),
+                TypeValidationPhase::OriginalMetadata,
+            )
         } else {
             scalar_kind(self.types, ty, context)
         }
     }
 
     fn function(&self, function: &Function) -> Result<(), CodegenError> {
+        if self.phase == VerifierPhase::DescriptorMetadata {
+            super::emit::debug::function_label(function)
+                .map_err(|message| self.contract_error(function, function.span, message))?;
+            symbol_name(&function.identity, self.types)?;
+            if !self.metadata_functions.borrow_mut().insert(function.id) {
+                return Ok(());
+            }
+        }
         self.reject_entry_predecessors(function)?;
 
         let name = self.function_name(function);
@@ -742,6 +768,17 @@ impl Verifier<'_> {
         if self.phase == VerifierPhase::CallableNative {
             jett_mir::move_values::MoveValuePlan::analyze(self.program, function, self.types)
                 .map_err(|message| self.contract_error(function, function.span, message))?;
+        }
+        Ok(())
+    }
+
+    /// Call only after the referencing edge's identity/signature/captures pass.
+    /// An uncallable outer body can describe an inner callable body without
+    /// allocating its environment or adding the target to native reachability.
+    fn latent_function(&self, target: FunctionId) -> Result<(), CodegenError> {
+        if self.phase == VerifierPhase::DescriptorMetadata {
+            let (_, target) = function_by_id(self.program, target)?;
+            self.function(target)?;
         }
         Ok(())
     }
@@ -1370,9 +1407,7 @@ impl Verifier<'_> {
                 value,
                 iterable,
                 ..
-            } if self.phase == VerifierPhase::DescriptorMetadata
-                && descriptor_only_function(function) =>
-            {
+            } if self.phase == VerifierPhase::DescriptorMetadata => {
                 // Original typed loops are valid in an uncallable body. Check
                 // their binding schema before native preparation may erase it;
                 // do not demand a prepared native loop or execute the iterable.
@@ -1520,7 +1555,8 @@ impl Verifier<'_> {
                     value.ty,
                     expression.ty,
                     *target,
-                )
+                )?;
+                self.latent_function(*target)
             }
             ExpressionKind::FunctionRef(target) => {
                 let Some(callee) = self
@@ -1560,7 +1596,7 @@ impl Verifier<'_> {
                         "function value signature does not match target",
                     ));
                 }
-                Ok(())
+                self.latent_function(*target)
             }
             ExpressionKind::ClosureRef {
                 function: target,
@@ -1622,22 +1658,33 @@ impl Verifier<'_> {
                             "closure capture type does not match target",
                         ));
                     }
-                    if !matches!(
-                        self.types.resolve(local.ty),
-                        Type::Int8
-                            | Type::Int16
-                            | Type::Int32
-                            | Type::Int64
-                            | Type::Uint8
-                            | Type::Uint16
-                            | Type::Uint32
-                            | Type::Uint64
-                            | Type::Float32
-                            | Type::Float64
-                            | Type::String
-                            | Type::Bool
-                            | Type::Nothing
-                    ) {
+                    if parameter.mode != jett_mir::ParamMode::Owned {
+                        return Err(self.contract_error(
+                            function,
+                            expression.span,
+                            "closure capture must use owned environment storage",
+                        ));
+                    }
+                    let latent_never = self.phase == VerifierPhase::DescriptorMetadata
+                        && local.ty == TypeInterner::NEVER;
+                    if !latent_never
+                        && !matches!(
+                            self.types.resolve(local.ty),
+                            Type::Int8
+                                | Type::Int16
+                                | Type::Int32
+                                | Type::Int64
+                                | Type::Uint8
+                                | Type::Uint16
+                                | Type::Uint32
+                                | Type::Uint64
+                                | Type::Float32
+                                | Type::Float64
+                                | Type::String
+                                | Type::Bool
+                                | Type::Nothing
+                        )
+                    {
                         return Err(self.contract_error(
                             function,
                             expression.span,
@@ -1645,7 +1692,7 @@ impl Verifier<'_> {
                         ));
                     }
                 }
-                Ok(())
+                self.latent_function(*target)
             }
             ExpressionKind::Unary { op, value } => {
                 self.expression(function, value)?;

@@ -1295,8 +1295,28 @@ runtime classification remains strict: a surviving return-only `never` function
 is unsupported, and no `never` capture environment or carrier is emitted.
 The descriptor retains a nonzero internal trap entry with no `never` parameter
 or return carrier; no valid call reaches it and no original body effect is
-emitted. Bare `never` captures, mismatched signatures and surviving impossible
-calls remain invalid. A return-only `never` signature does not grant this proof.
+emitted. Created `never` capture environments, mismatched signatures and
+surviving impossible calls remain invalid. A return-only `never` signature does not grant this proof.
+
+Descriptor metadata validation also follows exact function, closure and adapter
+value targets inside the proven uncallable body. It checks each target identity,
+signature, view mode and capture-local type before a separate visited FunctionId
+set prevents repeated body traversal. Every followed original body is checked;
+this traversal does not add native callable roots or emit an inner environment.
+A latent zero-argument closure may describe an owned `never` capture from the
+outer input. Actual closure creation retains the ordinary copyable capture
+restriction and rejects uninhabited environment values.
+
+This body phase uses recursive OriginalMetadata classification for composite
+types and recognizes only exact `never` or one direct `secret[never]` as absent
+value metadata. Function-descriptor classification may omit that exact result
+shape only with an exact `never` input; original return-only type metadata is
+not runtime authority. Literal fabrication, malformed nested TypeIds/view
+schemas and surviving callable uses still fail. Arbitrary wrapper/refinement
+peeling, opaque Resource layouts and hidden-secret observation policy are
+unchanged. The existing descriptor trap ABI and native reachability need no
+new carrier or runtime operation.
+
 Inhabited containers and
 absent sum arms containing `never` retain their normal representations.
 Native handler preparation also recognizes an exact final `SumTag` followed

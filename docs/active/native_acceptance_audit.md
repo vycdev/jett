@@ -1671,9 +1671,9 @@ the driver cases retain full stdlib evaluation. The actual factory diagnostic
 then exposed unused child formals in the enclosing frame table. Initial logs,
 pre-change captures, exact bounds and remaining gates are in
 [the descriptor contract](native_uninhabited_callback_descriptors.md).
-Complete workspace/object and supported-host results for the actual repair
-revision remain pending. The 439-case predecessor acceptance above cannot be
-substituted for that proof. The whole-language objective remains 100%, the fixed
+The subsequently repaired `90d82701` full workspace/object and supported-host
+results are recorded below. The earlier 439-case predecessor alone could not
+supply that proof. The whole-language objective remains 100%, the fixed
 inventory remains 207, and the broad planning estimate stays about 85%.
 
 ## Original function metadata in absent sum arms
@@ -1723,3 +1723,26 @@ and complete acceptance obligations are in
 [the call-view contract](native_scoped_call_view_staging.md). This is additional
 native implementation coverage, not whole-language completion or a denominator
 change.
+
+## Latent nested and secret-result callback metadata
+
+The isolated follow-up preserves exact Never-input descriptor authority while
+checking latent nested function bodies and direct Secret[Never] result metadata.
+Validated target/signature/mode/capture edges precede cycle-safe body traversal;
+no nested environment, native callable root, runtime carrier or ABI is created.
+Live return-only callbacks, created Never captures, phantom values, malformed
+metadata and opaque Resource layouts remain rejected. Exact selected proof and
+centralized execution evidence are in
+[the descriptor note](native_uninhabited_callback_descriptors.md#latent-nested-closures-and-direct-secret-results).
+
+All 63 codegen tests and 27 linked regressions pass with unchanged source hashes.
+The broader compiler run passes 1052 tests (989 library units plus 63 integration
+tests); its wrapper's incorrect expected-count guard is not a compiler failure.
+The 83 driver, 598 frontend and eight backend-lowering gates also pass with
+unchanged sources. Complete 464-case workspace/object/platform acceptance
+remains **pending**. Independently, main `55027914` passes its complete
+clean 461-case workspace, all 182 object obligations and 92 successful groups;
+its platform workflow is still live. The exact-head local acceptance record is
+centralized in the descriptor note above. Neither predecessor result accepts
+the separate isolated follow-up. The fixed inventory remains 207, object obligations 182,
+broad estimate about 85%, and whole-language goal 100%.
