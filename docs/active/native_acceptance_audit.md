@@ -1754,8 +1754,9 @@ accepted opaque `resource_type` tag. Three regressions cover source comparisons,
 reference type metadata with empty shapes, and a native object reached through
 an ordinary project caller. The affected 800 compiler tests and 598 frontend
 fixtures pass with unchanged source hashes. This adds no live Resource carrier,
-provider, source constructor or cleanup behavior. Complete workspace/platform
-acceptance for this correction remains separate; exact evidence and remaining
+provider, source constructor or cleanup behavior. Clean `616b51b9` subsequently
+passes its full workspace; supported-host acceptance for that head remains
+separate. Exact evidence and remaining
 lifecycle prerequisites are in [the active note](native_resource_kind_tags.md).
 
 ## Checked private resource-hook identities
@@ -1768,14 +1769,55 @@ metadata validation are required. Production catalogs stay empty; no source
 constructor, provider operation, runtime Resource value or native carrier is
 created. See [the selected contract and scope](native_resource_hook_identity.md).
 
-Root's isolated final focused run passes six resolver, seven checker and one
+The isolated final focused run passes six resolver, seven checker and one
 span-collision test with ten unchanged Rust source hashes. Exact results/logs
 are retained in `target/native-resource-hook-focused-after-diagnostic.json` and
 its referenced per-gate logs. The earlier missing-`mut` compile failure and
 source-body diagnostic expectation correction are not successful gates. The
 broader 1037 compiler library tests, 63 codegen object integration tests, 83
 driver tests, 598 frontend fixtures and eight backend-lowering tests also pass
-with unchanged sources in `target/native-resource-hook-phases.json`. Complete
-workspace/platform acceptance remains separate; no reference or native resource
+with unchanged sources in `target/native-resource-hook-phases.json`. The
+subsequent clean `616b51b9` full workspace passes, as recorded below; its
+supported-host run remains in progress. No reference or native Resource
 lifecycle was executed. This is checked identity proof, not a
 resource-provider parity row closure or inventory/percentage increase.
+
+
+## Resource static ownership boundaries
+
+The accepted local predecessor is exact clean `616b51b9`: its frozen full
+workspace exits zero with all 92 result groups, 464 supplemental native cases
+(940.26 seconds), all 182 object obligations (four manifest groups, 534.07
+seconds), remaining workspace targets and doc tests passing. Start/end HEAD and
+cleanliness agree in `target/native-workspace-616b51b9.json`; the run ends at
+`2026-10-03T12:11:54.8924860Z`. The older `62de6505` supported-host workflow
+[37118139645](https://github.com/vycdev/jett/actions/runs/37118139645) succeeds in
+all four Windows/Linux build and installed relocation jobs. The exact
+`616b51b9` workflow 37119573097 is still in progress; predecessor platform
+acceptance does not transfer to this head or the new guards.
+
+The new static guards refuse recursive Resource-copy acquisitions (E0364),
+known Resource views stored in owning payloads (E0401), and exact Resource-root
+printing/value reflection (E0300). Exact Resource-bearing machine transition
+sources reuse existing owned-argument checks. Safe views, unrelated copyable
+fields, actual owned payload transfers, empty carriers and type-only metadata
+remain admitted. Nested printing, hidden-Secret observation and other ownership
+paths remain separate work; no runtime/provider/native Resource value is enabled.
+
+All 36 focused groups pass, including 21 new source groups, in
+`target/native-resource-source-guards-focused-after-diagnostic.json`. The original
+20 sources and additional 14 payload sources all parse/resolve and are checked
+in both profiles with stable inputs. Their reports show the intended refusals
+and retained controls; these probes do not evaluate comptime/property bodies,
+install providers or execute native Resource code. See the
+[complete static scope and source evidence](native_resource_ownership_boundaries.md).
+
+The broader wrapper passes 1058 library units (254 typechecker units), 63
+codegen object integration tests (1.11 seconds), 83 driver tests (69.79 seconds),
+598 frontend fixtures (22.13 seconds) and eight backend-lowering tests. All three
+source hashes remain unchanged; `target/native-resource-source-guards-phases.json`
+ends with exit zero at `2026-10-03T12:28:58.9045108Z`. New complete-workspace and
+supported-host acceptance remain pending. This prerequisite adds no linked
+Resource case or object obligation: the about-85% estimate, fixed 207 inventory,
+182 obligations, 464 supplemental cases and whole-language 100% objective stay
+unchanged.

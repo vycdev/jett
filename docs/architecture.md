@@ -686,8 +686,9 @@ views, and forwarded aliases, retaining the borrow through parentheses,
 `coarsen`, and `declassify` when the checked result is move-only. These checks
 cover ordinary, generic, indirect, and pipeline calls, including actor handlers
 and verify/property bodies. Explicit written view arguments retain E0375;
-implicit-copy results, clones, ordinary owned field copies, and owned call
-results remain valid.
+implicit-copy results, valid clones, ordinary owned field copies without
+Resource data, and owned call results remain valid. Resource-bearing field
+acquisition must use a nonowning view or a genuine owned transfer.
 
 Directly written return-view annotations report E0401 by unique annotation
 span, including unused generic headers, interface/inherent/implementation
@@ -2164,6 +2165,27 @@ of bypassing validation; normal empty-catalog and source diagnostic behavior
 remain unchanged. No production hook, provider dispatch or source carrier is
 installed. The implementation and focused evidence are in
 [the resource-hook identity note](active/native_resource_hook_identity.md).
+
+Before source execution, the checker separates owning field copies from
+borrowed place projections. Only Field and the existing transparent place
+wrappers propagate that projection context; calls and owning constructors check
+their payloads normally. Recursive Resource-bearing field and cloning-getter
+results report E0364. A known Resource-bearing view cannot become an owned
+Some/Ok/Fail, list/map value, struct or machine payload (E0401), even when the
+completed constructor is itself viewed. Exact-state Resource-bearing transition
+sources reuse E0375/E0401 owned-argument checks. Ordinary owned data, empty
+containers, safe field views and non-Resource endpoints keep their existing
+admission. Generic phantom arguments do not count as stored Resource data.
+
+The payload guard diagnoses each source occurrence once and records only the
+exact identifier's legacy ownership counterpart for diagnostic deduplication;
+ordinary ownership traversal and unrelated diagnostics remain. Exact Resource
+roots also reject ordinary print/println and value-reflection operations with
+E0300. Type-only metadata, aggregate metadata and trace/breakpoint ownership
+summaries remain separate. Nested ordinary printing, including hidden Secret,
+known-absent and omitted values, has not been settled by this guard. The
+[static ownership note](active/native_resource_ownership_boundaries.md) records
+executed checker evidence and remaining live-resource prerequisites.
 
 Under the selected execution contract, the interpreter stores each live
 resource in a run-context registry and gives

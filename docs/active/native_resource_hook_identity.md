@@ -2,10 +2,10 @@
 
 Status: the isolated identity implementation passes all 14 focused tests.
 The broader compiler, object, driver, frontend and lowering gates also pass.
-Complete workspace and supported-host acceptance for the identity commit remain
-separate. The production catalog is empty; no Resource value or provider
-operation executes in this
-change. Whole-language native coverage remains about 85%, with the fixed
+The subsequent clean `616b51b9` full workspace also passes; its supported-host
+run remains in progress. The [acceptance audit](native_acceptance_audit.md#resource-static-ownership-boundaries)
+keeps local and platform evidence separate. The production catalog is empty;
+no Resource value or provider operation executes in this change. Whole-language native coverage remains about 85%, with the fixed
 207-fixture inventory and 100% objective unchanged.
 
 ## Selected boundary before Rust
@@ -87,14 +87,14 @@ existing rules, while the resource-only finalizer is syntactically pure. A
 future runtime provider installation must be explicit; purity, debug emission
 and ambient stdlib caller flags cannot grant provider authority.
 
-## Executed focused evidence and pending gates
+## Executed focused evidence
 
-Root applies the candidate on the clean `62de6505` metadata parent in an
+The candidate is applied on the clean `62de6505` metadata parent in an
 isolated worktree. The frozen source candidate is `c38adcec`; it remains a
 historical artifact. The first checker compile attempt exposes a missing
 `mut` on the `finish_check` helper's checker parameter. After that repair, the
 source-body test exposes an incorrect expected E0300: ordinary checking emits
-E0311 for the invalid variable initializer. Root corrects only that assertion.
+E0311 for the invalid variable initializer. Only that assertion is corrected.
 Both initial failures remain separate evidence, rather than successful gates.
 
 The final focused run passes six resolver tests, seven checker tests and the
@@ -118,11 +118,17 @@ and all **eight backend-lowering tests** pass (170.93 seconds), including the
 182-file lowering inventory. The wrapper exits zero with all ten Rust source
 hashes unchanged at `2026-10-03T11:18:33.3848153Z` in
 `target/native-resource-hook-phases.json` and its five referenced logs. Rust
-formatting and diff checks pass. Complete workspace and supported-host
-acceptance for the actual identity commit remain separate; this slice adds no
-supplemental linked resource case, object obligation or completed language row.
+formatting and diff checks pass. Clean `616b51b9` subsequently passes its complete
+workspace; supported-host acceptance for that head remains pending. The exact
+predecessor record is in the acceptance audit above. This slice adds no
+supplemental linked Resource case, object obligation or completed language row.
 
 ## Required lifecycle and backend followup
+
+The [static ownership guards](native_resource_ownership_boundaries.md) now close
+selected field/getter copies, known-view payload acquisition and root-value
+observation gaps. They do not establish source execution or settle the remaining
+nested printing and borrow provenance boundaries.
 
 The checked map is not a provider installation. The reference interpreter still
 needs a real owned Resource carrier, a deterministic fake provider and an

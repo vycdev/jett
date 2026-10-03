@@ -368,7 +368,7 @@ current estimate.
 | Function values, closures, and indirect calls | covered; inline bodies extract to checked functions with explicit capture parameters and ownership modes | owned descriptors carry code addresses, copied capture environments, and source-derived debug labels; indirect calls pass the environment after the runtime context and borrow view parameters; parenthesized, returned, projected, inline, and pipeline callee expressions retain checked call order | named, capture-free, and captured callbacks passed, returned, copied through aggregates, and invoked through indirect calls, including view and capability parameters; callee handlers and terminal failures clean already evaluated owned arguments; explicit `comptime` materializes named, capture-free, and captured inline function values from closed pure expressions, including capability-accepting callbacks whose bodies execute only with runtime authority |
 | Compiler intrinsics and reflection | covered with checked operands, source-aware reflection metadata, and closed `IntrinsicId` identities | `type.name`, `type.kind`, `type.has_secret`, `type.kind_tag`, `type.primitive_tag`, recursively constructed `type.info`, checked `type.arg`, struct/bitfield, enum, and machine metadata lists and layouts, active enum variant and machine state metadata, reflected field values, and checked reflected-type dispatch covered; other aggregate reflection pending | direct and generic scalar reflection, nested `TypeInfo`, indexed type arguments, struct/bitfield, enum, and machine metadata, active enum and machine state selection, reflected field values, and alias-aware `comptime type` dispatch match the interpreter on positive cases; alias probes remain empty as required; mismatch diagnostics and other aggregate reflection pending |
 | Explicit `comptime` values | checked closed pure expressions and contextual expected types covered | evaluated scalar and supported composite values materialize as typed HIR; captured closure values gain typed caller-local bindings; original source bodies are not emitted | linked native/interpreter fixtures cover nested collections, sums, structs, bitfields, enums, machines, bytes, contextual `ok`/`fail`/`none`, named functions, capture-free inline functions, captured closures, and pending `nothing` values, including captured and list-contained values; runtime authority remains unsupported |
-| Capabilities and runtime resources | nominal checked types covered | entry grants for all eleven capability types; capability task handles retain authority and pending depth through `run`/`join`; provider effects remain limited to implemented families | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; native/interpreter fixtures compare plain and pending Stdout and Environment debug values, nested capability joins, Stdout cancellation, and a joined Stdout write; successful native runs reject unconsumed scripted Random, Clock, and Graphics inputs; other providers/resources pending |
+| Capabilities and runtime resources | nominal checked types and static Resource copy/payload guards covered | entry grants for all eleven capability types; capability task handles retain authority and pending depth through `run`/`join`; provider effects remain limited to implemented families | Stdout output, Clock/Random sampling, and immutable Environment launch snapshots covered; native/interpreter fixtures compare plain and pending Stdout and Environment debug values, nested capability joins, Stdout cancellation, and a joined Stdout write; successful native runs reject unconsumed scripted Random, Clock, and Graphics inputs; other providers/resources pending |
 | Actors and structured concurrency | covered | sequential `run`/`join`/`cancel` values and result propagation; pending depth for `nothing` persists through calls, captures, and aggregates, while owned strings, bytes, lists, sets, maps, optionals, results, structs, enums, bitfields, machines, function descriptors, and `TypeConstruction` builders retain pending depth through runtime handles; actor identities and capability authority retain depth through separate scalar handles; actor constructors, registration, handler dispatch, and state writeback covered; all fixed-width integer, floating-point, and boolean task carriers retain pending depth | native/interpreter differential probes cover successful and failed string tasks, nested pending `nothing` and owned values including optional and result branches, captured functions, builders, actor identities, and capabilities, bare-unit and plain Stdout join failure, current sequential cancellation behavior, pending-value debug output, string and enum direct equality errors, pending function-call, builder-use, and actor-message errors, and aggregate enum-payload equality, actor allocation and owned-state cleanup, message ordering, state mutation, and responses; asynchronous scheduling and cancellation checkpoints remain pending |
 | JSON and trusted stdlib hooks | covered | checked `JsonTree` calls use trusted raw stdlib functions; supported structs, machines, collections including sets of primitive-backed elements, and top-level refinements specialize the checked source serializer, including public omission of direct secret fields; supported top-level enums use dedicated checked source hooks; primitive parse calls use private source decoders, including bounded `int8`/`int16`/`int32`, `uint16`/`uint32`, and `float32` construction; concrete structs, bare and state-qualified machines, supported secret wrappers, top-level refinements over supported bases, lists, sets of primitive-backed hashable types, string-keyed maps, optionals, and results specialize the checked source parser; other JSON shapes remain pending | native/interpreter fixtures cover raw trees, primitive and structured serialization, enum unit and payload values, machine state envelopes and public secret omission, primitive and structured parsing, top-level refinement parsing and serialization, secret-bearing records and machines, exact validation, renamed fields, aliases, nested collections including lists/maps of enums and enum payload structs, result branches, errors, and owned cleanup; other concrete JSON types pending |
 | Trace, breakpoint, assert, and failure reporting | covered | primitive, capability, function, actor, `TypeConstruction`, and recursive list, set, map, optional, result, struct, bitfield, enum, and machine values trace; zero- and multi-binding breakpoints over those types; default and interpolated custom-message `assert` in test bodies; other special debug values pending | native debug lines match interpreter stderr for scalar and aggregate fixtures, including empty and recursive values, bitfield numeric/enum/payload fields, false conditions, Unicode strings, bytes, `nothing`, plain/pending capabilities, and an out-of-scope local; named, inline, captured, and comptime callbacks inside aggregates, with subsequent calls and failure cleanup; actor ordinals and partially filled struct, bitfield, enum, and machine builders match; custom assertion codegen, context-owned error text, launcher copy-out, and passing verify/property suites have separate tests; lexical breakpoint frames, nested-scope exit, and typed closure captures covered; recursive secret redaction covered, including inferred bindings, generic errors, and reflection failures |
@@ -2171,8 +2171,9 @@ The builtin `TypeKind` enum now admits the already selected `resource_type`
 variant, and the shared reflection mapper returns the same tag. Existing enum
 indices, alias tags and empty opaque shapes are preserved. Source checking,
 reference metadata and native object emission are tested without a Resource
-value. The affected 800 compiler tests and 598 frontend fixtures pass; complete
-workspace/platform acceptance for this correction remains separate. See
+value. The affected 800 compiler tests and 598 frontend fixtures pass; the
+subsequent clean `616b51b9` full workspace also passes. Supported-host acceptance
+for that head remains separate. See
 [the contract and executed evidence](native_resource_kind_tags.md). Live resource
 hooks, carriers, provider authority and exactly-once cleanup remain open.
 
@@ -2191,9 +2192,34 @@ All 14 focused resolver/checker/span tests pass with stable source hashes in
 mutability compile error and corrected source-body E0311 assertion remain
 separate failure evidence. The broader 1037 compiler library tests, 63 codegen
 object integration tests, 83 driver tests, 598 frontend fixtures and eight
-backend-lowering tests also pass with unchanged sources. Complete workspace and
-platform acceptance for this identity commit remain separate. Reference
-ownership/provider installation, ordered source cleanup,
+backend-lowering tests also pass with unchanged sources. Clean `616b51b9`
+subsequently passes its full workspace; its supported-host workflow remains
+in progress. Reference provider installation, ordered source cleanup,
 HIR/MIR transfer/drop proofs and native lifecycle execution still remain. This
 prerequisite changes neither the fixed 207 inventory/182 object obligations nor
 the 464-case supplemental native corpus, about-85% estimate or full 100% goal.
+
+
+### Static Resource ownership prerequisites
+
+Resource-bearing owned field copies and cloning collection/reflection getters
+now report E0364. Known borrowed Resource data cannot be acquired by owning
+optional/result, list/map, struct or machine payloads (E0401); a Resource-bearing
+exact-state transition source retains the existing owned-argument boundary.
+Exact Resource-root printing and value reflection report E0300. Safe explicit
+views, unrelated copyable fields, real owned transfers, empty carriers and
+type-only metadata remain admitted. Nested printing policy is unchanged.
+
+All 36 focused resource groups pass, including 21 new source groups. The 34
+frozen synthetic-stdlib sources are rechecked in debug and release: selected
+copy/acquisition/root-observation gaps are refused and owned/view/empty controls
+are retained. The broader 1058 library units, 63 codegen object integration
+checks, 83 driver tests, 598 frontend fixtures and eight backend-lowering tests
+also pass with three unchanged source hashes. Details and the separate accepted
+`616b51b9` predecessor record are in the
+[ownership note](native_resource_ownership_boundaries.md) and
+[acceptance audit](native_acceptance_audit.md#resource-static-ownership-boundaries).
+This is checker-stage safety evidence. Resource carriers, fake/real providers,
+source cleanup and native lifecycle execution remain required. The new full
+workspace and supported-host gates are pending; 85%, 207 fixtures, 182 object
+obligations and the 464-case supplemental corpus are unchanged.

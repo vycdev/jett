@@ -1,10 +1,10 @@
 # Opaque resource type-only reflection tags
 
-Status: the focused affected compiler and frontend gates pass. Complete
-workspace and supported-host acceptance for this correction remain separate.
-The accepted predecessor `72237c4a` passes its complete clean workspace with
-464 native conformance cases and all 182 object obligations; its platform run
-is still in progress. The broad coverage estimate remains about 85%.
+Status: the affected compiler/frontend gates and subsequent clean `616b51b9`
+full workspace pass. That head's supported-host run remains in progress; local
+acceptance and predecessor platform evidence are centralized in the
+[acceptance audit](native_acceptance_audit.md#resource-static-ownership-boundaries).
+The broad coverage estimate remains about 85%.
 
 ## Selected contract and correction
 
@@ -56,8 +56,10 @@ the wrapper exits zero at `2026-10-03T10:44:38.0454370Z` in
 
 ## Remaining native resource work
 
-Type-only reflection is a prerequisite. Compiler-bound hook identities, real
-owned carriers, provider authority, safe recursive ownership, ordered cleanup,
+Type-only reflection and [checked hook identities](native_resource_hook_identity.md)
+are implemented prerequisites. The selected static copy/acquisition guards are
+recorded in the [ownership note](native_resource_ownership_boundaries.md). Real
+owned carriers, provider authority, other ownership paths, ordered cleanup,
 explicit close, error propagation, actor transfer and task cancellation still
 need checked implementations and reference/native execution evidence. This
 correction changes neither the 207-fixture inventory, its 182 object obligations

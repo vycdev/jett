@@ -2219,6 +2219,19 @@ no public provider API or resource value. Its checked boundary and remaining
 lifecycle work are recorded in the
 [active resource-hook note](active/native_resource_hook_identity.md).
 
+The checker refuses copying a Resource-bearing field into ownership, including
+through borrowed parents, and refuses cloning collection/reflection getters
+whose returned data contains a Resource. Explicit field views and reads of
+unrelated copyable fields remain valid. Owning optional/result, list/map, struct
+and machine payloads must receive owned Resource data, not a known view hidden
+inside a constructor. For a Resource-bearing exact machine state, its transition
+source also obeys the existing owned-argument boundary. These static guards
+preserve owned transfers, empty containers and type-only metadata; they do not
+install a runtime carrier or provider. Exact Resource roots cannot be ordinarily
+printed or reflected as a value. Nested printing remains a separate boundary,
+including hidden secrets, known absence and omitted values. See the
+[implemented ownership boundaries](active/native_resource_ownership_boundaries.md).
+
 Moving a resource transfers its single cleanup obligation. A `view` borrows it
 without taking cleanup responsibility. An explicit close consumes the owner;
 otherwise the compiler invokes the same trusted finalizer exactly once when the
@@ -5817,8 +5830,10 @@ parameter, reports E0401. This includes view parameters, explicit local views,
 forwarded aliases, parentheses, and move-only results of `coarsen` or
 `declassify`. Ordinary, generic, indirect, and pipeline calls obey the same
 boundary. An explicitly written `view` argument to an owned parameter retains
-E0375. Actual implicitly copyable results, explicit clones, ordinary owned
-field copies, and owned call results remain valid.
+E0375. Actual implicitly copyable results, valid explicit clones, ordinary owned
+field copies that do not contain Resource data, and owned call results remain
+valid. A Resource-bearing field cannot be acquired by copying its owner or view;
+use an explicit nonowning field view or a genuine owned transfer instead.
 
 Views also forbid projected writes: a field assignment through a known view
 reports E0401, even when its binding is marked `mutable`. An immutable binding

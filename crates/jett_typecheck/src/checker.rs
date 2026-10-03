@@ -28,6 +28,16 @@ use crate::resource_hooks::{CheckedResourceHook, ResourceHookError, validate_res
 
 mod graphics_audit;
 
+#[cfg(test)]
+mod resource_copy_tests;
+
+/// Resource copy authority for an exact field place, not an evaluation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceProjectionMode {
+    OwningCopy,
+    Borrowed,
+}
+
 /// One accepted concrete generic function body produced by type checking.
 #[derive(Debug, Clone)]
 pub struct CheckedGenericFunctionInstantiation {
@@ -626,6 +636,8 @@ struct TypeChecker<'a> {
     assignment_bindings: HashMap<Span, AssignmentBinding>,
     /// Exact legacy consume-view diagnostics replaced by typed boundary errors.
     diagnosed_owned_view_consumptions: HashMap<Span, Diagnostic>,
+    /// A generic recheck may revisit the same invalid owning payload source.
+    diagnosed_resource_payload_views: HashSet<Span>,
     /// A written return annotation may be resolved in several specializations.
     diagnosed_view_return_annotations: HashSet<Span>,
     /// Whether the function currently being type-checked is pure.
@@ -790,6 +802,7 @@ impl<'a> TypeChecker<'a> {
             constant_declarations: HashSet::new(),
             assignment_bindings: HashMap::new(),
             diagnosed_owned_view_consumptions: HashMap::new(),
+            diagnosed_resource_payload_views: HashSet::new(),
             diagnosed_view_return_annotations: HashSet::new(),
             current_function_pure: false,
             in_verify_block: false,
@@ -1853,6 +1866,13 @@ impl<'a> TypeChecker<'a> {
                 }),
             Type::Refinement { base, .. } => self.type_contains_secret_data_inner(*base, visited),
             _ => false,
+        }
+    }
+
+    fn check_resource_copy(&mut self, ty: TypeId, span: Span) {
+        if self.type_contains_resource_data(ty) {
+            self.sink
+                .emit(errors::resource_cannot_be_cloned(&self.type_name(ty), span));
         }
     }
 
@@ -4752,6 +4772,7 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
+                self.check_resource_root_value_reflection(value_ty, &name, span);
                 let type_machine_state_ty = self
                     .named_types
                     .get("TypeMachineState")
@@ -4785,6 +4806,7 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
+                self.check_resource_root_value_reflection(value_ty, &name, span);
                 let type_variant_ty = self
                     .named_types
                     .get("TypeVariant")
@@ -4806,6 +4828,14 @@ impl<'a> TypeChecker<'a> {
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 let return_ty = self.resolve_type_expr(&type_args[1]);
+                if matches!(self.interner.resolve(value_ty), Type::Resource(_)) {
+                    self.sink.emit(errors::type_mismatch(
+                        &format!("non-resource value for {name}"),
+                        &self.type_name(value_ty),
+                        span,
+                    ));
+                }
+                self.check_resource_copy(return_ty, span);
                 let type_field_ty = self
                     .named_types
                     .get("TypeField")
@@ -4827,6 +4857,14 @@ impl<'a> TypeChecker<'a> {
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 let return_ty = self.resolve_type_expr(&type_args[1]);
+                if matches!(self.interner.resolve(value_ty), Type::Resource(_)) {
+                    self.sink.emit(errors::type_mismatch(
+                        &format!("non-resource value for {name}"),
+                        &self.type_name(value_ty),
+                        span,
+                    ));
+                }
+                self.check_resource_copy(return_ty, span);
                 let type_field_ty = self
                     .named_types
                     .get("TypeField")
@@ -4848,6 +4886,14 @@ impl<'a> TypeChecker<'a> {
 
                 let value_ty = self.resolve_type_expr(&type_args[0]);
                 let return_ty = self.resolve_type_expr(&type_args[1]);
+                if matches!(self.interner.resolve(value_ty), Type::Resource(_)) {
+                    self.sink.emit(errors::type_mismatch(
+                        &format!("non-resource value for {name}"),
+                        &self.type_name(value_ty),
+                        span,
+                    ));
+                }
+                self.check_resource_copy(return_ty, span);
                 let type_field_ty = self
                     .named_types
                     .get("TypeField")
@@ -4948,6 +4994,7 @@ impl<'a> TypeChecker<'a> {
             }
             IntrinsicId::ListGetClone => {
                 let inner = self.optional_type_arg(&name, type_args, span);
+                self.check_resource_copy(inner, span);
                 Some((
                     vec![self.interner.intern(Type::List(inner)), TypeInterner::INT64],
                     self.interner.intern(Type::Optional(inner)),
@@ -9352,7 +9399,8 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let target_type = self.check_expr(&assign.target);
+        let target_type = self
+            .check_expr_with_resource_projection(&assign.target, ResourceProjectionMode::Borrowed);
         let value_type = self.check_expr_for_expected(&assign.value, target_type, false);
         self.check_view_rebinding(assign, target_type, value_type);
 
@@ -9428,6 +9476,45 @@ impl<'a> TypeChecker<'a> {
             TypeExpr::View(_, _) => true,
             TypeExpr::StateQualified(inner, _, _) => Self::type_is_view(inner),
             _ => false,
+        }
+    }
+
+    fn check_owned_resource_payload(&mut self, payload: &Expr, payload_ty: TypeId) {
+        if payload_ty != TypeInterner::ERROR
+            && self.type_contains_resource_data(payload_ty)
+            && self.initializer_is_view(payload)
+        {
+            if self.diagnosed_resource_payload_views.insert(payload.span()) {
+                self.sink.emit(Diagnostic::error(
+                    401,
+                    "cannot store a resource view in an owned payload; move an owned value instead",
+                    payload.span(),
+                ));
+            }
+            let mut subject = payload;
+            while let Expr::View(inner, _)
+            | Expr::Paren(inner, _)
+            | Expr::Coarsen(inner, _)
+            | Expr::Declassify(inner, _) = subject
+            {
+                subject = inner;
+            }
+            if let Expr::Ident(ident) = subject {
+                self.diagnosed_owned_view_consumptions.insert(
+                    ident.span,
+                    crate::ownership::cannot_consume_view(&ident.name, ident.span),
+                );
+            }
+        }
+    }
+
+    fn check_resource_root_value_reflection(&mut self, owner_ty: TypeId, name: &str, span: Span) {
+        if matches!(self.interner.resolve(owner_ty), Type::Resource(_)) {
+            self.sink.emit(errors::type_mismatch(
+                &format!("non-resource value for {name}"),
+                &self.type_name(owner_ty),
+                span,
+            ));
         }
     }
 
@@ -10241,6 +10328,14 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> TypeId {
+        self.check_expr_with_resource_projection(expr, ResourceProjectionMode::OwningCopy)
+    }
+
+    fn check_expr_with_resource_projection(
+        &mut self,
+        expr: &Expr,
+        projection: ResourceProjectionMode,
+    ) -> TypeId {
         // Provider constructors are direct property operations, not ordinary
         // function values that can escape through aliases or callbacks.
         if matches!(expr, Expr::Ident(_) | Expr::FieldAccess(_, _, _))
@@ -10283,9 +10378,13 @@ impl<'a> TypeChecker<'a> {
             Expr::GenericCall(callee, type_args, args, span) => {
                 self.check_call(callee, type_args, args, *span, None)
             }
-            Expr::Paren(inner, _) => self.check_expr(inner),
-            Expr::FieldAccess(base, field, span) => self.check_field_access(base, field, *span),
-            Expr::View(inner, _) => self.check_expr(inner),
+            Expr::Paren(inner, _) => self.check_expr_with_resource_projection(inner, projection),
+            Expr::FieldAccess(base, field, span) => {
+                self.check_field_access(base, field, *span, projection)
+            }
+            Expr::View(inner, _) => {
+                self.check_expr_with_resource_projection(inner, ResourceProjectionMode::Borrowed)
+            }
             Expr::Comptime(inner, _) => {
                 self.comptime_expr_depth += 1;
                 let ty = self.check_expr(inner);
@@ -10302,6 +10401,7 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Ok(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
+                self.check_owned_resource_payload(inner, inner_ty);
                 // The absent failure payload is uninhabited until context
                 // supplies a concrete error type.
                 self.interner
@@ -10309,6 +10409,7 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Fail(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
+                self.check_owned_resource_payload(inner, inner_ty);
                 // The absent success payload is uninhabited until context
                 // supplies a concrete success type.
                 self.interner
@@ -10316,6 +10417,7 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Some(inner, _span) => {
                 let inner_ty = self.check_expr(inner);
+                self.check_owned_resource_payload(inner, inner_ty);
                 self.interner.intern(Type::Optional(inner_ty))
             }
             Expr::None(_) => {
@@ -10353,7 +10455,7 @@ impl<'a> TypeChecker<'a> {
                 TypeInterner::STRING
             }
             Expr::Declassify(inner, span) => {
-                let inner_ty = self.check_expr(inner);
+                let inner_ty = self.check_expr_with_resource_projection(inner, projection);
                 if let Some(unwrapped) = self.secret_inner_type(inner_ty) {
                     unwrapped
                 } else {
@@ -10365,7 +10467,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Coarsen(inner, _) => {
-                let inner_ty = self.check_expr(inner);
+                let inner_ty = self.check_expr_with_resource_projection(inner, projection);
                 if inner_ty != TypeInterner::ERROR && !self.is_refinement_type(inner_ty) {
                     self.sink.emit(errors::coarsen_requires_refinement(
                         &self.type_name(inner_ty),
@@ -10383,13 +10485,9 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Ask(inner, _) => self.check_send_ask_inner(inner),
             Expr::Clone(inner, span) => {
-                let inner_ty = self.check_expr(inner);
-                if self.type_contains_resource_data(inner_ty) {
-                    self.sink.emit(errors::resource_cannot_be_cloned(
-                        &self.type_name(inner_ty),
-                        *span,
-                    ));
-                }
+                let inner_ty = self
+                    .check_expr_with_resource_projection(inner, ResourceProjectionMode::Borrowed);
+                self.check_resource_copy(inner_ty, *span);
                 inner_ty
             }
             Expr::Run(inner, _) => {
@@ -12050,6 +12148,13 @@ impl<'a> TypeChecker<'a> {
         self.expect_no_type_args(name, type_args, span);
         for arg in args {
             let arg_ty = self.check_expr(&arg.value);
+            if matches!(self.interner.resolve(arg_ty), Type::Resource(_)) {
+                self.sink.emit(errors::type_mismatch(
+                    "non-resource value for ordinary printing",
+                    &self.type_name(arg_ty),
+                    arg.value.span(),
+                ));
+            }
             if self.is_secret_type(arg_ty) {
                 self.sink.emit(errors::secret_exposure(
                     name,
@@ -13915,7 +14020,13 @@ impl<'a> TypeChecker<'a> {
         ));
     }
 
-    fn check_field_access(&mut self, base: &Expr, field: &ast::Ident, span: Span) -> TypeId {
+    fn check_field_access(
+        &mut self,
+        base: &Expr,
+        field: &ast::Ident,
+        span: Span,
+        projection: ResourceProjectionMode,
+    ) -> TypeId {
         let owner_span = if self.resolve.resolutions.contains_key(&base.span()) {
             base.span()
         } else {
@@ -14012,12 +14123,13 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        let base_ty = self.check_expr(base);
+        let base_ty =
+            self.check_expr_with_resource_projection(base, ResourceProjectionMode::Borrowed);
         if base_ty == TypeInterner::ERROR {
             return TypeInterner::ERROR;
         }
 
-        match self.interner.resolve(base_ty) {
+        let field_ty = match self.interner.resolve(base_ty) {
             Type::Secret(inner) => match self.interner.resolve(*inner) {
                 Type::Struct(sid) => {
                     let struct_def = self.interner.resolve_struct(*sid);
@@ -14127,7 +14239,11 @@ impl<'a> TypeChecker<'a> {
                 ));
                 TypeInterner::ERROR
             }
+        };
+        if projection == ResourceProjectionMode::OwningCopy {
+            self.check_resource_copy(field_ty, span);
         }
+        field_ty
     }
 
     fn machine_state_field_type(
@@ -14452,6 +14568,7 @@ impl<'a> TypeChecker<'a> {
             } else {
                 self.check_expr_for_expected(&arg.value, expected_ty, false)
             };
+            self.check_owned_resource_payload(&arg.value, arg_ty);
             if self.is_refinement_type(expected_ty) && self.can_refine_from(arg_ty, expected_ty) {
                 continue;
             }
@@ -14656,6 +14773,7 @@ impl<'a> TypeChecker<'a> {
 
         for (arg, (field_name, expected_ty)) in payload_args.iter().zip(state_def.fields.iter()) {
             let arg_ty = self.check_expr_for_expected(&arg.value, *expected_ty, false);
+            self.check_owned_resource_payload(&arg.value, arg_ty);
             if !self.types_compatible(*expected_ty, arg_ty) {
                 self.sink.emit(errors::argument_type_mismatch(
                     field_name,
@@ -14713,6 +14831,15 @@ impl<'a> TypeChecker<'a> {
                 None
             }
         };
+
+        if source_state.is_some() && self.type_contains_resource_data(source_ty) {
+            self.check_argument_view(
+                false,
+                Self::is_explicit_view(&args[0].value),
+                args[0].value.span(),
+            );
+            self.check_owned_argument(false, &args[0].value, source_ty, source_ty);
+        }
 
         let target_ident = match &args[1].value {
             Expr::Ident(ident) if args[1].name.is_none() => ident,
@@ -14778,6 +14905,7 @@ impl<'a> TypeChecker<'a> {
 
         for (arg, (field_name, expected_ty)) in payload_args.iter().zip(target_def.fields.iter()) {
             let arg_ty = self.check_expr_for_expected(&arg.value, *expected_ty, false);
+            self.check_owned_resource_payload(&arg.value, arg_ty);
             if !self.types_compatible(*expected_ty, arg_ty) {
                 self.sink.emit(errors::argument_type_mismatch(
                     field_name,
@@ -14877,9 +15005,11 @@ impl<'a> TypeChecker<'a> {
         }
 
         let first_ty = self.check_expr(&elems[0]);
+        self.check_owned_resource_payload(&elems[0], first_ty);
         let (mut element_ty, mut tainted) = self.strip_secret_type(first_ty);
         for elem in &elems[1..] {
             let elem_ty = self.check_expr(elem);
+            self.check_owned_resource_payload(elem, elem_ty);
             let (elem_base_ty, elem_secret) = self.strip_secret_type(elem_ty);
             if let Some(merged) = self.merge_inferred_never(element_ty, elem_base_ty, false) {
                 element_ty = merged;
@@ -14914,6 +15044,7 @@ impl<'a> TypeChecker<'a> {
                 expected_element_ty,
                 allow_refinement_handle,
             );
+            self.check_owned_resource_payload(elem, elem_ty);
             if !self.types_compatible(expected_element_ty, elem_ty) {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected_element_ty),
@@ -14935,6 +15066,7 @@ impl<'a> TypeChecker<'a> {
 
         let first_key_ty = self.check_expr(&entries[0].0);
         let first_value_ty = self.check_expr(&entries[0].1);
+        self.check_owned_resource_payload(&entries[0].1, first_value_ty);
         let (mut key_ty, mut key_tainted) = self.strip_secret_type(first_key_ty);
         let (mut value_ty, mut value_tainted) = self.strip_secret_type(first_value_ty);
 
@@ -14957,6 +15089,7 @@ impl<'a> TypeChecker<'a> {
             key_tainted |= entry_key_secret;
 
             let entry_value_ty = self.check_expr(value_expr);
+            self.check_owned_resource_payload(value_expr, entry_value_ty);
             let (entry_value_base_ty, entry_value_secret) = self.strip_secret_type(entry_value_ty);
             if let Some(merged) = self.merge_inferred_never(value_ty, entry_value_base_ty, false) {
                 value_ty = merged;
@@ -15006,6 +15139,7 @@ impl<'a> TypeChecker<'a> {
                 expected_value_ty,
                 allow_refinement_handle,
             );
+            self.check_owned_resource_payload(value_expr, value_ty);
             if !self.types_compatible(expected_value_ty, value_ty) {
                 self.sink.emit(errors::type_mismatch(
                     &self.type_name(expected_value_ty),
@@ -15043,6 +15177,7 @@ impl<'a> TypeChecker<'a> {
             expected_payload_ty,
             allow_refinement_handle,
         );
+        self.check_owned_resource_payload(payload, payload_ty);
         if !self.types_compatible(expected_payload_ty, payload_ty) {
             self.sink.emit(errors::type_mismatch(
                 &self.type_name(expected_payload_ty),
@@ -21592,6 +21727,505 @@ function main() returns nothing:
             "expected E0338, got: {:?}",
             errors
         );
+    }
+
+    fn check_resource_payload_source_in_profile(source: &str, release: bool) -> CheckResult {
+        let parsed = parse(source, FileId::new(STDLIB_FILE_ID_START));
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = jett_resolve::resolve(&parsed.module);
+        assert!(
+            resolved
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { diagnostic.severity != jett_diagnostics::Severity::Error }),
+            "resolve errors: {:?}",
+            resolved.diagnostics
+        );
+        assert!(resolved.resource_kernels.is_empty());
+        check_with_options(&parsed.module, &resolved, CheckOptions { release })
+    }
+
+    #[test]
+    fn resource_views_cannot_enter_owning_constructor_payloads() {
+        let prefix =
+            "namespace audit\nexport resource FileHandle\nstruct Holder:\n    token: FileHandle\n";
+        for body in [
+            "function reject(view token: FileHandle) returns optional[FileHandle]:\n    return some(view token)\n",
+            "function reject(view token: FileHandle) returns list[FileHandle]:\n    return list(view token)\n",
+            "function reject(view token: FileHandle) returns Holder:\n    return Holder(token: view token)\n",
+            "function reject(view token: FileHandle) returns result[FileHandle, string]:\n    return ok(view token)\n",
+            "function reject(view token: FileHandle) returns result[string, FileHandle]:\n    return fail(view token)\n",
+            "function reject(view token: FileHandle) returns optional[FileHandle]:\n    FileHandle alias = view token\n    FileHandle forwarded = alias\n    return some(forwarded)\n",
+            "function reject(view holder: Holder) returns list[Holder]:\n    Holder alias = view holder\n    return list(alias)\n",
+            "function reject(view token: FileHandle) returns list[FileHandle]:\n    FileHandle alias = view token\n    return list(alias)\n",
+            "function reject(view token: FileHandle) returns Holder:\n    FileHandle alias = view token\n    return Holder(token: alias)\n",
+            "function reject(first: FileHandle, view second: FileHandle) returns list[FileHandle]:\n    return list(first, view second)\n",
+            "function reject(view token: FileHandle) returns optional[FileHandle]:\n    return some((view token))\n",
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "release={release}, {body}: {errors:?}");
+                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+                assert!(errors[0].message.contains("resource view"), "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_view_payload_guards_validate_inferred_unused_and_generic_bodies() {
+        let prefix =
+            "namespace audit\nexport resource FileHandle\nstruct Holder:\n    token: FileHandle\n";
+        for expression in [
+            "some(view token)",
+            "list(view token)",
+            "ok(view token)",
+            "fail(view token)",
+            "Holder(token: view token)",
+            "view some(view token)",
+            "view list(view token)",
+            "view Holder(token: view token)",
+        ] {
+            let view_argument = if expression.starts_with("view ") {
+                expression.to_owned()
+            } else {
+                format!("view {expression}")
+            };
+            let source = format!(
+                "{prefix}function observe[T](view value: T) returns nothing:\n    return nothing\nfunction unused(view token: FileHandle) returns nothing:\n    observe({view_argument})\n    return nothing\n"
+            );
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "{expression}: {errors:?}");
+                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            }
+        }
+        let generic = r#"namespace audit
+export resource FileHandle
+function wrap[T](view token: T) returns optional[T]:
+    T alias = view token
+    return some(alias)
+function unused(view token: FileHandle) returns nothing:
+    optional[FileHandle] payload = wrap[FileHandle](view token)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(generic, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+            let start = usize::try_from(errors[0].span.start).expect("source byte offset");
+            let end = usize::try_from(errors[0].span.end).expect("source byte offset");
+            assert_eq!(generic.get(start..end), Some("alias"));
+        }
+    }
+
+    #[test]
+    fn owned_resource_payloads_views_absence_and_nonresource_constructors_remain_valid() {
+        let source = r#"namespace audit
+export resource FileHandle
+struct Holder:
+    token: FileHandle
+    count: int64
+struct Phantom[T]:
+    count: int64
+function phantom(view item: Phantom[FileHandle]) returns optional[Phantom[FileHandle]]:
+    return some(view item)
+function own_optional(token: FileHandle) returns optional[FileHandle]:
+    return some(token)
+function own_list(token: FileHandle) returns list[FileHandle]:
+    return list(token)
+function own_result(token: FileHandle) returns result[FileHandle, string]:
+    return ok(token)
+function own_failure(token: FileHandle) returns result[string, FileHandle]:
+    return fail(token)
+function own_holder(token: FileHandle) returns Holder:
+    return Holder(token: token, count: 7)
+function borrow(view holder: Holder, view token: FileHandle) returns nothing:
+    FileHandle alias = view token
+    FileHandle forwarded = alias
+    trace forwarded
+    FileHandle field_alias = view holder.token
+    trace field_alias
+    int64 count = holder.count
+    optional[FileHandle] absent = none
+    list[FileHandle] empty = list()
+    return nothing
+function scalar(view count: int64) returns optional[int64]:
+    return some(view count)
+function unchanged(view values: list[int64]) returns optional[list[int64]]:
+    return some(view values)
+function type_name() returns string:
+    return type.name[FileHandle]()
+function type_kind() returns bool:
+    return type.kind_tag[FileHandle]() == TypeKind.resource_type
+function type_fields() returns list[TypeField]:
+    return type.fields[FileHandle]()
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert!(errors.is_empty(), "release={release}: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn resource_roots_reject_value_reflection_without_banning_aggregate_metadata() {
+        let forbidden = r#"namespace audit
+export resource FileHandle
+function opaque_variant(view token: FileHandle) returns TypeVariant:
+    return type.variant_value[FileHandle](view token)
+function opaque_state(view token: FileHandle) returns TypeMachineState:
+    return type.machine_state_value[FileHandle](view token)
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(forbidden, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 2, "{errors:?}");
+            assert!(
+                errors
+                    .iter()
+                    .all(|diagnostic| diagnostic.code.code() == 300)
+            );
+            assert!(
+                errors.iter().all(|diagnostic| {
+                    diagnostic.message.contains("non-resource value for type.")
+                        && diagnostic.message.contains("audit.FileHandle")
+                }),
+                "{errors:?}"
+            );
+        }
+        let permitted = r#"namespace audit
+export resource FileHandle
+enum Slot:
+    empty
+    occupied(token: FileHandle)
+function aggregate_metadata(view slot: Slot) returns TypeVariant:
+    return type.variant_value[Slot](view slot)
+function resource_metadata() returns string:
+    return type.name[FileHandle]()
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(permitted, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn resource_root_print_refusal_keeps_release_policy_separate() {
+        let source = r#"namespace audit
+export resource FileHandle
+function forbidden_output(view token: FileHandle) returns nothing:
+    print(view token)
+    println(view token)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), if release { 4 } else { 2 }, "{errors:?}");
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.code.code() == 300
+                            && diagnostic.message.contains("ordinary printing")
+                    })
+                    .count(),
+                2,
+                "{errors:?}"
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| { diagnostic.code.code() == 362 })
+                    .count(),
+                if release { 2 } else { 0 },
+                "{errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_root_print_guard_does_not_select_nested_or_absent_rendering() {
+        let source = r#"namespace audit
+export resource FileHandle
+struct Holder:
+    token: FileHandle
+struct Hidden:
+    token: secret[FileHandle]
+function nested(view holder: Holder, view hidden: Hidden) returns nothing:
+    println(view holder)
+    println(view hidden)
+    return nothing
+function absence() returns nothing:
+    optional[FileHandle] missing = none
+    list[FileHandle] empty = list()
+    println(view missing)
+    println(view empty)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), if release { 4 } else { 0 }, "{errors:?}");
+            assert!(
+                errors
+                    .iter()
+                    .all(|diagnostic| diagnostic.code.code() == 362)
+            );
+        }
+    }
+
+    #[test]
+    fn resource_map_views_cannot_become_owned_values_in_either_typing_route() {
+        let prefix = "namespace audit\nexport resource FileHandle\n";
+        for body in [
+            "function reject(view token: FileHandle) returns map[string, FileHandle]:\n    return map(\"one\": view token)\n",
+            "function reject(view token: FileHandle) returns map[string, FileHandle]:\n    FileHandle alias = view token\n    return map(\"one\": alias)\n",
+            "function reject(first: FileHandle, view token: FileHandle) returns map[string, FileHandle]:\n    return map(\"one\": first, \"two\": view token)\n",
+            "function inspect[T](view value: T) returns nothing:\n    return nothing\nfunction reject(view token: FileHandle) returns nothing:\n    inspect(view map(\"one\": view token))\n    return nothing\n",
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "release={release}: {errors:?}");
+                assert_eq!(errors[0].code.code(), 401, "{errors:?}");
+                assert!(errors[0].message.contains("resource view"), "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_machine_payloads_and_viewed_owned_sources_are_rejected() {
+        let prefix = r#"namespace audit
+export resource FileHandle
+machine Envelope:
+    states:
+        empty
+        holding(token: FileHandle)
+    transitions:
+        empty to holding
+        holding to empty
+"#;
+        for (body, expected_code) in [
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    return Envelope(holding, view token)\n",
+                401,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    FileHandle alias = view token\n    return Envelope(holding, alias)\n",
+                401,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    return Envelope.transition(Envelope(empty), holding, view token)\n",
+                401,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Envelope at holding:\n    FileHandle alias = view token\n    return Envelope.transition(Envelope(empty), holding, alias)\n",
+                401,
+            ),
+            (
+                "function reject(view source: Envelope at holding) returns Envelope at empty:\n    return Envelope.transition(view source, empty)\n",
+                375,
+            ),
+            (
+                "function reject(view source: Envelope at holding) returns Envelope at empty:\n    return Envelope.transition(source, empty)\n",
+                401,
+            ),
+            (
+                "function reject(view source: Envelope at holding) returns Envelope at empty:\n    Envelope at holding alias = view source\n    return Envelope.transition(alias, empty)\n",
+                401,
+            ),
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "release={release}, {body}: {errors:?}");
+                assert_eq!(errors[0].code.code(), expected_code, "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_owned_map_machine_and_existing_enum_boundaries_are_preserved() {
+        let source = r#"namespace audit
+export resource FileHandle
+enum Packet:
+    empty
+    holding(token: FileHandle)
+machine Envelope:
+    states:
+        empty
+        holding(token: FileHandle)
+    transitions:
+        empty to holding
+        holding to empty
+function map_owned(token: FileHandle) returns map[string, FileHandle]:
+    return map("one": token)
+function map_absent() returns map[string, FileHandle]:
+    return map()
+function machine_owned(token: FileHandle) returns Envelope at holding:
+    return Envelope(holding, token)
+function machine_absent() returns Envelope at empty:
+    return Envelope(empty)
+function transition_owned(source: Envelope at holding) returns Envelope at empty:
+    return Envelope.transition(source, empty)
+function target_owned(source: Envelope at empty, token: FileHandle) returns Envelope at holding:
+    return Envelope.transition(source, holding, token)
+function unchanged(view source: Envelope at empty, token: FileHandle) returns Envelope at holding:
+    return Envelope.transition(view source, holding, token)
+function enum_owned(token: FileHandle) returns Packet:
+    return Packet.holding(token)
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(source, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert!(errors.is_empty(), "release={release}: {errors:?}");
+        }
+        let prefix = "namespace audit\nexport resource FileHandle\nenum Packet:\n    empty\n    holding(token: FileHandle)\n";
+        for (body, expected_code) in [
+            (
+                "function reject(view token: FileHandle) returns Packet:\n    return Packet.holding(view token)\n",
+                375,
+            ),
+            (
+                "function reject(view token: FileHandle) returns Packet:\n    FileHandle alias = view token\n    return Packet.holding(alias)\n",
+                401,
+            ),
+        ] {
+            let source = format!("{prefix}{body}");
+            for release in [false, true] {
+                let result = check_resource_payload_source_in_profile(&source, release);
+                let errors: Vec<_> = result
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                    .collect();
+                assert_eq!(errors.len(), 1, "{errors:?}");
+                assert_eq!(errors[0].code.code(), expected_code, "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn resource_payload_diagnostics_replace_only_the_exact_legacy_counterpart() {
+        let bare = r#"namespace audit
+export resource FileHandle
+struct Holder:
+    token: FileHandle
+function reject(view holder: Holder) returns list[Holder]:
+    return list(holder)
+"#;
+        let independent = r#"namespace audit
+export resource FileHandle
+function consume(token: FileHandle) returns nothing:
+    return nothing
+function reject(view viewed: FileHandle, owned: FileHandle) returns nothing:
+    some(viewed)
+    consume(owned)
+    consume(owned)
+    return nothing
+"#;
+        for release in [false, true] {
+            let result = check_resource_payload_source_in_profile(bare, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].code.code(), 401);
+            assert!(errors[0].message.contains("resource view"), "{errors:?}");
+
+            let result = check_resource_payload_source_in_profile(independent, release);
+            let errors: Vec<_> = result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 3, "{errors:?}");
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code.code() == 342)
+                    .count(),
+                1,
+                "{errors:?}"
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.code.code() == 401
+                            && diagnostic.message.contains("resource view")
+                    })
+                    .count(),
+                1,
+                "{errors:?}"
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|diagnostic| { diagnostic.code.code() == 400 })
+                    .count(),
+                1,
+                "{errors:?}"
+            );
+        }
     }
 
     #[test]
