@@ -1757,3 +1757,25 @@ fixtures pass with unchanged source hashes. This adds no live Resource carrier,
 provider, source constructor or cleanup behavior. Complete workspace/platform
 acceptance for this correction remains separate; exact evidence and remaining
 lifecycle prerequisites are in [the active note](native_resource_kind_tags.md).
+
+## Checked private resource-hook identities
+
+The identity-only prerequisite creates associated private Function DefIds through
+ordinary resource declaration resolution and checks complete function types and
+ownership modes against the exact nominal Resource definition. Stdlib FileId
+and independent loader origin, ordinary privacy/order/duplicates and unused
+metadata validation are required. Production catalogs stay empty; no source
+constructor, provider operation, runtime Resource value or native carrier is
+created. See [the selected contract and scope](native_resource_hook_identity.md).
+
+Root's isolated final focused run passes six resolver, seven checker and one
+span-collision test with ten unchanged Rust source hashes. Exact results/logs
+are retained in `target/native-resource-hook-focused-after-diagnostic.json` and
+its referenced per-gate logs. The earlier missing-`mut` compile failure and
+source-body diagnostic expectation correction are not successful gates. The
+broader 1037 compiler library tests, 63 codegen object integration tests, 83
+driver tests, 598 frontend fixtures and eight backend-lowering tests also pass
+with unchanged sources in `target/native-resource-hook-phases.json`. Complete
+workspace/platform acceptance remains separate; no reference or native resource
+lifecycle was executed. This is checked identity proof, not a
+resource-provider parity row closure or inventory/percentage increase.

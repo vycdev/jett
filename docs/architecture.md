@@ -2149,7 +2149,24 @@ generic parameters, user destructor, or source-visible carrier. The checked
 program binds private trusted operations by stdlib-origin declaration identity,
 not by matching a public qualified-name string.
 
-The interpreter stores each live resource in a run-context registry and gives
+The identity prerequisite uses an empty-by-default compiler catalog associated
+with an actual parsed Resource declaration. A nonempty privileged catalog
+requires both the reserved stdlib FileId and loader `SourceOrigin::Stdlib`.
+Resolution inserts real private Function definitions through normal namespace,
+duplicate and declaration-order handling. Synthetic diagnostic spans do not
+replace the resource's source-span binding. Closed checker-session recipes bind
+complete `Type::Function` parameter types, view/owned modes and return types by
+those exact DefIds; validators check all entries, including unused ones.
+
+Explicit fallible resolver/checker entries publish the checked facts. Legacy
+checker entries reject nonempty catalogs with internal diagnostic code 0 instead
+of bypassing validation; normal empty-catalog and source diagnostic behavior
+remain unchanged. No production hook, provider dispatch or source carrier is
+installed. The implementation and focused evidence are in
+[the resource-hook identity note](active/native_resource_hook_identity.md).
+
+Under the selected execution contract, the interpreter stores each live
+resource in a run-context registry and gives
 source execution an internal key containing context, nominal type, slot, and
 generation identities. Operations validate every component before provider
 dispatch. Finalization detaches pending work, runs one infallible trusted
@@ -2166,8 +2183,9 @@ finalizers, and rejected insertions release their consumed provider payloads.
 Suppressed panic payloads are dropped under unwind protection; if their
 destructors panic too, only that secondary payload is deliberately forgotten
 to bound cleanup while retaining the first failure for propagation.
-Interpreter trusted-hook dispatch and source-level
-scope/drop integration remain later stages of the resource contract.
+The checked identity substrate does not yet install interpreter trusted-hook
+dispatch, live owned Resource values or source-level scope/drop integration.
+Those remain later stages of the resource contract.
 
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime

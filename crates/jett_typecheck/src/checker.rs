@@ -24,6 +24,7 @@ use jett_types::{
 
 use crate::capability;
 use crate::errors;
+use crate::resource_hooks::{CheckedResourceHook, ResourceHookError, validate_resource_hooks};
 
 mod graphics_audit;
 
@@ -257,6 +258,8 @@ pub struct CheckResult {
     /// HIR identity is derived separately from source origin and canonical
     /// declaration metadata.
     pub definition_types: HashMap<DefId, TypeId>,
+    /// Privileged exact hook identities; empty for ordinary checking.
+    pub resource_hooks: HashMap<DefId, CheckedResourceHook>,
     /// Generic calls made outside generic function bodies, keyed by call span.
     pub generic_calls: HashMap<Span, CheckedGenericCall>,
     /// Closed compiler operation selected for each accepted intrinsic call.
@@ -313,12 +316,57 @@ pub fn check_with_options(
     options: CheckOptions,
 ) -> CheckResult {
     let mut checker = TypeChecker::new(resolve, options);
-    checker.check_module(module);
+    let ordinary = resolve.resource_kernels.is_empty();
+    if ordinary {
+        checker.check_module(module);
+    } else {
+        checker.sink.emit(Diagnostic::error(
+            0,
+            "compiler resource catalogs require check_with_resource_kernels",
+            module.span,
+        ));
+    }
+    finish_check(checker, module, options, ordinary)
+}
 
-    let complexity_diagnostics = crate::complexity::check_complexity(module);
+/// The only checker entry granting validated private resource declaration facts.
+pub fn check_with_resource_kernels(
+    module: &Module,
+    resolve: &ResolveResult,
+    options: CheckOptions,
+) -> Result<CheckResult, ResourceHookError> {
+    jett_resolve::validate_resource_kernels(module, resolve)?;
+    if resolve
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == jett_diagnostics::Severity::Error)
+    {
+        return Err(ResourceHookError::SourceResolutionFailed);
+    }
+    let mut checker = TypeChecker::new(resolve, options);
+    checker.check_module(module);
+    if let Some(error) = checker.resource_hook_error.take() {
+        return Err(error);
+    }
+    let checked = finish_check(checker, module, options, true);
+    validate_resource_hooks(module, resolve, &checked)?;
+    Ok(checked)
+}
+
+fn finish_check(
+    mut checker: TypeChecker<'_>,
+    module: &Module,
+    options: CheckOptions,
+    checked_bodies: bool,
+) -> CheckResult {
+    let complexity_diagnostics = if checked_bodies {
+        crate::complexity::check_complexity(module)
+    } else {
+        Vec::new()
+    };
 
     // Run ownership analysis (linear type checking) after type checking.
-    let (ownership_diagnostics, breakpoint_exclusions) =
+    let (ownership_diagnostics, breakpoint_exclusions) = if checked_bodies {
         crate::ownership::OwnershipChecker::new(&checker.interner)
             .with_debug_types(
                 checker
@@ -332,7 +380,10 @@ pub fn check_with_options(
                     )
                     .map(|(&span, &ty)| (span, ty)),
             )
-            .check_module_with_debug(module);
+            .check_module_with_debug(module)
+    } else {
+        (Vec::new(), HashMap::new())
+    };
 
     let reflection_metadata = Arc::new(checker.build_reflection_metadata());
     let equality_methods = checker
@@ -386,6 +437,7 @@ pub fn check_with_options(
         debug_type_names: checker.debug_type_names,
         binding_modes: checker.binding_modes,
         definition_types: checker.type_env,
+        resource_hooks: checker.resource_hooks,
         generic_calls: checker.generic_calls,
         intrinsic_ids: checker.intrinsic_ids,
         intrinsic_type_arguments: checker.intrinsic_type_arguments,
@@ -520,6 +572,8 @@ struct TypeChecker<'a> {
     sink: DiagnosticSink,
     /// DefId → TypeId for variables, parameters, and functions.
     type_env: HashMap<DefId, TypeId>,
+    resource_hooks: HashMap<DefId, CheckedResourceHook>,
+    resource_hook_error: Option<ResourceHookError>,
     /// Declaration span → DefId for locally declared names.
     decl_defs: HashMap<Span, DefId>,
     /// User-defined type name → TypeId.
@@ -696,6 +750,7 @@ impl<'a> TypeChecker<'a> {
             .scope_table
             .definitions
             .iter()
+            .filter(|def| !resolve.resource_kernels.contains_definition(def.id))
             .map(|def| (def.span, def.id))
             .collect();
 
@@ -705,6 +760,8 @@ impl<'a> TypeChecker<'a> {
             options,
             sink: DiagnosticSink::new(),
             type_env: HashMap::new(),
+            resource_hooks: HashMap::new(),
+            resource_hook_error: None,
             decl_defs,
             named_types: HashMap::new(),
             trusted_stdlib_named_types: HashMap::new(),
@@ -5495,6 +5552,54 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn register_resource_kernels(&mut self) -> Result<(), ResourceHookError> {
+        for entry in self.resolve.resource_kernels.iter() {
+            let resource_type = *self.type_env.get(&entry.resource_definition).ok_or(
+                ResourceHookError::MissingResourceType(entry.resource_definition),
+            )?;
+            let function_type = entry
+                .recipe
+                .intern_signature(&mut self.interner, resource_type)
+                .ok_or(ResourceHookError::InvalidResourceType(
+                    entry.resource_definition,
+                ))?;
+            self.type_env.insert(entry.definition, function_type);
+            self.resource_hooks.insert(
+                entry.definition,
+                CheckedResourceHook {
+                    definition: entry.definition,
+                    resource_definition: entry.resource_definition,
+                    resource_type,
+                    kind: entry.recipe.kind(),
+                    function_type,
+                },
+            );
+            let definition = self.resolve.scope_table.def(entry.definition);
+            let Type::Function {
+                params,
+                return_type,
+                ..
+            } = self.interner.resolve(function_type)
+            else {
+                return Err(ResourceHookError::InvalidFunctionShape(entry.definition));
+            };
+            self.function_signatures
+                .insert(definition.name.clone(), (params.clone(), *return_type));
+            self.function_parameter_names.insert(
+                definition.name.clone(),
+                entry
+                    .recipe
+                    .parameter_names()
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect(),
+            );
+            let is_pure = self.function_parameters_are_pure(params);
+            self.purity_map.insert(definition.name.clone(), is_pure);
+        }
+        Ok(())
+    }
+
     fn check_module(&mut self, module: &Module) {
         self.check_written_function_return_views(module);
         self.constant_declarations = module
@@ -5525,6 +5630,11 @@ impl<'a> TypeChecker<'a> {
                 Item::Resource(def) => self.predeclare_resource(def, current_namespace.as_deref()),
                 _ => {}
             }
+        }
+
+        if let Err(error) = self.register_resource_kernels() {
+            self.resource_hook_error = Some(error);
+            return;
         }
 
         // Second pass: fill in the struct/enum contents now that all names exist.
@@ -15904,6 +16014,7 @@ mod tests {
                 scope_table: self.scope_table,
                 resolutions: self.resolutions,
                 namespace_aliases: HashMap::new(),
+                resource_kernels: jett_resolve::ResolvedResourceKernels::default(),
                 diagnostics: Vec::new(),
             }
         }
@@ -23682,6 +23793,46 @@ function main() returns string:
                 .static_selections
                 .values()
                 .any(|selection| *selection == CheckedStaticSelection::IfThen)
+        );
+    }
+}
+
+#[cfg(test)]
+mod resource_hook_span_tests {
+    use super::*;
+    use jett_common::{STDLIB_FILE_ID_START, SourceOrigin};
+    use jett_resolve::{ResourceKernelSpec, resolve_with_resource_kernels};
+    use jett_types::ResourceKernelRecipe;
+
+    #[test]
+    fn synthetic_resource_functions_do_not_replace_source_declaration_fallback() {
+        let file = FileId::new(STDLIB_FILE_ID_START);
+        let parsed = jett_parser::parse("namespace resource_probe\nresource TestHandle\n", file);
+        assert!(parsed.errors.is_empty());
+        let Item::Resource(resource) = &parsed.module.items[1] else {
+            panic!("missing resource")
+        };
+        let specs = [ResourceKernelSpec {
+            resource_declaration: resource.name.span,
+            member: "kernel_close".into(),
+            recipe: ResourceKernelRecipe::Finalize,
+        }];
+        let resolved = resolve_with_resource_kernels(
+            &parsed.module,
+            &HashMap::from([(file, SourceOrigin::Stdlib)]),
+            &specs,
+        )
+        .unwrap();
+        let resource_definition = resolved.resolutions[&resource.name.span];
+        let kernel_definition = resolved.resource_kernels.iter().next().unwrap().definition;
+        assert_eq!(
+            resolved.scope_table.def(resource_definition).span,
+            resolved.scope_table.def(kernel_definition).span
+        );
+        let checker = TypeChecker::new(&resolved, CheckOptions::default());
+        assert_eq!(
+            checker.decl_defs.get(&resource.name.span),
+            Some(&resource_definition)
         );
     }
 }

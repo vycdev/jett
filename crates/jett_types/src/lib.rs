@@ -3,6 +3,7 @@
 mod defs;
 mod interner;
 mod reflection;
+mod resource_hooks;
 mod types;
 
 pub use defs::{
@@ -17,3 +18,5 @@ pub use reflection::{
     ReflectionMetadata, ReflectionTypeInfo, ReflectionVariantInfo,
 };
 pub use types::{CapabilityKind, Type, TypeId};
+
+pub use resource_hooks::{ResourceHookKind, ResourceKernelRecipe};

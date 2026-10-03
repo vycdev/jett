@@ -2175,3 +2175,25 @@ value. The affected 800 compiler tests and 598 frontend fixtures pass; complete
 workspace/platform acceptance for this correction remains separate. See
 [the contract and executed evidence](native_resource_kind_tags.md). Live resource
 hooks, carriers, provider authority and exactly-once cleanup remain open.
+
+### Checked private resource-hook identity prerequisite
+
+Compiler-supplied private resource declarations now retain exact Resource and
+Function DefIds, independent stdlib origin evidence, normal privacy/order and
+complete checked function ownership modes. Explicit fallible compiler entries
+validate all facts; default production resolution has an empty catalog. No
+public provider spelling, live carrier, resource hook dispatch or native drop
+admission is introduced. The selected pre-Rust contract and implementation are
+in [the active identity note](native_resource_hook_identity.md).
+
+All 14 focused resolver/checker/span tests pass with stable source hashes in
+`target/native-resource-hook-focused-after-diagnostic.json`. The initial helper
+mutability compile error and corrected source-body E0311 assertion remain
+separate failure evidence. The broader 1037 compiler library tests, 63 codegen
+object integration tests, 83 driver tests, 598 frontend fixtures and eight
+backend-lowering tests also pass with unchanged sources. Complete workspace and
+platform acceptance for this identity commit remain separate. Reference
+ownership/provider installation, ordered source cleanup,
+HIR/MIR transfer/drop proofs and native lifecycle execution still remain. This
+prerequisite changes neither the fixed 207 inventory/182 object obligations nor
+the 464-case supplemental native corpus, about-85% estimate or full 100% goal.

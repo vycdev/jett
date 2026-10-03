@@ -2210,6 +2210,15 @@ A resource has no primitive tag; its field, variant and machine-state metadata
 are empty. This metadata does not expose a resource value or constructor. A
 named type alias retains the ordinary `alias_type` reflection tag.
 
+Private trusted resource operations bind to the exact associated resource and
+Function declaration identities, loader-owned stdlib origin, and complete
+checked parameter ownership modes and result type. Ordinary privacy and
+declaration order still apply; a matching name or type cannot grant authority.
+The compiler's identity substrate has an empty production catalog and introduces
+no public provider API or resource value. Its checked boundary and remaining
+lifecycle work are recorded in the
+[active resource-hook note](active/native_resource_hook_identity.md).
+
 Moving a resource transfers its single cleanup obligation. A `view` borrows it
 without taking cleanup responsibility. An explicit close consumes the owner;
 otherwise the compiler invokes the same trusted finalizer exactly once when the

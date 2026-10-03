@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use jett_common::{FileId, Span};
+use jett_common::{FileId, SourceOrigin, Span};
 use jett_diagnostics::{Diagnostic, DiagnosticSink};
 use jett_parser::ast::{
     ActorDef, AssertStmt, AssignStmt, Block, BreakpointStmt, CallArg, ComptimeTypeBindStmt, Expr,
@@ -10,6 +10,9 @@ use jett_parser::ast::{
 };
 
 use crate::errors;
+use crate::resource_hooks::{
+    ResolvedResourceKernels, ResourceKernelError, ResourceKernelSpec, validate_specs,
+};
 use crate::scope::{DefId, DefKind, DefVisibility, ScopeId, ScopeTable};
 
 /// The result of name resolution.
@@ -21,19 +24,38 @@ pub struct ResolveResult {
     pub resolutions: HashMap<Span, DefId>,
     /// Map from namespace import definitions to their fully qualified targets.
     pub namespace_aliases: HashMap<DefId, String>,
+    /// Sealed privileged declaration associations; empty in production.
+    pub resource_kernels: ResolvedResourceKernels,
     /// Diagnostics emitted during resolution.
     pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Resolve all names in a parsed `Module`.
 pub fn resolve(module: &Module) -> ResolveResult {
+    finish_resolution(module, Resolver::new())
+}
+
+/// Resolve a compiler-owned private catalog. Never exposed to source/config.
+pub fn resolve_with_resource_kernels(
+    module: &Module,
+    origins: &HashMap<FileId, SourceOrigin>,
+    specs: &[ResourceKernelSpec],
+) -> Result<ResolveResult, ResourceKernelError> {
+    validate_specs(module, origins, specs)?;
     let mut resolver = Resolver::new();
+    resolver.resource_kernel_specs = specs.to_vec();
+    resolver.resource_kernels = ResolvedResourceKernels::with_catalog(origins, specs);
+    Ok(finish_resolution(module, resolver))
+}
+
+fn finish_resolution(module: &Module, mut resolver: Resolver) -> ResolveResult {
     resolver.resolve_module(module);
     resolver.check_unused();
     ResolveResult {
         scope_table: resolver.scope_table,
         resolutions: resolver.resolutions,
         namespace_aliases: resolver.namespace_aliases,
+        resource_kernels: resolver.resource_kernels,
         diagnostics: resolver.sink.into_diagnostics(),
     }
 }
@@ -47,6 +69,8 @@ struct Resolver {
     resolutions: HashMap<Span, DefId>,
     namespace_aliases: HashMap<DefId, String>,
     sink: DiagnosticSink,
+    resource_kernel_specs: Vec<ResourceKernelSpec>,
+    resource_kernels: ResolvedResourceKernels,
     /// The current scope during the walk.
     current_scope: ScopeId,
     /// Namespace introduced by the latest `namespace` item in the current file.
@@ -165,6 +189,8 @@ impl Resolver {
             resolutions: HashMap::new(),
             namespace_aliases: HashMap::new(),
             sink: DiagnosticSink::new(),
+            resource_kernel_specs: Vec::new(),
+            resource_kernels: ResolvedResourceKernels::default(),
             current_scope: root,
             current_namespace: None,
             current_file: None,
@@ -302,6 +328,7 @@ impl Resolver {
                         resource.exported,
                     ) {
                         self.resolutions.insert(resource.name.span, def_id);
+                        self.declare_resource_kernels(resource.name.span, def_id, index);
                     }
                 }
                 Item::TypeAlias(ta) => {
@@ -320,6 +347,30 @@ impl Resolver {
                 }
                 // Verify, property, and implement blocks don't declare new names in the module scope.
                 Item::Verify(_) | Item::Property(_) | Item::Implement(_) => {}
+            }
+        }
+    }
+
+    fn declare_resource_kernels(&mut self, span: Span, resource: DefId, order: usize) {
+        let Some(namespace) = self.current_namespace.clone() else {
+            return;
+        };
+        let specs = self
+            .resource_kernel_specs
+            .iter()
+            .filter(|spec| spec.resource_declaration == span)
+            .cloned()
+            .collect::<Vec<_>>();
+        for spec in specs {
+            if let Some(definition) = self.declare_namespaced_top_level(
+                &spec.member,
+                DefKind::Function,
+                span,
+                order,
+                false,
+            ) {
+                self.resource_kernels
+                    .insert(&spec, definition, resource, namespace.clone());
             }
         }
     }
