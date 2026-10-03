@@ -2119,7 +2119,26 @@ previously failing linked sum-arm tests and all nine callback tests pass. Three
 new codegen units cover absent-arm closure removal and strict nested metadata
 and live-value negatives. See
 [the regression evidence](native_uninhabited_callback_descriptors.md#full-run-regression-and-original-function-metadata-repair).
-The repaired commit still needs its own complete workspace, 182-object and
-supported-host runs. Corpus 448, inventory 207, about-85% tracking and the
-whole-language 100% objective remain unchanged. Borrowed handler staging remains
-the next independent implementation after this repair.
+The exact clean repaired revision `90d82701` subsequently passes the complete
+workspace with an unchanged head: all 448 native tests (944.48 seconds), all
+182 object obligations in the four-test manifest gate (553.77 seconds), all
+83 driver library tests and 598 frontend fixtures, remaining targets and
+doc-tests. The wrapper exits zero with 92 successful result groups at
+`2026-10-03T08:31:51.9056689Z`; exact log/metadata are
+`target/native-workspace-90d82701.log` and `.json`. Its supported-host workflow
+[37108099164](https://github.com/vycdev/jett/actions/runs/37108099164) passes all
+four Windows/Linux build/package and relocated installed jobs, last completing
+`2026-10-03T09:03:23Z`. Corpus 448, inventory
+207, about-85% tracking and the whole-language 100% objective remain unchanged.
+
+### Internal call-view scopes across handlers
+
+Original explicit view arguments now have eager typed Begin/End stages for
+noncloneable exact local and field origins. A protected terminal mutable owner
+may be rebound after the operation; an owned temporary evaluates once into
+ordinary owning storage. Complete results precede End, and aborted owned
+returns/loop exits abandon only their operation's internal loans. Persistent
+source aliases and same-operation owner-change safety remain separate.
+See [the implementation and focused gates](native_scoped_call_view_staging.md).
+Whole-language coverage remains about 85%, with the fixed 207-fixture inventory
+and 100% native-language objective unchanged.

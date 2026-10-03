@@ -145,7 +145,7 @@ fn source_local(source: &mut SequenceSource, visit: &mut impl FnMut(&mut LocalId
     }
 }
 
-fn block_locals(
+pub(crate) fn block_locals(
     block: &mut BasicBlock,
     visit: &mut impl FnMut(&mut LocalId),
     floor: &mut impl FnMut(&mut u32),
@@ -177,12 +177,14 @@ fn block_locals(
                 visit(target);
             }
             StatementKind::Let { local, value }
+            | StatementKind::BeginCallView { local, value }
             | StatementKind::CheckRefinement {
                 local, call: value, ..
             } => {
                 visit(local);
                 expression(value, visit, floor);
             }
+            StatementKind::EndCallView { local } => visit(local),
             StatementKind::Assign { target, value } => {
                 expression(target, visit, floor);
                 expression(value, visit, floor);

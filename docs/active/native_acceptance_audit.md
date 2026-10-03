@@ -1701,5 +1701,25 @@ linked tests pass (48.51 seconds) in
 profiles, pending diagnostics, source deletion and native verify/property
 execution. All nine callback cases pass again (3.82 seconds) in
 `target/native-original-function-metadata-linked-callbacks.log`. Exact repaired
-head workspace/object and supported-host acceptance remains required. The corpus
-is still 448, the fixed inventory 207, and the planning estimate about 85%.
+head `90d82701` subsequently passes its clean complete workspace and all 182
+object obligations. Its unchanged-head log and JSON are
+`target/native-workspace-90d82701.log` and `.json`: 448 native cases pass in
+944.48 seconds; the four-test object manifest gate passes in 553.77 seconds;
+all 83 driver library tests, 598 frontend fixtures, remaining targets and
+doc-tests pass. Exit zero and 92 successful groups complete at
+`2026-10-03T08:31:51.9056689Z`. Exact-head supported-host workflow 37108099164
+passes all four Windows/Linux build/package and relocated installed jobs, last
+completing `2026-10-03T09:03:23Z`. The corpus is 448, the fixed inventory 207, and the
+planning estimate about 85%.
+
+## Internal call-view stages across handlers
+
+Original explicit borrowed arguments use typed MIR Begin/End scopes when the
+existing cloneable snapshots cannot preserve the borrow. Exact checked local
+and field origins, pending receiver order, normal owned temporary storage and
+post-operation owner use are covered; source alias lifetime rules and ownership
+changes during later operands remain independent. The focused execution record
+and complete acceptance obligations are in
+[the call-view contract](native_scoped_call_view_staging.md). This is additional
+native implementation coverage, not whole-language completion or a denominator
+change.

@@ -1,6 +1,7 @@
 //! Jett's backend-neutral control-flow graph representation.
 
 mod analysis;
+mod call_views;
 pub mod copy_values;
 mod generated_functions;
 mod handlers;
@@ -158,6 +159,16 @@ impl SequenceSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StatementKind {
+    /// A compiler-internal, call-bounded borrow with an exact eager borrow proof.
+    /// Unlike a source Let alias, only this typed statement grants End authority.
+    BeginCallView {
+        local: LocalId,
+        value: Expression,
+    },
+    /// End only the matching internal loan; the borrowed slot owns no destructor.
+    EndCallView {
+        local: LocalId,
+    },
     /// Reject a changed wrapper's outer pending depth before any producer predicate.
     ReflectedContainerReady {
         source: LocalId,
@@ -343,6 +354,15 @@ impl FunctionValidator<'_, '_> {
             );
         }
 
+        let internal_call_views = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match statement.kind {
+                StatementKind::BeginCallView { local, .. } => Some(local),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
         for (index, local) in function.locals.iter().enumerate() {
             if local.id.index() as usize != index {
                 self.error(
@@ -364,7 +384,8 @@ impl FunctionValidator<'_, '_> {
                         "local view aliases must be immutable local bindings",
                     );
                 }
-                if let Some(root) = function.view_root(local.id)
+                if !internal_call_views.contains(&local.id)
+                    && let Some(root) = function.view_root(local.id)
                     && function.local(root).is_some_and(|root| root.mutable)
                 {
                     self.error(
@@ -526,9 +547,12 @@ impl FunctionValidator<'_, '_> {
                 self.check_local(*target, statement.span, "sum target");
             }
 
-            StatementKind::Let { local, value } => {
+            StatementKind::Let { local, value } | StatementKind::BeginCallView { local, value } => {
                 self.check_local(*local, statement.span, "let statement");
                 self.expression(value);
+            }
+            StatementKind::EndCallView { local } => {
+                self.check_local(*local, statement.span, "call view end");
             }
             StatementKind::CheckRefinement {
                 local,
@@ -1097,7 +1121,8 @@ struct Builder<'a> {
     function_param_modes: &'a std::collections::HashMap<FunctionId, Vec<ParamMode>>,
     blocks: Vec<BasicBlock>,
     current: BlockId,
-    loops: Vec<(BlockId, BlockId)>,
+    loops: Vec<(BlockId, BlockId, usize)>,
+    call_view_scopes: Vec<Vec<LocalId>>,
     locals: Vec<Local>,
     handlers: Vec<(LocalId, BlockId)>,
     view_params: Vec<LocalId>,
@@ -1122,6 +1147,7 @@ impl<'a> Builder<'a> {
             }],
             current: BlockId(0),
             loops: Vec::new(),
+            call_view_scopes: Vec::new(),
             locals: Vec::new(),
             handlers: Vec::new(),
             view_params: Vec::new(),
@@ -1229,15 +1255,22 @@ impl<'a> Builder<'a> {
                 }
             }
             hir::StatementKind::Return(value) => {
+                // This branch abandons surrounding calls before the return
+                // operand may move their owner. Other CFG branches retain them.
+                self.end_call_views_since(0, statement.span);
+                let abandoned = std::mem::take(&mut self.call_view_scopes);
                 let value = value.as_ref().map(|v| self.lower_value(v));
+                self.call_view_scopes = abandoned;
                 self.terminate(TerminatorKind::Return(value), statement.span);
             }
             hir::StatementKind::Break => {
-                let target = self.loops.last().expect("validated break has a loop").1;
+                let (_, target, depth) = *self.loops.last().expect("validated break has a loop");
+                self.end_call_views_since(depth, statement.span);
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::Continue => {
-                let target = self.loops.last().expect("validated continue has a loop").0;
+                let (target, _, depth) = *self.loops.last().expect("validated continue has a loop");
+                self.end_call_views_since(depth, statement.span);
                 self.terminate(TerminatorKind::Goto(target), statement.span);
             }
             hir::StatementKind::If {
@@ -1285,6 +1318,7 @@ impl<'a> Builder<'a> {
                 );
             }
             hir::StatementKind::Respond(value) => {
+                self.end_call_views_since(0, statement.span);
                 self.terminate(TerminatorKind::Respond(value.clone()), statement.span)
             }
             hir::StatementKind::Scope(block) => self.lower_block(block),
@@ -1339,7 +1373,8 @@ impl<'a> Builder<'a> {
         let body_block = self.new_block(body.span);
         let exit = self.new_block(statement_span);
         self.terminate(TerminatorKind::Goto(condition_block), statement_span);
-        self.loops.push((condition_block, exit));
+        self.loops
+            .push((condition_block, exit, self.call_view_scopes.len()));
         self.current = condition_block;
         let condition = self.lower_value(condition);
         self.terminate(
@@ -1383,7 +1418,7 @@ impl<'a> Builder<'a> {
             },
             iterable.span,
         );
-        self.loops.push((header, exit));
+        self.loops.push((header, exit, self.call_view_scopes.len()));
         self.current = body_block;
         self.lower_block(body);
         self.close_to(header, body.span);

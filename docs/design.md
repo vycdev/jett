@@ -5858,13 +5858,29 @@ The original owner remains live for dependent reads; projected and forwarded
 aliases are non-owning and carry no cleanup obligation. Explicit clones acquire
 independent ownership, and ordinary owned field initializers retain their copy
 behavior. Carrier-preserving `coarsen` and `declassify` aliases retain the same
-backing owner and existing representation checks. Temporary-backed views,
-mutable backing chains, projected mutation, allocating conversions, and owner
-consumption or rebinding after alias creation remain native implementation
-limits. These limits do not select loan expiry or lifetime extension, change
-the checker rules above, or claim every projected owner kind is supported; see
-the [local view implementation note](active/native_local_view_aliases.md) and
+backing owner and existing representation checks. Temporary-backed source local
+aliases, mutable alias chains, projected mutation, allocating conversions, and
+owner consumption or rebinding after source alias creation remain native
+implementation limits. These limits do not select loan expiry or lifetime
+extension, change the checker rules above, or claim every projected owner kind
+is supported; see the
+[local view implementation note](active/native_local_view_aliases.md) and
 [typed stable-field contract](active/native_stable_projected_local_views.md).
+
+An original explicit call-site view may be evaluated eagerly before a later
+handled argument, then released when the complete consuming operation returns.
+Native lowering retains its exact checked local or finite field path through
+an internal non-owning call scope. A terminal mutable owner stays protected
+during that scope and may be rebound afterward. An ordinary owned temporary
+producer evaluates once into owning storage, which backs the internal view;
+this introduces no implicit clone of an interface or resource. Direct views
+preserve pending metadata, while field reads retain their eager receiver checks.
+The operation's result is materialized before the internal scope ends. An
+aborted handler ends abandoned scopes before returning an owned operand, and
+loop exits abandon only scopes inside the exited operation. Persistent source
+aliases retain the limits above. Owner changes during a later argument remain
+a separate checker/native reconciliation; see the
+[call-view implementation](active/native_scoped_call_view_staging.md).
 
 **Rule 2: A view cannot be sent to another thread.**
 

@@ -749,12 +749,13 @@ temporaries before entering containers; borrowed argument lowering reads their
 existing handles. Plain string view expressions retain ordinary copy behavior.
 
 Native ownership planning conservatively refuses owner consumption or rebinding
-after an alias may have been created on a reachable path. It does not select a
-source lifetime-expiry rule. Mutable alias chains, temporary roots, projected
-mutation, allocating conversions, flow-narrowed bare-machine origins, and
-field paths without the checked declared-owner proof remain explicit
-native limitations. Owner transitions after alias creation follow the same
-conservative owner-change refusal; see
+after a source local alias may have been created on a reachable path. It does
+not select a source lifetime-expiry rule. Mutable source alias chains,
+temporary-backed source aliases, projected mutation, allocating conversions,
+flow-narrowed bare-machine origins, and field paths without the checked
+declared-owner proof remain explicit native limitations. Owner transitions
+after source alias creation follow the same conservative owner-change refusal;
+see
 [the bounded implementation](active/native_local_view_aliases.md) and
 [the stable projected-view contract](active/native_stable_projected_local_views.md).
 
@@ -1197,9 +1198,25 @@ anonymous function values reject argument labels. Ownership analysis follows
 the same evaluation order, and capability signatures enforce call purity for
 every callee shape. Function types carry parameter `view` modes through HIR and
 MIR; native indirect calls borrow view arguments through the call and transfer
-only owned arguments. MIR lowering receives the checked type interner so a view
-used before a later handler can be snapshotted only when its recursive value
-type is cloneable; resource-bearing values are never cloned by this extraction.
+only owned arguments. MIR lowering receives the checked type interner; existing
+handler snapshots remain restricted to recursively cloneable value types.
+Original explicit views of exact checked local/field origins instead use typed
+`BeginCallView` and `EndCallView` statements when snapshots cannot preserve the
+borrow. The initializer is evaluated eagerly, keeping checked field and pending
+receiver guards before later handlers. Direct views add no readiness check.
+The internal local is immutable and non-owning; its terminal owner may be
+mutable, and an ordinary owned temporary root evaluates once into a separate
+owning slot. Ownership/liveness analysis protects the owner through the complete
+operation, then kills only the internal loan. The operation result is stored
+before End; aborted returns/responds end abandoned loans before their owned
+operand, while break/continue respect the target loop's scope depth. Original
+metadata and every Begin/End path are validated before pruning; source alias
+names cannot authorize scope expiry. The emitter allocates no destructor slot
+for the internal alias and End emits no runtime ownership action. Existing
+source alias loans remain persistent. Owner-changing overlap inside later
+arguments stays a separate reconciliation; no implicit erased-authority clone,
+owner pin, or runtime ABI is introduced. See the
+[scoped implementation contract](active/native_scoped_call_view_staging.md).
 Interpreter function and closure invocations expose their own lexical scopes
 and the initial global environment, excluding unrelated caller locals and
 namespace aliases. Closures retain the namespace aliases visible at creation.

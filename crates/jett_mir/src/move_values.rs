@@ -168,6 +168,7 @@ impl MoveValuePlan {
         types: &TypeInterner,
     ) -> Result<CopyValuePlan, String> {
         validate_local_view_initializers(function, types)?;
+        let call_views = crate::call_views::validate(function, types)?;
         let mut plan = CopyValuePlan::analyze_storage(function, types, Some(program))?;
         if function.identity.declaration.kind == jett_hir::DeclarationKind::ActorHandler {
             // Captured state is written back after a return/respond terminator.
@@ -260,6 +261,7 @@ impl MoveValuePlan {
                     aliases: incoming_loans(id, &outgoing_aliases),
                     borrow_sources: &borrow_sources,
                     alias_sources: &alias_sources,
+                    call_views: &call_views,
                     validate: false,
                 }
                 .block(id)?;
@@ -285,6 +287,7 @@ impl MoveValuePlan {
                 aliases: incoming_loans(id, &outgoing_aliases),
                 borrow_sources: &borrow_sources,
                 alias_sources: &alias_sources,
+                call_views: &call_views,
                 validate: true,
             }
             .block(id)?;
@@ -299,10 +302,18 @@ pub fn validate_local_view_initializers(
     function: &Function,
     types: &TypeInterner,
 ) -> Result<(), String> {
+    let stages = crate::call_views::validate(function, types)?;
     let mut initialized = Set::new();
     for statement in function.blocks.iter().flat_map(|block| &block.statements) {
-        let StatementKind::Let { local, value } = &statement.kind else {
-            continue;
+        let (local, value) = match &statement.kind {
+            StatementKind::Let { local, value } => {
+                if stages.contains_key(&(local.index() as usize)) {
+                    return Err("internal call view cannot use a source alias initializer".into());
+                }
+                (local, value)
+            }
+            StatementKind::BeginCallView { local, value } => (local, value),
+            _ => continue,
         };
         let Some(definition) = function.local(*local) else {
             continue;
@@ -336,6 +347,7 @@ struct Flow<'a> {
     aliases: Set,
     borrow_sources: &'a BTreeMap<usize, usize>,
     alias_sources: &'a BTreeMap<usize, usize>,
+    call_views: &'a BTreeMap<usize, usize>,
     validate: bool,
 }
 impl Flow<'_> {
@@ -397,6 +409,26 @@ impl Flow<'_> {
                     }
                     self.require_owned_definition(*target)?;
                     self.state.insert(target.index() as usize);
+                }
+                StatementKind::BeginCallView { local, value } => {
+                    let id = local.index() as usize;
+                    if self.validate && self.aliases.contains(&id) {
+                        return Err("internal call view is already active".into());
+                    }
+                    self.expr(value, true)?;
+                    self.aliases.insert(id);
+                    self.state.insert(id);
+                }
+                StatementKind::EndCallView { local } => {
+                    let id = local.index() as usize;
+                    if !self.call_views.contains_key(&id)
+                        || (self.validate
+                            && (!self.aliases.contains(&id) || !self.state.contains(&id)))
+                    {
+                        return Err("internal call view end has no active initialization".into());
+                    }
+                    self.aliases.remove(&id);
+                    self.state.remove(&id);
                 }
                 StatementKind::Let { local, value } => {
                     let definition = self
@@ -524,6 +556,14 @@ impl Flow<'_> {
     }
 
     fn reject_aliased_owner_change(&self, root: usize) -> Result<(), String> {
+        if self.validate
+            && self
+                .aliases
+                .iter()
+                .any(|stage| self.call_views.get(stage) == Some(&root))
+        {
+            return Err(format!("cannot move native place {root} while borrowed"));
+        }
         if self.validate
             && self
                 .aliases

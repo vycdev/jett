@@ -157,6 +157,7 @@ fn collect_function_references(function: &Function, references: &mut References<
         for statement in &block.statements {
             match &statement.kind {
                 StatementKind::Let { value, .. }
+                | StatementKind::BeginCallView { value, .. }
                 | StatementKind::CheckRefinement { call: value, .. }
                 | StatementKind::Evaluate(value)
                 | StatementKind::HandleDefault(value) => {
@@ -177,7 +178,8 @@ fn collect_function_references(function: &Function, references: &mut References<
                         collect_expression_references(condition, references);
                     }
                 }
-                StatementKind::ReflectedContainerReady { .. }
+                StatementKind::EndCallView { .. }
+                | StatementKind::ReflectedContainerReady { .. }
                 | StatementKind::IterationBorrow { .. }
                 | StatementKind::SequenceLength { .. }
                 | StatementKind::SequenceGet { .. }

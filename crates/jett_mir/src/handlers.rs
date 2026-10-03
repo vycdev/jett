@@ -201,6 +201,34 @@ fn stable_deferred_view(locals: &[Local], expression: &Expression) -> bool {
         .is_some_and(|local| local.id == root && !local.mutable)
 }
 
+/// Only original explicit borrowed positions may receive an internal borrow
+/// scope. Formal-mode wrappers cannot convert a bare owned argument into one.
+fn valid_ordered_borrowed_values(
+    types: &TypeInterner,
+    locals: &[Local],
+    values: &[Expression],
+    order: &[usize],
+    eligible: &[bool],
+) -> bool {
+    eligible.len() == values.len()
+        && order.len() == values.len()
+        && order.iter().all(|&index| index < values.len())
+        && order
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == values.len()
+        && values.iter().enumerate().all(|(index, value)| {
+            !matches!(value.kind, ExpressionKind::View(_))
+                || can_snapshot_view(types, value.ty)
+                || stable_deferred_view(locals, value)
+                || (eligible[index]
+                    && (crate::call_views::borrowed_source(types, locals, value).is_some()
+                        || crate::call_views::temporary_root(types, locals, value).is_some()))
+        })
+}
+
 fn snapshotable_local(types: &TypeInterner, expression: &Expression) -> bool {
     if let ExpressionKind::InterfaceCoerce { value, .. } = &expression.kind {
         return snapshotable_local(types, value);
@@ -311,6 +339,147 @@ impl Builder<'_> {
             span,
         });
         id
+    }
+
+    fn call_view_temporary(&mut self, ty: TypeId, source: LocalId, span: Span) -> LocalId {
+        let id = LocalId::new(self.locals.len() as u32);
+        self.locals.push(Local {
+            id,
+            name: format!("$callView{}", id.index()),
+            ty,
+            debug_ty: ty,
+            debug_type_name: None,
+            mutable: false,
+            view_source: Some(source),
+            span,
+        });
+        self.view_params.push(id);
+        id
+    }
+
+    fn call_view_initializer(&mut self, expression: &Expression) -> Option<(LocalId, Expression)> {
+        if let Some(source) =
+            crate::call_views::borrowed_source(self.types, &self.locals, expression)
+        {
+            return Some((source, expression.clone()));
+        }
+        let root = crate::call_views::temporary_root(self.types, &self.locals, expression)?;
+        // Ordinary owning storage for the original producer, evaluated once.
+        // The stage borrows that storage; neither step clones erased authority.
+        let value = self.lower_value(&root);
+        let source = self.temporary(root.ty, root.span);
+        self.push(
+            StatementKind::Let {
+                local: source,
+                value,
+            },
+            root.span,
+        );
+        let rewritten = crate::call_views::replace_borrowed_root(
+            expression,
+            Expression {
+                kind: ExpressionKind::Local(source),
+                ty: root.ty,
+                span: root.span,
+            },
+        )?;
+        if crate::call_views::borrowed_source(self.types, &self.locals, &rewritten) != Some(source)
+        {
+            return None;
+        }
+        Some((source, rewritten))
+    }
+
+    fn lower_ordered_borrowed_values(
+        &mut self,
+        values: &[Expression],
+        order: &[usize],
+        eligible: &[bool],
+    ) -> Option<Vec<Expression>> {
+        if !valid_ordered_borrowed_values(self.types, &self.locals, values, order, eligible) {
+            return None;
+        }
+        self.call_view_scopes.push(Vec::new());
+        let mut lowered = values.to_vec();
+        for &index in order {
+            if eligible[index]
+                && !can_snapshot_view(self.types, values[index].ty)
+                && let Some((source, projection)) = self.call_view_initializer(&values[index])
+            {
+                let local = self.call_view_temporary(values[index].ty, source, values[index].span);
+                self.push(
+                    StatementKind::BeginCallView {
+                        local,
+                        value: projection,
+                    },
+                    values[index].span,
+                );
+                if let Some(scope) = self.call_view_scopes.last_mut() {
+                    scope.push(local);
+                }
+                lowered[index] = Expression {
+                    kind: ExpressionKind::View(Box::new(Expression {
+                        kind: ExpressionKind::Local(local),
+                        ty: values[index].ty,
+                        span: values[index].span,
+                    })),
+                    ty: values[index].ty,
+                    span: values[index].span,
+                };
+                continue;
+            }
+            // The established snapshot/deferred-local route is unchanged for
+            // every other value. Global eligibility above validates this input.
+            let Some(single) =
+                self.lower_ordered_owned_values(std::slice::from_ref(&values[index]), &[0])
+            else {
+                self.call_view_scopes.pop();
+                return None;
+            };
+            if let Some(value) = single.into_iter().next() {
+                lowered[index] = value;
+            }
+        }
+        Some(lowered)
+    }
+
+    fn finish_call_view_scope(&mut self, expression: Expression) -> Expression {
+        let Some(scope) = self.call_view_scopes.pop() else {
+            return expression;
+        };
+        if scope.is_empty() {
+            return expression;
+        }
+        // Materialize the complete consuming operation before ending its loans.
+        let local = self.temporary(expression.ty, expression.span);
+        self.push(
+            StatementKind::Let {
+                local,
+                value: expression.clone(),
+            },
+            expression.span,
+        );
+        for stage in scope.into_iter().rev() {
+            self.push(StatementKind::EndCallView { local: stage }, expression.span);
+        }
+        Expression {
+            kind: ExpressionKind::Local(local),
+            ty: expression.ty,
+            span: expression.span,
+        }
+    }
+
+    pub(super) fn end_call_views_since(&mut self, depth: usize, span: Span) {
+        let abandoned = self
+            .call_view_scopes
+            .iter()
+            .skip(depth)
+            .rev()
+            .flat_map(|scope| scope.iter().rev().copied())
+            .collect::<Vec<_>>();
+        for local in abandoned {
+            self.push(StatementKind::EndCallView { local }, span);
+        }
     }
 
     fn lower_ordered_owned_values(
@@ -856,6 +1025,8 @@ impl Builder<'_> {
                 !crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
                     || can_snapshot_view(self.types, arg.ty)
                     || stable_deferred_view(&self.locals, arg)
+                    || crate::call_views::borrowed_source(self.types, &self.locals, arg).is_some()
+                    || crate::call_views::temporary_root(self.types, &self.locals, arg).is_some()
             })
         {
             let inputs = args
@@ -876,7 +1047,17 @@ impl Builder<'_> {
                     }
                 })
                 .collect::<Vec<_>>();
-            if let Some(args) = self.lower_ordered_owned_values(&inputs, evaluation_order) {
+            let eligible = args
+                .iter()
+                .enumerate()
+                .map(|(index, arg)| {
+                    crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
+                        && matches!(arg.kind, ExpressionKind::View(_))
+                })
+                .collect::<Vec<_>>();
+            if let Some(args) =
+                self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)
+            {
                 let mut lowered = expression.clone();
                 lowered.kind = ExpressionKind::Intrinsic {
                     intrinsic: *intrinsic,
@@ -887,7 +1068,7 @@ impl Builder<'_> {
                     args,
                     evaluation_order: evaluation_order.clone(),
                 };
-                return lowered;
+                return self.finish_call_view_scope(lowered);
             }
         }
         if let ExpressionKind::ActorSpawn {
@@ -969,11 +1150,16 @@ impl Builder<'_> {
                     })
                     .collect::<Vec<_>>(),
             )
-            && valid_ordered_owned_values(self.types, &self.locals, &inputs, evaluation_order)
         {
-            let args = self
-                .lower_ordered_owned_values(&inputs, evaluation_order)
-                .expect("validated indirect argument order");
+            let eligible = args
+                .iter()
+                .map(|arg| matches!(arg.kind, ExpressionKind::View(_)))
+                .collect::<Vec<_>>();
+            let Some(args) =
+                self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)
+            else {
+                return expression.clone();
+            };
             // Source evaluates call arguments before resolving a function value
             // held in a mutable local. A handler may rebind that local.
             let observed_callee = self.lower_value(callee);
@@ -1000,7 +1186,7 @@ impl Builder<'_> {
                 args,
                 evaluation_order: evaluation_order.clone(),
             };
-            return lowered;
+            return self.finish_call_view_scope(lowered);
         }
         if let ExpressionKind::Call {
             function,
@@ -1010,15 +1196,26 @@ impl Builder<'_> {
             && args.iter().any(has_extractable_handle)
             && let Some(modes) = self.function_param_modes.get(function)
             && let Some(inputs) = call_staging_inputs(args, modes)
-            && let Some(args) = self.lower_ordered_owned_values(&inputs, evaluation_order)
         {
+            let eligible = args
+                .iter()
+                .zip(modes)
+                .map(|(arg, mode)| {
+                    *mode == ParamMode::View && matches!(arg.kind, ExpressionKind::View(_))
+                })
+                .collect::<Vec<_>>();
+            let Some(args) =
+                self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)
+            else {
+                return expression.clone();
+            };
             let mut lowered = expression.clone();
             lowered.kind = ExpressionKind::Call {
                 function: *function,
                 args,
                 evaluation_order: evaluation_order.clone(),
             };
-            return lowered;
+            return self.finish_call_view_scope(lowered);
         }
         let ExpressionKind::Handle {
             target,
@@ -1176,7 +1373,15 @@ impl Builder<'_> {
                 }
             })
             .collect();
-        let args = self.lower_ordered_owned_values(&inputs, evaluation_order)?;
+        let eligible = args
+            .iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                crate::move_values::intrinsic_borrows(*intrinsic, index, arg)
+                    && matches!(arg.kind, ExpressionKind::View(_))
+            })
+            .collect::<Vec<_>>();
+        let args = self.lower_ordered_borrowed_values(&inputs, evaluation_order, &eligible)?;
         let mut raw = expression.clone();
         if let ExpressionKind::Intrinsic {
             field_validation,
@@ -1330,11 +1535,11 @@ impl Builder<'_> {
         // pairs. Never fabricate a result if a malformed plan misses that pair.
         self.terminate(TerminatorKind::Unreachable, span);
         self.current = continuation;
-        Some(Expression {
+        Some(self.finish_call_view_scope(Expression {
             kind: ExpressionKind::Local(candidate),
             ty: expression.ty,
             span,
-        })
+        }))
     }
 
     fn lower_refinement_check(

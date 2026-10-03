@@ -956,7 +956,7 @@ impl Verifier<'_> {
                 )
             }
 
-            StatementKind::Let { local, value } => {
+            StatementKind::Let { local, value } | StatementKind::BeginCallView { local, value } => {
                 let local = function.local(*local).ok_or_else(|| {
                     self.contract_error(
                         function,
@@ -972,6 +972,16 @@ impl Verifier<'_> {
                     value.ty,
                     "let initializer type does not match its local",
                 )
+            }
+            StatementKind::EndCallView { local } => {
+                function.local(*local).ok_or_else(|| {
+                    self.contract_error(
+                        function,
+                        statement.span,
+                        "call view end target is absent from the local table",
+                    )
+                })?;
+                Ok(())
             }
             StatementKind::CheckRefinement { local, call, .. } => {
                 let local = function.local(*local).ok_or_else(|| {

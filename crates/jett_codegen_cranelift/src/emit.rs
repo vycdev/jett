@@ -1318,7 +1318,7 @@ impl Translator<'_, '_> {
                 self.define_local(*target, value, statement.span)
             }
 
-            StatementKind::Let { local, value } => {
+            StatementKind::Let { local, value } | StatementKind::BeginCallView { local, value } => {
                 let borrowed = self.local_types[local.index() as usize]
                     .view_source
                     .is_some();
@@ -1329,6 +1329,7 @@ impl Translator<'_, '_> {
                 };
                 self.define_local(*local, value, statement.span)
             }
+            StatementKind::EndCallView { .. } => Ok(()),
             StatementKind::CheckRefinement {
                 local,
                 call,
@@ -4813,6 +4814,167 @@ function selected_entry() returns string:
             error.to_string().contains("definite initialization"),
             "{error}"
         );
+    }
+
+    const CALL_VIEW_SOURCE: &str = r#"namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "member"
+struct Packet:
+    member: Named
+function report(view item: Named, extra: int64) returns string:
+    return Named.name(view item)
+function exercise(packet: Packet, incoming: optional[int64]) returns Packet:
+    string answer = report(view packet.member, incoming handle:
+        return packet
+    )
+    return packet
+"#;
+
+    #[test]
+    fn native_call_views_support_post_call_and_aborted_call_owner_returns() {
+        let prefix = CALL_VIEW_SOURCE.split("function exercise(").next().unwrap();
+        let mutable = format!(
+            r#"{prefix}function exercise(packet: Packet, incoming: optional[int64]) returns Packet:
+    mutable Packet current = packet
+    string answer = report(view current.member, incoming handle:
+        default 3
+    )
+    current = Packet(member: 9)
+    return current
+"#
+        );
+        let temporary = format!(
+            r#"{prefix}function make() returns Packet:
+    return Packet(member: 7)
+function exercise(incoming: optional[int64]) returns string:
+    return report(view make().member, incoming handle:
+        default 3
+    )
+"#
+        );
+        let direct_mutable = format!(
+            r#"{prefix}function exercise(incoming: optional[int64]) returns Named:
+    mutable Named current = 7
+    string answer = report(view current, incoming handle:
+        default 3
+    )
+    current = 9
+    return current
+"#
+        );
+        let direct_temporary = format!(
+            r#"{prefix}function make_named() returns Named:
+    return 7
+function exercise(incoming: optional[int64]) returns string:
+    return report(view make_named(), incoming handle:
+        default 3
+    )
+"#
+        );
+        for source in [
+            CALL_VIEW_SOURCE.to_owned(),
+            mutable,
+            temporary,
+            direct_mutable,
+            direct_temporary,
+        ] {
+            let (program, types) = lower_source(&source);
+            let exercise = program
+                .functions
+                .iter()
+                .find(|function| function.identity.declaration.name == "exercise")
+                .unwrap();
+            assert_eq!(
+                exercise
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .filter(|statement| matches!(
+                        statement.kind,
+                        StatementKind::BeginCallView { .. }
+                    ))
+                    .count(),
+                1
+            );
+            let object = emit_host_object(&program, &types).expect("exact borrowed field supports unchanged owner, post-call rebinding, owned temporary and aborted call cleanup");
+            assert!(!object.bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn native_call_view_scope_metadata_is_checked_before_dead_code_removal() {
+        for fault in ["no begin", "no end", "orphan end", "unused field metadata"] {
+            let (mut program, types) = lower_source(CALL_VIEW_SOURCE);
+            let exercise = program
+                .functions
+                .iter_mut()
+                .find(|function| function.identity.declaration.name == "exercise")
+                .unwrap();
+            let stage = exercise
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match statement.kind {
+                    StatementKind::BeginCallView { local, .. } => Some(local),
+                    _ => None,
+                })
+                .unwrap();
+            match fault {
+                "no begin" | "no end" => {
+                    for block in &mut exercise.blocks {
+                        block.statements.retain(|statement| {
+                            if fault == "no begin" {
+                                !matches!(statement.kind, StatementKind::BeginCallView { .. })
+                            } else {
+                                !matches!(statement.kind, StatementKind::EndCallView { .. })
+                            }
+                        });
+                    }
+                }
+                "orphan end" => {
+                    exercise.blocks[exercise.entry.index() as usize]
+                        .statements
+                        .push(Statement {
+                            kind: StatementKind::EndCallView {
+                                local: exercise.params[0].local,
+                            },
+                            span: exercise.span,
+                        });
+                }
+                _ => {
+                    let value = exercise
+                        .blocks
+                        .iter_mut()
+                        .flat_map(|block| &mut block.statements)
+                        .find_map(|statement| match &mut statement.kind {
+                            StatementKind::BeginCallView { local, value } if *local == stage => {
+                                Some(value)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    let ExpressionKind::View(inner) = &mut value.kind else {
+                        panic!("exact projected view")
+                    };
+                    let ExpressionKind::Field { owner_type, .. } = &mut inner.kind else {
+                        panic!("field metadata")
+                    };
+                    *owner_type = TypeInterner::STRING;
+                    exercise.blocks[exercise.entry.index() as usize]
+                        .terminator
+                        .kind = TerminatorKind::Unreachable;
+                }
+            }
+            let error = emit_host_object(&program, &types)
+                .expect_err("malformed internal stage cannot be pruned into validity");
+            assert!(
+                matches!(error, CodegenError::InvalidMirContract { .. }),
+                "{fault}: {error}"
+            );
+        }
     }
 
     #[test]

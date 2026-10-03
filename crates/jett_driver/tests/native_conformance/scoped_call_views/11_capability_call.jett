@@ -1,0 +1,14 @@
+namespace app
+function write(view stdout: Stdout, text: string) returns nothing:
+    Stdout.write(view stdout, text)
+function fallback(view stdout: Stdout) returns string:
+    Stdout.write(view stdout, "later:capability\n")
+    return "written:capability\n"
+function main(stdout: Stdout) returns nothing:
+    optional[string] absent = none
+    Stdout.write(view stdout, "before:capability\n")
+    write(view stdout, absent handle:
+        default fallback(view stdout)
+    )
+    Stdout.write(view stdout, "after:capability\n")
+    return nothing

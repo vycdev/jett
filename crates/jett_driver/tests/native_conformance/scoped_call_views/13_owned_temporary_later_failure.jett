@@ -1,0 +1,28 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "value:{self}"
+struct Packet:
+    member: Named
+function report(view stdout: Stdout, view item: Named, extra: int64) returns string:
+    Stdout.write(view stdout, "callee:cleanup\n")
+    return "{Named.name(view item)}:{extra}"
+function make_packet(view stdout: Stdout) returns Packet:
+    Stdout.write(view stdout, "source:cleanup\n")
+    return Packet(member: 7)
+function failing(view stdout: Stdout) returns int64:
+    Stdout.write(view stdout, "failure:cleanup\n")
+    list[string] values = list.remove_at[string](list("owned", "other"), -1)
+    return list.length(view values)
+function main(stdout: Stdout) returns nothing:
+    bytes payload = bytes.from_string("cleanup")
+    list[string] retained = list("owner", "kept")
+    optional[int64] absent = none
+    Stdout.write(view stdout, "before:cleanup\n")
+    string answer = report(view stdout, view make_packet(view stdout).member, absent handle:
+        default failing(view stdout)
+    )
+    Stdout.write(view stdout, "after:{answer}:{bytes.to_hex(view payload)}:{list.length(view retained)}\n")
+    return nothing

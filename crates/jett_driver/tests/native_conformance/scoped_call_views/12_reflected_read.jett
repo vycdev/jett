@@ -1,0 +1,26 @@
+namespace app
+interface Named:
+    function name(view self: Named) returns string
+implement Named for int64:
+    function name(view self: int64) returns string:
+        return "value:{self}"
+type Positive = int64 where value > 0
+struct Packet:
+    member: Named
+    count: int64
+function selected_field(view stdout: Stdout) returns TypeField:
+    Stdout.write(view stdout, "selector:reflection\n")
+    return list.get[TypeField](type.fields[Packet](), 1) handle:
+        return selected_field(view stdout)
+function main(stdout: Stdout) returns nothing:
+    Packet packet = Packet(member: 7, count: 12)
+    optional[TypeField] absent = none
+    Stdout.write(view stdout, "before:reflection\n")
+    Positive copied = type.field_value[Packet, Positive](view packet, view(absent handle:
+        default selected_field(view stdout)
+    ))
+    int64 observed = coarsen copied
+    Stdout.write(view stdout, "value:{observed}\n")
+    Packet consumed = packet
+    Stdout.write(view stdout, "consumed:{Named.name(view consumed.member)}:{consumed.count}\n")
+    return nothing

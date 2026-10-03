@@ -1,7 +1,8 @@
 # Native descriptors with an uninhabited invocation input
 
-Status: implementation integrated; focused compiler, linked, driver and frontend
-gates pass. Complete workspace and supported-host acceptance remains pending.
+Status: implementation integrated. The repaired `90d82701` revision passes its
+complete clean workspace and all four supported-host jobs. Later call-view
+staging has separate focused and complete acceptance obligations.
 The native parity objective remains whole-language coverage.
 
 ## Existing source behavior
@@ -194,6 +195,12 @@ tests pass again (3.82 seconds, 439 filtered) in
 `target/native-original-function-metadata-linked-callbacks.log`. The existing
 linked tests retain both runtime profiles, source deletion, pending-error order,
 comptime observations and native verify/property execution. The corpus remains
-448 cases. Fresh complete-workspace/object and supported-host acceptance for
-the repaired revision is still required; the about-85% estimate and fixed 207
-inventory remain unchanged.
+448 cases. The exact clean `90d82701` complete workspace subsequently passes
+all 448 native cases (944.48 seconds), all 182 object obligations (553.77 seconds),
+remaining targets and doc-tests. The wrapper reports unchanged clean start/end,
+exit zero and 92 successful groups at `2026-10-03T08:31:51.9056689Z` in
+`target/native-workspace-90d82701.log` and `.json`. Workflow 37108099164 remains
+the independent supported-host gate for that revision and passes all four build/
+package and relocated installed jobs, last completing `2026-10-03T09:03:23Z`.
+The about-85% estimate,
+fixed 207 inventory and whole-language objective remain unchanged.

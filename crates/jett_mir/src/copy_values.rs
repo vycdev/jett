@@ -42,6 +42,7 @@ impl CopyValuePlan {
             for statement in &block.statements {
                 let mut reads = Set::new();
                 let mut temporaries = 0;
+                let mut killed = None;
                 let definition = match &statement.kind {
                     StatementKind::ReflectedContainerReady { source, .. } => {
                         reads.insert(source.index() as usize);
@@ -82,7 +83,8 @@ impl CopyValuePlan {
                         }
                         Some(target.index() as usize)
                     }
-                    StatementKind::Let { local, value } => {
+                    StatementKind::Let { local, value }
+                    | StatementKind::BeginCallView { local, value } => {
                         let borrowed = function
                             .local(*local)
                             .ok_or("local definition is outside its function")?
@@ -97,6 +99,11 @@ impl CopyValuePlan {
                             borrowed,
                         )?;
                         Some(local.index() as usize)
+                    }
+                    StatementKind::EndCallView { local } => {
+                        reads.insert(local.index() as usize);
+                        killed = Some(local.index() as usize);
+                        None
                     }
                     StatementKind::CheckRefinement { local, call, .. } => {
                         visit(call, &mut reads, &mut temporaries, types, program, false)?;
@@ -154,7 +161,7 @@ impl CopyValuePlan {
                 };
                 expand_view_reads(function, &mut reads)?;
                 max_temporaries = max_temporaries.max(temporaries);
-                statements.push((reads, definition));
+                statements.push((reads, definition, killed));
             }
             let mut reads = Set::new();
             let mut temporaries = 0;
@@ -244,7 +251,10 @@ impl CopyValuePlan {
                     incoming
                 };
                 let mut outgoing = incoming.clone();
-                for (_, definition) in &facts[i].0 {
+                for (_, definition, killed) in &facts[i].0 {
+                    if let Some(local) = killed {
+                        outgoing.remove(local);
+                    }
                     if let Some(d) = definition {
                         outgoing.insert(*d);
                     }
@@ -260,9 +270,12 @@ impl CopyValuePlan {
         for &id in cfg.reverse_postorder() {
             let i = id.index() as usize;
             let mut initialized = initialized_in[i].clone();
-            for (reads, definition) in &facts[i].0 {
+            for (reads, definition, killed) in &facts[i].0 {
                 if !reads.is_subset(&initialized) {
                     return Err(format!("read before definite initialization in block {i}"));
+                }
+                if let Some(local) = killed {
+                    initialized.remove(local);
                 }
                 if let Some(d) = definition {
                     initialized.insert(*d);
@@ -296,8 +309,11 @@ impl CopyValuePlan {
                     })
                     .collect();
                 let mut live = out.union(&facts[i].1).copied().collect::<Set>();
-                for (j, (reads, definition)) in facts[i].0.iter().enumerate().rev() {
+                for (j, (reads, definition, killed)) in facts[i].0.iter().enumerate().rev() {
                     after[i][j] = live.clone();
+                    if let Some(local) = killed {
+                        live.remove(local);
+                    }
                     if let Some(d) = definition {
                         live.remove(d);
                     }
