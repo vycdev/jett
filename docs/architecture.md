@@ -2370,6 +2370,15 @@ providers remain pending. Native HIR hook lowering, Resource-linear MIR cleanup
 and a checked native carrier remain unsupported. See
 [the current reference record](active/native_resource_hook_identity.md#reference-lifecycle-execution).
 
+A separate private `jett_runtime::resource_custody` core now keeps program/kind/
+owner-slot identity, non-cloneable owner and loan tokens, and scope/operation/
+return frames. Moves advance holder generations; copied physical carriers
+cannot adopt an owner. Protected reverse cleanup continues after a finalizer
+panic and records Resource cleanup failures separately from ordinary native
+first-error state. Its 13 protocol tests and all 157 runtime library tests
+pass. Registration is test-only: production layout issuance, native ABI,
+MIR Resource ownership/drop plans and linked source execution remain pending.
+
 Move dataflow transfers one cleanup obligation; views never own cleanup. Scope
 exit, return, handled failure, cancellation, dropped actor messages, and runtime
 teardown finalize each remaining owner in deterministic reverse-acquisition

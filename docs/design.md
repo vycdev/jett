@@ -2266,6 +2266,13 @@ Required comptime, verify and property execution do not acquire that authority.
 Broader scoped/reflected/indirect/worker cases and native drop elaboration remain
 required; the bounded tests do not establish those complete domains.
 
+The private native runtime custody core separately tracks non-cloneable owned
+and borrowed tokens, checked frame destinations and reverse acquisition
+cleanup. Its protocol tests cover generation/provenance refusal and
+cleanup after failure or panic. Production registration, compiler transfer
+and drop proofs, linked source execution and real providers remain required;
+these runtime tests do not enable native Resource operations.
+
 Moving a resource transfers its single cleanup obligation. A `view` borrows it
 without taking cleanup responsibility. An explicit close consumes the owner;
 otherwise the compiler invokes the same trusted finalizer exactly once when the

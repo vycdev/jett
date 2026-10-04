@@ -9,6 +9,7 @@ pub mod graphics;
 pub mod math;
 pub mod native_abi;
 pub mod random;
+mod resource_custody;
 pub mod uuid;
 
 use std::any::Any;

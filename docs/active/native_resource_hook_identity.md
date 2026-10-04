@@ -290,3 +290,31 @@ real providers, task/actor cancellation and late completion remain required.
 HIR hook identity/operation lowering, Resource-linear MIR transfer/drop proofs
 and native carriers/providers are still missing. Nested ordinary printing,
 hidden Secret, known absence and omitted rendering policy is unchanged.
+
+## Native custody core protocol
+
+The private native runtime core is implemented independently of reference AST
+transport. Program/kind/owner-slot references keep one constructor-owned
+registration identity. Non-cloneable owner and loan tokens rejoin the registry's
+context, nominal kind, key generation and authority provenance. Transfers
+advance holder generations without minting an owner from a copied carrier.
+Chronological scope/operation/return frames retire loans before reverse owner
+cleanup. A protected finalizer panic does not stop cleanup of later owners.
+
+Resource completion retains cleanup-first precedence in a separate channel;
+ordinary native first-error behavior is unchanged. The controls cover failed
+publication cleanup, active-loan move refusal, stale/foreign/wrong-generation
+tokens, repeated entries, counter exhaustion, cleanup continuation and every
+entry/cleanup outcome pair. They assert owner, loan, frame and registry counts
+before context teardown. Dropping a copied physical carrier or token is not
+source-scope cleanup.
+
+Root's actual focused receipt `7b0e8f` passes **13/13** protocol tests in
+`target/native-resource-runtime-custody-core-first-focused.log`. After runtime
+formatting, `9e9957` passes **157/157** complete runtime library tests in
+`target/native-resource-runtime-custody-core-formatted-library.log`.
+Registration is still test-only. Production layout issuance, native ABI,
+Resource CFG ownership/drop plans, linked source-deleted lifecycle execution
+and real providers remain required. This protocol core adds no native inventory
+case; the broad feature estimate remains **85%** and the whole-language objective
+remains 100%.
